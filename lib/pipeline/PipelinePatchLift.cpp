@@ -34,6 +34,8 @@
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Parallel.h"
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Function.h"
@@ -441,8 +443,11 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       llvm::DenseMap<va_t, const LowFunc *> Source;
       for (const auto &LF : Result.LowFuncs)
         Source.try_emplace(LF.Entry, &LF);
+      auto Starts = llvm::to_vector(llvm::make_first_range(Source));
+      llvm::sort(Starts);
       for (const auto &[Index, F] : llvm::enumerate(Result.MedFuncs))
-        if (needsMachONativeRegisterBody(F, Img, Source.lookup(F.Entry))) {
+        if (needsMachONativeRegisterBody(F, Img, Source.lookup(F.Entry),
+                                         Starts)) {
           if (Mask.empty())
             Mask.assign(Result.MedFuncs.size(), 1);
           Mask[Index] = 0;

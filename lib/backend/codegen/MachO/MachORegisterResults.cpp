@@ -251,36 +251,12 @@ addressedReturnTail(Decoder &Decode, const BinaryImage &Image,
   return std::nullopt;
 }
 
-// A forwarding entry can have a one-word unwind range. Its old instruction
-// bytes still have an address, even though Darwin no longer unwinds there.
 bool retainedSigningWord(const BinaryImage &Image, const Entries &Functions,
                          va_t Current, va_t Address, uint32_t Word) {
   const auto Next = Functions.upper_bound(Address);
-  if (Next == Functions.begin())
-    return false;
-  va_t Entry = std::prev(Next)->first;
-  const auto *Section = Image.getSectionFor(Entry);
-  if (Entry == Current || Entry == Address || !Section ||
-      Section != Image.getSectionFor(Address) ||
-      !rangeInBounds(Address - Section->VA, aarch64::kInsnSize,
-                     Section->FileSz) ||
-      !machODataInCodeRanges(Image.MachODataInCode, Address, aarch64::kInsnSize)
-           .empty())
-    return false;
-  const auto *Bytes = Image.readVA(Address, aarch64::kInsnSize);
-  if (!Bytes || readLE<uint32_t>(Bytes) != Word)
-    return false;
-  llvm::SmallDenseSet<va_t, 4> Seen;
-  while (Entry != Current) {
-    if (!Seen.insert(Entry).second)
-      return false;
-    const auto Source =
-        machOLiftedSource(Image, Entry, Entry + aarch64::kInsnSize);
-    if (!Source || !Source->ForwardTarget)
-      return false;
-    Entry = *Source->ForwardTarget;
-  }
-  return true;
+  return Next != Functions.begin() &&
+         machORetainsSigningWord(Image, Current, std::prev(Next)->first,
+                                 Address, Word);
 }
 
 // Keep the constants and callees as actual LLVM operands. In particular a

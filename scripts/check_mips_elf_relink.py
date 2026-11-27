@@ -5,6 +5,7 @@ import argparse
 from dataclasses import dataclass, replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import stat
@@ -282,8 +283,8 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run(args, *, error=None, expected=0, source=None):
-    result = subprocess.run(args, input=source, text=True, capture_output=True, timeout=60)
+def run(args, *, error=None, expected=0, source=None, cwd=None, env=None):
+    result = subprocess.run(args, input=source, text=True, capture_output=True, timeout=60, cwd=cwd, env=env)
     if error is None:
         passed = result.returncode == expected
     else:
@@ -496,6 +497,57 @@ def qualify_second_updates(args, build, out, profile, manifest, patch):
     return results
 
 
+def qualify_named_inputs(args, build, out, profile, expected):
+    start, selected, replacement = "startup/unit.o", "../objects/unit.o", "rebuilt/unit.o"
+    lld = Path(shutil.which(str(args.lld)) or args.lld).absolute()
+    neverd = Path(shutil.which(str(args.neverd)) or args.neverd).absolute()
+    with tempfile.TemporaryDirectory(dir=out) as replay:
+        directory = Path(replay) / "project"
+        directory.mkdir()
+        for name, source in ((start, "start.o"), (selected, "calc.o"), (replacement, "updated.o")):
+            (directory / name).parent.mkdir()
+            shutil.copyfile(build / source, directory / name)
+        for mode, script in (("inplace", "base.ld"), ("section", "section.ld")):
+            body = layout(profile, mode == "section")
+            write(directory / script, body.replace("*(.text.start)", f'"{start}"(.text.start)')
+                  .replace("*(.text.calc)", f'"{selected}"(.text.calc)'))
+        manifest = directory / "manifest.json"
+        encode(manifest, dict(objects=[start, selected], original=selected, replacement=replacement,
+                              function="calc", layout="base.ld", sectionLayout="section.ld", section=".calc.update"))
+        # Link from the recorded directory with the actual object arguments.
+        # The updated object occupies the original argument in each direct link.
+        reference = directory / "reference.elf"
+        for case, source in (("original", "calc.o"), ("inplace", "updated.o"), ("section", "updated.o")):
+            shutil.copyfile(build / source, directory / selected)
+            script = "section.ld" if case == "section" else "base.ld"
+            run([lld, "-static", "-T", script, "-o", reference, start, selected], cwd=directory)
+            if digest(reference) != expected[case]:
+                raise ValueError(f"{profile.name}: {case} direct link with named inputs differs")
+        shutil.copyfile(build / "calc.o", directory / selected)
+        inputs = [directory / name for name in (start, selected, replacement, "base.ld", "section.ld", "manifest.json")]
+        for path in inputs:
+            path.chmod(0o444)
+        def input_state():
+            return [(digest(path), stat.S_IMODE(path.stat().st_mode)) for path in inputs]
+
+        before = input_state()
+        (directory / "temporary").mkdir()
+        env = dict(os.environ, TMPDIR="temporary", TMP="temporary", TEMP="temporary")
+        same = directory / "更新 app.elf"
+        for mode in MODES:
+            shutil.copyfile(out / "original.elf", same)
+            same.chmod(0o751)
+            permissions = stat.S_IMODE(same.stat().st_mode)
+            for error in (None, "do not reproduce"):
+                run([neverd, "patch", same.name, "--relink=manifest.json", f"--linker-path={lld}",
+                     f"--mode={mode}", "-o", same.name], error=error, cwd=directory, env=env)
+                if digest(same) != expected[mode] or stat.S_IMODE(same.stat().st_mode) != permissions:
+                    raise ValueError(f"{profile.name}: {mode} same-path bytes or permissions changed")
+            same.replace(out / f"{mode}.elf")
+        if input_state() != before:
+            raise ValueError(f"{profile.name}: relink changed a read-only build input")
+
+
 def qualify(args):
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -591,21 +643,8 @@ def qualify(args):
             for mode in MODES:
                 reject(mode, entry_error, input_elf=bad_input, layout="readonly-entry.ld")
 
-            # Deliver the same-path results to the guest runner. A retry with
-            # the old objects must leave the last successful executable intact.
-            encode(manifest_path, manifest)
-            with tempfile.TemporaryDirectory(dir=out) as replay:
-                same = Path(replay) / "更新 app.elf"
-                for mode in MODES:
-                    shutil.copyfile(original, same)
-                    same.chmod(0o751)
-                    permissions = stat.S_IMODE(same.stat().st_mode)
-                    for error in (None, "do not reproduce"):
-                        patch(mode, same, input_elf=same, error=error)
-                        if (digest(same) != results[name][mode] or
-                                stat.S_IMODE(same.stat().st_mode) != permissions):
-                            raise ValueError(f"{name}: {mode} same-path bytes or permissions changed")
-                    same.replace(out / f"{mode}.elf")
+            # Deliver the named-input, same-path results to the guest runner.
+            qualify_named_inputs(args, build, out, profile, results[name])
 
             reject("section", "do not reproduce", objects=["start.o", "updated.o"],
                    original="updated.o")

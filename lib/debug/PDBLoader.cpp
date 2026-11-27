@@ -697,6 +697,7 @@ struct PDBDebugContext::Impl {
   mutable std::map<va_t, std::vector<AuthenticatedRecordParameter>>
       RecordParameters;
   mutable std::map<va_t, AuthenticatedRecordParameter> RecordReturns;
+  mutable std::map<va_t, AuthenticatedReturnValueState> ProcedureReturns;
   mutable std::mutex LocalMutex;
   mutable std::mutex PublicMutex;
   mutable std::mutex TypeMutex;
@@ -769,6 +770,7 @@ struct PDBDebugContext::Impl {
   bool UserSelectedForAnalysis = false;
   bool FunctionSignaturesAuthenticated = false;
   bool ObjectExtentsAuthenticated = false;
+  bool ReturnDeclarationsAuthenticated = false;
   bool Loaded = false;
 
   bool hasAnalysisAuthority() const {
@@ -784,21 +786,19 @@ struct PDBDebugContext::Impl {
     return Owner.VA + Off;
   }
 
-  std::optional<uint16_t> moduleForVA(va_t Addr) const {
-    if (Addr == 0 || Contribs.empty())
-      return std::nullopt;
+  const ModuleRange *contributionForVA(va_t Addr) const {
     const auto It = std::upper_bound(Contribs.begin(), Contribs.end(), Addr,
                                      [](va_t Value, const ModuleRange &Range) {
                                        return Value < Range.Start;
                                      });
-    auto Cur = It;
-    while (Cur != Contribs.begin()) {
-      --Cur;
-      if (Addr >= Cur->Start && Addr < Cur->End)
-        return Cur->Module;
-      if (Cur->End <= Addr)
-        break;
-    }
+    if (It == Contribs.begin() || Addr >= std::prev(It)->End)
+      return nullptr;
+    return &*std::prev(It);
+  }
+
+  std::optional<uint16_t> moduleForVA(va_t Addr) const {
+    if (const auto *Range = contributionForVA(Addr))
+      return Range->Module;
     return std::nullopt;
   }
 
@@ -1011,6 +1011,8 @@ struct PDBDebugContext::Impl {
 
   std::optional<AuthenticatedRecordParameter>
   recordParameter(llvm::codeview::TypeIndex TI, uint64_t Register) const;
+  AuthenticatedReturnValueState
+  returnDeclaration(llvm::codeview::TypeIndex TI) const;
   void loadRecordParameters(uint32_t ModuleIndex) const;
   void ensureGraph(TypeGraph &Graph, bool UseIpi) const;
   void noteRecordFields(const TypeRef &Named,
@@ -1837,8 +1839,13 @@ PDBDebugContext::loadImpl(const std::filesystem::path &PdbPath,
                        llvm::COFF::IMAGE_SCN_MEM_WRITE)) &&
             Section.isReadable() && !Section.isWritable() &&
             Size <= Section.Size - static_cast<uint32_t>(C.Off);
+        const bool Code = C.ISect <= FixedSectionCount &&
+                          Section.isExecutable() &&
+                          (Flags & llvm::COFF::IMAGE_SCN_CNT_CODE) &&
+                          (Flags & llvm::COFF::IMAGE_SCN_MEM_EXECUTE) &&
+                          Size <= Section.Size - static_cast<uint32_t>(C.Off);
         Owner.Contribs.push_back(
-            {VA, VA + Size, C.Imod, C.ISect, ReadOnlyData});
+            {VA, VA + Size, C.Imod, C.ISect, ReadOnlyData, Code});
       }
       void visit(const llvm::pdb::SectionContrib2 &C) override {
         visit(C.Base);
@@ -1862,9 +1869,14 @@ PDBDebugContext::loadImpl(const std::filesystem::path &PdbPath,
             llvm::pdb::kInvalidStreamIndex ||
         DBI.getDebugStreamIndex(llvm::pdb::DbgHeaderType::SectionHdrOrig) !=
             llvm::pdb::kInvalidStreamIndex;
-    if (Ctx->PImpl->ImageIdentityAuthenticated && !HasAddressTranslation)
+    if (Ctx->PImpl->ImageIdentityAuthenticated && !HasAddressTranslation) {
       Ctx->PImpl->ReadOnlyDataRegions =
           pdb_loader_detail::readOnlyDataRegions(Ctx->PImpl->Contribs);
+      if (Image.Arch == Arch::X64 || Image.Arch == Arch::AArch64) {
+        pdb_loader_detail::excludeSharedCode(Ctx->PImpl->Contribs);
+        Ctx->PImpl->ReturnDeclarationsAuthenticated = true;
+      }
+    }
   }
   // Phase B walks TPI/IPI records on first type use.  Load still does not
   // enter LLVM's SymbolCache lazy type graph.
@@ -2721,10 +2733,35 @@ PDBDebugContext::Impl::recordParameter(llvm::codeview::TypeIndex TI,
   return std::nullopt;
 }
 
+AuthenticatedReturnValueState
+PDBDebugContext::Impl::returnDeclaration(llvm::codeview::TypeIndex TI) const {
+  using namespace llvm::codeview;
+  using K = AuthenticatedReturnKind;
+  if (TI == TypeIndex::Void())
+    return {K::NoValue};
+  if (TI.isSimple())
+    return TI.getSimpleMode() == SimpleTypeMode::NearPointer64
+               ? AuthenticatedReturnValueState{K::Pointer, PtrSize}
+               : AuthenticatedReturnValueState{};
+  auto CV = loadType(Tpi, false, TI);
+  if (!CV || CV->kind() != TypeLeafKind::LF_POINTER)
+    return {};
+  PointerRecord Pointer;
+  if (auto E = TypeDeserializer::deserializeAs(*CV, Pointer)) {
+    llvm::consumeError(std::move(E));
+    return {};
+  }
+  if (Pointer.getMode() == PointerMode::Pointer &&
+      Pointer.getPointerKind() == PointerKind::Near64 &&
+      Pointer.getSize() == PtrSize)
+    return {K::Pointer, PtrSize};
+  return {};
+}
+
 void PDBDebugContext::Impl::loadRecordParameters(uint32_t ModuleIndex) const {
   using namespace llvm::codeview;
   if (!RecordParameterModules.insert(ModuleIndex).second || !Native ||
-      !hasAnalysisAuthority() || CPU != CPUType::X64)
+      !hasAnalysisAuthority() || (CPU != CPUType::X64 && CPU != CPUType::ARM64))
     return;
   auto Module = Native->getModuleDebugStream(ModuleIndex);
   if (!Module) {
@@ -2741,6 +2778,7 @@ void PDBDebugContext::Impl::loadRecordParameters(uint32_t ModuleIndex) const {
   std::map<va_t, std::vector<AuthenticatedRecordParameter>> Staged;
   std::set<va_t> Ambiguous;
   std::map<va_t, AuthenticatedRecordParameter> Returns;
+  std::map<va_t, AuthenticatedReturnValueState> Declarations;
   va_t Entry = 0;
   uint32_t End = 0, CodeSize = 0, Nesting = 0;
   std::optional<TypeIndex> Parameter;
@@ -2770,18 +2808,32 @@ void PDBDebugContext::Impl::loadRecordParameters(uint32_t ModuleIndex) const {
       if (!Staged.emplace(Entry, std::vector<AuthenticatedRecordParameter>{})
                .second)
         Ambiguous.insert(Entry);
-      // Only a direct, ordinary Win64 procedure declaration binds RAX to a
-      // record pointer here. Display fallbacks and member adjustments do not.
+      // Only an ordinary procedure type supplies a source return declaration.
+      // The physical record-pointer binding below is specific to Win64 RAX.
       if (!isProcedureIdSymbol(Kind))
         if (auto CV = loadType(Tpi, false, Proc->FunctionType);
             CV && CV->kind() == TypeLeafKind::LF_PROCEDURE) {
           ProcedureRecord Type;
           if (auto E = TypeDeserializer::deserializeAs(*CV, Type))
             llvm::consumeError(std::move(E));
-          else if (Type.CallConv == CallingConvention::NearC)
-            if (auto Return = recordParameter(
-                    Type.ReturnType, getTargetRegInfo(Arch::X64).IntReturnReg))
-              Returns.emplace(Entry, std::move(*Return));
+          else if (Type.CallConv == CallingConvention::NearC) {
+            if (ReturnDeclarationsAuthenticated) {
+              const auto *Range = contributionForVA(Entry);
+              if (Range && Range->ExclusiveCode &&
+                  Range->Module == ModuleIndex &&
+                  Range->Section == Proc->Segment &&
+                  CodeSize <= Range->End - Entry) {
+                const auto State = returnDeclaration(Type.ReturnType);
+                if (State.Kind != AuthenticatedReturnKind::Unknown)
+                  Declarations.emplace(Entry, State);
+              }
+            }
+            if (CPU == CPUType::X64)
+              if (auto Return =
+                      recordParameter(Type.ReturnType,
+                                      getTargetRegInfo(Arch::X64).IntReturnReg))
+                Returns.emplace(Entry, std::move(*Return));
+          }
         }
       Nesting = 0;
       Parameter.reset();
@@ -2809,7 +2861,7 @@ void PDBDebugContext::Impl::loadRecordParameters(uint32_t ModuleIndex) const {
       Parameter.reset();
       continue;
     }
-    if (Nesting)
+    if (Nesting || CPU != CPUType::X64)
       continue;
     if (Kind == SymbolKind::S_LOCAL) {
       Parameter.reset();
@@ -2887,6 +2939,9 @@ void PDBDebugContext::Impl::loadRecordParameters(uint32_t ModuleIndex) const {
   for (auto &[VA, Return] : Returns)
     if (!Ambiguous.contains(VA))
       RecordReturns.emplace(VA, std::move(Return));
+  for (const auto &[VA, State] : Declarations)
+    if (!Ambiguous.contains(VA))
+      ProcedureReturns.emplace(VA, State);
 }
 
 std::vector<AuthenticatedRecordParameter>
@@ -2940,6 +2995,24 @@ bool PDBDebugContext::hasAnalysisAuthority() const {
 
 bool PDBDebugContext::hasAuthenticatedFunctionSignatures() const {
   return PImpl && PImpl->FunctionSignaturesAuthenticated;
+}
+
+bool PDBDebugContext::hasAuthenticatedReturnDeclarations() const {
+  return PImpl && PImpl->ReturnDeclarationsAuthenticated;
+}
+
+AuthenticatedReturnValueState
+PDBDebugContext::resolveAuthenticatedReturnValueState(va_t Entry) const {
+  if (!hasAuthenticatedReturnDeclarations())
+    return {};
+  const auto Module = PImpl->moduleForVA(Entry);
+  if (!Module)
+    return {};
+  std::lock_guard<std::mutex> Guard(PImpl->RecordParameterMutex);
+  PImpl->loadRecordParameters(*Module);
+  const auto It = PImpl->ProcedureReturns.find(Entry);
+  return It == PImpl->ProcedureReturns.end() ? AuthenticatedReturnValueState{}
+                                             : It->second;
 }
 
 bool PDBDebugContext::hasAuthenticatedObjectExtents() const {

@@ -5148,6 +5148,79 @@ TEST_F(JTE_X86_64, GuardReadsFlagsItsPredecessorCompareSet) {
     EXPECT_TRUE(Table.AnalysisOnly || Table.Targets != RootedSlots);
 }
 
+static fs::path laneCarryX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_lane_carry.o";
+}
+
+// `movzbl (%rdi), %eax; cmp $9, %eax; ja` and, in a later block,
+// `cmp $6, %al; ja` before the dispatch indexes with %rax (GCC in sqlite's
+// sqlite3VdbeRecordCompareWithSkip).  The lane compare's block never writes
+// %al, so the guard proof follows the blocks' only predecessors to the zero
+// extension that ties the lane to the index, and both dispatches read seven
+// entries rather than the ten the dword guard admits.  A second path into the
+// lane compare that loads all of %rax, a load of all of %rax before both
+// compares, or a write of %ah between them leaves the dispatch unresolved.
+TEST_F(JTE_X86_64, LaneGuardFindsItsExtensionInAnEarlierBlock) {
+  auto ImageOrErr = neverd::loadBinary(laneCarryX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  // Each table holds seven entries and a zero word.
+  const auto TableBase = [&](size_t Table) {
+    return Rodata->VA + Table * 8 * 4;
+  };
+  const auto Entries = [&](size_t Table) {
+    std::vector<neverd::va_t> Targets;
+    for (size_t Slot = 0; Slot < 7; ++Slot) {
+      const uint8_t *Bytes = Image.readVA(TableBase(Table) + Slot * 4, 4);
+      if (!Bytes)
+        return std::vector<neverd::va_t>{};
+      int32_t Entry = 0;
+      std::memcpy(&Entry, Bytes, sizeof(Entry));
+      Targets.push_back(TableBase(Table) + static_cast<int64_t>(Entry));
+    }
+    return Targets;
+  };
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  const auto Build = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  for (const auto &[Name, Table] :
+       {std::pair{"jt_lane_carry", size_t(0)},
+        std::pair{"jt_lane_carry_chain", size_t(1)}}) {
+    SCOPED_TRACE(Name);
+    const std::vector<neverd::va_t> Expected = Entries(Table);
+    ASSERT_EQ(Expected.size(), 7u);
+    const neverd::LowFunc Func = Build(Name);
+    ASSERT_EQ(Func.JumpTables.size(), 1u);
+    EXPECT_FALSE(Func.JumpTables.front().AnalysisOnly);
+    EXPECT_EQ(Func.JumpTables.front().BaseAddr, TableBase(Table));
+    EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
+    EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+  }
+
+  for (const char *Name :
+       {"jt_lane_two_paths", "jt_lane_wide_load", "jt_lane_high_byte"}) {
+    SCOPED_TRACE(Name);
+    const neverd::LowFunc Refused = Build(Name);
+    ASSERT_FALSE(Refused.Blocks.empty());
+    EXPECT_FALSE(Refused.UnsafeIndirectBranchAddresses.empty());
+    for (const neverd::JumpTable &Table : Refused.JumpTables)
+      EXPECT_TRUE(Table.AnalysisOnly);
+  }
+}
+
 static fs::path scalarRetractedX64So() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_scalar_retracted.so";
 }

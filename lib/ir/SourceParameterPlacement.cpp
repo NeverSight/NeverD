@@ -68,7 +68,7 @@ bool source_placement::isRecord(const TypeRef &Type) {
 }
 
 std::optional<std::vector<NdScalarLeaf>>
-source_placement::scalarLeaves(const TypeRef &Type) {
+source_placement::scalarLeaves(const TypeRef &Type, bool *ContainsUnion) {
   std::vector<NdScalarLeaf> Leaves;
   unsigned Budget =
       ::neverd::limits::ir::kSourceParameterPlacementMaxScalarLeaves;
@@ -94,6 +94,10 @@ source_placement::scalarLeaves(const TypeRef &Type) {
     }
     if (!isRecord(Part))
       return false;
+    if (ContainsUnion && Part->IsUnion) {
+      *ContainsUnion = true;
+      return false;
+    }
     // The record's C layout, or the scalars its debug information lists.
     if (!Part->Fields.empty() &&
         Part->Fields.size() == Part->FieldOffsets.size()) {
@@ -155,6 +159,12 @@ neverd::placeSourceParameters(Arch A, BinaryFormat F, const TypeRef &ReturnType,
                               llvm::ArrayRef<TypeRef> ParamTypes, bool Variadic,
                               std::optional<unsigned> FixedCount,
                               InstructionMode EntryMode) {
+  if (F == BinaryFormat::ELF && hasRISCVDoubleABI(A)) {
+    if (FixedCount && (!Variadic || *FixedCount > ParamTypes.size()))
+      return std::nullopt;
+    return placeRISCVDoubleABI(getTargetRegInfo(A), ReturnType, ParamTypes,
+                               FixedCount.value_or(ParamTypes.size()));
+  }
   if (FixedCount && (!Variadic || !isMIPS(A) || !*FixedCount ||
                      *FixedCount > ParamTypes.size()))
     return std::nullopt;

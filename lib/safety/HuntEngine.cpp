@@ -2440,6 +2440,16 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     return Out;
   }
 
+  if (In.Img && hasRISCVDoubleABI(In.Img->Arch) &&
+      (E->Kind == SinkKind::Copy || E->Kind == SinkKind::Format)) {
+    Finding Out;
+    stampSite(Out, In, F, Site);
+    Out.TheVerdict = Verdict::Unknown;
+    Out.TheConfidence = Confidence::Low;
+    Out.Detail = "dynamic call-site analysis is unavailable for this ABI";
+    return Out;
+  }
+
   if (E->Kind == SinkKind::Format) {
     Finding Out;
     stampSite(Out, In, F, Site);

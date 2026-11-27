@@ -152,7 +152,7 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch &A,
   using namespace llvm::ELF;
   const auto &File = Obj.getELFFile();
   const auto &Header = File.getHeader();
-  if ((A == Arch::RISCV64 || isPowerPC64(A)) != ELFT::Is64Bits)
+  if ((isRISCV64(A) || isPowerPC64(A)) != ELFT::Is64Bits)
     return llvm::createStringError("elf: machine and ELF class disagree");
   if (Header.e_type != ET_EXEC && Header.e_type != ET_DYN &&
       Header.e_type != ET_REL)
@@ -164,9 +164,12 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch &A,
   if (isRISCV(A)) {
     if constexpr (ELFT::Endianness != llvm::endianness::little)
       return llvm::createStringError("elf: unsupported big-endian RISC-V");
-    if (Header.e_flags & ~uint32_t(EF_RISCV_RVC))
-      return llvm::createStringError(
-          "elf: RISC-V requires the integer ILP32 or LP64 ABI");
+    const uint32_t ABI = Header.e_flags & EF_RISCV_FLOAT_ABI;
+    if ((Header.e_flags & ~uint32_t(EF_RISCV_RVC | EF_RISCV_FLOAT_ABI)) ||
+        (ABI != EF_RISCV_FLOAT_ABI_SOFT && ABI != EF_RISCV_FLOAT_ABI_DOUBLE))
+      return llvm::createStringError("elf: unsupported RISC-V ABI flags");
+    if (ABI == EF_RISCV_FLOAT_ABI_DOUBLE)
+      A = ELFT::Is64Bits ? Arch::RISCV64D : Arch::RISCV32D;
   } else {
     if (isPowerPC64(A) ? Header.e_flags > ppc_elf::ELFv2 : Header.e_flags != 0)
       return llvm::createStringError("elf: unsupported PowerPC ABI flags");
@@ -213,6 +216,13 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch &A,
           return llvm::createStringError("elf: RISC-V architecture attribute "
                                          "conflicts with integer ELF class");
         const auto &Extensions = ISA.getExtensions();
+        const bool SupportedRegisterFile = !Extensions.count("q") &&
+                                           !Extensions.count("zfinx") &&
+                                           !Extensions.count("zdinx");
+        if (hasRISCVDoubleABI(A) &&
+            (!Extensions.count("d") || !SupportedRegisterFile))
+          return llvm::createStringError(
+              "elf: double-float RISC-V ABI conflicts with ISA attributes");
         struct Extension {
           const char *Name;
           unsigned Major;
@@ -241,6 +251,8 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch &A,
           if (Spec.Member)
             RV.*Spec.Member = true;
         }
+        if (!SupportedRegisterFile)
+          RV.SingleFloat = RV.DoubleFloat = RV.Zcf = RV.Zcd = false;
       }
     }
     if (isPowerPC(A) && (S.sh_flags & SHF_EXECINSTR) &&
@@ -259,6 +271,8 @@ llvm::Error readProfile(const llvm::object::ELFObjectFile<ELFT> &Obj, Arch &A,
   }
   if (isPowerPC64(A))
     return readPPC64Profile(File, *Sections, A, Linkage);
+  if (hasRISCVDoubleABI(A))
+    RV.SingleFloat = RV.DoubleFloat = true;
   if (isRISCV(A) && (Header.e_flags & EF_RISCV_RVC) && !RV.Zca)
     RV.Compressed = true;
   return llvm::Error::success();
