@@ -10,9 +10,17 @@
 
 #include "Decode.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/JSON.h"
 
-#include <algorithm>
+#include <bitset>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace neverd::lua;
 using namespace llvm;
@@ -415,10 +423,11 @@ struct Function {
 std::string display(StringRef S) {
   return json::isUTF8(S) ? S.str() : json::fixUTF8(S);
 }
-json::Object inventory(Chunk &C, Proto &P) {
+json::Object inventory(Chunk &C, const Proto &P) {
   json::Array Constants, Up, Locals, Children;
+  Constants.reserve(P.K.size() + P.GC.size());
   auto Pool = [&](const auto &Values, StringRef Name) {
-    for (auto &K : Values) {
+    for (const auto &K : Values) {
       static const char *const Kinds[] = {
           "nil",   "boolean", "integer", "number", "string",
           "table", "import",  "closure", "vector", "cdata"};
@@ -439,21 +448,24 @@ json::Object inventory(Chunk &C, Proto &P) {
   };
   Pool(P.K, "constants");
   Pool(P.GC, "gc");
-  for (auto Id : P.Children)
-    Children.push_back(Id);
+  Children.reserve(P.Children.size());
+  for (unsigned Id : P.Children)
+    Children.emplace_back(Id);
   auto Name = [&](StringRef S) -> json::Value {
     if (!S.data() || S.empty())
       return nullptr;
     C.Job.use(C.Job.Text, S.size() * 3, P.Start);
     return display(S);
   };
-  for (auto &L : P.Locals)
+  Locals.reserve(P.Locals.size());
+  for (const auto &L : P.Locals)
     Locals.push_back(json::Object{
         {"name", Name(L.Name)},
         {"start_pc", L.Start},
         {"end_pc", L.End},
         {"register", L.Reg < 0 ? json::Value(nullptr) : json::Value(L.Reg)}});
-  for (auto &U : P.Up) {
+  Up.reserve(P.Up.size());
+  for (const auto &U : P.Up) {
     json::Object O{{"name", Name(U.Name)}};
     if (C.Dialect == Family::Jit ||
         (C.Dialect == Family::Puc && C.Version >= 0x52)) {
@@ -482,9 +494,52 @@ json::Object inventory(Chunk &C, Proto &P) {
       {"register_names", "generated"},
       {"line_info", P.Lines.empty() ? "unavailable" : "available"}};
 }
+
+void addInstructionMappings(json::Object &Row, ArrayRef<Inst> Code,
+                            const Proto &P, ArrayRef<unsigned> SourceLines,
+                            bool Decoded) {
+  json::Array Instructions;
+  // Auxiliary words and the unexamined tail of a partial decode have no row.
+  Instructions.reserve(
+      llvm::count_if(Code, [](const Inst &I) { return !I.Op.empty(); }));
+  bool AllSupported = Decoded;
+  for (const Inst &I : Code) {
+    if (I.Op.empty())
+      continue;
+
+    json::Object Mapping{{"pc", I.PC},       {"offset", P.CodeAt + 4 * I.PC},
+                         {"words", I.Width}, {"word", P.Code[I.PC]},
+                         {"opcode", I.Op},   {"successors", nullptr}};
+    if (I.Kind == Form::Unsupported)
+      AllSupported = false;
+    else if (Decoded) {
+      auto Targets = successors(I);
+      json::Array Edges;
+      Edges.reserve(Targets.size());
+      for (int Target : Targets)
+        Edges.emplace_back(Target);
+      Mapping["successors"] = std::move(Edges);
+    }
+    if (I.Width > 1) {
+      json::Array AuxiliaryWords;
+      AuxiliaryWords.reserve(I.Width - 1);
+      for (auto Word : ArrayRef(P.Code).slice(I.PC + 1, I.Width - 1))
+        AuxiliaryWords.emplace_back(Word);
+      Mapping["auxiliary_words"] = std::move(AuxiliaryWords);
+    }
+    if (!P.Lines.empty())
+      Mapping["original_line"] = P.Lines[I.PC];
+    if (I.PC < SourceLines.size() && SourceLines[I.PC])
+      Mapping["source_line"] = SourceLines[I.PC];
+    Instructions.emplace_back(std::move(Mapping));
+  }
+  Row["decode_complete"] = AllSupported;
+  Row["instructions"] = std::move(Instructions);
+}
 } // namespace
 void neverd::lua::render(Chunk &C, json::Object &Result) {
   json::Array Functions;
+  Functions.reserve(C.Functions.size());
   StringRef Overall = "reconstructed_source";
   for (auto &P : C.Functions) {
     if (!P.Complete)
@@ -530,38 +585,7 @@ void neverd::lua::render(Chunk &C, json::Object &Result) {
       if (Status == "malformed" || Overall != "malformed")
         Overall = Status;
     }
-    json::Array Instructions;
-    for (auto &I : F.Code)
-      if (!I.Op.empty()) {
-        json::Array Edges;
-        if (Decoded)
-          for (auto T : successors(I))
-            Edges.push_back(T);
-        json::Object Inst{{"pc", I.PC},
-                          {"offset", P.CodeAt + 4 * I.PC},
-                          {"words", I.Width},
-                          {"word", P.Code[I.PC]},
-                          {"opcode", I.Op},
-                          {"successors", Decoded && I.Kind != Form::Unsupported
-                                             ? json::Value(std::move(Edges))
-                                             : json::Value(nullptr)}};
-        if (I.Width > 1) {
-          json::Array Extra;
-          for (unsigned N = 1; N < I.Width; ++N)
-            Extra.push_back(P.Code[I.PC + N]);
-          Inst["auxiliary_words"] = std::move(Extra);
-        }
-        if (!P.Lines.empty())
-          Inst["original_line"] = P.Lines[I.PC];
-        if (I.PC < Out.Map.size() && Out.Map[I.PC])
-          Inst["source_line"] = Out.Map[I.PC];
-        Instructions.push_back(std::move(Inst));
-      }
-    Row["decode_complete"] =
-        Decoded && llvm::none_of(F.Code, [](const Inst &I) {
-          return !I.Op.empty() && I.Kind == Form::Unsupported;
-        });
-    Row["instructions"] = std::move(Instructions);
+    addInstructionMappings(Row, F.Code, P, Out.Map, Decoded);
     Row["source"] = std::move(Out.Text);
     Row["status"] = Status;
     Row["diagnostics"] = std::move(Diagnostics);
