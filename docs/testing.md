@@ -21099,6 +21099,10 @@ eight-byte header. Both loader selections check the original call and reject
 a changed DLL, delay binding, missing relocation, unaligned address, an
 overlapping import on the final byte, and shared, discardable or read-only
 storage.
+The original startup `FNCLEX` also checks the integer and floating-state
+boundary. Its stack pointer, private stack word and integer result survive.
+The test seeds a known x87 status word and checks that the frame analysis
+withdraws it after the instruction in both loader selections.
 The outer stdio wrapper
 restores ESP from EBP after its nested calls. The inner wrapper depends on
 the UCRT calling convention. On Windows,

@@ -21592,6 +21592,9 @@ checks the reached branches, the return cleanup, and the exact image-relative
 reads and writes. A nested call can contribute reads from a checked, call-free
 integer leaf. The caller consumes only the proved low result byte for control
 flow. Other invocations of the same target have their own inputs and effects.
+An operand-free `FNCLEX` preserves the integer frame on ordinary continuation.
+The PE32 frame transfer drops both bytes of its previous x87 status value so
+that a later `FNSTSW` cannot reuse stale exception flags or condition codes.
 `X86/RegistrationRuntimeImports.def` owns registration cleanup, jump and
 local-unwind names; `Windows/SEHRuntimeImports.def` maps the Win64 CRT memory
 entries to their routine kinds and provider queries. Symbol names remain case

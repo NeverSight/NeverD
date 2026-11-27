@@ -1799,6 +1799,61 @@ TEST(RegistrationCRTFrame, MathHelperStackFactsDoNotGrantMemoryEffects) {
   }
 }
 
+TEST(RegistrationCRTFrame, XCPT4ClearsX87StatusWithinItsIntegerFrame) {
+  using namespace registration_state;
+  for (bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(*Image));
+    const auto Function = CFGBuilder().buildIntegerFrameProof(
+        *Image, Dec, 0x406b88, "pre-c-initializer");
+    unsigned Matches = 0;
+    for (const auto &Block : Function.Blocks)
+      for (const auto &Op : Block.Ops) {
+        if (Op.Addr != 0x406bb8)
+          continue;
+        ++Matches;
+        ASSERT_EQ(Op.Opcode, NdOp::INTRINSIC);
+        ASSERT_EQ(Op.NumInputs, 1u);
+        ASSERT_EQ(Op.Inputs[0], NdVar::cst(uint64_t(Intrinsic::X87Fnclex), 2));
+        EXPECT_TRUE(isFramePreservingIntrinsic(Op));
+        EXPECT_FALSE(isX86FrameReadIntrinsic(Op, Arch::X86));
+
+        FrameState State;
+        FrameTransfer Transfer(State, 0);
+        const auto Status = NdVar::reg(x86reg::FPU_SW, 2);
+        State.OtherRegisterBytes[x86reg::FPU_SW] = FrameValue::constant(0x41);
+        State.OtherRegisterBytes[x86reg::FPU_SW + 1] =
+            FrameValue::constant(0x38);
+        State.Registers[x86reg::RSP / x86reg::GeneralRegStride] =
+            FrameValue::frame(-8);
+        State.Registers[x86reg::RAX / x86reg::GeneralRegStride] =
+            FrameValue::constant(1);
+        State.store(-8, 4, FrameValue::constant(42));
+        EXPECT_EQ(Transfer.read(Status).Constant, 0x3841u);
+        Transfer.beginInstruction(Op.Addr);
+        Transfer.write(Op, Transfer.evaluate(Op, false));
+        EXPECT_FALSE(Transfer.read(Status).Constant);
+        EXPECT_EQ(Transfer.read(NdVar::reg(x86reg::RSP, 4)),
+                  FrameValue::frame(-8));
+        EXPECT_EQ(Transfer.read(NdVar::reg(x86reg::RAX, 4)).Constant, 1u);
+        EXPECT_EQ(State.load(-8, 4).Constant, 42u);
+
+        auto Malformed = Op;
+        Malformed.Output = NdVar::reg(x86reg::RSP, 4);
+        EXPECT_FALSE(isFramePreservingIntrinsic(Malformed));
+        Malformed = Op;
+        Malformed.addInput(NdVar::reg(x86reg::RAX, 4));
+        EXPECT_FALSE(isFramePreservingIntrinsic(Malformed));
+        Malformed = Op;
+        Malformed.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+        EXPECT_FALSE(isFramePreservingIntrinsic(Malformed));
+      }
+    EXPECT_EQ(Matches, 1u);
+  }
+}
+
 TEST(RegistrationCRTFrame, FloatingStateEffectsRequireTheirExactShape) {
   auto Image = loadXCPT4();
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
