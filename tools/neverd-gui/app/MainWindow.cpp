@@ -32,7 +32,6 @@
 #include "ListingView.h"
 #include "LoadFileDialog.h"
 #include "LocalTypesView.h"
-#include "LuaRecoveryDialog.h"
 #include "MapPromptDialog.h"
 #include "MicrosoftSymbols.h"
 #include "ModelessDialog.h"
@@ -46,6 +45,7 @@
 #include "QuickStartDialog.h"
 #include "Resolve.h"
 #include "SafetyScanDialog.h"
+#include "ScriptRecoveryDialog.h"
 #include "SecondaryTextDelegate.h"
 #include "Session.h"
 #include "SetTypeDialog.h"
@@ -2187,9 +2187,20 @@ void MainWindow::connectActions() {
     comparison_->raise();
     comparison_->activateWindow();
   });
+  on(ActionId::FilePythonRecovery, [this] {
+    if (!pythonRecovery_) {
+      pythonRecovery_ = new ScriptRecoveryDialog(session_.workerPath(), this,
+                                                 ScriptLanguage::Python);
+      connect(pythonRecovery_, &ScriptRecoveryDialog::nativeReady, this,
+              &MainWindow::openFile);
+    }
+    pythonRecovery_->show();
+    pythonRecovery_->raise();
+    pythonRecovery_->activateWindow();
+  });
   on(ActionId::FileLuaRecovery, [this] {
     if (!luaRecovery_)
-      luaRecovery_ = new LuaRecoveryDialog(session_.workerPath(), this);
+      luaRecovery_ = new ScriptRecoveryDialog(session_.workerPath(), this);
     luaRecovery_->show();
     luaRecovery_->raise();
     luaRecovery_->activateWindow();
@@ -2771,6 +2782,7 @@ void MainWindow::updateActions() {
                         name == QLatin1String("FileOpen") ||
                         name == QLatin1String("FilePackageReview") ||
                         name == QLatin1String("FileLuaRecovery") ||
+                        name == QLatin1String("FilePythonRecovery") ||
                         name == QLatin1String("FileCompare") ||
                         name == QLatin1String("FileExit") ||
                         name == QLatin1String("FileQuickStart") ||

@@ -1359,6 +1359,14 @@
         <source>Recover a Lua artifact and inspect its prototypes</source>
         <translation>Lua 소스를 복원하고 함수 프로토타입 검사</translation>
     </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Python 코드 및 패키지 구성 요소 검사</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Python 소스 복원…</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -11249,7 +11257,7 @@ Your previous graph is still available.</source>
     </message>
 </context>
 <context>
-    <name>neverd::gui::LuaRecoveryDialog</name>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
     <message>
         <source>Recover Lua source</source>
         <translation>Lua 소스 복원</translation>
@@ -11373,6 +11381,62 @@ Your previous graph is still available.</source>
     <message>
         <source>Original line %1</source>
         <translation>원본 줄 %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>구성 요소</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>진입 스크립트</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>네이티브 구성 요소 내보내는 중…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>폴더…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>함수</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>함수 %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>네이티브 구성 요소를 내보냈습니다.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>PyInstaller 폴더 열기</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Python 파일 열기</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>네이티브 분석에서 열기…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>이 작업 프로세스에서는 Python 소스를 복원할 수 없습니다.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python 소스 (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Python 소스 복원</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>네이티브 구성 요소를 새 파일로 저장</translation>
     </message>
 </context>
 </TS>

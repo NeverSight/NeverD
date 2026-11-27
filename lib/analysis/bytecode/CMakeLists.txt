@@ -20,3 +20,17 @@ add_neverd_component_library(NeverDLuaRecovery
   LINK_COMPONENTS Digest
   LLVM_COMPONENTS Support
 )
+
+add_neverd_component_library(NeverDPythonRecovery
+  python/Archive.cpp
+  python/Exceptions.cpp
+  python/Expressions.cpp
+  python/Instructions.cpp
+  python/Instructions311.cpp
+  python/Marshal.cpp
+  python/Recovery.cpp
+  python/Source.cpp
+  LINK_COMPONENTS Digest
+  LLVM_COMPONENTS Object Support
+)
+target_link_libraries(NeverDPythonRecovery PRIVATE ZLIB::ZLIB)

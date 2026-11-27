@@ -1,6 +1,6 @@
 **语言**: [English](../README.md) | [简体中文](README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
+<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
 
 [← NeverD 项目](project.md)
 
@@ -46,6 +46,7 @@
 | [GUI 进程插件（英文）](../gui-plugins.md) | 管理器、菜单位置、任务结果和进程提供程序协议 |
 | [NPH 进程插件宿主（英文）](../plugin-host.md) | 共享所有权、任务准入、协议和进程生命周期 |
 | [原生插件](plugins.md) | 纯 C 描述符 ABI、回调与事件、构建/链接流程、发现顺序及兼容性规则 |
+| [Python 产物恢复](../python-recovery.md) | CPython 版本支持、PyInstaller 组件、原生分析和源码验证 |
 | [Python 插件](python-plugins.md) | 插件编写、会话与事件 API、隔离、测试及发布 |
 | [移动端总览](mobile.md) | Android 与 iOS 支持范围、输入输出格式、快速开始及各平台指南入口 |
 | [Android Java 代码恢复](android.md) | 支持 APK（含多 DEX）、DEX、smali → Java；CLI 参数、JSON 报告、验证与恢复限制 |

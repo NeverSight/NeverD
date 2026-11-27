@@ -1,6 +1,6 @@
 **语言**: [English](../../README.md) | [简体中文](project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 43c16b0119e7742e48d299e50d42224b09635b32fccff585a2f42918cfe3aefb -->
+<!-- i18n-source: 7a5404f829b6a5a34a3f24808dba0cb23589c828d24533a70789c03cf24cd87f -->
 
 <div align="center">
 
@@ -306,6 +306,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 统计 | 对每个已加载函数生成默认 C；检查后即释放该函数体 |
 | `decompile -llvm` | `.c` | 经 LLVM IR + 优化器 |
 | `decompile --devirtualize` | `.c` + 可选 JSON | 实验性 x64 解释器恢复；需要 `--func`；[契约与示例](interpreter-recovery.md) |
+| `python` | `.py` / JSON / 原生组件 | [CPython 与 PyInstaller 产物恢复](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Lua、LuaJIT 和 Luau 源码恢复](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 实验性: [Android](android.md), [iOS](ios.md) |
 | `patch` | 二进制 | 重写机器码 |

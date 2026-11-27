@@ -1,6 +1,6 @@
 **語言**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
+<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
 
 [← NeverD 專案](project.md)
 
@@ -46,6 +46,7 @@
 | [GUI 行程外掛（英文）](../gui-plugins.md) | 管理員、功能表位置、工作結果與行程提供程式通訊協定 |
 | [NPH 行程外掛宿主（英文）](../plugin-host.md) | 共用擁有權、工作准入、通訊協定與行程生命週期 |
 | [原生外掛](plugins.md) | 純 C 描述元 ABI、回呼與事件、建置/連結流程、探索順序及相容性規則 |
+| [Python 產物還原](../python-recovery.md) | CPython 版本支援、PyInstaller 元件、原生程式分析與原始碼驗證 |
 | [Python 外掛](python-plugins.md) | 外掛撰寫、工作階段與事件 API、隔離、測試及發佈 |
 | [行動平台支援總覽](mobile.md) | Android / iOS 輸入、原始碼輸出、CLI 流程與限制 |
 | [Android Java 還原](android.md) | APK（multidex）、DEX、smali 檔案／目錄 → Java。CLI 流程、執行環境、選項、JSON 報告、錯誤處理與驗證限制 |
