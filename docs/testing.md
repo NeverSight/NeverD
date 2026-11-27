@@ -12893,12 +12893,15 @@ refusal cases on incoming frame bytes whose writer is outside the function.
 variants through HighC and optimized/unoptimized LLVMC, compiling the generated
 x64 ELF C at O0/O2 with undefined-behavior traps and independent expected values.
 `JumpTableJoinedGuard.WideJoinedDomainsKeepEveryCase` uses bash's shape: a zero
-byte enters the dispatch past its range guard. Sizes 63, 64, 65, 97 and 128
-cross the one-word mask and reach the joined ceiling, and each keeps every
-slot. `WideJoinedDomainsRefuseAHoleOrTheNextSize` refuses 129 cases, whose
-literal is past the ceiling, and an equality path that reads one slot past
-the table. `AWideLiteralElsewhereKeepsASmallJoinedDomain` raises the proposed
-envelope to 128 with an unrelated compare and still proves the three slots.
+byte enters the dispatch past its range guard. Sizes 63, 64, 65, 97, 128,
+129, 173 and 255 cross each word of the feasible set and reach the joined
+ceiling, and each keeps every slot. `WideJoinedDomainsRefuseUnboundedOrHoledPaths`
+refuses 256 cases of a 16-bit value, whose literal is past the ceiling (256
+byte cases are bounded by the byte's own width), an equality path that reads
+one slot past the table, and a 255-case dispatch that a second path enters
+with an unchecked byte, which can be 255.
+`AWideLiteralElsewhereKeepsASmallJoinedDomain` raises the proposed envelope
+to the ceiling with an unrelated compare and still proves the three slots.
 `GeneratedSourceExecutesAWideJoinedDomain` compiles and runs the 97-case
 function from all three C routes at O0/O2.
 `X86_64ColdFragment.TheLoaderBindsAFramelessTrapPart` loads GCC 15.2's output

@@ -162,11 +162,11 @@ constexpr uint32_t kMaxJumpTableFeasibleSetValues = 64;
 /// Exclusive envelope for a joined predecessor domain.  Compare literals only
 /// propose it and each feasible coordinate is read from a solver model, so a
 /// wider envelope costs one query per member, not per proposed value.  It
-/// stays below a byte lane's 256 values: a byte read on an unguarded path is
-/// then a counterexample, never a domain proved by the lane's width alone.
-constexpr uint32_t kMaxJumpTableJoinedDomainValues = 128;
-static_assert(kMaxJumpTableJoinedDomainValues % 64 == 0 &&
-              kMaxJumpTableJoinedDomainValues >=
+/// stays below a byte lane's 256 values: a byte read on an unguarded path can
+/// be 255, which is then a counterexample, never a domain proved by the lane's
+/// width alone.
+constexpr uint32_t kMaxJumpTableJoinedDomainValues = 255;
+static_assert(kMaxJumpTableJoinedDomainValues >=
                   kMaxJumpTableFeasibleSetValues &&
               kMaxJumpTableJoinedDomainValues < 256);
 
