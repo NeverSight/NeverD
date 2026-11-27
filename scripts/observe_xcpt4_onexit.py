@@ -71,11 +71,11 @@ def parse_markers(output, groups):
     results = {}
     for name, fields in groups.items():
         pattern = " ".join(f"{key}=([01])" for key in fields)
-        matches = re.findall(rf"^XCPT4_{name} {pattern}\s*$", output, re.MULTILINE)
+        matches = re.findall(rf"\bXCPT4_{name} {pattern}[ \t]*$", output, re.MULTILINE)
         if len(matches) != 1:
             errors = [line for line in output.splitlines()
-                      if any(word in line.lower() for word in ("error", "syntax", "couldn't", "unable", "breakpoint"))]
-            raise ValueError(f"Expected one {name} observation, got {len(matches)}. {errors[-8:]}")
+                      if any(word in line.lower() for word in ("error", "syntax", "couldn't", "unable", "breakpoint", "operand", "unknown", "xcpt4_"))]
+            raise ValueError(f"Expected one {name} observation, got {len(matches)}. {errors[-16:]}")
         results[name] = dict(zip(fields, (bool(int(n)) for n in matches[0])))
     return results
 
@@ -92,8 +92,10 @@ def main():
     debugger = Path(os.environ["ProgramFiles(x86)"]) / "Windows Kits/10/Debuggers/x86/cdb.exe"
     steps, groups = observation()
     with tempfile.TemporaryDirectory() as folder:
-        command = [str(debugger), "-y", folder, str(fixture)]
-        completed = subprocess.run(command, input="\n".join(steps) + "\n", text=True,
+        commands = Path(folder) / "observe.txt"
+        commands.write_text("\n".join(steps) + "\n", encoding="ascii")
+        command = [str(debugger), "-y", folder, "-cf", str(commands), str(fixture)]
+        completed = subprocess.run(command, stdin=subprocess.DEVNULL, text=True,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    errors="replace", timeout=120, check=True)
     results = parse_markers(completed.stdout, groups)
