@@ -35,7 +35,6 @@
 #include "neverd/ir/low/LowRawEnvironment.h"
 #include "neverd/ir/low/MIPS/MIPSControlTarget.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
-#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -1127,33 +1126,6 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
         // Without a proven value, preserve the ordinary strict/lenient
         // handling of an unknown intrinsic output below.
       }
-      if (const auto *Read = riscv::cycleRead(Id)) {
-        if (!Read->admits(Img.Arch) || Op.NumInputs != 1 ||
-            (!Op.Output.isReg() && !Op.Output.isTemp()) ||
-            Op.Output.Size != Img.getPointerSize() || !RISCVCycleReader)
-          return false;
-        const auto Sample = RISCVCycleReader();
-        if (!Sample)
-          return false;
-        writeOutput(Op.Output, Read->HighHalf ? *Sample >> 32 : *Sample);
-        return true;
-      }
-      if (Id == Intrinsic::PPCVaddubm) {
-        if (!isPowerPC(Img.Arch) || Op.NumInputs != 3 ||
-            (!Op.Output.isReg() && !Op.Output.isTemp()) ||
-            Op.Output.Size != ppc::VectorBytes ||
-            Op.Inputs[1].Size != ppc::VectorBytes ||
-            Op.Inputs[2].Size != ppc::VectorBytes ||
-            !knownOperandBytes(Op.Inputs[1], 0, ppc::VectorBytes) ||
-            !knownOperandBytes(Op.Inputs[2], 0, ppc::VectorBytes))
-          return false;
-        auto Bytes = readOperandBytes(Op.Inputs[1]);
-        const auto Right = readOperandBytes(Op.Inputs[2]);
-        for (unsigned I = 0; I != ppc::VectorBytes; ++I)
-          Bytes[I] += Right[I];
-        writeOutputBytes(Op.Output, Bytes);
-        return true;
-      }
       if (integer_memory::owns(Id))
         return executeIntegerMemory(Op, Id);
       // The explicit portable x87 profile cannot silently skip an unmodeled
@@ -1215,7 +1187,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
           Id == Intrinsic::EVEXExpandLoad || Id == Intrinsic::AesEnc ||
           Id == Intrinsic::AesEncLast || Id == Intrinsic::AesDec ||
           Id == Intrinsic::AesDecLast || Id == Intrinsic::Pclmulqdq ||
-          isX86AtomicIntrinsic(Id))
+          isX86AtomicIntrinsic(Id) || Id == Intrinsic::PPCVaddubm ||
+          riscv::cycleRead(Id))
         return executeIntrinsic(Op);
     }
     // Opaque intrinsic (SSE/NEON vector op, etc.): it cannot alter control
