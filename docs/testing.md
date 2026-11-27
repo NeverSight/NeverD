@@ -12889,6 +12889,15 @@ the table. `AWideLiteralElsewhereKeepsASmallJoinedDomain` raises the proposed
 envelope to 128 with an unrelated compare and still proves the three slots.
 `GeneratedSourceExecutesAWideJoinedDomain` compiles and runs the 97-case
 function from all three C routes at O0/O2.
+`X86_64ColdFragment.TheLoaderBindsAFramelessTrapPart` loads GCC 15.2's output
+for the shape of Lua's reallymarkobject, linked with and without symbols. Its
+isolated trap part begins with the entry rule and is bound in both copies.
+`AFramelessTrapPartIsACaseOfItsSwitch` decompiles the stripped copy: the
+dispatch is a switch whose isolated path traps, not a call through the table,
+and the part has no definition of its own.
+`EntryLikePartsSomethingNamesStayFunctions` binds a control part and keeps as
+functions a part that is also called, one that returns and one a relocated
+pointer names; the control part's own symbol keeps it a function too.
 `JumpTableFiniteSelector.ExactSingletonReplayPreservesAProvedSibling`
 uses i386 and x64 consumers sharing one relocated table. The exact singleton
 keeps its finite replay without poisoning the independently bounded sibling's

@@ -1584,6 +1584,17 @@ entries and unwind frame starts; a frame that begins later, a chained row or a
 cold fragment cannot supply an independent callable identity. Next-entry bounds
 use those primary identities as well. Explicitly selecting code for analysis
 retains its separate decode and admission checks.
+GCC's hot/cold partitioning gives a function's `.text.unlikely` part an FDE of
+its own. The DWARF loader binds the part to the one function whose direct
+branches enter it with the frame its rules describe there, when the part
+begins inside that frame. A frameless function's part has no frame to begin
+inside, so its FDE starts with the entry rule as a function's does. That part
+is bound only when it ends in `ud2`, the trap of a path GCC isolated such as a
+store through a pointer it proved null, and nothing names it as a function:
+no symbol other than a `.cold` name, no direct call, no RIP-relative address
+and no relocated code pointer. An entry-like region that returns is a function
+tail-called once and stays one. Lua's reallymarkobject enters its isolated part
+from a jump table, which could not take a function entry as a case.
 COFF `IMAGE_SCN_CNT_CODE` is instruction-storage evidence independently of
 page execute permission. Ownership, selected pipeline entries and SDK batch
 selection share that distinction without changing the image's page flags.
