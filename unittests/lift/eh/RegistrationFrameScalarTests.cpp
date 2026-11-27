@@ -41,6 +41,68 @@ FrameValue evaluate(FrameValue Left, FrameValue Right, const LowOp &Op) {
   return FrameTransfer(Frame, -16).evaluate(Op, true);
 }
 
+TEST(RegistrationFrameScalar, ByteReturnLeavesTheUpperEAXBytesUnknown) {
+  FrameState Frame;
+  auto &EAX = Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride];
+  EAX = FrameValue::frame(-16);
+  FrameTransfer Transfer(Frame, -16);
+  const auto AL = NdVar::reg(x86reg::RAX, 1);
+  LowOp Move;
+  Move.Opcode = NdOp::COPY;
+  Move.Output = AL;
+  Move.addInput(NdVar::scalar(0, 1));
+  Transfer.write(Move, Transfer.evaluate(Move, false));
+  EXPECT_EQ(Transfer.read(AL), FrameValue::constant(0));
+  EXPECT_FALSE(Transfer.read(NdVar::reg(x86reg::RAX, 2)).Constant);
+  EXPECT_FALSE(EAX.Constant);
+  EXPECT_TRUE(EAX.MayBeFrame);
+  EXPECT_FALSE(EAX.Offset);
+  EAX = projectX86CallReturnValue(EAX);
+  EXPECT_EQ(Transfer.read(AL), FrameValue::constant(0));
+  EXPECT_FALSE(EAX.Constant);
+  EXPECT_TRUE(EAX.FrameOnlyFromCall);
+
+  Move.Output = NdVar::reg(x86reg::RAX + 1, 1);
+  Transfer.write(Move, FrameValue::taint(true));
+  EXPECT_EQ(Transfer.read(AL), FrameValue::constant(0));
+  EXPECT_FALSE(Transfer.read(Move.Output).Constant);
+  Move.Output = AL;
+  Transfer.write(Move, FrameValue::taint(true));
+  EXPECT_FALSE(Transfer.read(AL).Constant);
+  Transfer.write(Move, FrameValue::constant(1));
+  LowOp Call;
+  Call.Opcode = NdOp::CALL;
+  Transfer.write(Call, {});
+  EXPECT_FALSE(Transfer.read(AL).Constant);
+}
+
+TEST(RegistrationFrameScalar, JoinedByteRequiresAgreementOnEveryReturn) {
+  FrameState Frame;
+  FrameTransfer Transfer(Frame, -16);
+  LowOp Move;
+  Move.Opcode = NdOp::COPY;
+  Move.Output = NdVar::reg(x86reg::RAX, 1);
+  Move.addInput(NdVar::scalar(1, 1));
+  Transfer.write(Move, Transfer.evaluate(Move, false));
+  const FrameValue Byte = Transfer.read(NdVar::reg(x86reg::RAX, 4));
+  ASSERT_EQ(Transfer.read(Move.Output), FrameValue::constant(1));
+  auto &EAX = Frame.Registers[x86reg::RAX / x86reg::GeneralRegStride];
+  const auto Word = FrameValue::constant(0x543201);
+  const auto OtherWord = FrameValue::constant(0x761201);
+  for (const auto &Agreed :
+       {join(Byte, Word), join(Word, Byte), join(Word, OtherWord),
+        join(join(Word, OtherWord), Byte), join(Word, join(OtherWord, Byte))}) {
+    EAX = Agreed;
+    EXPECT_EQ(Transfer.read(Move.Output), FrameValue::constant(1));
+    EXPECT_FALSE(EAX.Constant);
+  }
+  for (const auto &Other : {FrameValue::constant(0x543200), FrameValue{},
+                            FrameValue::imageAddress(0x400001)}) {
+    EAX = join(Byte, Other);
+    EXPECT_FALSE(Transfer.read(Move.Output).Constant);
+  }
+}
+
 TEST(RegistrationFrameScalar, ConstantBranchesRequireBothPhysicalEdges) {
   for (bool Taken : {false, true})
     for (bool Reversed : {false, true})

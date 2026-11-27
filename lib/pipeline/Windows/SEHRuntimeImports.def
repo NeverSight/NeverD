@@ -15,9 +15,9 @@
 #error "Define NEVERD_SEH_RUNTIME_IMPORT before including this file"
 #endif
 
-NEVERD_SEH_RUNTIME_IMPORT("__acrt_iob_func", CRTStream, isX64CRTStdioProvider)
+NEVERD_SEH_RUNTIME_IMPORT("__acrt_iob_func", CRTStream, isUCRTStdioProvider)
 NEVERD_SEH_RUNTIME_IMPORT("__stdio_common_vfprintf", CRTVfprintf,
-                          isX64CRTStdioProvider)
+                          isUCRTStdioProvider)
 NEVERD_SEH_RUNTIME_IMPORT("_controlfp_s", CRTControlFP, isX64ControlFPProvider)
 
 #undef NEVERD_SEH_RUNTIME_IMPORT

@@ -112,7 +112,7 @@ class ScalarLeafProof {
       return Op.mem.disp == 8 || (Op.mem.disp == -4 && State.Scratch);
     if (Op.mem.base != X86_REG_INVALID || Op.mem.disp < 0 ||
         uint64_t(Op.mem.disp) > UINT32_MAX - 3 ||
-        !(isFileBackedWritableImageRange(Image, va_t(Op.mem.disp), 4) ||
+        !(isMappedWritablePE32DataRange(Image, va_t(Op.mem.disp), 4) ||
           readImmutableImageBytes(Image, va_t(Op.mem.disp), 4)))
       return false;
     // Only storage ownership matters: the retained instruction still reads
@@ -170,9 +170,15 @@ public:
                         State.Flags)
                .second)
         continue;
-      const auto Return = readImmutableCodeBytes(Image, State.Address, 4);
-      if (Return && *Return == std::vector<uint8_t>({0x8b, 0xe5, 0x5d, 0xc3})) {
-        if (!(State.Registers & 1) || !recordInstruction(State.Address, 4))
+      // Both forms restore this helper's EBP frame before its near return.
+      const auto *Start = Image.readVA(State.Address, 2);
+      const bool Leave = Start && Start[0] == 0xc9 && Start[1] == 0xc3;
+      if (Leave || (Start && Start[0] == 0x8b && Start[1] == 0xe5)) {
+        const unsigned Size = Leave ? 2 : 4;
+        const auto Return = readImmutableCodeBytes(Image, State.Address, Size);
+        if (!Return ||
+            (!Leave && ((*Return)[2] != 0x5d || (*Return)[3] != 0xc3)) ||
+            !(State.Registers & 1) || !recordInstruction(State.Address, Size))
           return false;
         ++Returns;
         continue;

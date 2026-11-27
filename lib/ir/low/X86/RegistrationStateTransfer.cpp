@@ -758,14 +758,23 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
                  : StackPops.end();
       const auto Boundary = Boundaries.find(Op.Addr);
       if (It != StackPops.end() && Op.Seq >= 0 &&
-          (!Op.Inputs[0].isConst() || After.Frame.ImportBindingsIntact ||
-           (Op.Opcode == NdOp::CALL && !StackBindingCallees.count(*Target))) &&
           Boundary != Boundaries.end() && Boundary->second.first == Block.Id &&
           Boundary->second.second.Control == LowInstructionControl::Call) {
-        ImportedCall =
-            Op.Opcode == NdOp::INDIR_CALL || StackImportVeneers.count(*Target);
-        PreserveImportBindings = StackBindingPreservers.count(It->first);
-        if (!CallSP) {
+        const bool Bound =
+            !Op.Inputs[0].isConst() || After.Frame.ImportBindingsIntact ||
+            (Op.Opcode == NdOp::CALL && !StackBindingCallees.count(*Target));
+        if (Bound) {
+          ImportedCall = Op.Opcode == NdOp::INDIR_CALL ||
+                         StackImportVeneers.count(*Target);
+          PreserveImportBindings = StackBindingPreservers.count(It->first);
+        }
+        // A real call may explicitly restore its caller's ESP even after a
+        // previous operation invalidated its nested import bindings.
+        if (!CallSP &&
+            (Bound ||
+             (Op.Opcode == NdOp::CALL && !StackImportVeneers.count(*Target) &&
+              JumpRuntime && JumpRuntime->OpaqueStack &&
+              JumpRuntime->OpaqueStack(Op, WorkUsed) == It->second))) {
           LowOp Adjust;
           Adjust.Opcode = NdOp::INT_ADD;
           Adjust.Output = NdVar::reg(x86reg::RSP, 4);

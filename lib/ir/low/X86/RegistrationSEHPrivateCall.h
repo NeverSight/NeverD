@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <map>
+#include <optional>
 
 namespace neverd {
 struct BinaryImage;
@@ -29,6 +30,9 @@ public:
       : Image(Image), Function(Function) {}
 
   bool preservesFrame(const LowOp &Op, size_t &Work);
+  /// Check explicit returning ESP with all nested calls opaque. This answer
+  /// neither preserves the caller frame nor authenticates an import binding.
+  std::optional<uint32_t> opaqueStackPop(const LowOp &Op, size_t &Work);
 
 private:
   bool proveCallee(va_t Target, size_t &Work);
@@ -37,6 +41,8 @@ private:
   const LowFunc &Function;
   std::map<va_t, bool> Callees;
   std::map<const LowOp *, bool> Occurrences;
+  std::map<va_t, std::optional<uint32_t>> StackTargets;
+  std::map<const LowOp *, std::optional<uint32_t>> StackOccurrences;
 };
 
 } // namespace registration_state

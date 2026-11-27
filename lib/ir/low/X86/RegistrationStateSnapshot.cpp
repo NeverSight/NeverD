@@ -36,11 +36,11 @@ static hash_code hash_value(const FrameValue &Value) {
   return hash_combine(
       Value.Offset, Value.Constant, Value.PreviousChain, Value.MayBeFrame,
       Value.FrameOnlyFromCall, Value.SavedRegister, Value.ReturnPC,
-      Value.SecurityCookie, Value.CookieFrameOffset, Value.CookieXOR,
-      Value.EntryOffset, Value.CallbackAddress, Value.ExceptionObject,
-      Value.SEHException, Value.JumpCapture, Value.FrameOnlyFromSEHScalar,
-      Value.ImageAddress, Value.CookieImageXOR, Value.ImportTarget,
-      Value.ThreadAddress);
+      Value.SecurityCookie, Value.PartialLowByte, Value.CookieFrameOffset,
+      Value.CookieXOR, Value.EntryOffset, Value.CallbackAddress,
+      Value.ExceptionObject, Value.SEHException, Value.JumpCapture,
+      Value.FrameOnlyFromSEHScalar, Value.ImageAddress, Value.CookieImageXOR,
+      Value.ImportTarget, Value.ThreadAddress);
 }
 
 static hash_code hash_value(const FrameState &Frame) {

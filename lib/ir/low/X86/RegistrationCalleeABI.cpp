@@ -29,7 +29,7 @@ namespace neverd::registration_abi {
 namespace {
 
 bool isCallerCleanupCRTImport(const Import &Imported) {
-  enum class Family { Unknown, Legacy, Math };
+  enum class Family { Unknown, Legacy, Math, Stdio, Runtime, Initializers };
   const auto Provider = llvm::StringSwitch<Family>(Imported.Name)
 #define NEVERD_REGISTRATION_CRT_CLEANUP(Name, Kind) .Case(Name, Family::Kind)
 #include "RegistrationRuntimeImports.def"
@@ -38,7 +38,14 @@ bool isCallerCleanupCRTImport(const Import &Imported) {
     return coff_loader::isX86LegacyCRTProvider(Imported.Module);
   if (Provider == Family::Math)
     return coff_loader::isX86MathCleanupProvider(Imported.Module);
-  return false;
+  if (Provider == Family::Stdio)
+    return coff_loader::isUCRTStdioProvider(Imported.Module);
+  if (Provider == Family::Runtime)
+    return coff_loader::isUCRTRuntimeProvider(Imported.Module);
+  if (Provider == Family::Initializers)
+    return coff_loader::isX86LegacyCRTProvider(Imported.Module) ||
+           coff_loader::isUCRTRuntimeProvider(Imported.Module);
+  return registrationCRTAccessorAccess(Imported).has_value();
 }
 
 } // namespace
@@ -218,6 +225,10 @@ bool preservesRegistrationImportBindings(const BinaryImage &Image,
   // Other CRT providers and the modern _set_app_type have separate contracts.
   if (Module.equals_insensitive("msvcr100.dll") &&
       (Import->Name == "__set_app_type" || Import->Name == "__setusermatherr"))
+    return true;
+  // The no-argument argc and argv accessors return addresses of CRT globals.
+  // Loading through those pointers reads live process inputs.
+  if (registrationCRTAccessorAccess(*Import))
     return true;
   // These APIs transform pointer bits with a process-specific secret, without
   // replacing the caller image's import slots. Keep the runtime result opaque;

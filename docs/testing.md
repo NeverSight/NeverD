@@ -21111,6 +21111,19 @@ an incoming-object conditional finally separately from its returning-stack
 contract. Far returns, unknown stack restoration, malformed metadata, writable
 code, changed frame registers and nested calls that only have a pop summary
 refuse. This regression does not certify the helper's object-memory effects.
+The PE32 stdio tests cover the direct and veneer calls for the one-DWORD
+stream lookup and six-DWORD formatted output. They check the original xcpt4
+imports, caller cleanup and refusals for a changed provider, delayed binding
+or conflicting slot.
+
+The PE32 startup fixture also checks both UCRT initializer walkers and the
+three relocated callbacks in their read-only tables. The outer stdio wrapper
+restores ESP from EBP after its nested calls. The inner wrapper depends on
+the UCRT calling convention. On Windows,
+`RegistrationCRTFrame.OriginalPE32XCPT4RunsOnWindows` executes the original
+file and checks all 90 outcomes in order. The x86 source enables 85 cases
+and explicitly skips 29, 58, 61, 87 and 89.
+
 The public xcpt4 PE32 and PE64 issue tests remain separate required acceptance
 checks; passing these focused tests does not close either issue.
 

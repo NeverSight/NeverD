@@ -246,6 +246,7 @@ bool overlaps(va_t Address, uint64_t Extent, va_t Base, uint64_t Width) {
          (Base <= Address ? Address - Base < Width : Base - Address < Extent);
 }
 
+template <bool FileBacked = true>
 const uint8_t *mappedBytes(const BinaryImage &Image, va_t Address,
                            uint64_t Extent, bool Immutable, bool Code = false) {
   // A raw instruction-storage extent needs execution permission. The byte
@@ -292,9 +293,11 @@ const uint8_t *mappedBytes(const BinaryImage &Image, va_t Address,
       Section->Size > InvalidVA - Section->VA ||
       Segment->Size > InvalidVA - Segment->VA || Section->VA < Segment->VA ||
       !rangeInBounds(Address - Section->VA, Extent, Section->Size) ||
-      !rangeInBounds(Address - Section->VA, Extent, Section->FileSz) ||
+      (FileBacked &&
+       !rangeInBounds(Address - Section->VA, Extent, Section->FileSz)) ||
       !rangeInBounds(Address - Segment->VA, Extent, Segment->Size) ||
-      !rangeInBounds(Address - Segment->VA, Extent, Segment->FileSz) ||
+      (FileBacked &&
+       !rangeInBounds(Address - Segment->VA, Extent, Segment->FileSz)) ||
       Section->FileOff < Segment->FileOff ||
       Section->FileOff - Segment->FileOff != Section->VA - Segment->VA)
     return nullptr;
@@ -478,7 +481,10 @@ readImmutableImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size,
 
 std::optional<std::vector<uint8_t>>
 readInitialImageBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
-  if (!supportedImage(Image) || !Size ||
+  const bool LinkedI386 = Image.Arch == Arch::X86 &&
+                          Image.Bits == Bitness::Bits32 &&
+                          supportedPEImage(Image);
+  if ((!supportedImage(Image) && !LinkedI386) || !Size ||
       Size > ::neverd::limits::loader::kMaxImageReadBytes)
     return std::nullopt;
   const auto *Bytes = mappedBytes(Image, Address, Size, false);
@@ -863,17 +869,31 @@ bool isImagePointerBitPattern(const BinaryImage &Image, uint64_t Bits,
          Image.getSectionFor(Bits);
 }
 
-bool isFileBackedWritableImageRange(const BinaryImage &Image, va_t Address,
-                                    uint32_t Size) {
-  if ((!supportedImage(Image) && !supportedPEImage(Image)) || !Size ||
-      Size > ::neverd::limits::loader::kMaxImageReadBytes ||
-      !mappedBytes(Image, Address, Size, false))
+namespace {
+template <bool FileBacked>
+bool writableDataRange(const BinaryImage &Image, va_t Address, uint32_t Size) {
+  if (!Size || Size > ::neverd::limits::loader::kMaxImageReadBytes ||
+      !mappedBytes<FileBacked>(Image, Address, Size, false))
     return false;
   const auto *Section = Image.getSectionFor(Address);
   const auto *Segment = Image.getSegmentFor(Address);
   return Section->isWritable() && !Section->isExecutable() &&
          Segment->isWritable() && !Segment->isExecutable() &&
          !Segment->ReadOnlyAfterRelocations;
+}
+} // namespace
+
+bool isFileBackedWritableImageRange(const BinaryImage &Image, va_t Address,
+                                    uint32_t Size) {
+  return (supportedImage(Image) || supportedPEImage(Image)) &&
+         writableDataRange<true>(Image, Address, Size);
+}
+
+bool isMappedWritablePE32DataRange(const BinaryImage &Image, va_t Address,
+                                   uint32_t Size) {
+  return supportedPEImage(Image) && Image.Arch == Arch::X86 &&
+         Image.Bits == Bitness::Bits32 && !Image.IsRelocatable &&
+         writableDataRange<false>(Image, Address, Size);
 }
 
 namespace {

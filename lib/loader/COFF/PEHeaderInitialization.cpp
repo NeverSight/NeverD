@@ -15,6 +15,8 @@
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/object/PELayout.h"
 
+#include "llvm/ADT/SmallVector.h"
+
 #include <algorithm>
 #include <optional>
 #include <vector>
@@ -32,7 +34,7 @@ class HeaderInitialization {
   uint64_t HeaderPages;
   std::vector<LoaderRange> Writes, Relocations;
   std::vector<LoaderProtectedRead> Reads, RelocationReads;
-  std::optional<uint64_t> CookieField;
+  llvm::SmallVector<uint64_t, 3> WriterFields;
   bool HasRelocations = false;
 
   bool charge(size_t Bytes, size_t Records = 0) {
@@ -75,15 +77,19 @@ class HeaderInitialization {
     };
     if (!Preserved(Writes, Reads) || !Preserved(Relocations, RelocationReads))
       return false;
-    // When this image can be rebased, the cookie destination must move with
-    // it. An unrelocated absolute value cannot establish that separation.
-    if (CookieField && HasRelocations) {
-      const auto It = std::lower_bound(
-          Relocations.begin(), Relocations.end(), *CookieField,
-          [](LoaderRange R, uint64_t Begin) { return R.Begin < Begin; });
-      if (It == Relocations.end() || It->Begin != *CookieField ||
-          It->End != *CookieField + (PE.Is64 ? 8 : 4))
-        return false;
+    // An absolute destination must move with a rebased image. A partial or
+    // missing relocation cannot bound the loader write to an ordinary section.
+    if (HasRelocations) {
+      for (uint64_t Field : WriterFields) {
+        if (!charge(0, llvm::bit_width(Relocations.size()) + 1))
+          return false;
+        const auto It = std::lower_bound(
+            Relocations.begin(), Relocations.end(), Field,
+            [](LoaderRange R, uint64_t Begin) { return R.Begin < Begin; });
+        if (It == Relocations.end() || It->Begin != Field ||
+            It->End != Field + (PE.Is64 ? 8 : 4))
+          return false;
+      }
     }
     return true;
   }
@@ -212,10 +218,19 @@ class HeaderInitialization {
     if (!Data || D.Size < 4 || D.Size > Data->size())
       return false;
     const uint32_t Size = readLE<uint32_t>(Data->data());
-    constexpr size_t Supported = offsetof(Config, GuardCFCheckFunction);
-    if (Size < 4 || Size > Data->size() || Size > Supported ||
-        D.Size > Supported || !charge(Size, 1))
+    constexpr size_t LegacySize = offsetof(Config, GuardCFCheckFunction);
+    if (Size < 4 || Size > Data->size() || !charge(Size, 1))
       return false;
+    if (Size > LegacySize || D.Size > LegacySize) {
+      // MSVC x86 can retain the 64-byte directory size with a longer
+      // self-sized configuration. Inspect every declared extension word.
+      using PE32 = coff_load_configuration32;
+      if (PE.Is64 || PE.FileHeader->Machine != IMAGE_FILE_MACHINE_I386 ||
+          D.Size > Size ||
+          Size < offsetof(PE32, GuardFlags) + sizeof(uint32_t) ||
+          Size > sizeof(PE32) || Size % sizeof(uint32_t))
+        return false;
+    }
     const unsigned Width = PE.Is64 ? 8 : 4;
     const auto Pointer = [&](size_t Offset) -> std::optional<uint64_t> {
       if (Size <= Offset)
@@ -227,46 +242,70 @@ class HeaderInitialization {
     };
     const auto Lock = Pointer(offsetof(Config, LockPrefixTable));
     const auto Edit = Pointer(offsetof(Config, EditList));
-    const auto Cookie = Pointer(offsetof(Config, SecurityCookie));
-    if (!Lock || *Lock || !Edit || *Edit || !Cookie)
+    if (!Lock || *Lock || !Edit || *Edit)
       return false;
     const uint64_t RVA = D.RelativeVirtualAddress;
     const uint64_t End = RVA + std::max(uint32_t(D.Size), Size);
     Reads.push_back({{RVA, End}, std::nullopt});
     uint64_t Cursor = RVA;
-    // These fields are absolute image pointers. A complete scalar relocation
-    // can adjust them without changing their image-relative destination.
-    // Zero/unsupported writer fields and all scalar metadata remain protected.
-    for (size_t Offset :
-         {offsetof(Config, SecurityCookie), offsetof(Config, SEHandlerTable)}) {
+    const auto RecordPointer = [&](size_t Offset, bool WritesThrough) {
       const auto Value = Pointer(Offset);
       if (!Value)
         return false;
       if (!*Value)
-        continue;
+        return true;
       const uint64_t Base = getPEImageBase(PE);
       if (*Value < Base || *Value - Base < HeaderPages ||
           *Value - Base >= getPESizeOfImage(PE))
         return false;
+      // Image-relative read tables and loader destinations retain their
+      // identity when the complete pointer field is rebased.
       if (Cursor < RVA + Offset)
         RelocationReads.push_back({{Cursor, RVA + Offset}, std::nullopt});
       RelocationReads.push_back(
           {{RVA + Offset, RVA + Offset + Width}, RVA + Offset});
       Cursor = RVA + Offset + Width;
+      if (WritesThrough) {
+        if (*Value > InvalidVA - Width ||
+            (!PE.Is64 && *Value + Width > (uint64_t{1} << 32)) ||
+            Width > getPESizeOfImage(PE) - (*Value - Base))
+          return false;
+        WriterFields.push_back(RVA + Offset);
+        Writes.push_back({*Value - Base, *Value - Base + Width});
+      }
+      return true;
+    };
+    if (!RecordPointer(offsetof(Config, SecurityCookie), true) ||
+        !RecordPointer(offsetof(Config, SEHandlerTable), false))
+      return false;
+    for (size_t Offset = LegacySize; Offset < Size;
+         Offset += sizeof(uint32_t)) {
+      const uint32_t Value = readLE<uint32_t>(Data->data() + Offset);
+      if (!Value)
+        continue;
+      switch (Offset) {
+      case offsetof(coff_load_configuration32, GuardCFCheckFunction):
+      case offsetof(coff_load_configuration32,
+                    CastGuardOsDeterminedFailureMode):
+        if (!RecordPointer(Offset, true))
+          return false;
+        break;
+      case offsetof(coff_load_configuration32, VolatileMetadataPointer):
+        // MSVC emits access-site metadata for x86 on ARM64. It describes
+        // memory ordering and supplies no loader write destination.
+        if (!RecordPointer(Offset, false))
+          return false;
+        break;
+      case offsetof(coff_load_configuration32, GuardFlags):
+        if (Value != uint32_t(GuardFlags::CF_INSTRUMENTED))
+          return false;
+        break;
+      default:
+        return false;
+      }
     }
     if (Cursor < End)
       RelocationReads.push_back({{Cursor, End}, std::nullopt});
-    if (*Cookie) {
-      const uint64_t Base = getPEImageBase(PE);
-      if (*Cookie > InvalidVA - Width ||
-          (!PE.Is64 && *Cookie + Width > (uint64_t{1} << 32)) ||
-          *Cookie < Base || *Cookie - Base < HeaderPages ||
-          *Cookie - Base > getPESizeOfImage(PE) ||
-          Width > getPESizeOfImage(PE) - (*Cookie - Base))
-        return false;
-      CookieField = RVA + offsetof(Config, SecurityCookie);
-      Writes.push_back({*Cookie - Base, *Cookie - Base + Width});
-    }
     return true;
   }
 

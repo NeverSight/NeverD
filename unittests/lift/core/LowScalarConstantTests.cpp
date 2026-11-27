@@ -429,6 +429,40 @@ TEST(LowScalarConstant, SelfDifferenceRequiresTheSameScalarOccurrence) {
     }
 }
 
+TEST(LowScalarConstant, SignedSubtractionOverflowUsesTheOperandWidth) {
+  for (uint16_t Width = 1; Width <= 8; ++Width) {
+    const uint64_t Sign = uint64_t{1} << (Width * 8 - 1);
+    const uint64_t Mask = UINT64_MAX >> ((8 - Width) * 8);
+    const std::array<uint64_t, 7> Values{
+        0, 1, Sign - 1, Sign, Mask, UINT64_MAX, 0xc0000040};
+    for (uint64_t Left : Values)
+      for (uint64_t Right : Values) {
+        SCOPED_TRACE(::testing::Message()
+                     << Width << ':' << Left << ':' << Right);
+        auto Op = binary(NdOp::INT_SBOR, Width, Left, Right);
+        Op.Output.Size = 1;
+        NdOpEmulator Emulator(BinaryImage{});
+        ASSERT_TRUE(Emulator.step(Op));
+        const auto Expected = Emulator.getRegister(0);
+        ASSERT_TRUE(Expected);
+        EXPECT_EQ(lowScalarConstantResult(Op, constant), *Expected);
+      }
+  }
+}
+
+TEST(LowScalarConstant, SignedSubtractionOverflowRequiresTwoKnownOperands) {
+  auto Op = binary(NdOp::INT_SBOR, 4, 0x80000000, 1);
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+  Op.Output.Size = 1;
+  Op.Inputs[1].Size = 2;
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+  Op.Inputs[1] = NdVar::reg(8, 4);
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+  Op.Inputs[1] = NdVar::cst(0, 4);
+  Op.Inputs[0] = NdVar::reg(8, 4);
+  EXPECT_FALSE(lowScalarConstantResult(Op, constant));
+}
+
 TEST(LowScalarConstant, MultiplicationMatchesConcreteFixedWidthExecution) {
   for (uint16_t Width : {1, 2, 4, 8})
     for (uint64_t Left : {uint64_t{0}, uint64_t{1}, uint64_t{4},
