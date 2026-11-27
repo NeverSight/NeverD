@@ -235,6 +235,51 @@ void generatedArrays() {
   rejects([&] { EncodedJson({}, "items", 1, TextItem); },
           "Escaping exceeded the generated payload budget");
 }
+void reportEncoding() {
+  auto compare = [](std::string_view Text, bool Ordered) {
+    const auto Expected = parseJson(Text);
+    auto Report = tryEncodeScriptReport(Text);
+    check(Report.has_value() == (Ordered && NEVERD_USE_SIMDJSON),
+          "Unexpected script report encoding path");
+    if (!Report)
+      return;
+    check(Report->Status ==
+              Expected.at("status").get_ref<const std::string &>(),
+          "Encoded report lost its terminal status");
+    check(Report->Payload.text() == EncodedJson(Expected).text(),
+          "Encoded report differs from the ordinary payload");
+    const auto Framed = frame(Json{{"status", "ok"}}, Report->Payload);
+    check(parseJson(std::string_view(Framed).substr(4))["payload"] == Expected,
+          "Framed report differs from the SDK value");
+  };
+  compare(
+      R"({"":[[],{"a":1}],"b":{"x":true},"c":[null,false,"\u0008\n\"é"],"status":"cancelled"})",
+      true);
+  compare(
+      R"({"n":[18446744073709551615,-9223372036854775808,-0],"status":"ok"})",
+      true);
+  compare(R"({"status":"ok","a":2})", false);
+  compare(R"({"d":1.2e-4,"status":"ok"})", false);
+  compare(R"({"status":null})", false);
+  compare(R"({})", false);
+  auto encode = [](std::string_view Text) {
+    if (auto Report = tryEncodeScriptReport(Text))
+      return std::move(Report->Payload);
+    return EncodedJson(parseJson(Text));
+  };
+  auto nested = [](size_t Depth) {
+    return R"({"a":)" + std::string(Depth, '[') + "0" +
+           std::string(Depth, ']') + R"(,"status":"ok"})";
+  };
+  check(encode(nested(63)).text() == nested(63),
+        "Report at the transport nesting limit changed");
+  rejects([&] { encode(nested(64)); }, "Excessive report nesting was accepted");
+  rejects([&] { encode(R"({"a":[{"x":1,"\u0078":2}],"status":"ok"})"); },
+          "Duplicate decoded keys in a report were accepted");
+  rejects([&] { encode(R"({"status":"ok"} {})"); },
+          "Trailing report content was accepted");
+}
+
 void writtenText() {
   // Every string the writer copies, the serializer would have copied; every
   // other it prints as the serializer does, invalid UTF-8 included.
@@ -362,6 +407,7 @@ void writtenText() {
 
 int main() {
   generatedArrays();
+  reportEncoding();
   writtenText();
   {
     using namespace std::chrono_literals;
