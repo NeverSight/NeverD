@@ -11647,7 +11647,19 @@ predecessor's operations followed by its own, for at most
 `kMaxJumpTableGuardFlagSearchBlocks` blocks. This only proposes syntax: every
 definition unfolded there keeps its all-path definition query, so a second
 path into the block refuses the guard, and an index written after the compare
-is no longer the compared value.
+is no longer the compared value. A compare of a narrower low lane of the index
+register that the block never writes walks on the same way to the lane's
+definition, whose extension ties the lane to the index. sqlite's
+`sqlite3VdbeRecordCompareWithSkip` loads a byte with `movzbl`, bounds it with
+`cmp $9, %eax; ja`, and three blocks later with `cmp $6, %al; ja`, then
+indexes with `%rax`. Without that definition the lane was an unknown leaf, the
+dword guard admitted ten slots, and the dispatch stayed unresolved. The walk
+serves only a guard whose branch reaches the index's block, directly or by
+falling through blocks that only it enters and that leave the index register
+alone, and it keeps the blocks it walked only once the definition is in view.
+libzstd's sequence decoder also compares `%dl` after a shift, long before a
+dispatch that indexes with `%rdx`: that compare keeps the syntax it had,
+since unfolding it into the shift makes a condition the proof cannot use.
 The address-role proof takes a table load's scale from the role's own index
 occurrence first. An AArch64 extended-register operand widens the index into
 a temporary the same instruction scales. An x86 32-bit write widens it into

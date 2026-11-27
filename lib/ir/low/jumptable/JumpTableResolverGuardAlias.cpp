@@ -3337,8 +3337,60 @@ alias_done:
                Right.Offset < Left.Offset + Left.Size;
       };
       std::vector<va_t> Walked{BlockStart};
-      for (uint32_t Hop = 0; Hop < limits::kMaxJumpTableGuardFlagSearchBlocks;
-           ++Hop) {
+      // A compare of a narrower low lane of the index register binds that
+      // lane through its definition, whose extension ties the lane to the
+      // index: GCC compares `%al` after `cmp $9, %eax` on what `movzbl`
+      // loaded blocks earlier. When nothing here writes the lane, that
+      // definition precedes this block, so the walk goes on for it as for a
+      // flag. It does so only where the lane can still be the index: the
+      // guard's branch enters the index's block, directly or by falling
+      // through blocks that only it enters and that leave the index register
+      // alone. It keeps what it walked only once the definition is in view,
+      // so other compares of the register's lanes keep the syntax they had.
+      const NdVar &Index = Info.IndexValueAtUse;
+      bool LaneWalk = false;
+      if (Index.isReg() && Info.IndexUseAddr != InvalidVA)
+        if (const auto IndexBlock = blockContaining(Info.IndexUseAddr)) {
+          auto Term = Insns.find(BranchAddr);
+          for (uint32_t Step = 0;
+               Term != Insns.end() &&
+               Step <= limits::kMaxJumpTableGuardFlagSearchBlocks;
+               ++Step) {
+            const InsnRecord &Rec = Term->second;
+            const auto Entry = entersBlock(Rec, *IndexBlock);
+            if (!Entry)
+              break;
+            if (Entry->Falls || Entry->Named) {
+              LaneWalk = true;
+              break;
+            }
+            if (!Rec.IsCond || !Rec.IsBranch || Rec.IsIndirect || Rec.IsCall ||
+                Rec.IsRet || Rec.Size == 0 || Rec.Addr > InvalidVA - Rec.Size)
+              break;
+            const va_t Next = Rec.Addr + Rec.Size;
+            const auto Entering = blocksEntering(Next);
+            if (!Entering || Entering->size() != 1)
+              break;
+            auto Last = Insns.end();
+            bool WritesIndex = false;
+            for (auto It = Insns.lower_bound(Next);
+                 It != Insns.end() && blockContaining(It->first) == Next &&
+                 !WritesIndex;
+                 ++It) {
+              if (!consumeCandidateEvidence())
+                break;
+              for (const LowOp &Op : It->second.Ops)
+                WritesIndex |= overlaps(Op.Output, Index);
+              Last = It;
+            }
+            if (WritesIndex || GuardBuildExhausted)
+              break;
+            Term = Last;
+          }
+        }
+      std::optional<std::pair<std::vector<LowOp>, int>> BeforeLane;
+      bool LaneCarried = false;
+      for (uint32_t Hop = 0;; ++Hop) {
         // The flags the branch instruction reads before it writes them.
         int First = CondIndex;
         while (First > 0 && Ops[First - 1].Addr == BranchAddr)
@@ -3359,21 +3411,56 @@ alias_done:
           }
         }
         // Drop the flags an earlier operation writes, the nearest first.
+        int FlagWriter = -1;
         for (int I = First - 1; I >= 0 && !Carried.empty(); --I) {
           if (!consumeCandidateEvidence())
             break;
           const NdVar &Out = Ops[I].Output;
+          const size_t Unwritten = Carried.size();
           Carried.erase(std::remove_if(Carried.begin(), Carried.end(),
                                        [&](const NdVar &Flag) {
                                          return overlaps(Out, Flag);
                                        }),
                         Carried.end());
+          if (FlagWriter < 0 && Carried.size() != Unwritten)
+            FlagWriter = I;
+        }
+        // The compared lanes of the index register nothing here writes.
+        LaneCarried = false;
+        if (LaneWalk && Carried.empty() && FlagWriter >= 0) {
+          const va_t CompareAddr = Ops[FlagWriter].Addr;
+          int CompareFirst = FlagWriter;
+          while (CompareFirst > 0 && Ops[CompareFirst - 1].Addr == CompareAddr)
+            --CompareFirst;
+          for (int I = CompareFirst; I <= FlagWriter && !GuardBuildExhausted;
+               ++I) {
+            for (int J = 0; J < Ops[I].NumInputs; ++J) {
+              const NdVar &Input = Ops[I].Inputs[J];
+              if (!Input.isReg() || Input.Space != Index.Space ||
+                  Input.Offset != Index.Offset || Input.Size == 0 ||
+                  Input.Size >= Index.Size)
+                continue;
+              bool Written = false;
+              for (int K = 0; K < I && !Written; ++K) {
+                if (!consumeCandidateEvidence())
+                  break;
+                Written = overlaps(Ops[K].Output, Input);
+              }
+              if (!Written) {
+                Carried.push_back(Input);
+                LaneCarried = true;
+              }
+            }
+          }
         }
         if (GuardBuildExhausted) {
           Info.IncompleteGuardDomain = true;
           return false;
         }
-        if (Carried.empty())
+        if (LaneCarried && !BeforeLane)
+          BeforeLane.emplace(Ops, CondIndex);
+        if (Carried.empty() ||
+            Hop == limits::kMaxJumpTableGuardFlagSearchBlocks)
           break;
         const auto Entering = blocksEntering(Walked.back());
         if (GuardBuildExhausted) {
@@ -3411,6 +3498,10 @@ alias_done:
         Ops.insert(Ops.begin(), Prefix.begin(), Prefix.end());
         CondIndex += static_cast<int>(Prefix.size());
         Walked.push_back(Predecessor);
+      }
+      if (LaneCarried && BeforeLane) {
+        Ops = std::move(BeforeLane->first);
+        CondIndex = BeforeLane->second;
       }
     }
 
