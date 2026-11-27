@@ -84,8 +84,39 @@ bool isMinimalLeafExpression(const SymContext &Ctx, SymRef E,
     return A != B && MaxAtoms >= 2;
   if (Ctx.isVar(A))
     std::swap(A, B);
+  // A word expression that reads three distinct free words through two
+  // full-width binary operations needs all three leaves and both operations.
+  // Each of these operators admits an identity on the other input. A select
+  // would need an additional predicate to use a word wider than one bit.
+  if (MaxAtoms >= 2 && Ctx.width(E) > 1 && Ctx.isVar(B)) {
+    SymRef Inner = A;
+    if (Op == SymOp::Add && Ctx.op(Inner) == SymOp::Mul &&
+        Ctx.numOperands(Inner) == 2 && Ctx.isConstOnes(Ctx.operand(Inner, 0))) {
+      Inner = Ctx.operand(Inner, 1); // a - b in the printed expression
+      if (Ctx.isVar(Inner))
+        return Inner != B;
+    }
+    const auto K = Ctx.op(Inner);
+    if (MaxAtoms >= 3 &&
+        (K == SymOp::Add || K == SymOp::Mul || K == SymOp::And ||
+         K == SymOp::Or || K == SymOp::Xor) &&
+        Ctx.numOperands(Inner) == 2) {
+      const auto L = Ctx.operand(Inner, 0), R = Ctx.operand(Inner, 1);
+      if (Ctx.isVar(L) && Ctx.isVar(R) && L != R && L != B && R != B &&
+          Ctx.readability(E) == SymReadability{5, 2})
+        return true;
+    }
+  }
   if (!Ctx.isConst(A) || MaxAtoms < 1 || Ctx.isConstZero(A))
     return false;
+  // -(x^y) needs both free words. A shorter reading has just one binary
+  // operator. At width >= 2 neither signed difference, sum, product nor a
+  // bitwise operator gives -1 at both (1,0) and (0,1) and zero at (1,1).
+  if (Op == SymOp::Mul && MaxAtoms >= 2 && Ctx.width(E) >= 2 &&
+      Ctx.op(B) == SymOp::Xor && Ctx.numOperands(B) == 2 &&
+      Ctx.isVar(Ctx.operand(B, 0)) && Ctx.isVar(Ctx.operand(B, 1)) &&
+      Ctx.operand(B, 0) != Ctx.operand(B, 1) && Ctx.isConstOnes(A))
+    return true;
   // A subtraction prints one operation too. C-X can only have a cheaper
   // unary spelling at C=0 (negation) or C=-1 (complement). The builder has
   // already removed a zero addend; retain complement recovery for the latter.

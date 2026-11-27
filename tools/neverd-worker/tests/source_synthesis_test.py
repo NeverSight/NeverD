@@ -856,6 +856,10 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind == "partial-field-product-611":
+            # Three rows have an extra copy beyond their complete blocks of
+            # 32. The execution oracle observes their signed byte fields.
+            assert code.count("*") <= (36 if llvm else 60), text
         elif kind == "quartic-field-product-383":
             assert code.count("*") <= (24 if llvm else 32), text
             if llvm:
@@ -1094,6 +1098,7 @@ if __name__ == "__main__":
             ("carry-mask-product-313", *distributed_field_elf(313, carry_masks=True)),
             ("sparse-mask-product-389", *distributed_field_elf(389, sparse_masks=True)),
             ("quartic-field-product-383", *distributed_field_elf(383, paired_fields=True, group_log=2)),
+            ("partial-field-product-611", *distributed_field_elf(611, paired_fields=True, group_log=5)),
             ("paired-field-product-268", *distributed_field_elf(268, paired_fields=True)),
             ("funnel-perturbation-composed-product-283",
              *variable_field_elf(283, terminal_period=3, repeated_offsets=True,

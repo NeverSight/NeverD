@@ -2112,17 +2112,17 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
   Budget.ArithmeticProductReading = {};
   SymRef Prepared =
       foldProductValuations(Ctx, EarlyTail, Budget, ValuationStorage);
+  SymRef PackedAlternative;
   // A compact modular proof may still print each factor in an incomplete
   // block. For a native product of this size the ordinary arithmetic engine
   // can give a shorter polynomial over the original fields.
   if (Prepared == Budget.ArithmeticProductReading && Ctx.op(E) == SymOp::Mul &&
-      Ctx.op(Prepared) == SymOp::Concat && Ctx.width(E) <= 64 &&
+      Ctx.width(E) <= 64 &&
       Ctx.numOperands(E) <= detail::limits::kMaxResidueProductFactors &&
       readingCost(Ctx, Prepared) >= Ctx.numOperands(E)) {
     const auto Available = Budget.available();
     const auto Reserve =
-        std::max(Budget.used(),
-                 Available / detail::limits::kProductReadingReserveDivisor);
+        Available / detail::limits::kProductReadingReserveDivisor;
     if (Reserve < Available) {
       WorkBudget Trial(Available - Reserve);
       MBAOptions Local = Opts;
@@ -2131,8 +2131,19 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
       const auto Alternative = solveArithmetic(Ctx, E, Local, Trial, Arithmetic,
                                                /*ExpandComplements=*/false);
       Budget.consume(Trial.used());
-      if (readingScore(Ctx, Alternative) < readingScore(Ctx, Prepared))
-        Prepared = Alternative;
+      if (Alternative != E) {
+        const auto Parts = Ctx.operands(Prepared);
+        // A native residual power can hide coefficient sharing in the expanded
+        // sum. Finish that sum in the usual walk and keep the already-proved
+        // factored spelling available at the final cost comparison.
+        if (readingScore(Ctx, Alternative) < readingScore(Ctx, Prepared) ||
+            (Ctx.op(Prepared) == SymOp::Mul &&
+             Ctx.op(Alternative) == SymOp::Add &&
+             std::adjacent_find(Parts.begin(), Parts.end()) != Parts.end())) {
+          PackedAlternative = Prepared;
+          Prepared = Alternative;
+        }
+      }
     }
   }
   if (EarlyTail == E && !Budget.exhausted() &&
@@ -2562,6 +2573,9 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
   // A locally shorter child can make the composed spelling longer. Retain
   // the independently proved whole-root candidate as an alternative even
   // when subsequent search exhausts its allowance.
+  if (PackedAlternative && readingScore(Ctx, PackedAlternative) <
+                               readingScore(Ctx, WholeAlternative))
+    WholeAlternative = PackedAlternative;
   const bool KeptWhole = WalkRoot != E && readingScore(Ctx, WholeAlternative) <
                                               readingScore(Ctx, Out);
   if (KeptWhole)

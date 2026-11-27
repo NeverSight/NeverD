@@ -16,8 +16,10 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import runpy
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -166,6 +168,32 @@ class SimplifySurfaceAgreementTests(unittest.TestCase):
                         native[index][field],
                         f"CLI and the JSON entry point disagree on {field}",
                     )
+
+    def test_partial_power_blocks_match_the_interpolated_cost(self) -> None:
+        generator = REPO_ROOT / "tools" / "neverd-bench" / "generate_paired_product.py"
+        product = runpy.run_path(str(generator))["paired_product"]
+        tool = self.binaries / ("neverd.exe" if sys.platform == "win32" else "neverd")
+        with tempfile.TemporaryDirectory() as directory:
+            corpus = Path(directory) / "products.txt"
+            cases = ((16, 0, 2), (32, 5, 4), (65536, 1, 3), (65536, 1, 5))
+            for width, case, depth in cases:
+                with self.subTest(width=width, case=case, depth=depth):
+                    expressions = [
+                        product(width, case, group_log=depth, reference=reference)
+                        for reference in (False, True)
+                    ]
+                    corpus.write_text("\n".join(expressions) + "\n", encoding="utf-8")
+                    args = [str(tool), "simplify", "-f", str(corpus), "--json",
+                            f"--width={width}"]
+                    normal = subprocess.run(args, capture_output=True, text=True, check=True)
+                    default, reference = json.loads(normal.stdout)
+                    limited = subprocess.run(args + ["--max-work=65536"],
+                                             capture_output=True, text=True, check=True)
+                    constrained = json.loads(limited.stdout)[0]
+                    for reduced in (default, constrained):
+                        self.assertTrue(reduced["changed"])
+                        self.assertLessEqual(reduced["costAfter"], reference["costAfter"])
+                    self.assertLess(constrained["work"], 65536)
 
     def test_the_corpus_still_exercises_the_optimiser(self) -> None:
         """A corpus nothing collapses would let the test above pass on nothing.

@@ -4815,6 +4815,13 @@ fixture checks this family in HighC and LLVM-to-C through the worker and CLI.
 blocks whose cubic and quartic terms still affect the result. It exhausts
 all pairs of four-bit inputs against the original product.
 
+Group logs 5 and 6 add three overlapping word expressions and leave several
+independent factors outside the complete blocks. At width 9,437,201, case 7
+and group log 6 generate 917,516 factors. Use `--counted` for their exact
+multiplicities and `--reference` for the interpolated polynomial. The
+611-factor native fixture exercises blocks of 32 with three remaining copies
+in both source views.
+
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
 coordinates through chains of left and right rotations. A coefficient may
