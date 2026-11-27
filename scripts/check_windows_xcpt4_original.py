@@ -23,8 +23,8 @@ def main() -> int:
     except ValueError as error:
         print(json.dumps({"error": str(error), "sha256": before, **result}))
         return 1
-    print(json.dumps({"sha256": before, "exit_code": result["exit_code"],
-                      "cases": cases}, sort_keys=True))
+    print(json.dumps({"sha256": before, "cases": cases, **result},
+                     sort_keys=True))
     return 0
 
 
