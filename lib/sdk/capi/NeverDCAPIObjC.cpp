@@ -27,6 +27,7 @@
 #include "ObjCSwiftVirtualSources.h"
 #include "ObjCSynchronizedSource.h"
 #include "SessionImpl.h"
+#include "SourceDefinitionNotes.h"
 #include "SourceProjectionEvidenceJSON.h"
 #include "SourceRegisterCopyProjection.h"
 #include "SourceSwiftConsumedInputProjection.h"
@@ -217,12 +218,17 @@ const char *objcMethodsJSON(neverd_session_t Sess, size_t MaxFunctions,
     // Summary mode still renders and checks every publishable method below.
     // The unrelated whole-image native source is only returned by full export.
     if (IncludeSources) {
+      std::vector<CEmitterOptions::RefusedDefinition> Refused;
+      auto NativeOptions = COptions;
+      NativeOptions.RefusedDefinitions = &Refused;
       llvm::raw_string_ostream NativeOS(NativeSource);
-      if (!Emitter.emit(Result.HighFuncs, NativeOS, COptions)) {
+      if (!Emitter.emit(Result.HighFuncs, NativeOS, NativeOptions)) {
         S->setError("native C source projection failed");
         Trace.finish(false);
         return nullptr;
       }
+      if (!Refused.empty())
+        NativeSource.insert(0, refusedDefinitionNotes(Refused));
     }
     std::map<va_t, const HighFunc *> Functions;
     size_t NativeFunctionCount = 0;
