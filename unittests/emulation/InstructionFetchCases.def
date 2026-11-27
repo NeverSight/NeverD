@@ -10,6 +10,8 @@ NEVERD_FETCH_VALUE(Code, 0x10000)
 NEVERD_FETCH_VALUE(Data, 0x20000)
 NEVERD_FETCH_VALUE(Alias, 0x30000)
 NEVERD_FETCH_VALUE(Timeout, 2000000)
+// The eviction and loop checks run thousands of native steps on one thread.
+NEVERD_FETCH_VALUE(LongRunTimeout, 10000000)
 NEVERD_FETCH_VALUE(FirstValue, 11)
 NEVERD_FETCH_VALUE(SecondValue, 22)
 NEVERD_FETCH_VALUE(MixedMemory, 0x5678)
