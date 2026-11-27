@@ -31,7 +31,7 @@ char kind(StringRef T) {
   return T == "null" || uninitialized(T) ? 'A' : verificationKind(T);
 }
 int64_t definition(unsigned PC) { return int64_t(PC) + 1; }
-int64_t exceptionId(unsigned Target) { return -(int64_t(65537) + Target); }
+int64_t exceptionId(unsigned Target) { return FirstExceptionId - Target; }
 int64_t phi(unsigned PC, unsigned Slot, bool Stack) {
   return (int64_t(PC + 1) << 18) + (Stack ? 65536 : 0) + Slot;
 }

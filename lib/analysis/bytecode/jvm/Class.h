@@ -143,4 +143,4 @@ llvm::StringRef mnemonic(unsigned Opcode);
 Instructions decode(const Class &C, const Code &Body, Job &J);
 llvm::json::Object analyzeMethod(const Class &C, const Member &M, Job &J);
 } // namespace neverd::jvm
-#endif
+#endif // NEVERD_ANALYSIS_BYTECODE_JVM_CLASS_H

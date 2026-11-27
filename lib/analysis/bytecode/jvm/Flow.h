@@ -12,6 +12,9 @@
 
 #include <map>
 namespace neverd::jvm {
+// Negative IDs down to -65535 identify the receiver and parameter slots.
+inline constexpr int64_t FirstExceptionId = -65537;
+
 struct Value {
   std::string Type;
   int64_t Id = 0;
@@ -46,4 +49,4 @@ struct JavaBody {
 JavaBody renderJava(const Class &C, const Member &M, const Instructions &Code,
                     const Flow &G);
 } // namespace neverd::jvm
-#endif
+#endif // NEVERD_ANALYSIS_BYTECODE_JVM_FLOW_H

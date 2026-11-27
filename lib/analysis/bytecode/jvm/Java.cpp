@@ -365,7 +365,7 @@ class Printer {
       if (!Block.Entry)
         continue;
       for (auto &V : Block.Entry->Stack)
-        if (V.Id <= -65537)
+        if (V.Id <= FirstExceptionId)
           Values[V.Id] = {"caught", {}};
       for (unsigned I = Block.Begin; I < Block.End; ++I) {
         auto &R = Rows[I];
@@ -386,7 +386,7 @@ class Printer {
           if (!Literal && !(Uses[Id] == 1 && U > I && G.BlockForRow[U] == B &&
                             (Rows[U].Opcode < 87 || Rows[U].Opcode > 95) &&
                             Epoch[U] == Epoch[I] + unsigned(barrier(Op)) &&
-                            X.S.size() < 1024)) {
+                            X.S.size() < limits::InlineExpressionBytes)) {
             auto N = "v" + std::to_string(R.PC);
             if (Node.Result->Type == "null")
               fail("Null temporary lacks a qualified Java type");

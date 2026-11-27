@@ -1,6 +1,6 @@
 **언어**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
+<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
 
 [← NeverD 프로젝트](project.md)
 
@@ -46,6 +46,7 @@
 | [GUI 프로세스 플러그인(영문)](../gui-plugins.md) | 관리자, 메뉴 배치, 작업 결과 및 프로세스 프로토콜 |
 | [NPH 프로세스 플러그인 호스트(영문)](../plugin-host.md) | 공유 소유권, 작업 수락, 프로토콜 및 프로세스 수명 |
 | [네이티브 플러그인](plugins.md) | 순수 C descriptor ABI, callback과 event, build/link workflow, discovery 및 호환성 규칙 |
+| [Java 산출물 복원](../jvm-recovery.md) | JVM 클래스 파일 버전, JAR 항목 선택, 타입이 지정된 IR 및 Java 메서드 복원 |
 | [Python 산출물 복원](../python-recovery.md) | CPython 버전별 지원, PyInstaller 구성 요소, 네이티브 분석, 소스 검증 |
 | [Python 플러그인](python-plugins.md) | 플러그인 작성, 세션·이벤트 API, 격리, 테스트 및 배포 |
 | [모바일 지원 개요](mobile.md) | Android / iOS 입력, 소스 출력, CLI 흐름 및 제한 |

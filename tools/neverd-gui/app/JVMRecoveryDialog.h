@@ -52,4 +52,4 @@ private:
   QByteArray selectedText() const;
 };
 } // namespace neverd::gui
-#endif
+#endif // NEVERD_GUI_JVMRECOVERYDIALOG_H

@@ -31,6 +31,7 @@ def disassembly(listing):
     current = None
     descriptor = None
     exceptions = False
+    switch = None
     for line in listing.splitlines():
         head = re.match(r"^  ([^ ].*)[;{]$", line)
         if head:
@@ -57,9 +58,61 @@ def disassembly(listing):
             methods.append(current)
             descriptor = None
         elif current is not None:
-            op = re.match(r"^\s+(\d+):\s+([a-z][a-z0-9_]+)\b", line)
+            if switch is not None:
+                case = re.match(r"\s*(default|-?\d+):\s*(\d+)\s*$", line)
+                if case:
+                    if case[1] == "default":
+                        switch["default_target"] = int(case[2])
+                    else:
+                        switch["cases"].append(
+                            {"key": int(case[1]), "target": int(case[2])}
+                        )
+                    continue
+                switch = None
+            op = re.match(r"^\s+(\d+):\s+([a-z][a-z0-9_]+)\b(.*)", line)
             if op:
-                current["instructions"].append([int(op[1]), op[2]])
+                name = op[2]
+                operands = op[3].split("//", 1)[0].strip()
+                args = [x.strip() for x in operands.split(",")]
+                evidence = {}
+                if args[0].startswith("#"):
+                    evidence["pool_index"] = int(args[0][1:])
+                    if name in {"invokeinterface", "multianewarray"}:
+                        evidence["operand"] = int(args[1])
+                elif name in {"bipush", "sipush"}:
+                    evidence["operand"] = int(args[0])
+                elif name == "newarray":
+                    evidence["operand"] = [
+                        "boolean",
+                        "char",
+                        "float",
+                        "double",
+                        "byte",
+                        "short",
+                        "int",
+                        "long",
+                    ].index(args[0]) + 4
+                elif name.startswith("if") or name in {
+                    "goto",
+                    "goto_w",
+                    "jsr",
+                    "jsr_w",
+                }:
+                    evidence["branch_target"] = int(args[0])
+                elif name in {"tableswitch", "lookupswitch"}:
+                    evidence["cases"] = []
+                    switch = evidence
+                elif re.fullmatch(r"[ailfd](load|store)(_w)?|ret(_w)?|iinc(_w)?", name):
+                    evidence["local"] = int(args[0])
+                    if name.startswith("iinc"):
+                        evidence["increment"] = int(args[1])
+                    if name.endswith("_w"):
+                        evidence["wide"] = True
+                        name = name[:-2]
+                instruction = [int(op[1]), name]
+                if evidence:
+                    instruction.append(evidence)
+                current["instructions"].append(instruction)
             if line.strip() == "Exception table:":
                 exceptions = True
             elif exceptions and "target type" not in line:

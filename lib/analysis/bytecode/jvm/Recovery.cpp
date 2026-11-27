@@ -60,7 +60,7 @@ Options options(const json::Object &O) {
         option("Negative JVM limit or release");
       auto N = size_t(*I);
       if (K == "release") {
-        if (N > limits::Releases)
+        if (N > LastRelease)
           option("Unknown Java runtime release");
         Q.Release = N;
       } else if (K == "max_expanded_bytes" && N <= limits::ExpandedBytes)
@@ -214,6 +214,17 @@ void parse(Component &M, Job &J) {
     M.Error = F;
   }
 }
+bool previewAllowed(const Class &C, const Options &Q) {
+  if (C.Major >= 56 && C.Minor == 65535)
+    return Q.Preview && Q.Release == C.Major - 44;
+  return !Q.Release || C.Major <= 44 + Q.Release;
+}
+bool classPathMatches(const Component &M) {
+  if (!M.Parent)
+    return true;
+  auto Path = StringRef(M.Logical);
+  return Path.consume_back(".class") && Path == M.Parsed->Name;
+}
 std::shared_ptr<Index> index(ArrayRef<Input> Inputs, const Options &Q, Job &J) {
   auto T = std::make_shared<Index>();
   auto add = [&](unsigned InputIndex, std::string Name) -> Component & {
@@ -316,7 +327,8 @@ std::shared_ptr<Index> index(ArrayRef<Input> Inputs, const Options &Q, Job &J) {
       T->Components[Id].Selected = true;
   }
   for (auto &M : T->Components)
-    if (M.Parsed && !M.Error && M.Selected)
+    if (M.Parsed && !M.Error && M.Selected && classPathMatches(M) &&
+        previewAllowed(*M.Parsed, Q))
       T->Definitions[M.Parsed->Name].push_back(M.Id);
   for (auto &M : T->Components)
     if (M.Selected && M.Kind == "source" && !M.Error)
@@ -434,11 +446,6 @@ void methodEdges(json::Array &Edges, const Class &C, const Member &M,
     Edges.emplace_back(std::move(O));
   }
 }
-bool previewAllowed(const Class &C, const Options &Q) {
-  if (C.Major >= 56 && C.Minor == 65535)
-    return Q.Preview && Q.Release == C.Major - 44;
-  return !Q.Release || C.Major <= 44 + Q.Release;
-}
 json::Object view(const Index &T, const Options &Q, Job &J, const Input &Root) {
   auto R = report();
   R["input_sha256"] = Root.Hash;
@@ -518,9 +525,11 @@ json::Object view(const Index &T, const Options &Q, Job &J, const Input &Root) {
           classInventory(C, Selected && (Q.Component >= 0 || !M.Parent ||
                                          !Q.ClassName.empty()));
       auto Identity = web::identity(
-          "jvm-class", {Root.Hash, T.Components[M.Parent.value_or(M.Id)].SHA,
-                        M.Path, std::to_string(M.Release), C.Name});
+          "jvm-class",
+          {Root.Hash, T.Components[M.Parent.value_or(M.Id)].SHA, M.Path,
+           std::to_string(M.Release), std::to_string(Q.Release), C.Name});
       O["identity"] = Identity;
+      O["classpath_name_matches"] = classPathMatches(M);
       if (M.Selected)
         relations(Edges, M, T);
       for (const auto &A : C.Attributes) {
@@ -542,8 +551,8 @@ json::Object view(const Index &T, const Options &Q, Job &J, const Input &Root) {
                                           {"resolution", "named_attachment"}});
       }
       bool Allowed = previewAllowed(C, Q);
-      if (Selected && !Allowed) {
-        O["runtime_eligible"] = false;
+      O["runtime_eligible"] = Allowed;
+      if ((Selected || M.Selected) && !Allowed) {
         O.getArray("diagnostics")
             ->emplace_back(json::Object{
                 {"code", "runtime_profile"},
@@ -625,6 +634,7 @@ std::shared_ptr<const Index> indexed(ArrayRef<Input> Ins, const Options &Q,
   }
   Key += ":" + std::to_string(Q.Release) + ":" + std::to_string(Q.Member) +
          ":" + std::to_string(Q.Expanded) + ":" + std::to_string(Q.Items);
+  Key += Q.Preview ? ":preview" : ":standard";
   {
     std::lock_guard Guard(Last.Mutex);
     if (Key == Last.Key && Last.Value) {

@@ -417,7 +417,7 @@ Class readClass(StringRef Bytes, Job &J) {
     invalid(0, "class_magic", "Missing JVM class signature");
   C.Minor = R.u2();
   C.Major = R.u2();
-  if (C.Major < 45 || C.Major > 44 + limits::Releases)
+  if (C.Major < 45 || C.Major > 44 + LastRelease)
     unsupported(6, "class_version", "Unqualified class-file major version");
   if (C.Major >= 56 && C.Minor && C.Minor != 65535)
     invalid(4, "class_minor",

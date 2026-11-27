@@ -26,6 +26,7 @@ inline constexpr size_t ReportBytes = 4 * 1024 * 1024;
 inline constexpr size_t Members = 4096;
 inline constexpr unsigned Dependencies = 32;
 inline constexpr unsigned Nesting = 32;
-inline constexpr unsigned Releases = LastRelease;
+// Keep single-use expressions readable before introducing a named temporary.
+inline constexpr size_t InlineExpressionBytes = 1024;
 } // namespace neverd::jvm::limits
-#endif
+#endif // NEVERD_ANALYSIS_BYTECODE_JVM_LIMITS_H

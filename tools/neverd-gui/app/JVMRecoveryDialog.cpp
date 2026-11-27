@@ -335,6 +335,8 @@ void JVMRecoveryDialog::receive(const QJsonObject &M) {
     Tabs->setCurrentWidget(IR);
   else if (!Bytecode->document()->isEmpty())
     Tabs->setCurrentWidget(Bytecode);
+  else
+    Tabs->setCurrentWidget(Evidence);
   updateActions();
 }
 void JVMRecoveryDialog::select() {

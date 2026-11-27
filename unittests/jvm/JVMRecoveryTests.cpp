@@ -81,6 +81,18 @@ TEST(JVMRecovery, CompilerVersionsInstructionsAndExceptionRanges) {
         auto &J = *Oracle[P].getAsArray();
         EXPECT_EQ(O.getInteger("pc"), J[0].getAsInteger());
         EXPECT_EQ(O.getString("opcode"), J[1].getAsString());
+        if (J.size() > 2)
+          for (auto &[Key, Expected] : *J[2].getAsObject()) {
+            if (StringRef(Key) == "branch_target") {
+              auto *Succ = O.getArray("successors");
+              ASSERT_TRUE(Succ && !Succ->empty());
+              EXPECT_EQ(Succ->front(), Expected);
+            } else {
+              auto *Actual = O.get(Key);
+              ASSERT_TRUE(Actual) << StringRef(Key).str();
+              EXPECT_EQ(*Actual, Expected);
+            }
+          }
       }
       auto &Handlers = *E.getArray("handlers");
       if (Ops.empty())
@@ -211,7 +223,7 @@ TEST(JVMRecovery, SyntheticCodeTypesSwitchesAndOpaqueRecords) {
 }
 TEST(JVMRecovery, PhysicalJarMembersAndExplicitRuntimeSelection) {
   auto Jars = loadFixtures("jars.json");
-  ASSERT_EQ(Jars.size(), 7u);
+  ASSERT_EQ(Jars.size(), 8u);
   for (auto &V : Jars) {
     auto &Entry = *V.getAsObject();
     auto Id = *Entry.getString("id");
@@ -234,6 +246,18 @@ TEST(JVMRecovery, PhysicalJarMembersAndExplicitRuntimeSelection) {
         EXPECT_EQ(R.getString("status"), "malformed");
         EXPECT_TRUE(R.getArray("components")->empty());
         continue;
+      }
+      if (Id == "classpath-alias") {
+        bool Found = false;
+        for (auto &V : *R.getArray("components")) {
+          auto &C = *V.getAsObject();
+          if (C.getString("kind") != "class")
+            continue;
+          EXPECT_FALSE(C.getBoolean("classpath_name_matches").value_or(true));
+          Found = true;
+        }
+        EXPECT_TRUE(Found);
+        break;
       }
       if (Id == "mixed") {
         EXPECT_EQ(R.getString("status"), "partial_reconstruction");
@@ -356,11 +380,14 @@ TEST(JVMRecovery, OrderedLocalHierarchyAndContentCache) {
   ASSERT_TRUE(write("Leaf.class", Leaf));
   ASSERT_TRUE(write("A.class", Middle));
   ASSERT_TRUE(write("B.class", Middle));
-  auto fetch = [&](std::initializer_list<StringRef> Deps) {
+  auto fetch = [&](std::initializer_list<StringRef> Deps, int Release = 0,
+                   bool Preview = false) {
     json::Array A;
     for (auto N : Deps)
       A.emplace_back(file(N));
-    json::Object Q{{"method", "parent(LLeaf;)LRoot;"},
+    json::Object Q{{"release", Release},
+                   {"preview", Preview},
+                   {"method", "parent(LLeaf;)LRoot;"},
                    {"dependencies", std::move(A)}};
     std::string S;
     raw_string_ostream(S) << json::Value(std::move(Q));
@@ -403,6 +430,25 @@ TEST(JVMRecovery, OrderedLocalHierarchyAndContentCache) {
     }
     EXPECT_TRUE(Found);
   }
+  auto Newer = Middle;
+  Newer[7] = 71;
+  ASSERT_TRUE(write("A.class", Newer));
+  EXPECT_EQ(
+      first(parse(fetch({"A.class"}, 17)), "functions").getString("status"),
+      "disassembly_only");
+  EXPECT_EQ(
+      first(parse(fetch({"A.class"}, 27)), "functions").getString("status"),
+      "reconstructed_source");
+  auto Preview = Middle;
+  Preview[4] = char(255);
+  Preview[5] = char(255);
+  ASSERT_TRUE(write("A.class", Preview));
+  EXPECT_EQ(first(parse(fetch({"A.class"}, 17, true)), "functions")
+                .getString("status"),
+            "reconstructed_source");
+  EXPECT_EQ(
+      first(parse(fetch({"A.class"}, 17)), "functions").getString("status"),
+      "disassembly_only");
   ASSERT_TRUE(write("A.class", Root));
   EXPECT_EQ(first(parse(fetch({"A.class"})), "functions").getString("status"),
             "disassembly_only");

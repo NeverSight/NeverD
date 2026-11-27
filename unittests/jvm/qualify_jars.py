@@ -85,6 +85,7 @@ def produce(jdk, output):
                 ]
             ),
         )
+        record("classpath-alias", zip_bytes([("Other.class", rows["java-17"])]))
         record("traversal", zip_bytes([("../Sample.class", rows["java-8"])]))
         record(
             "duplicate",

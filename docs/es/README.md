@@ -1,6 +1,6 @@
 **Idiomas**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 9e8a0aced68a5f96f13cdd208e302ed220dc1bb4f42e98b2f7cc7d40cff9d6f9 -->
+<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
 
 [← Proyecto NeverD](project.md)
 
@@ -46,6 +46,7 @@ Las guías en inglés se encuentran directamente en `docs/`. Las traducciones se
 | [Plugins de proceso GUI (inglés)](../gui-plugins.md) | Administrador, ubicación de menús, resultados y protocolo de proveedores |
 | [Host NPH de plugins de proceso (inglés)](../plugin-host.md) | Propietarios compartidos, admisión de tareas, protocolo y duración de procesos |
 | [Plugins nativos](plugins.md) | ABI de descriptor en C puro, callbacks y eventos, flujo de compilación/enlace, descubrimiento y reglas de compatibilidad |
+| [Recuperación de artefactos Java](../jvm-recovery.md) | Versiones de los archivos de clase, selección de JAR, IR tipada y reconstrucción de métodos Java |
 | [Recuperación de artefactos de Python](../python-recovery.md) | Versiones de CPython, componentes de PyInstaller, análisis nativo y validación del código fuente |
 | [Plugins de Python](python-plugins.md) | Autoría, API de sesión y eventos, aislamiento, pruebas y publicación |
 | [Resumen de mobile](mobile.md) | CLI experimental de Android/iOS, entradas, salidas, informes y límites |
