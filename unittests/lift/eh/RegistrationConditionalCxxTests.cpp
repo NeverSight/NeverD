@@ -776,6 +776,9 @@ TEST(RegistrationConditionalCxx,
         else if (Mode == 6)
           F.overwrite(F.ResultVA,
                       {0x8d, 0x45, 0xec}); // Retired private object.
+        else if (Mode == 7)
+          Expected.PartialLowByte =
+              0; // MOV AX,0 leaves the upper bits tainted.
         else if (Mode == 8)
           Input = {}; // Both the scalar and borrowed return arms are reached.
       }
