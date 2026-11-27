@@ -249,7 +249,14 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
               (Op.NumInputs == 0 || !Op.Inputs[0].isConst()))
             return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
                    " (incomplete-call-inventory)";
-          const va_t Target = Op.Opcode == NdOp::CALL ? Op.Inputs[0].Offset : 0;
+          va_t Target = 0;
+          if (Op.Opcode == NdOp::CALL) {
+            Target = Op.Inputs[0].Offset;
+            // ELFv2 can branch to a symbol's local entry. MedIR names the
+            // same callee by its global entry after verifying the call ABI.
+            if (Img)
+              Target = Img->ppc64GlobalEntry(Target);
+          }
           LowCalls.emplace_back(Op.Addr, Op.Seq,
                                 static_cast<unsigned>(Op.Opcode), Target);
         }
@@ -286,11 +293,20 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
       if (!Table.MutatedUnsafe && !Table.Targets.empty())
         ResolvedIndirectBranches.insert(Table.InsnAddr);
     for (const LowBlock &Block : F.Blocks)
-      for (const LowOp &Op : Block.Ops)
+      for (const LowOp &Op : Block.Ops) {
         if (Op.Opcode == NdOp::INDIR_BR &&
             ResolvedIndirectBranches.count(Op.Addr) == 0)
           return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
                  " (unresolved-indirect-branch)";
+        // This operation returns a physical address selected by the historical
+        // MIPS MMU. The static scan has no translation state for that access.
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+            Op.Inputs[0].isConst() &&
+            Op.Inputs[0].Offset ==
+                static_cast<uint64_t>(Intrinsic::MIPSHistoricalAddressCheck))
+          return "incomplete safety lift at 0x" + llvm::utohexstr(Op.Addr) +
+                 " (unresolved-memory-translation)";
+      }
   }
   for (const MedFunc &F : Result.MedFuncs)
     for (const MedCallInfo &Call : F.CallInfos) {
@@ -324,8 +340,8 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
           if (Op.Opcode != NdOp::CALL || Op.NumInputs == 0 ||
               !Op.Inputs[0].isConst())
             continue;
-          const va_t Target =
-              normalizeCodeAddress(Op.Inputs[0].Offset, Img->Arch, Img->Mode);
+          const va_t Target = Img->ppc64GlobalEntry(
+              normalizeCodeAddress(Op.Inputs[0].Offset, Img->Arch, Img->Mode));
           const Segment *TargetSegment = Img->getSegmentFor(Target);
           if (!TargetSegment || !TargetSegment->isExecutable() ||
               Img->isImportStubAt(Target) || AcceptedEntries.count(Target) != 0)

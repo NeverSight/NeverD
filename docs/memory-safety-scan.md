@@ -29,6 +29,22 @@ Audit counts matched allocation sites, while Hunt counts sites it examined and t
 
 `coverage_complete` means all **selected** analyzers finished their inventories within budget. `ok` means at least one analyzer finished its pass (possibly with a budget limit) or produced observations before stopping. Consult the individual states for partial work. Any established `UNSAFE` finding yields exit code **2**, including when another analyzer stopped. With no such finding, an inconclusive observation or incomplete selected analyzer yields `UNKNOWN` and exit code **1**. Otherwise the verdict is `SAFE` within the selected static checks and the exit code is **0**. Argument, file loading and output errors also return **1**.
 
+## MIPS, PowerPC and RISC-V ELF
+
+The same `neverd scan` command reads the architecture, byte order and ABI from the ELF. The CLI, desktop worker and SDK share this selection.
+
+| ELF target | Linked stack-read control |
+| --- | --- |
+| MIPS32r2 o32 and MIPS64r2 n64, big- and little-endian | Identifies the uninitialized read and its function as `UNSAFE`. |
+| MIPS64r2 n32, big- and little-endian | Identifies the same read. Its evidence yields `UNKNOWN`. |
+| MIPS III o32, big- and little-endian | An access that needs runtime MMU translation yields `UNKNOWN` with `unresolved-memory-translation`. |
+| PowerPC32 and PowerPC64 ELFv1/ELFv2, big- and little-endian | Identifies the uninitialized read and its function as `UNSAFE`. |
+| RISC-V RV32I/ILP32 and RV64I/LP64, little-endian | Identifies the uninitialized read and its function as `UNSAFE`. |
+
+The paired control initializes a local of the same width before reading it. A second fixture calls a separately linked one-argument text function with an immutable literal. On PowerPC64 ELFv2 the scan resolves the local entry and proves the literal safe. On other admitted profiles the report can identify the call while leaving the string's origin inconclusive. Missing call targets or unsupported instructions can leave another binary inconclusive. The RISC-V controls cover the integer calling conventions. An unsupported file ABI can fail during loading before a report exists.
+
+The regression runs against linked binaries on every test host. To rebuild them, run `python3 unittests/safety/fixtures/elf-profiles/build.py --clang clang --lld ld.lld --ppc64-ld powerpc64le-linux-gnu-ld` with Clang/LLD 22 and GNU PowerPC64 binutils 2.40. GNU ld supplies the ELFv1 function descriptors.
+
 ## Limits and evidence
 
 One scan uses one loaded image, one native lift, one validated function inventory, and one set of interprocedural facts and resolved catalog sites. The lift stops once it has recovered the call ABI and prepared the verified machine IR that Audit and Hunt read. Each analyzer applies its usual path, step, loop, call-depth, fixed-point and solver budgets. The scan accepts symbol, catalog and budget options. Ctrl-C in the CLI or **Cancel scan** in the workbench requests a cooperative stop. Loading, the current lifting pass, shared preparation or a bounded analyzer operation can finish before the next checkpoint. Evidence from completed work stays in the report. The desktop worker reports an error if a reply exceeds its 8 MiB transport limit. Use `neverd scan program -o scan.json` to write a larger report.

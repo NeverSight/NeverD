@@ -15,6 +15,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/loader/BinaryImageModel.h"
 #include "neverd/safety/Limits.h"
 #include "neverd/safety/SinkScanner.h"
@@ -148,6 +149,7 @@ struct MemModel {
   const MedFunc &F;
   uint64_t SP = 0, FP = 0;
   bool Have = false;
+  mutable std::optional<EntryStackOffsetProof> MixedWidthStack;
   llvm::DenseMap<ValueKey, std::pair<int, int>> OpDef;
   llvm::DenseMap<ValueKey, std::pair<int, int>> PhiDef;
   llvm::DenseSet<ValueKey> AmbiguousDefs;
@@ -161,6 +163,9 @@ struct MemModel {
     SP = In.StackPointerReg;
     FP = In.FramePointerReg;
     Have = In.StackRegsKnown;
+    if (Have && In.Img && hasMIPS32BitAddressIn64BitGPR(In.Img->Arch))
+      MixedWidthStack.emplace(F, In.Img->Arch, In.Img->abiFormat(),
+                              F.EntryKind);
     const auto RecordDefinition = [&](auto &Definitions, const ValueKey &Key,
                                       std::pair<int, int> Location) {
       if (AmbiguousDefs.count(Key))
@@ -304,6 +309,11 @@ struct MemModel {
   }
 
   std::optional<int64_t> stackOffset(const MedVar &V) const {
+    // The target's stack proof recognizes a signed word adjustment to a
+    // full-width address register on n32 and MIPS III o32.
+    if (MixedWidthStack)
+      if (auto Offset = MixedWidthStack->offset(V))
+        return Offset;
     llvm::DenseSet<ValueKey> Seen;
     return stackOffsetRec(V, 0, Seen);
   }
@@ -2753,7 +2763,12 @@ private:
         // This audit only claims local frame bytes below the entry SP.
         if (!Offset || *Offset >= 0)
           continue;
-        if (!valueHasPointerWidth(*Addr)) {
+        // In a mixed-width frame a memory operation can address through
+        // the full GPR that carries the ABI's four-byte pointer.
+        const bool FullAddressRegister =
+            Mem.MixedWidthStack &&
+            Addr->Size == getTargetRegInfo(In.Img->Arch).addressRegisterBytes();
+        if (!valueHasPointerWidth(*Addr) && !FullAddressRegister) {
           Finding Fn;
           Fn.Origin = Track::Audit;
           Fn.Class = VulnClass::UninitializedRead;

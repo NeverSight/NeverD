@@ -492,6 +492,26 @@ TEST(SafetyReport, PipelineCoverageRequiresExactCallInventory) {
   Result.MedFuncs.front().CallInfos.front().TargetAddr = kTarget;
   EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
 
+  // A PPC64 ELFv2 branch can name the local entry of the exact symbol
+  // recorded in MedIR. Adjacent interior addresses still fail coverage.
+  neverd::BinaryImage Img;
+  Img.Arch = neverd::Arch::PPC64LE;
+  Result.SourceImage = &Img;
+  auto &RawTarget =
+      Result.LowFuncs.front().Blocks.front().Ops.front().Inputs[0];
+  RawTarget.Offset = kTarget + 8;
+  Error = validatePipelineCoverage(Result, &Img);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+  Img.PPC64EntryContexts[kTarget].LocalEntryOffset = 8;
+  EXPECT_FALSE(validatePipelineCoverage(Result, &Img).has_value());
+  RawTarget.Offset = kTarget + 4;
+  Error = validatePipelineCoverage(Result, &Img);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+  RawTarget.Offset = kTarget;
+  Result.SourceImage = nullptr;
+
   Result.LowFuncs.front().Blocks.front().Ops.push_back(
       Result.LowFuncs.front().Blocks.front().Ops.front());
   Error = validatePipelineCoverage(Result);
