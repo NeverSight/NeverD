@@ -20,7 +20,7 @@ ABIS = {
     "n64": ("mips64", "gnuabi64", 5058),
 }
 MODES = ("section", "inplace")
-PRODUCT_VERSION = 9
+PRODUCT_VERSION = 10
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -453,6 +453,48 @@ def qualify_upgrade(args):
     print(f"Relinked {len(results)} original-release programs with the new linker in both modes")
 
 
+def qualify_second_updates(args, build, out, profile, manifest, patch):
+    # The first update replaced calc.o under its original basename. Reproduce
+    # that entire executable before changing the function a second time.
+    current = build / "first" / "calc.o"
+    current.parent.mkdir()
+    shutil.copyfile(build / "updated.o", current)
+    third = "third.o"
+    compile_arithmetic_object(args, build, profile, third, CALC.replace("ADJUST", "11"))
+    objects = [current.relative_to(build).as_posix() if name == manifest["original"] else name
+               for name in manifest["objects"]]
+    newest = [build / (third if name == manifest["original"] else name) for name in manifest["objects"]]
+    layouts = {"inplace": ("base.ld", ".text"), "section": ("section.ld", ".calc.update")}
+    references = {}
+    for script, _ in layouts.values():
+        reference = build / "reference.elf"
+        run([args.lld, "-static", "-T", build / script, "-o", reference, *newest])
+        references[script] = digest(reference)
+    results = {}
+    for first in MODES:
+        previous = out / f"{first}.elf"
+        old_script = layouts[first][0]
+        moved_script, moved_section = layouts["inplace" if first == "section" else "section"]
+        second_manifest = {**manifest, "objects": objects, "original": current.relative_to(build).as_posix(),
+                           "replacement": third, "layout": old_script,
+                           "sectionLayout": moved_script, "section": moved_section}
+        for mode in MODES:
+            key = f"after-{first}-{mode}"
+            output = out / f"{key}.elf"
+            encode(build / "manifest.json", second_manifest)
+            patch(mode, output, input_elf=previous)
+            expected = references[old_script if mode == "inplace" else moved_script]
+            if digest(output) != expected:
+                raise ValueError(f"{profile.name}: {key} differs from the independent second link")
+            encode(build / "manifest.json", {**second_manifest, "objects": manifest["objects"],
+                                             "original": manifest["original"]})
+            patch(mode, output, input_elf=previous, error="do not reproduce the input ELF")
+            if digest(output) != expected:
+                raise ValueError(f"{profile.name}: stale link inputs replaced the {key} output")
+            results[key] = expected
+    return results
+
+
 def qualify(args):
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -508,6 +550,8 @@ def qualify(args):
             patch("section", out / "section-grown.elf")
             results[name] = {case: digest(out / f"{case}.elf")
                              for case in ("original", *MODES, "section-grown")}
+            if profile == Profile(profile.abi, profile.little):
+                results[name].update(qualify_second_updates(args, build, out, profile, manifest, patch))
 
             sentinel = build / "prior output"
             sentinel.write_bytes(b"existing product\n")
@@ -719,7 +763,7 @@ def execute(args):
     manifest = json.loads((root / "products.json").read_text())
     if "version" in manifest:
         version = manifest["version"]
-        if version not in (2, 3, 4, 5, 6, 7, 8, 9):
+        if version not in (2, 3, 4, 5, 6, 7, 8, 9, 10):
             raise ValueError("Unknown MIPS relink products version")
         hashes = manifest["profiles"]
     else:
@@ -753,6 +797,10 @@ def execute(args):
         if version >= 3 and not profile.linkage:
             # The larger body returns 61, 56 and 44 for the three startup calls.
             expected_results["section-grown"] = 161
+        second_updates = version >= 10 and profile == Profile(profile.abi, profile.little)
+        if second_updates:
+            # The three calls to 2*x + 11 return 11, 13 and 25.
+            expected_results.update({f"after-{first}-{mode}": 49 for first in MODES for mode in MODES})
         if hashes[profile.name].keys() != expected_results.keys():
             raise ValueError(f"{profile.name}: unexpected set of relink products")
         for case, expected in expected_results.items():
@@ -778,6 +826,11 @@ def execute(args):
                             or old["va"] >= section["va"] + section["size"])
                     or (case == "section-grown" and section["size"] <= old["size"])):
                 raise ValueError(f"{profile.name}: incorrect {case} placement {section} for {old}")
+        if second_updates:
+            for first in MODES:
+                moved = old if first == "section" else ranges["section"]
+                if ranges[f"after-{first}-inplace"] != ranges[first] or ranges[f"after-{first}-section"] != moved:
+                    raise ValueError(f"{profile.name}: incorrect second placement after {first}")
         results[profile.name], placements[profile.name] = row, ranges
         if profile.name == "micromips-r2-n64-be":
             from mips_elf_runtime import check_non_executable_entry

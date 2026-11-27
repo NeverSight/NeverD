@@ -220,6 +220,12 @@ same object must fail in `inplace` mode and preserve the previous output.
 The runner checks the function size, file offset, ISA marker and exact ISA
 revision in `.MIPS.abiflags`. Shrinking n64 images place code above 4 GiB.
 
+The six classic R2 base programs undergo a second source update in all four
+orders of `section` and `inplace`. Their exit statuses progress from 25 to
+37 to 49. Each second output must match its independent complete LLD link.
+Reusing the first generation's input objects must preserve the last
+successful output and report that they do not reproduce the executable.
+
 Six classic R2 configurations also carry 16 MiB of initialized read-only
 data and 64 MiB of BSS. The guest reads both ends of each object, writes the
 last BSS byte, and checks that the first byte stays zero before calling the
