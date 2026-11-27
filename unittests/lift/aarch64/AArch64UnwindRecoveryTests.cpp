@@ -371,6 +371,29 @@ TEST(AArch64ImplicitUnwind, InstructionAddressRecipesSurviveImageSlides) {
   EXPECT_EQ(PageRelative.State->Kind, Kind::Unsigned);
 }
 
+TEST(AArch64ImplicitUnwind, RegisterModifierNeedsTheSigningPCAndKey) {
+  for (bool KeyB : {false, true}) {
+    const auto Sign = KeyB ? ExplicitSignB : ExplicitSignA;
+    const auto Auth = KeyB ? ExplicitAuthBX11 : ExplicitAuthAX11;
+    Frame F{Sign, PreviousPCInX11, Auth, Ret};
+    const auto Before = F.at(2);
+    ASSERT_TRUE(Before.State);
+    EXPECT_EQ(Before.State->Kind, Kind::SPAndPC);
+    EXPECT_EQ(Before.State->Key, KeyB ? AArch64RAKey::B : AArch64RAKey::A);
+    EXPECT_EQ(Before.State->SigningPC, 0u);
+    const auto After = F.at(3);
+    ASSERT_TRUE(After.State);
+    EXPECT_EQ(After.State->Kind, Kind::Unsigned);
+  }
+  Frame WrongKey{ExplicitSignA, PreviousPCInX11, ExplicitAuthBX11, Ret};
+  Frame WrongRegister{ExplicitSignB, PreviousPCInX11, ExplicitAuthBX12, Ret};
+  Frame WrongAddress{ExplicitSignB, Nop, PreviousPCInX11, ExplicitAuthBX11,
+                     Ret};
+  EXPECT_EQ(WrongKey.at(3).Status, Status::Unknown);
+  EXPECT_EQ(WrongRegister.at(3).Status, Status::Unknown);
+  EXPECT_EQ(WrongAddress.at(4).Status, Status::Unknown);
+}
+
 TEST(AArch64ImplicitUnwind, CompactRowsRecoverActualCarriersAtInterruption) {
   Frame F{SignB, Push, MoveFP, Call, Pop, AuthB, Ret};
   F.Function.Dwarf.reset();

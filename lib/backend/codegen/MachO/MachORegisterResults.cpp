@@ -26,6 +26,7 @@
 #include "neverd/ir/low/AArch64AddressResult.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/Limits.h"
@@ -79,6 +80,7 @@ struct RegisterBody {
   std::optional<ExceptionAddressRange> RetainedTail;
   bool HasDataPage = false;
   bool HasEmbeddedData = false;
+  bool HasSigningAddress = false;
   bool HasSavedFrame = false;
   bool HasLanguageFrame = false;
   bool HasBareReturn = false;
@@ -111,16 +113,11 @@ definedEntries(llvm::Module &M, const BinaryImage &Image,
   return Functions;
 }
 
-struct PCSigningInstruction {
-  unsigned Operands;
-  bool Returns;
-};
-
-std::optional<PCSigningInstruction> pcSigningInstruction(unsigned Id) {
+std::optional<AArch64PAuthLROperation> pcSigningInstruction(unsigned Id) {
   switch (Id) {
-#define MACHO_REGISTER_PC_SIGNING(Name, Operands, Returns)                     \
+#define MACHO_REGISTER_PC_SIGNING(Name, Operation)                             \
   case AARCH64_INS_##Name:                                                     \
-    return PCSigningInstruction{Operands, Returns};
+    return aarch64PAuthLROperation(Intrinsic::Operation);
 #include "MachORegisterResults.def"
   default:
     return std::nullopt;
@@ -146,8 +143,9 @@ bool isRegisterCall(unsigned Id) {
 bool independent(const DecodedInsn &I) {
   const auto &D = I.Raw->detail->aarch64;
   if (const auto PCSigning = pcSigningInstruction(I.Id))
-    return D.op_count == PCSigning->Operands &&
-           (!D.op_count || D.operands[0].type == AARCH64_OP_IMM);
+    return D.op_count == unsigned(PCSigning->Authenticate) &&
+           (!D.op_count || D.operands[0].type == AARCH64_OP_IMM ||
+            D.operands[0].type == AARCH64_OP_REG);
   switch (I.Id) {
 #define MACHO_REGISTER_ALU(Name) case AARCH64_INS_##Name:
 #include "MachORegisterResults.def"
@@ -260,23 +258,107 @@ addressedReturnTail(Decoder &Decode, const BinaryImage &Image,
   return std::nullopt;
 }
 
-// The existing PACM instruction table identifies the matching signing
-// instruction and the consumer of the local signing PC in X16.
-bool movesSigningPoint(const MachOLiftedSource &Source, va_t Start, va_t PC,
-                       va_t Target, aarch64_reg Reg) {
-  constexpr auto Word = aarch64::kInsnSize;
-  if (Reg != AARCH64_REG_X16 || Target <= Start || Target % Word ||
-      !rangeInBounds(Target - Start, Word, Source.Bytes.size()) ||
-      Source.Bytes.size() - (PC - Start) < 3 * Word ||
-      !machODataInCodeRanges(Source.Embedded, Target - Word, 2 * Word)
-           .empty() ||
-      !machODataInCodeRanges(Source.Embedded, PC + Word, 2 * Word).empty())
-    return false;
-  const auto At = [&](va_t VA) {
-    return readLE<uint32_t>(Source.Bytes.data() + (VA - Start));
+// An exported numeric address denotes original storage. Follow both edges
+// until the modifier is overwritten or leaves in a Darwin scratch register.
+bool signingRegisterIsLocal(Decoder &Decode, const MachOLiftedSource &Source,
+                            va_t Start, va_t After, aarch64_reg Reg,
+                            bool Returns) {
+  const bool Scratch = Reg >= AARCH64_REG_X10 && Reg <= AARCH64_REG_X17;
+  if (Returns)
+    return Scratch;
+  const auto Offset = mapCapstoneReg(Reg).Offset;
+  const auto Matches = [&](uint16_t Other) {
+    const auto R = mapCapstoneReg(static_cast<aarch64_reg>(Other));
+    return R.Size && R.Offset == Offset;
   };
-  if (At(Target - Word) != kAArch64PACMEncoding ||
-      At(PC + Word) != kAArch64PACMEncoding)
+  constexpr auto Word = aarch64::kInsnSize;
+  llvm::SmallVector<va_t> Work{After};
+  llvm::SmallDenseSet<va_t, 8> Visited;
+  while (!Work.empty()) {
+    const va_t PC = Work.pop_back_val();
+    if (!Visited.insert(PC).second)
+      continue;
+    if (PC < Start || !rangeInBounds(PC - Start, Word, Source.Bytes.size()) ||
+        !machODataInCodeRanges(Source.Embedded, PC, Word).empty())
+      return false;
+    DecodedInsn I{};
+    if (Decode.decodeOne(Source.Bytes.data() + (PC - Start), Word, PC, I) !=
+            int(Word) ||
+        !I.Raw || !I.Raw->detail)
+      return false;
+    cs_regs Reads, Writes;
+    uint8_t NR = 0, NW = 0;
+    const auto Handle = Decode.getHandle();
+    if (cs_regs_access(Handle, I.Raw, Reads, &NR, Writes, &NW) != CS_ERR_OK ||
+        llvm::any_of(llvm::ArrayRef(Reads, NR), Matches))
+      return false;
+    if (llvm::any_of(llvm::ArrayRef(Writes, NW), Matches) ||
+        I.Id == AARCH64_INS_BRK)
+      continue;
+    if (cs_insn_group(Handle, I.Raw, CS_GRP_RET)) {
+      if (!Scratch)
+        return false;
+      continue;
+    }
+    if (cs_insn_group(Handle, I.Raw, CS_GRP_CALL)) {
+      if (!Scratch)
+        return false;
+    } else if (cs_insn_group(Handle, I.Raw, CS_GRP_JUMP)) {
+      const auto &D = I.Raw->detail->aarch64;
+      if (!D.op_count || D.operands[D.op_count - 1].type != AARCH64_OP_IMM)
+        return false;
+      const va_t Target = D.operands[D.op_count - 1].imm;
+      if (Target >= Start && Target - Start < Source.Bytes.size())
+        Work.push_back(Target);
+      else if (!Scratch)
+        return false;
+      if (I.Id == AARCH64_INS_B &&
+          (D.cc == AArch64CC_Invalid || D.cc == AArch64CC_AL))
+        continue;
+    }
+    Work.push_back(PC + Word);
+  }
+  return true;
+}
+
+// An ADR producing the second modifier must follow its signing instruction
+// when the body moves. The key and the consuming register identify the pair.
+bool movesSigningPoint(Decoder &Decode, const MachOLiftedSource &Source,
+                       va_t Start, va_t PC, va_t Target, aarch64_reg Reg) {
+  constexpr auto Word = aarch64::kInsnSize;
+  if (Target < Start || Target % Word ||
+      !rangeInBounds(Target - Start, Word, Source.Bytes.size()) ||
+      Source.Bytes.size() - (PC - Start) < 2 * Word ||
+      !machODataInCodeRanges(Source.Embedded, Target, Word).empty() ||
+      !machODataInCodeRanges(Source.Embedded, PC + Word, Word).empty())
+    return false;
+  const auto Bytes = [&](va_t VA) {
+    return Source.Bytes.data() + (VA - Start);
+  };
+  const auto At = [&](va_t VA) { return readLE<uint32_t>(Bytes(VA)); };
+  if (At(PC + Word) != kAArch64PACMEncoding) {
+    DecodedInsn I{};
+    if (Decode.decodeOne(Bytes(Target), Word, Target, I) != int(Word))
+      return false;
+    const auto Sign = pcSigningInstruction(I.Id);
+    if (!Sign || Sign->Authenticate ||
+        Decode.decodeOne(Bytes(PC + Word), Word, PC + Word, I) != int(Word) ||
+        !I.Raw || !I.Raw->detail)
+      return false;
+    const auto Auth = pcSigningInstruction(I.Id);
+    const auto &D = I.Raw->detail->aarch64;
+    if (!Auth || !Auth->Authenticate || Auth->Key != Sign->Key ||
+        D.op_count != 1 || D.operands[0].type != AARCH64_OP_REG ||
+        D.operands[0].reg != Reg)
+      return false;
+    return signingRegisterIsLocal(Decode, Source, Start, PC + 2 * Word, Reg,
+                                  Auth->Return);
+  }
+  if (Reg != AARCH64_REG_X16 || Target == Start ||
+      Source.Bytes.size() - (PC - Start) < 3 * Word ||
+      !machODataInCodeRanges(Source.Embedded, Target - Word, Word).empty() ||
+      !machODataInCodeRanges(Source.Embedded, PC + 2 * Word, Word).empty() ||
+      At(Target - Word) != kAArch64PACMEncoding)
     return false;
   enum class Modifier { PC, X15, X16 };
   const auto Operation = [](uint32_t Bits, Modifier Expected) {
@@ -909,7 +991,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     const bool Stops = Jump || !Targets.empty() || I.Id == AARCH64_INS_RET ||
                        I.Id == AARCH64_INS_RETAA || I.Id == AARCH64_INS_RETAB ||
                        I.Id == AARCH64_INS_BRK ||
-                       (PCSigning && PCSigning->Returns);
+                       (PCSigning && PCSigning->Return);
     if (!Stops && !Islands.empty() && Islands.front().Begin == NextPC)
       return std::nullopt;
     const auto Encoding = readLE<uint32_t>(I.Raw->bytes);
@@ -1025,7 +1107,8 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       OS << kLocal << (Target - Start) / Word << '\n';
       continue;
     }
-    if (PCSigning && PCSigning->Operands) {
+    if (PCSigning && PCSigning->Authenticate && Ops.size() == 1 &&
+        Ops.front().type == AARCH64_OP_IMM) {
       const auto Distance =
           ((Encoding >> kAArch64PAuthLRImmShift) & kAArch64PAuthLRImmMask) *
           kAArch64PAuthLRScale;
@@ -1091,12 +1174,15 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       const auto Reg = NumericPage ? NumericPage->ResultRegister : Ops[0].reg;
       if (Reg == AARCH64_REG_XZR)
         return std::nullopt;
-      const bool Moves = !NumericPage && !Rebased && !OutsideCFG &&
-                         (Dispatch.TableAddresses.contains(PC) ||
-                          movesSigningPoint(*Source, Start, PC, Target, Reg));
-      if (Moves)
+      const bool TableAddress = Dispatch.TableAddresses.contains(PC);
+      const bool Moves =
+          !NumericPage && !Rebased && !OutsideCFG &&
+          (TableAddress ||
+           movesSigningPoint(Decode, *Source, Start, PC, Target, Reg));
+      if (Moves) {
         References.push_back({PC, Target, 0});
-      else {
+        Body.HasSigningAddress |= !TableAddress;
+      } else {
         // The lookahead consumes the borrowed instruction. The source word
         // and destination register have already been copied.
         if (!LiteralAddress) {
@@ -1459,7 +1545,9 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
         AddressUsers.insert(&F);
       llvm::append_range(SourceSlots, Body->SourcePointerSlots);
       if (llvm::any_of(F, [](const auto &BB) { return BB.hasAddressTaken(); }))
-        AddressTaken.emplace_back(&F, Source && !Source->JumpTables.empty());
+        AddressTaken.emplace_back(&F,
+                                  Body->HasSigningAddress ||
+                                      (Source && !Source->JumpTables.empty()));
       Bodies.try_emplace(&F, std::move(*Body));
     }
   }
@@ -1490,9 +1578,9 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
   llvm::DenseMap<const llvm::Function *, llvm::SmallVector<llvm::Function *>>
       DependsOn;
   llvm::SmallVector<llvm::Function *> Retain;
-  for (auto [F, LocalDispatch] : AddressTaken) {
+  for (auto [F, UsesLocalLabels] : AddressTaken) {
     const auto Escape = blockAddressEscape(*F, [&](const auto *User) {
-      if (User == F && LocalDispatch)
+      if (User == F && UsesLocalLabels)
         return true;
       if (!AddressUsers.contains(User))
         return false;
@@ -1534,7 +1622,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData ||
         Body.HasSavedFrame || Body.HasLanguageFrame || Body.HasBareReturn ||
         Body.HasInteriorEntry || Body.IsForwarder || Body.HasEmbeddedData ||
-        Body.HasDataPage || !Body.SourceAddresses.empty())
+        Body.HasDataPage || Body.HasSigningAddress ||
+        !Body.SourceAddresses.empty())
       Select(F);
     if (HasVariadicCursor &&
         (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument))
