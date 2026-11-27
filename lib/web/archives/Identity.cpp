@@ -9,8 +9,9 @@
 
 #include "../Internal.h"
 
+#include "neverd/support/SHA256.h"
+
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/Support/SHA256.h"
 
 #include <array>
 
@@ -20,14 +21,12 @@ bool validUtf8(std::string_view Bytes) {
 }
 
 std::string sha256(std::string_view Bytes) {
-  llvm::SHA256 Hash;
-  Hash.update(llvm::StringRef(Bytes));
-  return llvm::toHex(Hash.final(), true);
+  return llvm::toHex(neverd::sha256(llvm::arrayRefFromStringRef(Bytes)), true);
 }
 
 std::string identity(std::string_view Domain,
                      const std::vector<std::string_view> &Fields) {
-  llvm::SHA256 Hash;
+  SHA256Stream Hash;
   auto Field = [&](std::string_view Text) {
     std::array<uint8_t, 8> Size{};
     uint64_t Length = Text.size();
