@@ -31,18 +31,25 @@ def observation():
     # Only boolean predicates on these fixed application/runtime images
     # leave the debugger. The hardware execution breakpoints leave code intact.
     entry = {
-        "pc": "@eip == @$exentry+0x33a",
+        "pc": "@eip == @$exentry-0x272",
         "app_type_export": "poi(@$exentry+0x128e) == @$t0+0x85a00",
         "commode_export": "poi(@$exentry+0x12ca) == @$t0+0x879d0",
         "callback": "poi(@esp) == @$exentry+0x6eb",
-        "first_null": "poi(@$t0+0x10475c) == poi(@$t0+0x103300)",
-        "last_null": "poi(@$t0+0x104760) == poi(@$t0+0x103300)",
-        "end_null": "poi(@$t0+0x104764) == poi(@$t0+0x103300)",
-        "full": "poi(@$t0+0x104760) == poi(@$t0+0x104764)",
+        "uses_default": "poi(@$exentry+0x43ca) == 0xffffffff",
         "mode0_zero": "poi(@$t0+0x1043c4) == 0",
         "mode1_zero": "poi(@$t0+0x1043c8) == 0",
         "handler0_null": "poi(@$t0+0x1043bc) == poi(@$t0+0x103300)",
         "handler1_null": "poi(@$t0+0x1043c0) == poi(@$t0+0x103300)",
+    }
+    table = {
+        "pc": "@eip == @$t0+0x616e0",
+        "callback": "poi(@esp+8) == @$exentry+0x6eb",
+        "ucrt_table": "@$t1 == @$t0+0x10475c",
+        "program_table": "@$t1 == @$exentry+0x43ca",
+        "first_null": "poi(@$t1) == poi(@$t0+0x103300)",
+        "last_null": "poi(@$t1+4) == poi(@$t0+0x103300)",
+        "end_null": "poi(@$t1+8) == poi(@$t0+0x103300)",
+        "full": "poi(@$t1+4) == poi(@$t1+8)",
     }
     comparison = {
         "pc": "@eip == @$t0+0x617d2",
@@ -51,20 +58,22 @@ def observation():
         "take_growth_branch": "(@efl & 0x40) != 0",
     }
     returned = {
-        "pc": "@eip == @$exentry+0x33f",
+        "pc": "@eip == @$exentry-0x26d",
         "success": "@eax == 0",
-        "first_null": "poi(@$t0+0x10475c) == poi(@$t0+0x103300)",
-        "nonempty": "poi(@$t0+0x10475c) != poi(@$t0+0x104760)",
-        "room": "poi(@$t0+0x104760) != poi(@$t0+0x104764)",
+        "first_null": "poi(@$t1) == poi(@$t0+0x103300)",
+        "nonempty": "poi(@$t1) != poi(@$t1+4)",
+        "room": "poi(@$t1+4) != poi(@$t1+8)",
     }
     steps = [
-        ".expr /s masm", "ba e 1 @$exentry+0x33a", "g",
+        ".expr /s masm", "ba e 1 @$exentry-0x272", "g", ".lastevent",
         "r $t0 = poi(@$exentry+0x127a)-0x61640", marker("ENTRY", entry),
+        "bc *", "ba e 1 @$t0+0x616e0", "g", ".lastevent",
+        "r $t1 = poi(@esp+4)", marker("TABLE", table),
         "bc *", "ba e 1 @$t0+0x617d2", "g", marker("COMPARE", comparison),
-        "bc *", "ba e 1 @$exentry+0x33f", "g", marker("RETURN", returned),
+        "bc *", "ba e 1 @$exentry-0x26d", "g", marker("RETURN", returned),
         "bc *", "qd",
     ]
-    return steps, {"ENTRY": entry, "COMPARE": comparison, "RETURN": returned}
+    return steps, {"ENTRY": entry, "TABLE": table, "COMPARE": comparison, "RETURN": returned}
 
 
 def parse_markers(output, groups):
@@ -94,16 +103,19 @@ def main():
     with tempfile.TemporaryDirectory() as folder:
         commands = Path(folder) / "observe.txt"
         commands.write_text("\n".join(steps) + "\n", encoding="ascii")
-        command = [str(debugger), "-y", folder, "-cf", str(commands), str(fixture)]
+        command = [str(debugger), "-hd", "-y", folder, "-cf", str(commands), str(fixture)]
         completed = subprocess.run(command, stdin=subprocess.DEVNULL, text=True,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    errors="replace", timeout=120, check=True)
     results = parse_markers(completed.stdout, groups)
-    before, branch, after = (results[n] for n in ("ENTRY", "COMPARE", "RETURN"))
+    before, table, branch, after = (results[n] for n in ("ENTRY", "TABLE", "COMPARE", "RETURN"))
     if not (all(before[key] for key in ("pc", "app_type_export", "commode_export", "callback"))
-            and branch["pc"] and after["pc"] and branch["first_null"] == before["first_null"]
-            and branch["take_growth_branch"] == branch["equal"] == before["full"]):
-        raise ValueError(f"The register and table observations disagree: {results}")
+            and table["pc"] and table["callback"] and table["ucrt_table"] != table["program_table"]
+            and table["ucrt_table"] == before["uses_default"]
+            and branch["pc"] and after["pc"] and branch["first_null"] == table["first_null"]
+            and branch["take_growth_branch"] == branch["equal"] == table["full"]):
+        events = [line for line in completed.stdout.splitlines() if "Last event:" in line]
+        raise ValueError(f"The register and table observations disagree: {results}; {events}")
     if after["success"] and not after["nonempty"]:
         raise ValueError("The registrar returned success with an empty table")
     if digest(fixture) != FIXTURE_SHA256 or digest(provider) != UCRT_SHA256:
