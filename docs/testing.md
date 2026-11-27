@@ -16613,6 +16613,10 @@ zero callee cleanup, while private object/initializer borrows and exception
 dispatch remain unproved. `StackCleanupCannotAuthorizeDispatchOrObservation`
 also checks that these table, lock and exit-registration imports cannot acquire
 the separate RaiseException caller-frame contract from their stack fact.
+The two PE32 startup-mode tests check the UCRT provider and caller cleanup,
+then decode the actual arguments to `_set_app_type`, `_set_fmode` and
+`_set_new_mode` in the MSVC `xcpt4` fixture. They exercise whole-image and
+selected-function loading, including a changed getter and a split call sequence.
 Managed-name variants, partial or missing caller cleanup, and stale provider or
 slot bindings receive no normal-return stack contract.
 `CxxCookieSourceProofReachesTheParentAndMedCallABI` also checks an independent

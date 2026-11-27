@@ -29,7 +29,15 @@ namespace neverd::registration_abi {
 namespace {
 
 bool isCallerCleanupCRTImport(const Import &Imported) {
-  enum class Family { Unknown, Legacy, Math, Stdio, Runtime, Initializers };
+  enum class Family {
+    Unknown,
+    Legacy,
+    Math,
+    Stdio,
+    Runtime,
+    Heap,
+    Initializers
+  };
   const auto Provider = llvm::StringSwitch<Family>(Imported.Name)
 #define NEVERD_REGISTRATION_CRT_CLEANUP(Name, Kind) .Case(Name, Family::Kind)
 #include "RegistrationRuntimeImports.def"
@@ -42,6 +50,8 @@ bool isCallerCleanupCRTImport(const Import &Imported) {
     return coff_loader::isUCRTStdioProvider(Imported.Module);
   if (Provider == Family::Runtime)
     return coff_loader::isUCRTRuntimeProvider(Imported.Module);
+  if (Provider == Family::Heap)
+    return coff_loader::isUCRTHeapProvider(Imported.Module);
   if (Provider == Family::Initializers)
     return coff_loader::isX86LegacyCRTProvider(Imported.Module) ||
            coff_loader::isUCRTRuntimeProvider(Imported.Module);

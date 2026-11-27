@@ -21558,6 +21558,10 @@ and jump/local-unwind contracts retain their distinct provider sets.
 PE32 also uses the UCRT stdio provider set for the caller-cleanup convention
 of `__acrt_iob_func` and `__stdio_common_vfprintf`. Proving a stream, a format
 string or the effects of output requires the arguments at the call.
+For the UCRT startup setters `_set_app_type`, `_set_fmode` and `_set_new_mode`,
+PE32 retains live import bindings when the checked call receives a documented
+mode on the private stack. MSVC can push that value directly or call a linked
+option getter that returns an immediate in EAX and then push EAX.
 `X86/RegistrationRuntimeImports.def` owns registration cleanup, jump and
 local-unwind names; `Windows/SEHRuntimeImports.def` maps the Win64 CRT memory
 entries to their routine kinds and provider queries. Symbol names remain case

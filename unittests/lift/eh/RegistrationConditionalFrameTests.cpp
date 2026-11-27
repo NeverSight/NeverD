@@ -746,19 +746,72 @@ TEST(RegistrationCRTFrame, XCPT4PrintfObtainsTheStandardOutputStream) {
       const auto Slot = checkedCRTCallSlot(*Image, Op, Work);
       ASSERT_EQ(Slot, 0x4080fcu);
       EXPECT_TRUE(
-          isCheckedCRTStandardStreamCall(*Image, Block, Op, *Slot, Work));
+          hasBindingPreservingCRTArgument(*Image, Block, Op, *Slot, Work));
       LowBlock EntryAtCall;
       for (const auto &Boundary : Block.InstructionBoundaries)
         if (Boundary.Address >= Op.Addr)
           EntryAtCall.InstructionBoundaries.push_back(Boundary);
+      EXPECT_FALSE(hasBindingPreservingCRTArgument(*Image, EntryAtCall, Op,
+                                                   *Slot, Work));
       EXPECT_FALSE(
-          isCheckedCRTStandardStreamCall(*Image, EntryAtCall, Op, *Slot, Work));
-      EXPECT_FALSE(
-          isCheckedCRTStandardStreamCall(*Image, Block, Op, 0x4080f8, Work));
+          hasBindingPreservingCRTArgument(*Image, Block, Op, 0x4080f8, Work));
       return;
     }
   }
   FAIL() << "missing original standard stream call";
+}
+
+TEST(RegistrationCRTFrame, XCPT4StartupModesRequireTheirActualArgument) {
+  using namespace registration_state;
+  struct Invocation {
+    va_t Entry, Call, ValueInstruction;
+    const char *Name;
+  };
+  const Invocation Cases[] = {{0x406b88, 0x406b8b, 0x406b89, "_set_app_type"},
+                              {0x406b88, 0x406b96, 0x407268, "_set_fmode"},
+                              {0x406c3b, 0x406c46, 0x40726e, "_set_new_mode"}};
+  for (const bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(*Image));
+    for (const auto &Case : Cases) {
+      SCOPED_TRACE(::testing::Message() << Selected << " " << Case.Name);
+      const auto Caller = CFGBuilder().buildIntegerFrameProof(
+          *Image, Dec, Case.Entry, "startup initializer");
+      unsigned Calls = 0;
+      for (const auto &Block : Caller.Blocks)
+        for (const auto &Op : Block.Ops) {
+          if (Op.Addr != Case.Call || Op.Opcode != NdOp::CALL)
+            continue;
+          ++Calls;
+          size_t Work = 0;
+          const auto Slot = checkedCRTCallSlot(*Image, Op, Work);
+          ASSERT_TRUE(Slot);
+          const auto *Import = Image->findImportAt(*Slot);
+          ASSERT_TRUE(Import);
+          ASSERT_EQ(Import->Name, Case.Name);
+          EXPECT_TRUE(
+              hasBindingPreservingCRTArgument(*Image, Block, Op, *Slot, Work));
+          LowBlock AfterProducer;
+          for (const auto &Boundary : Block.InstructionBoundaries)
+            if (Boundary.Address >= Case.Call - 1)
+              AfterProducer.InstructionBoundaries.push_back(Boundary);
+          EXPECT_FALSE(hasBindingPreservingCRTArgument(*Image, AfterProducer,
+                                                       Op, *Slot, Work));
+          auto *Byte = const_cast<uint8_t *>(
+              Image->readVA(Case.ValueInstruction + 1, 1));
+          ASSERT_TRUE(Byte);
+          const uint8_t Saved = *Byte;
+          *Byte = 0xff;
+          EXPECT_FALSE(
+              hasBindingPreservingCRTArgument(*Image, Block, Op, *Slot, Work));
+          *Byte = Saved;
+          EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+        }
+      EXPECT_EQ(Calls, 1u);
+    }
+  }
 }
 
 TEST(RegistrationCRTFrame, XCPT4StdioImportsHaveCallerCleanup) {

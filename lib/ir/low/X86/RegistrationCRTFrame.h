@@ -32,11 +32,11 @@ bool hasPrivateStartupClockOutput(const BinaryImage &Image,
 /// The caller owns the current slot binding and the provider's effects.
 std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
                                        const LowOp &Op, size_t &Work);
-/// The current block pushes a standard stream index before the bound accessor.
-/// The caller supplies a live import binding and a private argument slot.
-bool isCheckedCRTStandardStreamCall(const BinaryImage &Image,
-                                    const LowBlock &Block, const LowOp &Op,
-                                    va_t Slot, size_t &Work);
+/// A checked standard stream index or startup mode keeps import bindings live.
+/// The caller supplies the current binding and the private outgoing stack word.
+bool hasBindingPreservingCRTArgument(const BinaryImage &Image,
+                                     const LowBlock &Block, const LowOp &Op,
+                                     va_t Slot, size_t &Work);
 /// Ordered possible no-argument callbacks of this original CRT invocation.
 /// The caller supplies a current import binding and owns each callee's effects.
 std::optional<std::vector<va_t>>

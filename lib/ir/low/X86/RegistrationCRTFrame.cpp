@@ -14,6 +14,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/RuntimeProviders.h"
@@ -126,28 +127,76 @@ bool hasPrivateStartupClockOutput(const BinaryImage &Image,
          int64_t(*Buffer.Offset) + 8 <= 0;
 }
 
-bool isCheckedCRTStandardStreamCall(const BinaryImage &Image,
-                                    const LowBlock &Block, const LowOp &Op,
-                                    va_t Slot, size_t &Work) {
+namespace {
+std::optional<uint32_t> pushedCRTArgument(const BinaryImage &Image,
+                                          const LowBlock &Block, va_t Call,
+                                          bool AllowGetter, size_t &Work) {
+  const auto *Push = precedingInstruction(Block, Call, Work);
+  if (!Push || (Push->Size != 1 && Push->Size != 2 && Push->Size != 5))
+    return std::nullopt;
+  const size_t Limit = limits::kMaxRegistrationEHStateWork;
+  const auto Bytes = readImmutablePE32CodeBytes(Image, Push->Address,
+                                                Push->Size, {}, Work, Limit);
+  if (!Bytes)
+    return std::nullopt;
+  if (Push->Size == 2 && (*Bytes)[0] == 0x6a)
+    return uint32_t(int32_t(int8_t((*Bytes)[1])));
+  if (Push->Size == 5 && (*Bytes)[0] == 0x68)
+    return readLE<uint32_t>(Bytes->data() + 1);
+  if (!AllowGetter || Push->Size != 1 || (*Bytes)[0] != 0x50)
+    return std::nullopt;
+
+  // MSVC may obtain a startup mode from a separately linked option object.
+  // The same block must call the getter immediately before PUSH EAX.
+  const auto *Getter = precedingInstruction(Block, Push->Address, Work);
+  if (!Getter || Getter->Size != 5 || !Getter->Immediate ||
+      Getter->Control != LowInstructionControl::Call ||
+      !hasCheckedX86RegistrationDirectCallBytes(
+          Image, Getter->Address, *Getter->Immediate, Work, Limit))
+    return std::nullopt;
+  const va_t Target = *Getter->Immediate;
+  const auto Prefix =
+      readImmutablePE32CodeBytes(Image, Target, 3, {}, Work, Limit);
+  if (!Prefix)
+    return std::nullopt;
+  // XOR EAX,EAX; RET or MOV EAX,imm32; RET. No incoming register,
+  // file-initial data, relocation or callback contributes to these results.
+  if (((*Prefix)[0] == 0x33 || (*Prefix)[0] == 0x31) && (*Prefix)[1] == 0xc0 &&
+      (*Prefix)[2] == 0xc3)
+    return 0;
+  if ((*Prefix)[0] != 0xb8)
+    return std::nullopt;
+  const auto Body =
+      readImmutablePE32CodeBytes(Image, Target, 6, {}, Work, Limit);
+  if (!Body || (*Body)[5] != 0xc3)
+    return std::nullopt;
+  return readLE<uint32_t>(Body->data() + 1);
+}
+} // namespace
+
+bool hasBindingPreservingCRTArgument(const BinaryImage &Image,
+                                     const LowBlock &Block, const LowOp &Op,
+                                     va_t Slot, size_t &Work) {
   const auto *Import = Image.findImportAt(Slot);
-  if (!Import || Import->Name != "__acrt_iob_func" ||
-      !coff_loader::isUCRTStdioProvider(Import->Module) ||
-      !isFileBackedPEImportSlot(Image, Slot) ||
+  if (!Import)
+    return false;
+  const llvm::StringRef Name = Import->Name;
+  const bool Stream = Name == "__acrt_iob_func";
+  if ((!Stream && Name != "_set_app_type" && Name != "_set_fmode" &&
+       Name != "_set_new_mode") ||
+      !registration_abi::checkedRegistrationImportStackPop(Image, Slot) ||
       checkedCRTCallSlot(Image, Op, Work) != Slot)
     return false;
-  const auto *Push = precedingInstruction(Block, Op.Addr, Work);
-  if (!Push || (Push->Size != 2 && Push->Size != 5))
+  const auto Value = pushedCRTArgument(Image, Block, Op.Addr, !Stream, Work);
+  if (!Value)
     return false;
-  const auto Bytes =
-      readImmutablePE32CodeBytes(Image, Push->Address, Push->Size, {}, Work,
-                                 limits::kMaxRegistrationEHStateWork);
-  if (!Bytes)
-    return false;
-  // UCRT returns the FILE member of the selected stdin, stdout or stderr
-  // record. A different index has no checked stream object.
-  return Push->Size == 2
-             ? (*Bytes)[0] == 0x6a && (*Bytes)[1] <= 2
-             : (*Bytes)[0] == 0x68 && readLE<uint32_t>(Bytes->data() + 1) <= 2;
+  if (Name == "_set_fmode")
+    // _O_TEXT, _O_BINARY, _O_WTEXT. Invalid modes can invoke application code.
+    return *Value == 0x4000 || *Value == 0x8000 || *Value == 0x10000;
+  if (Name == "_set_new_mode")
+    return *Value <= 1;
+  // Standard FILE indices and the documented _crt_app_type enumerators.
+  return *Value <= 2;
 }
 
 std::optional<std::vector<va_t>>
