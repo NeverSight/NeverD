@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/STLExtras.h"
 
+#include <iterator>
 #include <optional>
 #include <tuple>
 
@@ -43,6 +44,7 @@ struct Instruction {
   va_t Producer = InvalidVA;
   std::optional<AArch64PAuthLROperation> Signing;
   std::optional<unsigned> Modifier;
+  std::optional<va_t> BranchTarget;
   bool Call = false;
 };
 
@@ -50,6 +52,7 @@ using Origins = llvm::SmallVector<std::pair<va_t, va_t>, 2>;
 
 struct Proof {
   Origins Definitions;
+  llvm::SmallDenseMap<int, va_t, 2> IncomingSigners{};
   uint32_t WritesToConsumer = 0;
   bool CrossesEdge = false;
   bool Joined = false;
@@ -63,18 +66,18 @@ Proof reachingSigners(const LowFunc &CFG,
                       const llvm::DenseMap<va_t, Instruction> &Code,
                       const LowBlock &Consumer, va_t Auth, unsigned Modifier,
                       unsigned Key) {
-  using Cursor = std::tuple<int, va_t, unsigned, va_t, va_t, va_t>;
+  using Cursor = std::tuple<int, va_t, unsigned, va_t, va_t, va_t, int>;
   llvm::SmallVector<Cursor, 4> Work;
   llvm::SmallDenseSet<Cursor, 8> Seen;
   Work.emplace_back(Consumer.Id, Auth, Modifier, InvalidVA, InvalidVA,
-                    InvalidVA);
+                    InvalidVA, -1);
   Proof Result;
   size_t Steps = 0;
   while (!Work.empty()) {
     const auto State = Work.pop_back_val();
     if (!Seen.insert(State).second)
       continue;
-    auto [Id, End, R, Origin, Target, Signer] = State;
+    auto [Id, End, R, Origin, Target, Signer, Edge] = State;
     const auto &B = CFG.Blocks[Id];
     bool Done = false;
     for (va_t PC = End; PC > B.StartAddr;) {
@@ -113,6 +116,12 @@ Proof reachingSigners(const LowFunc &CFG,
         else if (!llvm::is_contained(Result.Definitions,
                                      std::pair(Origin, Target)))
           Result.Definitions.emplace_back(Origin, Target);
+        if (Edge >= 0) {
+          auto [It, Inserted] =
+              Result.IncomingSigners.try_emplace(Edge, Signer);
+          if (!Inserted && It->second != Signer)
+            It->second = InvalidVA;
+        }
         Done = true;
         break;
       }
@@ -128,9 +137,55 @@ Proof reachingSigners(const LowFunc &CFG,
       Result.Unknown = true;
     for (auto Pred : B.Preds)
       Work.emplace_back(Pred, CFG.Blocks[Pred].EndAddr, R, Origin, Target,
-                        Signer);
+                        Signer, Edge < 0 ? Pred : Edge);
   }
   return Result;
+}
+
+// A direct edge with one reaching signer can enter its own PC-relative AUT
+// or authenticated return. No register, flags or stack slot carries the
+// selection across the join.
+std::optional<MachOSigningConsumer>
+routeSigningEdges(const LowFunc &CFG,
+                  const llvm::DenseMap<va_t, Instruction> &Code,
+                  const Proof &Paths, const LowBlock &Join, va_t PC,
+                  AArch64PAuthLROperation Operation) {
+  if (Join.Preds.empty())
+    return std::nullopt;
+  MachOSigningConsumer Auth{PC, std::nullopt};
+  Auth.Returns = Operation.Return;
+  Auth.PrefixWords = (PC - Join.StartAddr) / Word;
+  std::optional<va_t> Fallthrough;
+  for (auto Id : Join.Preds) {
+    const auto &Pred = CFG.Blocks[Id];
+    auto Edge = Paths.IncomingSigners.find(Id);
+    if (Edge == Paths.IncomingSigners.end() || Edge->second == InvalidVA)
+      return std::nullopt;
+    const va_t Signer = Edge->second;
+    if (!machOPCRelativeAuthentication(Operation.Id, PC, Signer))
+      return std::nullopt;
+    auto It = llvm::find_if(
+        Auth.Routes, [Signer](const auto &R) { return R.Signer == Signer; });
+    if (It == Auth.Routes.end()) {
+      Auth.Routes.push_back({Signer, {}});
+      It = std::prev(Auth.Routes.end());
+    }
+    const auto Last = Pred.EndAddr - Word;
+    const auto Transfer = Code.find(Last);
+    if (Transfer == Code.end())
+      return std::nullopt;
+    if (Transfer->second.BranchTarget == Join.StartAddr)
+      It->Branches.push_back(Last);
+    else if (Pred.EndAddr != Join.StartAddr)
+      return std::nullopt;
+    if (Pred.EndAddr == Join.StartAddr)
+      Fallthrough = Signer;
+  }
+  llvm::sort(Auth.Routes, [&](const auto &L, const auto &R) {
+    return std::pair(Fallthrough != L.Signer, L.Signer) <
+           std::pair(Fallthrough != R.Signer, R.Signer);
+  });
+  return Auth;
 }
 
 } // namespace
@@ -156,8 +211,7 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
       const auto Form = machOPCAuthenticationForm(Bits);
       if (Form == MachOAuthenticationForm::Register) {
         Consumers.emplace_back(&B, PC);
-      } else if (B.Preds.size() > 1 &&
-                 Form == MachOAuthenticationForm::PCRelative) {
+      } else if (Form == MachOAuthenticationForm::PCRelative) {
         // On a second lift the common authenticator already carries its PC.
         // An old numeric producer can precede the join on a different arm.
         const auto Distance =
@@ -219,6 +273,11 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
       Fact.Signing = machOPCSigningInstruction(I.Id);
       const auto &D = I.Raw->detail->aarch64;
       const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
+      if ((I.Id == AARCH64_INS_B || I.Id == AARCH64_INS_CBZ ||
+           I.Id == AARCH64_INS_CBNZ || I.Id == AARCH64_INS_TBZ ||
+           I.Id == AARCH64_INS_TBNZ) &&
+          !Ops.empty() && Ops.back().type == AARCH64_OP_IMM)
+        Fact.BranchTarget = va_t(Ops.back().imm);
       if (Ops.empty() || Ops.front().type != AARCH64_OP_REG)
         continue;
       const auto RD = Ops.front().reg;
@@ -281,6 +340,7 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
         Same ? machOPCRelativeAuthentication(I.Signing->Id, PC,
                                              Paths.Definitions.front().second)
              : std::nullopt;
+    std::optional<MachOSigningConsumer> Dispatch;
     std::optional<unsigned> Scratch;
     if (!Local && !Relative) {
       for (auto Physical : machOSigningScratchRegisters()) {
@@ -301,8 +361,16 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
         }
       }
       if (!Scratch) {
-        Result.Unresolved = true;
-        continue;
+        Dispatch = routeSigningEdges(CFG, Code, Paths, *Block, PC, *I.Signing);
+        if (!Dispatch) {
+          Result.Unresolved = true;
+          continue;
+        }
+        for (auto [Index, Route] : llvm::enumerate(Dispatch->Routes))
+          for (va_t Branch : Route.Branches)
+            if (Index)
+              Result.BranchRoutes.try_emplace(Branch, PC, Index);
+        Result.Dispatches.try_emplace(PC, *Dispatch);
       }
     }
     const auto Bits = readLE<uint32_t>(Source.Bytes.data() + (PC - CFG.Entry));
@@ -319,10 +387,13 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
           Local ? MachOSigningAddress::Local : MachOSigningAddress::Observable;
       const auto SigningWord =
           readLE<uint32_t>(Source.Bytes.data() + (Sign - CFG.Entry));
+      Result.SigningPCs.insert(Sign);
       Result.RetainedSigningWords.insert(SigningWord);
       if (!Local && (Scratch || First))
         A.Authentication = MachOAuthenticationReplacement{
-            {PC, Scratch, false, Scratch.has_value()}, Replacement, Sign};
+            Dispatch.value_or(
+                MachOSigningConsumer{PC, Scratch, false, Scratch.has_value()}),
+            Replacement, Sign};
       if (!Result.Addresses.try_emplace(Origin, A).second)
         Result.Unresolved = true;
       First = false;

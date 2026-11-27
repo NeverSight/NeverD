@@ -178,8 +178,9 @@
       "profile": "joined-signing-address",
       "test": "AArch64LiftedImage.JoinedSigningModifiersFollowEachIncomingPath",
       "environment": "NEVERD_ARM64E_JOINED_SIGNING_FIXTURES",
-      "inventory": "path-proven-modifiers",
-      "bodies": 36
+      "inventory": "scratch-free-signing-edges",
+      "bodies": 54,
+      "archived_inventories": {"path-proven-modifiers": 36}
     }
   },
   "commands": {

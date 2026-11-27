@@ -1072,19 +1072,26 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
     const va_t End = Start + Source.size();
     AddressExpansion InstalledOffset;
     llvm::DenseMap<va_t, const MachOLiftedSourceAddress *> Authentications;
+    llvm::DenseMap<va_t, std::pair<va_t, unsigned>> RouteTargets;
     bool RebuiltLSDA = false;
     for (const auto &Site : Addresses) {
       if (Site.Instruction >= End)
         break;
       RebuiltLSDA |= Site.Form != MachOAddressForm::PagePair ||
-                     Site.insertsSigningModifier();
+                     Site.expandsAuthentication();
       if (Site.Form == MachOAddressForm::Expanded)
         InstalledOffset.Sites.push_back(Site.Instruction - Start);
       if (Site.Authentication)
         Authentications.try_emplace(Site.Authentication->Instruction, &Site);
-      if (Site.insertsSigningModifier()) {
+      if (Site.expandsAuthentication()) {
         const auto &Auth = *Site.Authentication;
-        const auto At = Site.modifierSite() - Start;
+        for (auto [Index, Route] : llvm::enumerate(Auth.Routes))
+          if (Index)
+            for (va_t Branch : Route.Branches)
+              RouteTargets.try_emplace(Branch, Auth.Instruction,
+                                       Auth.routeEntry(Index) *
+                                           aarch64::kInsnSize);
+        const auto At = Site.signingExpansionSite() - Start;
         InstalledOffset.Sites.append(Auth.insertedWords(), At);
         if (Auth.RestoreSource)
           InstalledOffset.Restores.emplace_back(At + aarch64::kInsnSize,
@@ -1239,6 +1246,38 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
               I.Raw->detail->aarch64.operands[0].type != AARCH64_OP_REG)
             return refuse(kSourceAddressTarget);
           const auto Id = I.Id;
+          const auto &Auth = *SigningConsumer->Authentication;
+          if (!Auth.Routes.empty()) {
+            const auto Operation = machOPCSigningInstruction(Id);
+            if (!Operation || Operation->Return != Auth.Returns ||
+                After.size() < (1 + Auth.insertedWords()) * Size)
+              return refuse(kSourceAddressTarget);
+            const va_t Begin = Owner->second + InstalledOffset(Offset);
+            const va_t Next = Owner->second + InstalledOffset(Offset + Size);
+            for (auto [Index, Route] : llvm::enumerate(Auth.Routes)) {
+              const auto At = Index * Auth.routeWords() * Size;
+              const auto Sign =
+                  Owner->second + InstalledOffset(Route.Signer - Start);
+              const auto Prefix = Auth.PrefixWords * Size;
+              if (Index && Prefix &&
+                  After.slice(At - Prefix, Prefix) !=
+                      Source.slice(Offset - Prefix, Prefix))
+                return refuse(kLeafCode);
+              if (machOPCRelativeAuthentication(Operation->Id, Begin + At,
+                                                Sign) !=
+                  readLE<uint32_t>(After.data() + At))
+                return refuse(kSourceAddressTarget);
+              if (!Auth.Returns && Index + 1 != Auth.Routes.size()) {
+                const auto *Bytes = After.data() + At + Size;
+                const auto Branch = decodeDirectBranch(
+                    Original.Arch, InstructionMode::Default, Bytes, Size,
+                    Begin + At + Size, {.Jumps = true});
+                if (!Branch || Branch->target() != Next)
+                  return refuse(kDirectTarget);
+              }
+            }
+            continue;
+          }
           const auto Register =
               SigningConsumer->Authentication->ModifierRegister;
           const bool Restore = SigningConsumer->Authentication->RestoreSource;
@@ -1367,8 +1406,13 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                            *branch::a64ConditionalBranchDisplacement(Word);
           if (Destination < Start || Destination >= End)
             return refuse(kDirectTarget);
-          const auto Delta = int64_t(InstalledOffset(Destination - Start)) -
-                             int64_t(InstalledOffset(Offset));
+          auto DestinationOffset = InstalledOffset(Destination - Start);
+          if (auto Route = RouteTargets.find(Start + Offset);
+              Route != RouteTargets.end())
+            DestinationOffset = InstalledOffset(Route->second.first - Start) +
+                                Route->second.second;
+          const auto Delta =
+              int64_t(DestinationOffset) - int64_t(InstalledOffset(Offset));
           std::optional<uint32_t> Expected;
           if (!Target)
             Expected =

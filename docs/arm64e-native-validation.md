@@ -2771,6 +2771,21 @@ unknown. After a matching AUT at the original SP, instruction recovery can
 establish an unsigned LR on all paths. A wrong key or a clobbered modifier
 cannot establish this post-authentication state.
 
+When all temporary registers are live, the publisher can route a direct
+incoming edge to its own PC-relative AUT or authenticated return. Each edge
+must prove one matching key and signing PC. Fallthrough keeps its own copy. The caller retains the numerical source address.
+Independent materializations of the same signing address also keep its numeric source
+value when their uses prove an observable store. A shared,
+position-independent prefix can run on each route when its unwind and
+language scope agree with the authenticator. The final image check resolves
+each direct target, decodes each authentication against the installed signer
+and compares the duplicated prefix with the source instructions.
+
+Full-width MOV and ADD/SUB by zero carry a joined signing-PC relation
+through a register copy. A full-width self-copy of LR also preserves the
+relation between LR and its modifier. A partial copy or nonzero adjustment cannot
+supply that proof.
+
 The unwind analysis also recognizes a full-width literal load from an
 immutable, dyld-rebased slot as a possible signing address. Recovery checks
 the loaded address against the recorded signer. A wrong address, a writable

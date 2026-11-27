@@ -328,7 +328,9 @@ def check_signing_address_inventory(manifest):
     profile = CONFIG["signing_address"]
     version = profile["inventory_property"]
     if manifest.get("return_profile") == profile["joins"]["profile"]:
-        if manifest.get(version) != profile["joins"]["inventory"] or manifest.get(profile["count_property"]) != profile["joins"]["bodies"]:
+        joins = profile["joins"]
+        inventories = {**joins["archived_inventories"], joins["inventory"]: joins["bodies"]}
+        if manifest.get(version) not in inventories or manifest.get(profile["count_property"]) != inventories[manifest[version]]:
             raise ValueError(CONFIG["bad_inventory"])
         return
     if version in manifest and manifest[version] != profile["inventory"]:
