@@ -32,6 +32,8 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/observe_xcpt4_provider_modules.ps1 original-case/corpus/windows-eh/msvc/vs2019/x86/native/no-gs/o0/windows-seh-tests/xcpt4-msvc-x86-native-no-gs-o0.exe
+      - name: Observe capacity during the first UCRT exit registration
+        run: python scripts/observe_xcpt4_onexit.py
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ always() }}
         with:
@@ -39,6 +41,7 @@ jobs:
           path: |
             xcpt4.json
             xcpt4-modules.json
+            xcpt4-onexit.json
           if-no-files-found: error
           retention-days: 14
 
