@@ -863,6 +863,63 @@ TEST(RegistrationCRTFrame, XCPT4StartupFilterSetterPreservesLiveBindings) {
   }
 }
 
+TEST(RegistrationCRTFrame, XCPT4StdioOptionStoresUseTheReturnedDataAddress) {
+  struct Change {
+    va_t MissingFixup;
+    va_t Overlap;
+    va_t Instruction = 0;
+    uint8_t Byte = 0;
+  };
+  const Change Cases[] = {{},
+                          {0x4045b4, 0},
+                          {0x4072b7, 0},
+                          {0, 0x40b55f},
+                          {0, 0x40b223},
+                          {0, 0, 0x4045b8, 0x58},  // POP EAX
+                          {0, 0, 0x4072b6, 0xb9}}; // MOV ECX,imm32
+  for (bool Selected : {false, true}) {
+    auto Original = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+    // The first getter uses a frame pointer, the second returns directly.
+    for (const auto &[MissingFixup, Overlap, Instruction, Byte] : Cases) {
+      SCOPED_TRACE(::testing::Message()
+                   << Selected << ' ' << MissingFixup << ' ' << Overlap << ' '
+                   << Instruction);
+      BinaryImage Image = *Original;
+      if (Instruction) {
+        auto *Code = const_cast<uint8_t *>(Image.readVA(Instruction, 1));
+        ASSERT_TRUE(Code);
+        *Code = Byte;
+      }
+      if (MissingFixup)
+        ASSERT_EQ(std::erase_if(
+                      Image.BaseRelocations,
+                      [&](const auto &R) { return R.Address == MissingFixup; }),
+                  1u);
+      if (Overlap) {
+        ASSERT_FALSE(Image.Imports.empty());
+        auto Binding = Image.Imports.front();
+        Binding.IATAddr = Overlap;
+        Image.Imports.push_back(std::move(Binding));
+      }
+      size_t Work = 0;
+      RegistrationCallCalleeIndex Callees(Image, &Work);
+      for (va_t Entry : {0x4072bcu, 0x406c33u}) {
+        const auto Contract = Callees.stackContract(Entry);
+        if (MissingFixup || Overlap || Instruction) {
+          EXPECT_FALSE(Contract && Contract->PreservesImportBindings);
+          continue;
+        }
+        ASSERT_TRUE(Contract);
+        EXPECT_EQ(Contract->StackPopBytes, 0u);
+        EXPECT_TRUE(Contract->PreservesImportBindings);
+        EXPECT_TRUE(Contract->RequiredImports.empty());
+      }
+      EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    }
+  }
+}
+
 TEST(RegistrationConditionalFrame, DirectCallsRetainTheirPhysicalOwner) {
   auto Image = loadXCPT4(true);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());

@@ -6,6 +6,7 @@
 /// \file
 /// Prove returning stack effects with separate parent and standalone entries.
 
+#include "../../../loader/ReadOnlyBytesIndex.h"
 #include "RegistrationABIPrivate.h"
 #include "RegistrationAddress.h"
 #include "RegistrationCRTData.h"
@@ -18,6 +19,7 @@
 #include "RegistrationOpaqueStack.h"
 #include "RegistrationOrdinaryGraph.h"
 #include "RegistrationPrecisionArguments.h"
+#include "RegistrationSourceCall.h"
 #include "RegistrationStackOwner.h"
 
 #include "neverd/Limits.h"
@@ -32,12 +34,14 @@
 #include "neverd/loader/RegistrationScopeGraph.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
+#include <bit>
 #include <deque>
 #include <functional>
 #include <map>
@@ -165,6 +169,7 @@ struct StackBody {
   std::map<std::pair<va_t, int>, va_t> ImportDataLoads;
   std::set<va_t> ImportSlots;
   llvm::SmallPtrSet<const LowOp *, 2> BindingPreservingInitializers;
+  llvm::DenseMap<const LowOp *, uint32_t> DataAddressReturns;
   uint32_t ArgumentReadBytes = 0;
   bool CheckedArgumentReadBytes = false;
   bool PreservesImportBindings = false;
@@ -367,10 +372,44 @@ struct StackBody {
     return true;
   }
 
-  bool collectCalleeImports(const NestedStackProof &Nested,
-                            bool CheckInitializers) {
+  std::optional<uint32_t> dataAddressGetter(const LowOp &Op) {
+    if (!registration_state::hasX86ScalarCallOutput(Op) ||
+        !chargeCalleeWork(Work, Image.Segments.size() + 1))
+      return std::nullopt;
+    const va_t Target = Op.Inputs[0].Offset;
+    const auto *Prefix = Image.readVA(Target, 4);
+    if (!Prefix)
+      return std::nullopt;
+    const bool Framed = Prefix[0] == 0x55 && Prefix[1] == 0x8b &&
+                        Prefix[2] == 0xec && Prefix[3] == 0xb8;
+    if ((!Framed && Prefix[0] != 0xb8) ||
+        !registration_abi::isPlainRegistrationCalleeEntry(Image, Target))
+      return std::nullopt;
+    const unsigned Offset = Framed ? 4 : 1;
+    const auto &Fields = Image.DataAddressRelocOperands;
+    if (!chargeCalleeWork(Work, 1 + std::bit_width(Fields.size())) ||
+        !Fields.contains(Target + Offset))
+      return std::nullopt;
+    // MOV EAX,imm32 / RET, optionally enclosed by the standard EBP frame.
+    // Bind every byte and the one HIGHLOW operand before using the returned
+    // address. Only the caller's later access can establish its permissions.
+    const auto Bytes = readRelocatedPE32CodeBytes(
+        Image, Target, Framed ? 10 : 6, {Target + Offset}, Work,
+        limits::kMaxRegistrationEHStateWork);
+    if (!Bytes || (*Bytes)[Offset - 1] != 0xb8 || Bytes->back() != 0xc3 ||
+        (Framed && ((*Bytes)[0] != 0x55 || (*Bytes)[1] != 0x8b ||
+                    (*Bytes)[2] != 0xec || (*Bytes)[8] != 0x5d)) ||
+        !registration_state::checkedRegistrationDirectCall(Image, Source, Op,
+                                                           Work))
+      return std::nullopt;
+    return readLE<uint32_t>(Bytes->data() + Offset);
+  }
+
+  bool collectCalleeImports(const NestedStackProof &Nested, bool Ordinary) {
     // Collect before transfer: a store can invalidate a dependency of a
     // later direct helper, including a veneer hidden behind another helper.
+    const bool CheckGetters = Ordinary && Image.Format == BinaryFormat::COFF &&
+                              !Image.DataAddressRelocOperands.empty();
     for (const auto &[Id, Block] : Blocks) {
       if (!chargeCalleeWork(Work, Block->Ops.size() + 1))
         return false;
@@ -381,6 +420,12 @@ struct StackBody {
           continue;
         std::optional<va_t> Slot;
         if (Op.Opcode == NdOp::CALL) {
+          if (CheckGetters) {
+            if (auto Address = dataAddressGetter(Op)) {
+              DataAddressReturns.try_emplace(&Op, *Address);
+              continue;
+            }
+          }
           if (const auto Callee = Nested(Op.Inputs[0].Offset)) {
             if (!chargeCalleeWork(Work, Callee->RequiredImports.size() + 1))
               return false;
@@ -394,7 +439,7 @@ struct StackBody {
         } else {
           Slot = Op.Inputs[0].Offset;
         }
-        if (CheckInitializers && Slot &&
+        if (Ordinary && Slot &&
             !collectInitializerImports(*Block, Op, *Slot, Nested))
           return false;
       }
@@ -803,18 +848,25 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
       bool ImportedCall = false;
       bool PreserveImportBindings = false;
       std::optional<va_t> ImportedSlot;
+      std::optional<uint32_t> DataAddress;
       if (Op.Opcode == NdOp::CALL && Op.NumInputs == 1 &&
           Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
-          State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset)
-        if (const auto Callee = NestedPop(Op.Inputs[0].Offset);
-            Callee &&
-            (Callee->RequiredImports.empty() || State.ImportBindingsIntact)) {
+          State.Registers[x86reg::RSP / x86reg::GeneralRegStride].Offset) {
+        if (const auto It = Body.DataAddressReturns.find(&Op);
+            It != Body.DataAddressReturns.end()) {
+          CalleePop = 0;
+          PreserveImportBindings = true;
+          DataAddress = It->second;
+        } else if (const auto Callee = NestedPop(Op.Inputs[0].Offset);
+                   Callee && (Callee->RequiredImports.empty() ||
+                              State.ImportBindingsIntact)) {
           CalleePop = Callee->StackPopBytes;
           ImportedCall = Callee->ImportVeneer;
           if (ImportedCall)
             ImportedSlot = Callee->RequiredImports.front();
           PreserveImportBindings = Callee->PreservesImportBindings;
         }
+      }
       if (Op.Opcode == NdOp::INDIR_CALL && Op.NumInputs == 1 &&
           Op.Inputs[0].Size == 4 &&
           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
@@ -872,6 +924,14 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
                      0, ImportedCall, PreserveImportBindings);
       if (CallSP)
         State.Registers[x86reg::RSP / x86reg::GeneralRegStride] = *CallSP;
+      if (DataAddress) {
+        const auto Value = FrameValue::imageAddress(*DataAddress);
+        State.Registers[x86reg::RAX / x86reg::GeneralRegStride] = Value;
+        LowOp Result;
+        Result.Opcode = NdOp::COPY;
+        Result.Output = Op.Output;
+        Transfer.write(Result, Value, 0);
+      }
       if (ImportedSlot && PreserveImportBindings && !Registration &&
           !CxxPaths && Op.Output.Size == 4 &&
           (Op.Output == NdVar::reg(x86reg::RAX, 4) || Op.Output.isTemp())) {

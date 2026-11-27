@@ -21084,7 +21084,11 @@ The PE32 startup fixture also checks both UCRT initializer walkers and the
 three relocated callbacks in their read-only tables.
 `InitializerCallsKeepOnlyProvenCallbackEffects` covers a callback that
 uses an eager import, an earlier store that replaces its slot, and a
-delay-loaded callback dependency. The outer stdio wrapper
+delay-loaded callback dependency. The stdio initializer uses one framed and
+one frameless getter for its two option records. Whole-image and selected
+loading check each store with the real instructions. Missing relocations,
+a changed destination register or an overlapping import withdraw the effect.
+The outer stdio wrapper
 restores ESP from EBP after its nested calls. The inner wrapper depends on
 the UCRT calling convention. On Windows,
 `RegistrationCRTFrame.OriginalPE32XCPT4RunsOnWindows` executes the original

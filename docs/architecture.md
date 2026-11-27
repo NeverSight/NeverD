@@ -21576,6 +21576,10 @@ eager imports required by every returning callback before analyzing its
 first instruction. A preceding store can invalidate one of those imports.
 The walker preserves the bindings on return only if they are live at the
 call and every callback preserves them.
+An ordinary PE32 helper can return a relocated data address in EAX, with
+or without a frame pointer. The caller checks the physical call, the whole
+getter and its HIGHLOW operand. A later store must still prove its width,
+destination permissions and disjointness from every import slot.
 `X86/RegistrationRuntimeImports.def` owns registration cleanup, jump and
 local-unwind names; `Windows/SEHRuntimeImports.def` maps the Win64 CRT memory
 entries to their routine kinds and provider queries. Symbol names remain case
