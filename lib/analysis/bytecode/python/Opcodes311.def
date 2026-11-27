@@ -1,4 +1,5 @@
-//===- Opcodes311.def - CPython 3.11 disk instruction layout ---------------===//
+//===- Opcodes311.def - CPython 3.11 disk instruction layout
+//---------------===//
 //
 // NeverD Decompiler
 //
