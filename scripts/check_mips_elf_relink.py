@@ -280,11 +280,13 @@ def run(args, *, error=None, expected=0, source=None):
                            f"{error or expected}\n{result.stdout}\n{result.stderr}")
 
 
-def compile_arithmetic_object(args, build, profile, filename, ir):
+def compile_arithmetic_object(args, build, profile, filename, ir, *, pic=False):
     target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}"]
-    features = "+noabicalls" + (f",+{profile.isa}" if profile.isa != "classic" else "")
-    run([args.llc, "-filetype=obj", f"-mtriple={profile.triple}", *target, f"-mattr={features}",
-         "-relocation-model=static", "-o", build / filename, "-"], source=ir)
+    features = [] if pic else ["+noabicalls"]
+    if profile.isa != "classic":
+        features.append("+" + profile.isa)
+    run([args.llc, "-filetype=obj", f"-mtriple={profile.triple}", *target, "-mattr=" + ",".join(features),
+         "-relocation-model=pic" if pic else "-relocation-model=static", "-o", build / filename, "-"], source=ir)
 
 
 def assemble_startup(args, build, profile):
@@ -347,7 +349,7 @@ def build_upgrade_objects(old, new, build, out, profile, partial):
         callers.append(inputs / filename)
     calc = (FIXTURES / "group_calc.ll").read_text()
     for tools, name, adjust in ((old, "calc.o", "1"), (new, "updated.o", "5")):
-        compile_arithmetic_object(tools, inputs, profile, name, calc.replace("ADJUST", adjust))
+        compile_arithmetic_object(tools, inputs, profile, name, calc.replace("ADJUST", adjust), pic=partial == "pic")
         run([tools.lld, "-r", "-o", build / name, *callers, inputs / name])
         shutil.copyfile(build / name, out / name)
     return ["calc.o"]
@@ -579,17 +581,26 @@ def verify_elf_profile(image, profile, file_type):
             raise ValueError(f"{profile.name}: expected the fork's wide-GPR o32 ELF flags")
 
 
-def inspect_elf(image, profile):
+def inspect_elf(image, profile, *, require_pic_marker=False):
     verify_elf_profile(image, profile, "ET_EXEC")
     if bool(image["e_entry"] & 1) != profile.compressed_entry:
         raise ValueError(f"{profile.name}: incorrect program entry ISA at {image['e_entry']:#x}")
 
     symtab = image.get_section_by_name(".symtab")
     (index, symbol), = ((i, s) for i, s in enumerate(symtab.iter_symbols()) if s.name == "calc")
-    # pyelftools exposes the generic ELF visibility fields. MIPS uses the full high nibble.
+    # MIPS16 uses the whole high nibble. Other functions can carry STO_MIPS_PIC
+    # alongside their encoding, for example after a relocatable link.
     other = symtab.data()[index * symtab["sh_entsize"] + (5 if image.elfclass == 64 else 13)]
-    if other & 0xf0 != {"classic": 0, "micromips": 0x80, "mips16": 0xf0}[profile.isa]:
+    if other & 0xf0 == 0xf0:
+        isa = "mips16"
+    elif other & 0x80:
+        isa = "micromips"
+    else:
+        isa = "classic"
+    if isa != profile.isa:
         raise ValueError(f"{profile.name}: incorrect calc ISA marker {other:#x}")
+    if require_pic_marker and not other & 0x20:
+        raise ValueError(f"{profile.name}: missing STO_MIPS_PIC on the partially linked calc")
     section = image.get_section(symbol["st_shndx"])
     va, size = symbol["st_value"], symbol["st_size"]
     if (symbol["st_info"]["type"] != "STT_FUNC" or not section["sh_flags"] & 4 or size <= 0
@@ -731,7 +742,7 @@ def execute(args):
                 raise ValueError(f"{path}: SHA-256 mismatch")
             with path.open("rb") as source:
                 image = ELFFile(source)
-                ranges[case] = inspect_elf(image, profile)
+                ranges[case] = inspect_elf(image, profile, require_pic_marker=args.partial_link == "pic")
                 execute_image(path, image, profile, expected)
             row[case] = expected
         old, inplace = ranges["original"], ranges["inplace"]
@@ -770,10 +781,10 @@ if __name__ == "__main__":
     upgrade.add_argument("--neverd", required=True)
     upgrade.add_argument("--original-tools", required=True, type=Path)
     upgrade.add_argument("--tools", required=True, type=Path)
-    upgrade.add_argument("--partial-link", action="store_true",
-                         help="partially link the startup, weak definitions and function before the final link")
     runtime = commands.add_parser("execute")
     runtime.add_argument("--root", required=True, type=Path)
-    runtime.add_argument("--partial-link", action="store_true", help="verify the combined input objects")
+    for command in (upgrade, runtime):
+        command.add_argument("--partial-link", nargs="?", const="static", choices=("static", "pic"),
+                             help="combine the startup and weak definitions with a static or PIC callee")
     args = parser.parse_args()
     {"qualify": qualify, "upgrade": qualify_upgrade, "execute": execute}[args.command](args)

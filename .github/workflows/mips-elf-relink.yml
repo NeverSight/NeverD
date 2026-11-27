@@ -132,6 +132,7 @@ jobs:
             python scripts/check_mips_elf_relink.py upgrade --root "$root" "${args[@]}"
             if [[ "$release" == r14 ]]; then
               python scripts/check_mips_elf_relink.py upgrade --root "$root-partial" --partial-link "${args[@]}"
+              python scripts/check_mips_elf_relink.py upgrade --root "$root-partial-pic" --partial-link=pic "${args[@]}"
             fi
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -168,6 +169,7 @@ jobs:
               /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$root"
             done
             /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$dir/from-r14-partial" --partial-link
+            /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$dir/from-r14-partial-pic" --partial-link=pic
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -177,5 +179,5 @@ jobs:
             products/*/placements.json
             products/*/from-*/execution.json
             products/*/from-*/placements.json
-            products/*/from-r14-partial/partial-inputs.json
+            products/*/from-r14-partial*/partial-inputs.json
           if-no-files-found: error

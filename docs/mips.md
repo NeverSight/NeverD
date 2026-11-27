@@ -251,18 +251,20 @@ two destinations in the replacement. The targets are more than 2 KiB ahead
 in the original layout and behind the new `section` placement. Each native
 build produces 1,148 executable images across 336 configurations, including
 812 patched images. The upgrade check uses r13 and r14 to build one original
-per ABI and byte order. Six more r14 originals use `ld.lld -r` to combine
+per ABI and byte order. Twelve more r14 originals use `ld.lld -r` to combine
 the startup, the function and two helpers. Both helpers define the same
 COMDAT function and different weak implementations of `group_choice`.
-The first helper in link order must supply the result. For each replacement
-the current linker combines the updated function with the original startup
+The first helper in link order must supply the result. Six programs call
+a PIC function from the static startup. The runner checks that the linked
+function retains `STO_MIPS_PIC` and uses the classic instruction set.
+The current linker combines the updated function with the original startup
 and helpers. The runner checks the ABI, the surviving COMDAT group, both
 weak symbols and the three `R_MIPS_26` relocations on startup calls in both
 intermediate objects. Reversing the original helpers selects a different
 weak definition. Both modes reject that executable when given the original
-input order and preserve the previous output. Across the three input sets
-the runner compares all 36 replacements byte for byte with independent
-links, runs the 18 originals and all 36 replacements, and checks the
+input order and preserve the previous output. Across the four input sets
+the runner compares all 48 replacements byte for byte with independent
+links, runs the 24 originals and all 48 replacements, and checks the
 function placement in every ELF.
 
 For MIPS16 o32 hard float, the ordinary function pointer selects the
