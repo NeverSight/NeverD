@@ -10020,6 +10020,12 @@ to a different valid image. Truncated instruction streams remain unretained.
 a function whose lift is incomplete until its callee is proved never to
 return: the second build's kept contract answers and it reads no graph, and
 once the prover's answer changes the call is proved again.
+`PipelineOutcome.ASmallX64WholeImageBatchLiftsNoCalleeAgain` runs a
+six-function whole-image x64 batch, too small to run in parallel, through the
+pipeline: its first batch makes no x87 call graph build
+(`PipelineOptions::X87GraphBuildsForTesting`; the single-pass batch made five,
+each a second lift of a function the batch builds), and every body is the
+one a run of that function alone builds.
 
 Publishing an additional code reference may retain the pipeline's raw x87
 graphs, but cannot retain an earlier tag proof. A shared-cache test publishes a

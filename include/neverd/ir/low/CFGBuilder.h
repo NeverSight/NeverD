@@ -838,6 +838,10 @@ public:
       const NoReturnCalleeProver *NoReturnCallees,
       const detail::AbsoluteRelocationRootIndex *RelocationRoots,
       const ExecutableCodeOwnerIndex *CodeOwners);
+  /// Unit-test-only: the call graph builds \p Cache admitted, the ones it led
+  /// and the ones it did not lead alike; each lifted its function.
+  static size_t
+  x87CallGraphBuildsForTesting(const std::shared_ptr<X87CallGraphCache> &Cache);
 
   size_t relativeRelocationRootSourceCacheBuildCountForTesting() const {
     return RelativeRelocationRootSourceCacheBuildCountForTesting;
