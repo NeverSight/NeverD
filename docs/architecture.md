@@ -21562,6 +21562,10 @@ For the UCRT startup setters `_set_app_type`, `_set_fmode` and `_set_new_mode`,
 PE32 retains live import bindings when the checked call receives a documented
 mode on the private stack. MSVC can push that value directly or call a linked
 option getter that returns an immediate in EAX and then push EAX.
+The Windows CRT startup also installs a top-level filter. Its returning
+`SetUnhandledExceptionFilter` call preserves import bindings when the
+argument is a relocated pointer into immutable code. A later exception
+dispatch requires its own handler proof.
 `X86/RegistrationRuntimeImports.def` owns registration cleanup, jump and
 local-unwind names; `Windows/SEHRuntimeImports.def` maps the Win64 CRT memory
 entries to their routine kinds and provider queries. Symbol names remain case

@@ -815,6 +815,54 @@ TEST(RegistrationCRTFrame, XCPT4StartupModesRequireTheirActualArgument) {
   }
 }
 
+TEST(RegistrationCRTFrame, XCPT4StartupFilterSetterPreservesLiveBindings) {
+  enum class Change { None, MissingRelocation, DataTarget, Provider, NewMode };
+  for (const bool Selected : {false, true}) {
+    auto Original = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+    for (const auto Variant :
+         {Change::None, Change::MissingRelocation, Change::DataTarget,
+          Change::Provider, Change::NewMode}) {
+      SCOPED_TRACE(::testing::Message() << Selected << ' ' << int(Variant));
+      BinaryImage Image = *Original;
+      if (Variant == Change::MissingRelocation)
+        ASSERT_EQ(
+            std::erase_if(Image.BaseRelocations,
+                          [](const auto &R) { return R.Address == 0x407489; }),
+            1u);
+      if (Variant == Change::DataTarget) {
+        auto *Word = const_cast<uint8_t *>(Image.readVA(0x407489, 4));
+        ASSERT_TRUE(Word);
+        writeLE<uint32_t>(Word, 0x40b1b8);
+      }
+      if (Variant == Change::Provider) {
+        const auto Import = llvm::find_if(
+            Image.Imports, [](const auto &I) { return I.IATAddr == 0x408014; });
+        ASSERT_NE(Import, Image.Imports.end());
+        Import->Module = "other.dll";
+      }
+      if (Variant == Change::NewMode) {
+        auto *Getter = const_cast<uint8_t *>(Image.readVA(0x40726f, 1));
+        ASSERT_TRUE(Getter);
+        *Getter = 0xff;
+      }
+      size_t Work = 0;
+      RegistrationCallCalleeIndex Callees(Image, &Work);
+      const auto Callback = Callees.stackContract(0x406c3b);
+      if (Variant != Change::None) {
+        EXPECT_FALSE(Callback && Callback->PreservesImportBindings);
+        continue;
+      }
+      ASSERT_TRUE(Callback);
+      EXPECT_EQ(Callback->StackPopBytes, 0u);
+      EXPECT_TRUE(Callback->PreservesImportBindings);
+      EXPECT_EQ(Callback->RequiredImports,
+                (std::vector<va_t>{0x408014, 0x408078}));
+      EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+    }
+  }
+}
+
 TEST(RegistrationConditionalFrame, DirectCallsRetainTheirPhysicalOwner) {
   auto Image = loadXCPT4(true);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());

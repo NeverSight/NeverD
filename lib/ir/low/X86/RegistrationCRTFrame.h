@@ -21,13 +21,14 @@ struct LowBlock;
 struct LowOp;
 namespace registration_state {
 struct FrameState;
-enum class StartupQuery { Identifier, Clock };
-std::optional<StartupQuery> kernelStartupQuery(const Import &Imported);
-/// Both Windows clocks write an eight-byte result to a checked caller buffer.
-bool hasPrivateStartupClockOutput(const BinaryImage &Image,
-                                  const LowBlock &Block, const LowOp &Op,
-                                  va_t Slot, const FrameState &Frame,
-                                  size_t &Work);
+enum class KernelStartupCall { Identifier, Clock, SetExceptionFilter };
+std::optional<KernelStartupCall> kernelStartupCall(const Import &Imported);
+/// Check a private clock output or the installed filter's code pointer.
+/// The caller owns the live binding and private outgoing argument word.
+bool hasBindingPreservingKernelArgument(const BinaryImage &Image,
+                                        const LowBlock &Block, const LowOp &Op,
+                                        va_t Slot, const FrameState &Frame,
+                                        size_t &Work);
 /// Authenticate the physical PE32 call and any immediate import veneer.
 /// The caller owns the current slot binding and the provider's effects.
 std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,

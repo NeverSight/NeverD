@@ -803,7 +803,7 @@ stackPopForBody(StackBody &Body, va_t Entry, const NestedStackProof &NestedPop,
           PreserveImportBindings =
               registration_state::hasBindingPreservingCRTArgument(
                   Image, Block, Op, *ImportedSlot, Work) ||
-              registration_state::hasPrivateStartupClockOutput(
+              registration_state::hasBindingPreservingKernelArgument(
                   Image, Block, Op, *ImportedSlot, State, Work);
           if (!PreserveImportBindings && *SP.Offset <= -8)
             if (const auto Targets =

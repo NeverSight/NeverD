@@ -90,29 +90,50 @@ const LowInstructionBoundary *precedingInstruction(const LowBlock &Block,
 }
 } // namespace
 
-std::optional<StartupQuery> kernelStartupQuery(const Import &Imported) {
+std::optional<KernelStartupCall> kernelStartupCall(const Import &Imported) {
   if (!llvm::StringRef(Imported.Module).equals_insensitive("kernel32.dll"))
     return std::nullopt;
   if (Imported.Name == "GetCurrentProcessId" ||
       Imported.Name == "GetCurrentThreadId")
-    return StartupQuery::Identifier;
+    return KernelStartupCall::Identifier;
   if (Imported.Name == "GetSystemTimeAsFileTime" ||
       Imported.Name == "QueryPerformanceCounter")
-    return StartupQuery::Clock;
+    return KernelStartupCall::Clock;
+  if (Imported.Name == "SetUnhandledExceptionFilter")
+    return KernelStartupCall::SetExceptionFilter;
   return std::nullopt;
 }
 
-bool hasPrivateStartupClockOutput(const BinaryImage &Image,
-                                  const LowBlock &Block, const LowOp &Op,
-                                  va_t Slot, const FrameState &Frame,
-                                  size_t &Work) {
+bool hasBindingPreservingKernelArgument(const BinaryImage &Image,
+                                        const LowBlock &Block, const LowOp &Op,
+                                        va_t Slot, const FrameState &Frame,
+                                        size_t &Work) {
   const auto *Imported = Image.findImportAt(Slot);
-  if (!Imported || kernelStartupQuery(*Imported) != StartupQuery::Clock ||
-      !Frame.ImportBindingsIntact || !isFileBackedPEImportSlot(Image, Slot) ||
+  if (!Imported || !Frame.ImportBindingsIntact)
+    return false;
+  const auto Call = kernelStartupCall(*Imported);
+  if (!Call || *Call == KernelStartupCall::Identifier ||
+      !isFileBackedPEImportSlot(Image, Slot) ||
       checkedCRTCallSlot(Image, Op, Work) != Slot)
     return false;
   const auto *Push = precedingInstruction(Block, Op.Addr, Work);
-  if (!Push || Push->Size != 1)
+  if (!Push)
+    return false;
+  if (*Call == KernelStartupCall::SetExceptionFilter) {
+    if (Push->Size != 5)
+      return false;
+    const auto Limit = limits::kMaxRegistrationEHStateWork;
+    const auto Bytes = readRelocatedPE32CodeBytes(
+        Image, Push->Address, 5, {Push->Address + 1}, Work, Limit);
+    if (!Bytes || (*Bytes)[0] != 0x68)
+      return false;
+    // Installation records the pointer in Windows. A later unhandled
+    // exception has its own dispatch and handler obligations.
+    return readImmutablePE32CodeBytes(
+               Image, readLE<uint32_t>(Bytes->data() + 1), 1, {}, Work, Limit)
+        .has_value();
+  }
+  if (Push->Size != 1)
     return false;
   const auto Byte = readImmutableCodeBytes(Image, Push->Address, 1);
   if (!Byte || (*Byte)[0] < 0x50 || (*Byte)[0] > 0x57 || (*Byte)[0] == 0x54)
