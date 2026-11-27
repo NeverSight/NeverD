@@ -272,6 +272,42 @@ TEST(SymMBAObservedWindow, ShiftWindowsMatchAnExhaustiveIndependentOracle) {
   }
 }
 
+TEST(SymMBAObservedWindow, ComposesRightShiftsWithTheirSignFill) {
+  for (unsigned W : {8u, 32u, 65u, 129u, 513u}) {
+    SCOPED_TRACE(W);
+    SymContext C;
+    const SymRef X = C.mkVar("x", W);
+    const SymRef First = C.mkConst(W, 2);
+    for (unsigned Second : {3u, W - 2, W - 1}) {
+      SCOPED_TRACE(Second);
+      const SymRef Next = C.mkConst(W, Second);
+      const SymRef Logical = C.mkLShr(X, First);
+      const SymRef Signed = C.mkAShr(X, First);
+      const SymRef ExpectLogical =
+          Second + 2 >= W ? C.mkZero(W) : C.mkLShr(X, C.mkConst(W, Second + 2));
+      const SymRef ExpectSigned =
+          C.mkAShr(X, C.mkConst(W, std::min(W - 1, Second + 2)));
+      EXPECT_EQ(simplifyWindow(C, C.mkLShr(Logical, Next)), ExpectLogical);
+      EXPECT_EQ(simplifyWindow(C, C.mkAShr(Logical, Next)), ExpectLogical);
+      EXPECT_EQ(simplifyWindow(C, C.mkAShr(Signed, Next)), ExpectSigned);
+      // A logical outer shift exposes sign-fill bits from the inner shift.
+      const SymRef Mixed = C.mkLShr(Signed, Next);
+      neverd::solver::BitVectorSolver Proof(C);
+      EXPECT_EQ(Proof.check(C.mkNe(Mixed, simplifyWindow(C, Mixed))),
+                neverd::solver::SatResult::Unsat);
+    }
+    const SymRef Count = C.mkVar("count", W);
+    const SymRef Variable = C.mkAShr(C.mkLShr(X, Count), First);
+    neverd::solver::BitVectorSolver Proof(C);
+    EXPECT_EQ(Proof.check(C.mkNe(Variable, simplifyWindow(C, Variable))),
+              neverd::solver::SatResult::Unsat);
+    const SymRef Once = C.mkLShr(X, C.mkConst(W, 5));
+    const SymRef Twice = C.mkLShr(C.mkLShr(X, First), C.mkConst(W, 3));
+    EXPECT_EQ(simplifyWindow(C, C.mkAdd(Once, Twice)),
+              C.mkMul(C.mkConst(W, 2), Once));
+  }
+}
+
 TEST(SymMBAObservedWindow, SymbolicCountsAndBudgetExhaustionKeepAllInputs) {
   SymContext C;
   auto X = C.mkVar("source", 64), Count = C.mkVar("count", 256);
