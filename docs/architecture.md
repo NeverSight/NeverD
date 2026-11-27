@@ -21558,6 +21558,11 @@ and jump/local-unwind contracts retain their distinct provider sets.
 PE32 also uses the UCRT stdio provider set for the caller-cleanup convention
 of `__acrt_iob_func` and `__stdio_common_vfprintf`. Proving a stream, a format
 string or the effects of output requires the arguments at the call.
+The PE32 CRT startup ABI assigns caller cleanup to the argument, environment
+and on-exit table routines in the runtime API set. The math and locale
+API sets supply `__setusermatherr` and `_configthreadlocale`, respectively.
+These call summaries describe the returning stack pointer. Import binding
+and memory effects require evidence for the invocation.
 For the UCRT startup setters `_set_app_type`, `_set_fmode` and `_set_new_mode`,
 PE32 retains live import bindings when the checked call receives a documented
 mode on the private stack. MSVC can push that value directly or call a linked

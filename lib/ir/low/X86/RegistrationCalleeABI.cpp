@@ -33,6 +33,8 @@ bool isCallerCleanupCRTImport(const Import &Imported) {
     Unknown,
     Legacy,
     Math,
+    MathHandler,
+    Locale,
     Stdio,
     Runtime,
     Heap,
@@ -46,6 +48,12 @@ bool isCallerCleanupCRTImport(const Import &Imported) {
     return coff_loader::isX86LegacyCRTProvider(Imported.Module);
   if (Provider == Family::Math)
     return coff_loader::isX86MathCleanupProvider(Imported.Module);
+  if (Provider == Family::MathHandler)
+    return coff_loader::isX86LegacyCRTProvider(Imported.Module) ||
+           coff_loader::isX86MathCleanupProvider(Imported.Module);
+  if (Provider == Family::Locale)
+    return coff_loader::isX86LegacyCRTProvider(Imported.Module) ||
+           coff_loader::isUCRTLocaleProvider(Imported.Module);
   if (Provider == Family::Stdio)
     return coff_loader::isUCRTStdioProvider(Imported.Module);
   if (Provider == Family::Runtime)
