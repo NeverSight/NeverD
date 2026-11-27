@@ -2705,6 +2705,19 @@ continues to its outer catch on the original stack.
 the two-modifier signing instructions when the host passes the feature
 probe.
 
+The M4 Max and both free Apple M1 runners passed all 32 cases. Each host
+checked 192 input or published images, including 64 with register modifiers.
+The real runtimes supplied 288 exceptions and completed 720 pairs of search
+and cleanup decisions per host. All three hosts passed the same 223
+signed-unwind and image cases with zero skips. On each hosted arm64e runner,
+all 141 unwind cases recorded native execution or system personality decisions. Of the 82 publication cases,
+81 recorded native execution. The remaining case checked installation of the
+local signing address and rejection of the two observable-address variants.
+The hardware delivery counter was zero on all three hosts.
+[Per-case evidence](evidence/arm64e-explicit-personality-2026-11-27.json) ·
+[Apple-linked controls](https://github.com/gmh5225/test_mac_intel/actions/runs/45937609347) ·
+[Release Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/45940557627)
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,
