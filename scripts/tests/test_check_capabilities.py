@@ -3242,6 +3242,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "symbolic.execution.lowir-concolic": "experimental",
                 "symbolic.execution.path-exploration": "experimental",
                 "llvm.semantic.synthesis-rewrite": "supported",
+                "lua.source-recovery": "experimental",
                 "mobile.source-recovery": "experimental",
                 "translation.executable-engine": "experimental",
                 "translation.runtime-contract": "experimental",
@@ -3252,6 +3253,18 @@ class RepositoryCapabilityTests(unittest.TestCase):
         no_surfaces = {"c": [], "python": [], "cli": [], "json": []}
         expected_surfaces = {
             **dict.fromkeys(expected_mips, no_surfaces),
+            "lua.source-recovery": {
+                "c": ["neverd_lua_recover_json_v1"],
+                "python": [],
+                "cli": [
+                    "neverd lua",
+                    "neverd lua --json",
+                    "neverd lua --profile",
+                    "neverd lua --prototype",
+                    "neverd lua --o",
+                ],
+                "json": ["neverd_lua_recover_json_v1"],
+            },
             "rewrite.interactive-byte-overlay": {
                 "c": [
                     "neverd_assemble_json",
