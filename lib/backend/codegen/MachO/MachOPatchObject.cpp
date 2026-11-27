@@ -10,6 +10,7 @@
 #include "MachOLiftedObject.h"
 #include "MachOPublishedData.h"
 #include "MachOSourceDependencies.h"
+#include "MachOStrictLayout.h"
 #include "MachOTLSRuntime.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
@@ -218,14 +219,27 @@ uint64_t installationCommandBytes(const NativeMachO &Object,
     return SegmentBytes * Segments + sizeof(section_64) * Sections +
            sizeof(linkedit_data_command) * (1 + unsigned(NewDICE));
   }
-  if (!NewDICE && Original.isArm64e() &&
-      Original.findSegmentByName(kDefaultNdTextSegment)) {
+  if (!NewDICE && Original.isArm64e()) {
     const auto *Linkedit =
         Original.findSegmentByName(section_names::macho::LinkeditSeg);
     if (Linkedit && Linkedit->VA) {
       const auto *Tail = Original.getSegmentFor(Linkedit->VA - 1);
-      if (!Tail || !Tail->isExecutable())
-        return SegmentBytes + sizeof(linkedit_data_command);
+      if (!Tail || !Tail->isExecutable()) {
+        uint64_t Padding = SegmentBytes + sizeof(linkedit_data_command);
+        if (Original.findSegmentByName(kDefaultNdTextSegment))
+          return Padding;
+        // A data segment before __LINKEDIT prevents extending the original
+        // text mapping. Reserve the part of the first RX command and signing
+        // command that the installer cannot obtain from disposable commands.
+        forEachMachOLoadCommand(
+            Original.Raw.data(), Original.Raw.size(),
+            [&](const uint8_t *Command, uint32_t ID, uint32_t Size, bool) {
+              if (shouldDropLoadCommand(ID) ||
+                  macho_patch_detail::canReclaimToolCommand(Command, ID, Size))
+                Padding -= std::min<uint64_t>(Padding, Size);
+            });
+        return Padding;
+      }
     }
   }
   return NewDICE ? SegmentBytes + sizeof(linkedit_data_command) * 2 : 0;
