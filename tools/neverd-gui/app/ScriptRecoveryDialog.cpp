@@ -86,6 +86,9 @@ ScriptRecoveryDialog::ScriptRecoveryDialog(const QString &Worker,
   } else {
     Profile->addItem(tr("PUC Lua"), "puc");
     Profile->addItem(tr("LuaJIT"), "luajit");
+    Profile->addItem(QStringLiteral("LuaJIT 1.0"), "luajit-1.0");
+    Profile->addItem(QStringLiteral("LuaJIT 1.1"), "luajit-1.1");
+    Profile->addItem(tr("Upstream Luau"), "luau-upstream");
     Profile->addItem(tr("Upstream Luau 0.659"), "luau-0.659");
   }
   Inputs->addRow(tr("&Profile"), Profile);

@@ -5529,9 +5529,9 @@
       "status": "experimental",
       "owner": "bytecode",
       "targets": [
-        "PUC Lua 5.1–5.5",
-        "LuaJIT dump v2",
-        "Upstream Luau 0.659 bytecode v6/type v3"
+        "PUC Lua 2.4–5.5 bytecode and earlier text sources",
+        "LuaJIT 1.0/1.1 PUC chunks and independent 2.x dump v1/v2",
+        "Upstream Luau bytecode v1–v14, type encodings v1–v3, and pinned 0.659"
       ],
       "docs": [
         "docs/lua-recovery.md"
@@ -5546,6 +5546,17 @@
           "target": "NeverDLuaRecoveryTests",
           "source": "unittests/lua/LuaRecoveryTests.cpp",
           "filter": "LuaRecovery.OwnedCompilerDumps",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLuaRecoveryTests",
+          "source": "unittests/lua/LuaRecoveryTests.cpp",
+          "filter": "LuaRecovery.ReleaseInstructionsAndSourceMatchCompilerFixtures",
           "platforms": [
             "darwin",
             "linux",

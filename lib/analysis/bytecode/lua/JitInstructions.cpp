@@ -111,15 +111,15 @@ void neverd::lua::decodeJit(Decoder &D) {
     if (Op == "UCLO") {
       if (Target < 0 || size_t(Target) >= D.P.Code.size())
         D.bad("Invalid close destination");
-      auto Destination = mnemonic(Family::Jit, 2, D.P.Code[Target]);
+      auto Destination = mnemonic(Family::Jit, D.C.Version, D.P.Code[Target]);
       if (!Destination.starts_with("RET") && Destination != "CALLT" &&
           Destination != "CALLMT")
         I.Kind = Form::Unsupported;
     }
   } else if (Op == "ITERC") {
     uint32_t L = D.extra();
-    if (mnemonic(Family::Jit, 2, L) != "ITERL" || ((L >> 8) & 255) != A ||
-        C != 3 || B < 2 || A < 3)
+    if (mnemonic(Family::Jit, D.C.Version, L) != "ITERL" ||
+        ((L >> 8) & 255) != A || C != 3 || B < 2 || A < 3)
       D.bad("Invalid iterator latch");
     I.Kind = Form::GenericLoop;
     I.Base = A - 3;
@@ -136,7 +136,7 @@ void neverd::lua::decodeJit(Decoder &D) {
   } else if (Op.starts_with("IS") && Op != "ISNEXT" && Op != "ISTYPE" &&
              Op != "ISNUM") {
     auto J = D.extra();
-    if (mnemonic(Family::Jit, 2, J) != "JMP")
+    if (mnemonic(Family::Jit, D.C.Version, J) != "JMP")
       D.bad("Test lacks its jump");
     int Dest = int(I.PC) + 2 + int(J >> 16) - 32768;
     if (Op == "IST" || Op == "ISF" || Op == "ISTC" || Op == "ISFC") {

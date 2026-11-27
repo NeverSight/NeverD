@@ -169,7 +169,8 @@ cl::opt<unsigned> PythonNative("native",
 cl::SubCommand LuaCmd("lua", "Recover Lua-family source and bytecode");
 cl::opt<std::string>
     LuaProfile("profile",
-               cl::desc("Lua recovery profile: auto, puc, luajit, luau-0.659"),
+               cl::desc("Lua recovery profile: auto, puc, luajit, luajit-1.0, "
+                        "luajit-1.1, luau-upstream, luau-0.659"),
                cl::init("auto"), cl::sub(LuaCmd));
 cl::opt<unsigned> LuaPrototype("prototype",
                                cl::desc("Show one prototype by report ID"),
