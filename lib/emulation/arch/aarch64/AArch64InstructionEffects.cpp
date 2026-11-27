@@ -83,13 +83,13 @@ bool baselineFeatures(const cs_insn &I) {
   }
   return true;
 }
-llvm::Expected<std::vector<AArch64MemoryAccess>>
+llvm::Error
 structureMemoryEffects(uint32_t Word, const AArch64MachineState &State,
-                       uint64_t Base, unsigned First) {
+                       uint64_t Base, unsigned First,
+                       llvm::SmallVectorImpl<AArch64MemoryAccess> &Accesses) {
   const auto I = aarch64StructureMemoryInstruction(Word);
   if (!I || I->totalAccessBytes() - 1 > UINT64_MAX - Base)
     return llvm::make_error<UnsupportedExecutionError>();
-  std::vector<AArch64MemoryAccess> Accesses;
   Accesses.reserve(I->totalAccessBytes() / I->ElementBytes);
   for (unsigned N = 0; N != I->totalAccessBytes() / I->ElementBytes; ++N) {
     RegisterValue Value{};
@@ -103,13 +103,14 @@ structureMemoryEffects(uint32_t Word, const AArch64MachineState &State,
     Accesses.push_back({Base + N * I->ElementBytes, Value, I->ElementBytes,
                         I->isLoad() ? Read : Write});
   }
-  return Accesses;
+  return llvm::Error::success();
 }
 } // namespace
-llvm::Expected<std::vector<AArch64MemoryAccess>>
-getAArch64InstructionEffects(const cs_insn &I,
-                             const AArch64MachineState &State) {
+llvm::Error getAArch64InstructionEffects(
+    const cs_insn &I, const AArch64MachineState &State,
+    llvm::SmallVectorImpl<AArch64MemoryAccess> &Accesses) {
   using namespace encoding;
+  Accesses.clear();
   if (I.size != aarch64::InstructionBytes || !I.detail)
     return llvm::make_error<UnsupportedExecutionError>();
   const uint32_t Word = llvm::support::endian::read32le(I.bytes);
@@ -117,7 +118,7 @@ getAArch64InstructionEffects(const cs_insn &I,
   // machine, even when the decoder names their optional PAuth aliases.
   // They still execute through Machine::step and consume an ordinary attempt.
   if (disabledPAuthHint(Word))
-    return std::vector<AArch64MemoryAccess>();
+    return llvm::Error::success();
   // XPACLRI (HINT #7) strips PAC bits even with authentication disabled.
   // Low 48-bit addresses are fixed points in this translation regime, so
   // PAuth stripping and a baseline transport's legacy HINT agree. Execute
@@ -125,13 +126,13 @@ getAArch64InstructionEffects(const cs_insn &I,
   if (Word == 0xd50320ff) {
     if (State.reg(AArch64Register::X30) > aarch64::UserMax)
       return llvm::make_error<UnsupportedExecutionError>();
-    return std::vector<AArch64MemoryAccess>();
+    return llvm::Error::success();
   }
   // AArch64PageTables never sets GP. Execute the original landing-pad word,
   // including on a transport that implements FEAT_BTI; do not replace bytes
   // or infer guarded-page enforcement from the decoder's optional feature.
   if (unguardedBTIHint(Word))
-    return std::vector<AArch64MemoryAccess>();
+    return llvm::Error::success();
   enum InstructionKind {
     Integer,
     Memory,
@@ -172,7 +173,8 @@ getAArch64InstructionEffects(const cs_insn &I,
         Source == aarch64::GPRCount ? 0 : State.Registers[Source];
     if (!aarch64::canonicalRange(Address, 1))
       return llvm::make_error<UnsupportedExecutionError>();
-    return std::vector<AArch64MemoryAccess>{{Address, {}, 1, Read, true}};
+    Accesses.push_back({Address, {}, 1, Read, true});
+    return llvm::Error::success();
   }
   if (Kind == Barrier) {
     // Named baseline DSB domains/access types only. The remaining options
@@ -180,7 +182,7 @@ getAArch64InstructionEffects(const cs_insn &I,
     if ((I.id == AARCH64_INS_DSB && isDataSynchronization(Word) &&
          ((Word >> BarrierOptionShift) & BarrierAccessMask)) ||
         (I.id == AARCH64_INS_ISB && isInstructionSynchronization(Word)))
-      return std::vector<AArch64MemoryAccess>();
+      return llvm::Error::success();
     return llvm::make_error<UnsupportedExecutionError>();
   }
   const bool UsesFloatingState = Kind == Floating || Kind == ScalarConversion;
@@ -254,7 +256,6 @@ getAArch64InstructionEffects(const cs_insn &I,
   }
   if (HasVector && !baselineFeatures(I))
     return llvm::make_error<UnsupportedExecutionError>();
-  std::vector<AArch64MemoryAccess> Accesses;
   auto GPR = [&](unsigned R) {
     return R == aarch64::GPRCount ? uint64_t(0) : State.Registers[R];
   };
@@ -263,7 +264,7 @@ getAArch64InstructionEffects(const cs_insn &I,
   const uint64_t Base =
       Rn == aarch64::GPRCount ? State.reg(AArch64Register::SP) : GPR(Rn);
   if (Kind == StructureMemory)
-    return structureMemoryEffects(Word, State, Base, Rt);
+    return structureMemoryEffects(Word, State, Base, Rt, Accesses);
   if (Kind == Memory) {
     const bool Vector = Word & VectorMemoryBit;
     const auto Operand = [&](unsigned Register) {
@@ -366,6 +367,6 @@ getAArch64InstructionEffects(const cs_insn &I,
   for (const auto &M : Accesses)
     if (M.Size - 1 > UINT64_MAX - M.Address)
       return llvm::make_error<UnsupportedExecutionError>();
-  return Accesses;
+  return llvm::Error::success();
 }
 } // namespace neverd::emulation
