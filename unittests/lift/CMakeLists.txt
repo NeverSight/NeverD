@@ -3572,6 +3572,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_guard_session.s
   x86_64/test_jumptable_lane_identity.s
   x86_64/test_jumptable_token_loop.s
+  x86_64/test_jumptable_memory_reload.s
   x86_64/test_jumptable_byte_switch.s
   x86_64/test_jumptable_inclusive_postload_clobber.s
   x86_64/test_jumptable_inclusive_postload_unrelated.s

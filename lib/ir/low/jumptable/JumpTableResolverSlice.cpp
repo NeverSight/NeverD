@@ -9008,71 +9008,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           // `movzx edx, byte [rbp-0x38]` reloads next.  Otherwise the LOAD
           // defines its own occurrence, which a later use of it may compare
           // but a distinct reload cannot borrow guard evidence from.
-          const auto MayWriteMemory = [](const LowOp &Op) {
-            return Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
-                   Op.Opcode == NdOp::ATOMIC_ADD ||
-                   Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
-                   Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-                   Op.Opcode == NdOp::INTRINSIC ||
-                   Op.MemoryOrdering != NdMemoryOrdering::None;
-          };
           const auto SameLoad = [&](const LowOp &Op) {
             return Op.Opcode == NdOp::LOAD && Op.NumInputs == Def.NumInputs &&
                    Op.Output.Size == Def.Output.Size &&
                    Op.MemoryAddressSpace == Def.MemoryAddressSpace;
           };
-          // The full guest register and constant displacement a LOAD's
-          // address carries inside its own instruction: the register itself,
-          // or a temp built from it by same-width copies and constant adds.
           // Two loads whose addresses carry the same register and
           // displacement, with no write of that register between them, read
-          // the same address even when the register's own value (a loop
-          // cursor) has no closed form.
-          auto loadAddressCarrier =
-              [&](const std::vector<LowOp> &Ops, int Before, va_t InsnAddr,
-                  NdVar Value) -> std::optional<std::pair<NdVar, uint64_t>> {
-            uint64_t Displacement = 0;
-            for (unsigned N = 0; N < limits::kMaxQuasiCopyDepth; ++N) {
-              if (!consumeEvidence())
-                return std::nullopt;
-              if (Value.isReg())
-                return Value.Size == CurrentImg->getPointerSize()
-                           ? std::optional(std::pair{Value, Displacement})
-                           : std::nullopt;
-              if (!Value.isTemp())
-                return std::nullopt;
-              int Writer = -1;
-              for (int K = Before - 1; K >= 0 && Ops[K].Addr == InsnAddr; --K) {
-                if (!consumeEvidence())
-                  return std::nullopt;
-                if (Ops[K].Output.Space == Value.Space &&
-                    Ops[K].Output.Offset == Value.Offset) {
-                  Writer = K;
-                  break;
-                }
-              }
-              if (Writer < 0)
-                return std::nullopt;
-              const LowOp &Transport = Ops[Writer];
-              if (Transport.Opcode == NdOp::COPY && Transport.NumInputs == 1 &&
-                  Transport.Output.Size == Value.Size &&
-                  Transport.Inputs[0].Size == Value.Size) {
-                Value = Transport.Inputs[0];
-              } else if (Transport.Opcode == NdOp::INT_ADD &&
-                         Transport.NumInputs == 2 &&
-                         Transport.Output.Size == Value.Size &&
-                         Value.Size == CurrentImg->getPointerSize() &&
-                         Transport.Inputs[0].isConst() !=
-                             Transport.Inputs[1].isConst()) {
-                const bool ConstantFirst = Transport.Inputs[0].isConst();
-                Displacement += Transport.Inputs[ConstantFirst ? 0 : 1].Offset;
-                Value = Transport.Inputs[ConstantFirst ? 1 : 0];
-              } else {
-                return std::nullopt;
-              }
-              Before = Writer;
-            }
-            return std::nullopt;
+          // the same address (detail::loadAddressCarrier).
+          auto loadAddressCarrier = [&](const std::vector<LowOp> &Ops,
+                                        int Before, va_t InsnAddr,
+                                        NdVar Value) {
+            return detail::loadAddressCarrier(
+                Ops, Before, InsnAddr, Value, CurrentImg->getPointerSize(),
+                [&] { return consumeEvidence(); });
           };
           const std::optional<std::pair<NdVar, uint64_t>> LoadCarrier =
               HasFrameSlot ? std::nullopt
@@ -9097,7 +9046,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               const ResolverFlowBlock &Searching = Graph.Blocks[SearchBlock];
               for (int J = SearchEnd - 1; J >= 0 && !Stop; --J) {
                 const LowOp &Op = Searching.Ops[J];
-                if (!consumeEvidence() || MayWriteMemory(Op)) {
+                if (!consumeEvidence() || detail::mayWriteMemory(Op)) {
                   Stop = true;
                   break;
                 }

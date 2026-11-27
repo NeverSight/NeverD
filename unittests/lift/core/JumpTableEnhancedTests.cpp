@@ -5280,6 +5280,71 @@ TEST_F(JTE_X86_64, IndexTakesTheComparedLaneAfterTheGuard) {
   }
 }
 
+static fs::path memoryReloadX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_memory_reload.o";
+}
+
+// pcre2_dfa_match compares a byte in memory and reloads it as the table index
+// (`cmpb $0xc,0x2(%r11); ja; movzbl 0x2(%r11),%edx`). The reload reads the
+// compared byte, so the guard bounds the index without its value query: with
+// a guard-session allowance too small for that query, jt_mem_reload still
+// reads its six slots. A store or an address-register write between the two
+// loads, another displacement or width, a sign-extending reload of a byte the
+// guard admits past 0x7f, a call or a change after the reload, a second way
+// into the reload block and a reload block whose address is data each keep
+// the dispatch unproved with the full allowance.
+TEST_F(JTE_X86_64, AReloadOfTheComparedByteIsTheIndex) {
+  auto ImageOrErr = neverd::loadBinary(memoryReloadX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  // jt_mem_reload's table comes first: six entries and a zero word.
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 6; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(Rodata->VA + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Rodata->VA + static_cast<int64_t>(Entry));
+  }
+  const neverd::Symbol *Reload = Image.findSymbol("jt_mem_reload");
+  ASSERT_NE(Reload, nullptr);
+  for (const bool SmallSession : {false, true}) {
+    SCOPED_TRACE(SmallSession);
+    neverd::CFGBuilder Builder;
+    if (SmallSession)
+      Builder.setGuardQueryMatchEvidenceBudgetForTesting(2000);
+    const neverd::LowFunc Func =
+        Builder.build(Image, Decoder, Reload->Addr, Reload->Name);
+    ASSERT_EQ(Func.JumpTables.size(), 1u);
+    EXPECT_FALSE(Func.JumpTables.front().AnalysisOnly);
+    EXPECT_EQ(Func.JumpTables.front().BaseAddr, Rodata->VA);
+    EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
+    EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+  }
+  for (const char *Name :
+       {"jt_mem_reload_store", "jt_mem_reload_carrier", "jt_mem_reload_disp",
+        "jt_mem_reload_wide", "jt_mem_reload_signed", "jt_mem_reload_call",
+        "jt_mem_reload_partial", "jt_mem_reload_second_pred",
+        "jt_mem_reload_rooted"}) {
+    SCOPED_TRACE(Name);
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::CFGBuilder Builder;
+    const neverd::LowFunc Func =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    for (const neverd::JumpTable &Table : Func.JumpTables)
+      EXPECT_TRUE(Table.AnalysisOnly);
+  }
+}
+
 static fs::path tokenLoopX64Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_token_loop.o";
 }

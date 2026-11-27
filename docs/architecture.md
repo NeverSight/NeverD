@@ -11701,6 +11701,17 @@ left, and a temporary counts only within its own instruction. Without the
 identity pcre2's parse_regex asked one session over 556 controlling
 conditions for such a dispatch; the session spent 339 Mi of the candidate
 account and did not finish, and the guard proof 362 Mi in all.
+A byte compared in memory is that leaf too when the index reloads it
+(`cmpb $0xc, 0x2(%r11); ja; movzbl 0x2(%r11), %edx`): a load of the same
+width through the same register and displacement, reached into the index by
+zero-extensions and same-width copies, in a block only the guard's
+fallthrough enters. Nothing between the two loads may write memory or that
+register, and no call may run before the index is used. These are the
+conditions under which the value resolver's reload search also reads one
+value; the address carrier and the memory-write test are its own helpers.
+pcre2_dfa_match's dispatch of this shape spent the whole 487 Mi left in its
+candidate account on the guard session, and two tables the function had
+proved were then withdrawn because that dispatch stayed open.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph

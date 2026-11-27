@@ -34,6 +34,7 @@
 #include "../LowScalarSymbolic.h"
 
 #include "neverd/Common.h"
+#include "neverd/Limits.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
@@ -46,6 +47,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace neverd {
@@ -144,6 +146,77 @@ inline bool targetRoleProofContextMatches(const TargetRoleProofContextKey &Key,
          Key.ProofRoots.size() == ProofRoots.size() &&
          std::equal(Key.ProofRoots.begin(), Key.ProofRoots.end(),
                     ProofRoots.begin());
+}
+
+/// The address operand of a LowIR LOAD: its second input when the first
+/// names the address space.
+inline const NdVar &loadAddressOperand(const LowOp &Load) {
+  return Load.NumInputs >= 2 ? Load.Inputs[1] : Load.Inputs[0];
+}
+
+/// Whether \p Op may write memory: a store, an atomic, a call, an intrinsic
+/// or an ordered access.  Two loads of one address with none of these between
+/// them read one value.
+inline bool mayWriteMemory(const LowOp &Op) {
+  return Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
+         Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
+         Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+         Op.Opcode == NdOp::INTRINSIC ||
+         Op.MemoryOrdering != NdMemoryOrdering::None;
+}
+
+/// The full guest register and constant displacement a LOAD's address
+/// carries inside its own instruction: the register itself, or a temp built
+/// from it by same-width copies and constant adds.  \p Value is the address
+/// operand of the load at \p Before in \p Ops, whose instruction is at
+/// \p InsnAddr.  Two loads whose addresses carry the same register and
+/// displacement, with no write of that register between them, read the same
+/// address even when the register's own value (a loop cursor) has no closed
+/// form.  \p Consume is charged once per step and once per operation read.
+template <typename ConsumeT>
+std::optional<std::pair<NdVar, uint64_t>>
+loadAddressCarrier(const std::vector<LowOp> &Ops, int Before, va_t InsnAddr,
+                   NdVar Value, unsigned PointerSize, ConsumeT &&Consume) {
+  uint64_t Displacement = 0;
+  for (unsigned N = 0; N < limits::kMaxQuasiCopyDepth; ++N) {
+    if (!Consume())
+      return std::nullopt;
+    if (Value.isReg())
+      return Value.Size == PointerSize
+                 ? std::optional(std::pair{Value, Displacement})
+                 : std::nullopt;
+    if (!Value.isTemp())
+      return std::nullopt;
+    int Writer = -1;
+    for (int K = Before - 1; K >= 0 && Ops[K].Addr == InsnAddr; --K) {
+      if (!Consume())
+        return std::nullopt;
+      if (Ops[K].Output.Space == Value.Space &&
+          Ops[K].Output.Offset == Value.Offset) {
+        Writer = K;
+        break;
+      }
+    }
+    if (Writer < 0)
+      return std::nullopt;
+    const LowOp &Transport = Ops[Writer];
+    if (Transport.Opcode == NdOp::COPY && Transport.NumInputs == 1 &&
+        Transport.Output.Size == Value.Size &&
+        Transport.Inputs[0].Size == Value.Size) {
+      Value = Transport.Inputs[0];
+    } else if (Transport.Opcode == NdOp::INT_ADD && Transport.NumInputs == 2 &&
+               Transport.Output.Size == Value.Size &&
+               Value.Size == PointerSize &&
+               Transport.Inputs[0].isConst() != Transport.Inputs[1].isConst()) {
+      const bool ConstantFirst = Transport.Inputs[0].isConst();
+      Displacement += Transport.Inputs[ConstantFirst ? 0 : 1].Offset;
+      Value = Transport.Inputs[ConstantFirst ? 1 : 0];
+    } else {
+      return std::nullopt;
+    }
+    Before = Writer;
+  }
+  return std::nullopt;
 }
 
 } // namespace detail
