@@ -1611,6 +1611,12 @@ later, by seven with `cmp $6, %al` before the dispatch indexes with `%rax`:
 both dispatches read their seven slots. A second path into the lane compare
 that loads all of `%rax`, a load of all of `%rax` before both compares, or a
 write of `%ah` between them stays unresolved.
+`JTE_X86_64.LaneCompareBoundWinsOverAWideTest` loads `%eax` with `movl`,
+tests `(%eax - 4) & ~4` on the full register in the next block and bounds
+`%eax` by ten in the one after: the dispatch reads its ten slots. A second
+path into the compare that loads all of `%rax`, a call between the load and
+the compare, or an address of the compare block that .data holds stays
+unresolved.
 `JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
 whose first state is a constant: scalar recovery first takes its dispatch as a
 direct branch and withdraws that guess when the cases loop back, and the

@@ -11660,6 +11660,22 @@ alone, and it keeps the blocks it walked only once the definition is in view.
 libzstd's sequence decoder also compares `%dl` after a shift, long before a
 dispatch that indexes with `%rdx`: that compare keeps the syntax it had,
 since unfolding it into the shift makes a condition the proof cannot use.
+The structural rule that a compared lane is the index looks for the lane's
+zero extension the same way: when the compare's block writes no byte of the
+register, it follows the blocks each entered only by falling through from
+the one before, and no call may run between the extension and the compare.
+It stops at a block also entered another way, as a function entry or a
+root of the proof such as a relocated label or a landing pad: that entry
+skips the extension, and no all-path query checks a structural leaf.
+Such a compare of the index lane also decides which view the proof keeps,
+since guards over different widths share no symbolic index: a full-width
+guard wins only when one of them is such a compare too, or no guard is.
+A routine of bash's command printer loads a field with
+`movl 0x18(%rbx), %eax`, tests `(%eax - 4) & ~4` on the full register and
+branches away on 4 and 8, and bounds `%eax` by twenty in the next block.
+Keeping that full-width test alone left two holes and no bound; the
+compare's view now bounds the dispatch, and dropping the test only enlarges
+the domain.
 The address-role proof takes a table load's scale from the role's own index
 occurrence first. An AArch64 extended-register operand widens the index into
 a temporary the same instruction scales. An x86 32-bit write widens it into

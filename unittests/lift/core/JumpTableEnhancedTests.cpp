@@ -5221,6 +5221,76 @@ TEST_F(JTE_X86_64, LaneGuardFindsItsExtensionInAnEarlierBlock) {
   }
 }
 
+static fs::path walkedExtendX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_walked_extend.o";
+}
+
+// `movl 0x18(%rdi), %eax` widens %eax into %rax, a block tests
+// `(%eax - 4) & ~4` on the full register and branches away on 4 and 8, and
+// the next block bounds %eax by ten before the dispatch indexes with %rax
+// (GCC in a routine of bash's command printer).  The compare names the index
+// lane, whose zero extension the proof finds in the earlier block, so its
+// bound wins over the full-width test that only cuts holes, and the dispatch
+// reads its ten entries.  A second path into the compare that loads all of
+// %rax, a call between the load and the compare, or an address of the compare
+// block that .data holds leaves the dispatch unresolved.
+TEST_F(JTE_X86_64, LaneCompareBoundWinsOverAWideTest) {
+  auto ImageOrErr = neverd::loadBinary(walkedExtendX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  // Each table holds ten entries and a zero word.
+  const auto TableBase = [&](size_t Table) {
+    return Rodata->VA + Table * 11 * 4;
+  };
+  std::vector<neverd::va_t> Expected;
+  for (size_t Slot = 0; Slot < 10; ++Slot) {
+    const uint8_t *Bytes = Image.readVA(TableBase(0) + Slot * 4, 4);
+    ASSERT_NE(Bytes, nullptr);
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(TableBase(0) + static_cast<int64_t>(Entry));
+  }
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  const auto Build = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  const neverd::LowFunc Func = Build("jt_walked_extend");
+  ASSERT_EQ(Func.JumpTables.size(), 1u);
+  EXPECT_FALSE(Func.JumpTables.front().AnalysisOnly);
+  EXPECT_EQ(Func.JumpTables.front().BaseAddr, TableBase(0));
+  EXPECT_EQ(Func.JumpTables.front().Targets, Expected);
+  EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+
+  for (const char *Name : {"jt_walked_two_preds", "jt_walked_call"}) {
+    SCOPED_TRACE(Name);
+    const neverd::LowFunc Refused = Build(Name);
+    ASSERT_FALSE(Refused.Blocks.empty());
+    EXPECT_FALSE(Refused.UnsafeIndirectBranchAddresses.empty());
+    for (const neverd::JumpTable &Table : Refused.JumpTables)
+      EXPECT_TRUE(Table.AnalysisOnly);
+  }
+
+  // .data holds the address of jt_walked_rooted's compare block, so that
+  // entry skips the extension and brings any %rax: its ten slots are no
+  // proved table.
+  const neverd::LowFunc Rooted = Build("jt_walked_rooted");
+  ASSERT_FALSE(Rooted.Blocks.empty());
+  for (const neverd::JumpTable &Table : Rooted.JumpTables)
+    EXPECT_TRUE(Table.AnalysisOnly || Table.BaseAddr != TableBase(3));
+}
+
 static fs::path scalarRetractedX64So() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_scalar_retracted.so";
 }
