@@ -148,7 +148,9 @@ TEST(LuaRecovery, SerializedReportAtExportLimit) {
   ASSERT_NE(Root, nullptr);
   EXPECT_EQ(Root->getString("status"), "budget_exceeded");
   EXPECT_EQ(Root->getString("input_sha256"), InputHash);
-  EXPECT_TRUE(Root->getNull("root"));
+  const auto *RootID = Root->get("root");
+  ASSERT_NE(RootID, nullptr);
+  EXPECT_EQ(RootID->kind(), json::Value::Null);
   ASSERT_NE(Root->getArray("functions"), nullptr);
   EXPECT_TRUE(Root->getArray("functions")->empty());
   const auto *Diagnostics = Root->getArray("diagnostics");
