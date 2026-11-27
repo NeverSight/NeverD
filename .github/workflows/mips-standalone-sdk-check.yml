@@ -75,10 +75,10 @@ jobs:
           test "$(git -C project rev-parse HEAD)" = "$PROJECT"
           test "$(git -C project rev-parse HEAD:third_party/llvm-project)" = "$FORK"
           git -C project submodule update --init --depth 1 third_party/capstone third_party/unicorn signatures
-          flags=()
+          flags=(-DNEVERD_LLVM_PREBUILT=ON)
           if [[ "$RUNNER_OS" == Linux ]]; then flags+=(-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14); fi
           cmake -S project -B project/build-sdk -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_TESTING=OFF -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_ENABLE_CPU_EMULATION=OFF \
+            -DBUILD_TESTING=OFF -DNEVERD_ENABLE_CPU_EMULATION=OFF \
             -DNEVERD_ENABLE_WEB_ANALYSIS=OFF "${flags[@]}"
           (cd project && python scripts/build.py build-sdk --config Release --parallel 4 --target neverd)
       - name: Link the standalone r14 and r15 drivers to their published static libraries
