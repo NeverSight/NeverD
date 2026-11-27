@@ -43,19 +43,57 @@ def paired_p95(cohorts, field, draws):
     return [percentile(differences, f) for f in (0.025, 0.975)]
 
 
-def tail_components(records):
-    ordered = sorted(records, key=lambda item: item["wall_ms"])
+def tail_and_middle(records, rank):
+    ordered = sorted(records, key=lambda item: item[rank])
     n = len(ordered)
     # Compare the slowest five percent with the central ten percent of the
-    # same total-wall ranking. Their mean component differences are additive.
+    # same ranking, preserving the observations belonging to each launch.
     tail = ordered[-math.ceil(n * 0.05):]
     typical = ordered[min(n - 1, int(n * 0.45)):max(1, math.ceil(n * 0.55))]
+    return tail, typical
+
+
+def tail_components(records):
+    tail, typical = tail_and_middle(records, "wall_ms")
     fields = ["pre_main_ms", "main_ms", "teardown_ms", "exit_to_observer_ms", "wall_ms",
               "spawn_to_birth_ms"]
     excess = {key: statistics.mean(row[key] for row in tail)
               - statistics.mean(row[key] for row in typical) for key in fields}
     excess["birth_to_main_ms"] = excess["pre_main_ms"] - excess["spawn_to_birth_ms"]
     return excess
+
+
+def entry_bounds(row):
+    # Only the stop closes the current runnable interval. The live sample
+    # precedes the stop and the parent timestamp follows it. Bound how much
+    # the child could have accrued between main entry and those observations.
+    wall = row["birth_to_main_ms"]
+    gate = row["probe_to_gate_ms"]
+    delay = gate + row["gate_to_observer_ms"]
+    cpu = row["cpu_at_entry_ms"]
+    at_stop = row["runnable_at_stop_ms"]
+    cpu_low = max(0, cpu - gate, row["cpu_at_stop_ms"] - delay)
+    cpu_high = min(wall, cpu, row["cpu_at_stop_ms"])
+    runnable_low = max(0, at_stop - delay, row["runnable_at_entry_ms"] - gate)
+    runnable_high = min(wall, at_stop)
+    if cpu_low > cpu_high + 1e-6 or max(runnable_low, cpu_low) > runnable_high + 1e-6:
+        raise ValueError("entry counters exceed their observation window")
+    return {"cpu_ms": (cpu_low, cpu_high),
+            "ready_ms": (max(0, runnable_low - cpu_high), max(0, runnable_high - cpu_low)),
+            "other_ms": (wall - runnable_high, wall - max(runnable_low, cpu_low))}
+
+
+def entry_tail(records):
+    tail, middle = tail_and_middle(records, "birth_to_main_ms")
+    slow, typical = ([entry_bounds(row) for row in group] for group in (tail, middle))
+    # Subtract opposite endpoints. A delayed observer widens the interval.
+    excess = {key: [statistics.mean(v[key][i] for v in slow)
+                    - statistics.mean(v[key][1 - i] for v in typical) for i in (0, 1)]
+              for key in slow[0]}
+    fields = ("birth_to_main_ms", "pageins", "bytes_read", "faults", "cow_faults")
+    return {"slowest_mean": {k: statistics.mean(r[k] for r in tail) for k in fields},
+            "middle_mean": {k: statistics.mean(r[k] for r in middle) for k in fields},
+            "excess_bounds_ms": excess}
 
 
 def summarize_group(cohorts, marked, draws):
@@ -73,10 +111,13 @@ def summarize_group(cohorts, marked, draws):
                   "by_round": {k: percentile([b[field] for _, b in c], 0.95)
                                - percentile([a[field] for a, _ in c], 0.95)
                                for k, c in cohorts.items()}}
-        if len(groups) > 1 and field in ("wall_ms", "lifetime_ms", "cpu_ms"):
+        if len(groups) > 1 and field in ("wall_ms", "lifetime_ms", "cpu_ms", "birth_to_main_ms"):
             metric["p95_difference_ci95"] = paired_p95(groups, field, draws)
         report["metrics"][field] = metric
-    if marked:
+    if marked and "runnable_at_stop_ms" in pairs[0][0]:
+        report["entry_tail"] = {key: entry_tail([p[i] for p in pairs])
+                                for i, key in enumerate(("before", "after"))}
+    elif marked:
         report["slow_tail_minus_typical_ms"] = {
             key: tail_components([p[i] for p in pairs]) for i, key in enumerate(("before", "after"))
         }
@@ -119,8 +160,11 @@ def summarize(path, draws=2000):
         for kind in ("stock", "marked"):
             for other in ("A2", "B"):
                 prefix = i, condition, kind, other
+                # Earlier records used the primary A as the left side of A/A.
+                independent_control = "A1" in setup.get("sdk_sha256", {}) and other == "A2"
+                left = "A1" if independent_control else "A"
                 try:
-                    group = [(samples.pop((*prefix, j, "A")), samples.pop((*prefix, j, other)))
+                    group = [(samples.pop((*prefix, j, left)), samples.pop((*prefix, j, other)))
                              for j in range(0, setup["pairs"], 2 if other == "A2" else 1)]
                 except KeyError as error:
                     raise ValueError(f"missing launch in {prefix}") from error
@@ -139,12 +183,13 @@ def main():
     args = parser.parse_args()
     report = summarize(args.samples)
     args.json.write_text(json.dumps(report, indent=2) + "\n")
-    print("Load / executable / comparison        Pairs     Before P95     After P95   95% CI for change (ms)")
+    print("Load / executable / comparison       Metric             Pairs    Before P95    After P95   95% CI for change (ms)")
     for label, data in report["groups"].items():
-        wall = data["metrics"]["wall_ms"]
+        metric = "birth_to_main_ms" if "entry_tail" in data else "wall_ms"
+        wall = data["metrics"][metric]
         ci = wall.get("p95_difference_ci95")
         interval = f"[{ci[0]:.2f}, {ci[1]:.2f}]" if ci else "one round"
-        print(f"{label:<37} {data['pairs']:>5} {wall['before']['p95']:>12.2f} "
+        print(f"{label:<37} {metric:<17} {data['pairs']:>5} {wall['before']['p95']:>12.2f} "
               f"{wall['after']['p95']:>12.2f}   {interval}")
 
 
