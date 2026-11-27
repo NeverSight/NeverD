@@ -368,6 +368,19 @@ TEST(SymMBAResidualBudget, RefusalAndPartialSearchKeepSparseProductsExact) {
   }
 }
 
+std::string
+repeatedFields(unsigned Scale,
+               llvm::ArrayRef<std::pair<unsigned, const char *>> Blocks) {
+  std::string Text = std::to_string(Scale);
+  for (auto [Copies, Block] : Blocks)
+    for (unsigned I = 0; I != Copies; ++I) {
+      Text += "*(";
+      Text += Block;
+      Text += ")";
+    }
+  return Text;
+}
+
 TEST(SymMBAResidualBudget, NativeRepeatedFieldPowersFitTheReducedBudget) {
   // Each high coefficient reads at most five input bits. The packed form
   // shares more subexpressions, while the expanded form prints fewer nodes.
@@ -380,14 +393,7 @@ TEST(SymMBAResidualBudget, NativeRepeatedFieldPowersFitTheReducedBudget) {
       {32, "5 + 56*zext(extract(y,0,2),16) + 8*sext(extract(x,1,2),16)"},
       {48, "3 - 24*zext(extract(y,1,2),16) + 24*zext(extract(x,0,3),16)"
            " + 8*sext(extract(y,0,1),16)"}};
-  std::string Text = "4";
-  for (auto [Copies, Block] : Blocks)
-    for (unsigned I = 0; I != Copies; ++I) {
-      Text += "*(";
-      Text += Block;
-      Text += ")";
-    }
-  auto Input = parseSymExpr(C, Text, Width);
+  auto Input = parseSymExpr(C, repeatedFields(4, Blocks), Width);
   ASSERT_TRUE(Input.ok());
   MBAOptions Options;
   Options.MaxWork = 65536;
@@ -401,6 +407,31 @@ TEST(SymMBAResidualBudget, NativeRepeatedFieldPowersFitTheReducedBudget) {
                                               llvm::APInt(Width, B)};
       EXPECT_EQ(C.eval(Result.Expr, Values), C.eval(Input.Root, Values));
     }
+  }
+}
+
+TEST(SymMBAResidualBudget, FullWidthOddPowersWithAndWithoutALeadingUnit) {
+  constexpr unsigned Width = 13;
+  const std::pair<unsigned, const char *> Blocks[] = {
+      {16, "3+8*zext(extract(x+y,1,3),13)-24*sext(extract(x,0,2),13)"},
+      {17, "-5+24*sext(extract(x^y,0,3),13)+8*zext(extract(y,1,2),13)"},
+      {33, "1-8*zext(extract(x,1,3),13)+40*zext(extract(y,0,3),13)"},
+      {16, "7+24*zext(extract(y,0,2),13)+8*sext(extract(x^y,1,3),13)"}};
+  for (unsigned Scale : {1u, 5u}) {
+    SymContext C;
+    auto Input = parseSymExpr(C, repeatedFields(Scale, Blocks), Width);
+    ASSERT_TRUE(Input.ok());
+    MBAOptions Options;
+    Options.MaxWork = 65536;
+    Options.VerifySamples = 0;
+    const auto Result = simplifyMBADeep(C, Input.Root, Options);
+    EXPECT_LT(Result.Work, Options.MaxWork);
+    EXPECT_LE(Result.SizeAfter, 202u);
+    for (unsigned X = 0; X != 16; ++X)
+      for (unsigned Y = 0; Y != 16; ++Y) {
+        const std::array Inputs{llvm::APInt(Width, X), llvm::APInt(Width, Y)};
+        EXPECT_EQ(C.eval(Result.Expr, Inputs), C.eval(Input.Root, Inputs));
+      }
   }
 }
 

@@ -2139,6 +2139,12 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
         if (readingScore(Ctx, Alternative) < readingScore(Ctx, Prepared) ||
             (Ctx.op(Prepared) == SymOp::Mul &&
              Ctx.op(Alternative) == SymOp::Add &&
+             // A sign or offset can normally disappear once per summed term.
+             // Finish a close expansion; a much larger sum repeats the same
+             // field analysis and consumes the packed product's allowance.
+             readingCost(Ctx, Alternative) <=
+                 llvm::SaturatingAdd(readingCost(Ctx, Prepared),
+                                     size_t(Ctx.numOperands(Alternative))) &&
              std::adjacent_find(Parts.begin(), Parts.end()) != Parts.end())) {
           // A constant suffix exposes the actual width of the varying bits.
           // Walk that spelling when its DAG is smaller. Retain the checked

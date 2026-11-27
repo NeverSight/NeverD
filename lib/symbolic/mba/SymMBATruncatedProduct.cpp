@@ -2145,14 +2145,16 @@ struct QuadraticFieldPolynomial {
     auto High = emitFieldRows(Ctx, Projected, Rows, Constant, Budget, Storage,
                               NativeArithmetic);
     const auto Value = Ctx.mkConcat(High, Ctx.mkConst(Offset.trunc(K + Pad)));
-    const auto Zeros = Ctx.mkConst(Width - P, 0);
+    auto restoreWidth = [&](SymRef V) {
+      return Width == P ? V : Ctx.mkConcat(V, Ctx.mkConst(Width - P, 0));
+    };
     llvm::SmallVector<SymRef, 8> Factors(Remainder);
     Factors.push_back(Value);
-    const auto Narrow = Ctx.mkConcat(Ctx.mkMul(Factors), Zeros);
+    const auto Narrow = restoreWidth(Ctx.mkMul(Factors));
     if (NativeRemainder.empty())
       return Narrow;
     Factors.assign(NativeRemainder.begin(), NativeRemainder.end());
-    Factors.push_back(Ctx.mkConcat(Value, Zeros));
+    Factors.push_back(restoreWidth(Value));
     const auto Native = Ctx.mkMul(Factors);
     return readingScore(Ctx, Native) < readingScore(Ctx, Narrow) ? Native
                                                                  : Narrow;
@@ -2319,7 +2321,9 @@ SymRef buildResiduePowerBlocks(SymContext &Ctx,
   }
   if (Accepted < limits::kMinResidueProductFactors)
     return {};
-  return Ctx.mkConcat(Ctx.mkMul(Parts), Ctx.mkConst(Width - P, 0));
+  const auto Product = Ctx.mkMul(Parts);
+  return Width == P ? Product
+                    : Ctx.mkConcat(Product, Ctx.mkConst(Width - P, 0));
 }
 
 // Compute a complete second-degree product in its observed ring. Factoring a
@@ -2329,9 +2333,10 @@ SymRef buildResiduePowerBlocks(SymContext &Ctx,
 // the outer shift keeps this identity exact even in a power-of-two ring.
 SymRef foldQuadraticFields(SymContext &Ctx, SymRef Root, unsigned Precision,
                            WorkBudget &Budget, size_t &Storage) {
-  const auto Ops = Ctx.operands(Root);
-  const auto Outer = Ops.front();
-  auto Factors = Ops.drop_front();
+  const auto FirstFactor = Ctx.operand(Root, 0);
+  const bool Scaled = Ctx.isConst(FirstFactor);
+  const auto Outer = Scaled ? FirstFactor : Ctx.mkConst(Ctx.width(Root), 1);
+  auto Factors = Ctx.operands(Root).drop_front(Scaled);
   const bool LongRuns = hasLongFactorRun(Factors);
   if (!LongRuns && !Budget.consume(Factors.size()))
     return {};
@@ -2751,8 +2756,20 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     return foldScaledDistributedProduct(Ctx, Root, Budget, Storage,
                                         EmittedReading);
   const auto Scaled = extractFactorScale(Ctx, Root, Budget, Storage);
-  if (!Scaled || Ctx.op(Scaled) != SymOp::Mul)
+  if (!Scaled || Ctx.op(Scaled) != SymOp::Mul) {
+    // Repeated odd affine factors also fix low bits when the leading scale
+    // is a unit. The quadratic proof then observes the full native word.
+    const auto Factors = Ctx.operands(Root).drop_front(Ctx.isConst(First));
+    if (Ctx.width(Root) <= llvm::APInt::APINT_BITS_PER_WORD &&
+        hasLongFactorRun(Factors))
+      if (auto Q = foldQuadraticFields(Ctx, Root, Ctx.width(Root), Budget,
+                                       Storage)) {
+        if (EmittedReading)
+          *EmittedReading = true;
+        return Q;
+      }
     return Root;
+  }
   const auto Scale = Ctx.operand(Scaled, 0);
   if (!Ctx.isConst(Scale) || (Ctx.constWords(Scale).front() & 1))
     return Root;
