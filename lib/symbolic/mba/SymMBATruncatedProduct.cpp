@@ -1759,17 +1759,20 @@ SymRef emitFieldRows(SymContext &Ctx, llvm::ArrayRef<SymRef> Fields,
       Sum.push_back(Ctx.mkMul(Fields[I], Rows[I].Slope));
     return Ctx.mkAdd(Sum);
   }
-  llvm::SmallVector<unsigned, 8> Natural, Active, Degree;
-  size_t Edges = 0;
+  llvm::SmallVector<unsigned, 8> Natural, Active, Degree, Fixed;
+  size_t MixedEdges = 0, Edges = 0;
   const auto Top = Ctx.mkConst(llvm::APInt::getSignMask(Width));
   bool TopWeights = false, TopSquares = false, TwoBitSquares = false;
   for (const auto &[I, Row] : llvm::enumerate(Rows)) {
     Natural.push_back(I);
-    Degree.push_back(unsigned(Row.Terms.size()) + !Ctx.isConstZero(Row.Slope));
+    Fixed.push_back(!Ctx.isConstZero(Row.Slope));
+    Degree.push_back(unsigned(Row.Terms.size()) + Fixed.back());
     if (Degree.back())
       Active.push_back(I);
     Edges += Row.Terms.size();
     for (auto [J, W] : Row.Terms) {
+      Fixed.back() += I == J;
+      MixedEdges += I < J;
       TopWeights |= I != J && W == Top;
       TopSquares |= I == J && W == Top;
       TwoBitSquares |=
@@ -1786,31 +1789,42 @@ SymRef emitFieldRows(SymContext &Ctx, llvm::ArrayRef<SymRef> Fields,
   };
   using RowKey = std::pair<uint64_t, unsigned>;
   llvm::SmallVector<llvm::SmallDenseMap<RowKey, Reading, 4>, 8> Readings(N);
-  auto spell = [&](llvm::ArrayRef<unsigned> Order, bool Parity, bool Squares,
-                   bool First) -> SymRef {
-    llvm::SmallVector<unsigned, 8> Position(N);
+  // The order fixes ownership of each cross term. Its parity and square
+  // spellings use the same subset of partners, including on cache hits.
+  struct OwnedRow {
+    uint64_t Mask = 0;
+    unsigned Count = 0, Forms = 0;
+  };
+  llvm::SmallVector<OwnedRow, 8> Owned(N);
+  llvm::SmallVector<unsigned, 8> Position(N);
+  auto orient = [&](llvm::ArrayRef<unsigned> Order) {
     for (auto [Rank, I] : llvm::enumerate(Order))
       Position[I] = Rank;
+    for (unsigned I : Order) {
+      auto &Selection = Owned[I];
+      Selection = {};
+      for (auto [T, Term] : llvm::enumerate(Rows[I].Terms)) {
+        if (Position[Term.Other] < Position[I])
+          continue;
+        ++Selection.Count;
+        if (T < 64)
+          Selection.Mask |= uint64_t{1} << T;
+        if (Term.Weight == Top)
+          Selection.Forms |= Term.Other == I ? LinearTopSquare : TopBitPartners;
+        else if (Term.Other == I && Width > 1 &&
+                 Ctx.constValue(Term.Weight).countr_zero() == Width - 2)
+          Selection.Forms |= TwoBitSquare;
+      }
+    }
+  };
+  auto spell = [&](llvm::ArrayRef<unsigned> Order, unsigned Enabled,
+                   bool First) -> SymRef {
     llvm::SmallVector<SymRef, 16> Sum{Constant}, HighBits;
     for (unsigned I : Order) {
       const auto &Row = Rows[I];
       const bool FitsMask = Row.Terms.size() <= 64;
-      uint64_t Mask = 0;
-      unsigned Forms = 0, Count = 0;
-      for (auto [T, Term] : llvm::enumerate(Row.Terms)) {
-        if (Position[Term.Other] < Position[I])
-          continue;
-        ++Count;
-        if (FitsMask)
-          Mask |= uint64_t{1} << T;
-        if (Term.Weight == Top && Term.Other == I && !First)
-          Forms |= LinearTopSquare;
-        if (Parity && Term.Weight == Top && Term.Other != I)
-          Forms |= TopBitPartners;
-        if (Squares && I == Term.Other && Width > 1 &&
-            Ctx.constValue(Term.Weight).countr_zero() == Width - 2)
-          Forms |= TwoBitSquare;
-      }
+      const auto [Mask, Count, Supported] = Owned[I];
+      const unsigned Forms = Enabled & Supported;
       const RowKey Key{Mask, Forms};
       auto &Cache = Readings[I];
       if (FitsMask)
@@ -1880,78 +1894,112 @@ SymRef emitFieldRows(SymContext &Ctx, llvm::ArrayRef<SymRef> Fields,
     return Ctx.mkAdd(Sum);
   };
 
-  auto Best = spell(Natural, false, false, true);
-  llvm::SmallVector<size_t, 8> Cost;
-  for (SymRef X : Fields)
-    Cost.push_back(llvm::SaturatingAdd(readingCost(Ctx, X), size_t{1}));
+  orient(Natural);
+  auto Best = spell(Natural, 0, true);
   const size_t Visits = 1 + Active.size() + Edges;
-  auto compare = [&](llvm::ArrayRef<unsigned> Order, bool Parity,
-                     bool Squares) {
-    if (!Budget.canConsume(Visits))
+  auto orientAlternative = [&](llvm::ArrayRef<unsigned> Order) {
+    if (!Budget.canConsume(Order.size() + Edges))
+      return false;
+    Budget.consume(Order.size() + Edges);
+    orient(Order);
+    return true;
+  };
+  auto compare = [&](llvm::ArrayRef<unsigned> Order, unsigned Enabled) {
+    if (!Budget.canConsume(1 + Order.size()))
       return;
-    Budget.consume(Visits);
-    const auto Candidate = spell(Order, Parity, Squares, false);
+    Budget.consume(1 + Order.size());
+    const auto Candidate = spell(Order, Enabled, false);
     if (Candidate && readingScore(Ctx, Candidate) < readingScore(Ctx, Best))
       Best = Candidate;
   };
+  constexpr unsigned Parity = LinearTopSquare | TopBitPartners;
   if (TopSquares)
-    compare(Natural, false, false);
+    compare(Natural, LinearTopSquare);
   if (TopWeights)
-    compare(Natural, true, false);
+    compare(Natural, Parity);
   if (TwoBitSquares)
-    compare(Natural, true, true);
+    compare(Natural, Parity | TwoBitSquare);
   // In a mixed product the outer coordinate appears once for the whole
   // slope; each inner coordinate is printed at every use. Try putting the
   // most expensive source fields outside before considering vertex degree.
+  if (!MixedEdges)
+    return Best;
+  llvm::SmallVector<size_t, 8> Cost;
+  for (SymRef X : Fields)
+    Cost.push_back(llvm::SaturatingAdd(readingCost(Ctx, X), size_t{1}));
   auto ByCost = Active;
   llvm::stable_sort(ByCost,
                     [&](unsigned A, unsigned B) { return Cost[A] > Cost[B]; });
-  if (ByCost != Active) {
-    compare(ByCost, false, false);
+  if (ByCost != Active && orientAlternative(ByCost)) {
+    compare(ByCost, LinearTopSquare);
     if (TopWeights)
-      compare(ByCost, true, false);
+      compare(ByCost, Parity);
   }
   // Small native products also get an independent arithmetic expansion.
   // Do not repeat the same pivot search over simple leaf slices first.
   if (NativeArithmetic)
     return Best;
+  bool TriedUnforced = false;
   for (unsigned First : Active) {
     if (Degree[First] < 2)
       continue;
-    const size_t OrderWork = Active.size() * Active.size() + Edges;
-    if (!Budget.canConsume(OrderWork + Visits))
+    // Only the relative order of endpoints of mixed terms changes the
+    // polynomial. A diagonal or linear row has no effect on the next pivot.
+    const bool Forced = Degree[First] != Fixed[First];
+    if (!Forced && TriedUnforced)
+      continue;
+    TriedUnforced |= !Forced;
+    if (!Budget.canConsume(Active.size() + Visits))
       break;
-    Budget.consume(OrderWork);
+    Budget.consume(Active.size());
     llvm::SmallVector<unsigned, 8> Left(Degree), Free(Active), Order;
     auto priority = [&](unsigned I) {
-      return llvm::SaturatingMultiply(size_t(Left[I] ? Left[I] - 1 : 0),
-                                      Cost[I]);
+      return std::pair{
+          Left[I] > Fixed[I],
+          llvm::SaturatingMultiply(size_t(Left[I] ? Left[I] - 1 : 0), Cost[I])};
     };
-    while (!Free.empty()) {
-      auto Next = Order.empty()
-                      ? llvm::find(Free, First)
-                      : std::max_element(Free.begin(), Free.end(),
-                                         [&](unsigned A, unsigned B) {
-                                           return priority(A) < priority(B);
-                                         });
+    size_t Remaining = MixedEdges;
+    while (Remaining) {
+      if (!Budget.canConsume(Free.size()))
+        return Best;
+      Budget.consume(Free.size());
+      const auto Next =
+          Forced && Order.empty()
+              ? llvm::find(Free, First)
+              : std::max_element(
+                    Free.begin(), Free.end(), [&](unsigned A, unsigned B) {
+                      const auto PA = priority(A), PB = priority(B);
+                      return PA != PB ? PA < PB : A > B;
+                    });
       const unsigned I = *Next;
+      Remaining -= Left[I] - Fixed[I];
       Order.push_back(I);
-      Free.erase(Next);
+      *Next = Free.back();
+      Free.pop_back();
+      if (!Remaining)
+        break;
+      if (!Budget.canConsume(Rows[I].Terms.size()))
+        return Best;
+      Budget.consume(Rows[I].Terms.size());
       for (const auto &Term : Rows[I].Terms)
         if (Term.Other != I && Left[Term.Other])
           --Left[Term.Other];
     }
+    llvm::sort(Free);
+    Order.append(Free);
     // Reordering zero-degree rows cannot change the printed expression.
     // Both base orders have already been tried with the same diagonal forms.
-    if (Order == Active)
+    if (Order == Active || (Order == ByCost && !TwoBitSquares))
       continue;
+    if (!orientAlternative(Order))
+      break;
     if (Order != ByCost) {
-      compare(Order, false, false);
+      compare(Order, LinearTopSquare);
       if (TopWeights)
-        compare(Order, true, false);
+        compare(Order, Parity);
     }
     if (TwoBitSquares)
-      compare(Order, true, true);
+      compare(Order, Parity | TwoBitSquare);
   }
   return Best;
 }
@@ -2084,8 +2132,8 @@ struct QuadraticFieldPolynomial {
 
   SymRef emit(unsigned D, unsigned Width, WorkBudget &Budget, size_t &Storage) {
     const unsigned Pad = std::min(D, L - 1), Live = L - Pad;
-    const auto Scale = Offset.trunc(L);
-    const auto Second = Quadratic ? Scale.shl(K - 1) : llvm::APInt(L, 0);
+    const auto Scale = Offset.trunc(Live);
+    const unsigned Bits = Quadratic ? L - K + 1 : 0;
     llvm::SmallVector<llvm::APInt, 8> Slopes(Linear);
     llvm::SmallVector<SymRef, 8> Projected(Fields);
     // A sign bit can be folded back into a signed coordinate if it cancels
@@ -2116,27 +2164,33 @@ struct QuadraticFieldPolynomial {
     llvm::SmallVector<FieldRow, 8> Rows(Fields.size());
     llvm::SmallVector<unsigned, 8> Active;
     for (unsigned I = 0; I < Fields.size(); ++I) {
-      Rows[I].Slope = Ctx.mkConst((Scale * Slopes[I]).extractBits(Live, Pad));
-      if (HasMoment[I])
+      Rows[I].Slope = Ctx.mkConst(Scale * Slopes[I].extractBits(Live, Pad));
+      if (HasMoment[I] && Bits > D)
         Active.push_back(I);
     }
-    for (auto [Pos, I] : llvm::enumerate(Active)) {
-      const unsigned Bits = L - K + 1;
-      auto A = Linear[I].trunc(Bits);
-      for (unsigned J : llvm::ArrayRef(Active).drop_front(Pos)) {
-        auto W = A * Linear[J].trunc(Bits);
-        if (auto M = Moments.find({I, J}); M != Moments.end())
-          W -= M->second;
-        W = W.zext(L) * Second;
-        if (I != J)
-          W <<= 1;
-        const auto Coefficient = W.extractBits(Live, Pad);
-        if (Coefficient.isZero())
-          continue;
-        const auto Weight = Ctx.mkConst(Coefficient);
-        Rows[I].Terms.push_back({J, Weight});
-        if (I != J)
-          Rows[J].Terms.push_back({I, Weight});
+    // Each complete run has multiplicity divisible by 2^D. Both the
+    // linear sums and the second moments have those D low zeros, so take
+    // them out before multiplying in the surviving coefficient ring.
+    if (!Active.empty()) {
+      const unsigned Kept = Bits - D;
+      const auto Unit = Scale.trunc(Kept);
+      for (auto [Pos, I] : llvm::enumerate(Active)) {
+        const auto A = Linear[I].extractBits(Kept, D);
+        for (unsigned J : llvm::ArrayRef(Active).drop_front(Pos)) {
+          auto W = A * Linear[J].trunc(Kept);
+          if (auto M = Moments.find({I, J}); M != Moments.end())
+            W -= M->second.extractBits(Kept, D);
+          if (W.isZero())
+            continue;
+          const auto Coefficient =
+              (W * Unit).zext(Live).shl(K - 1 + unsigned(I != J));
+          if (Coefficient.isZero())
+            continue;
+          const auto Weight = Ctx.mkConst(Coefficient);
+          Rows[I].Terms.push_back({J, Weight});
+          if (I != J)
+            Rows[J].Terms.push_back({I, Weight});
+        }
       }
     }
     const bool NativeArithmetic =
@@ -2238,11 +2292,25 @@ SymRef QuadraticFieldPolynomial::build(llvm::ArrayRef<QuadraticRun> Runs,
     return Ctx.mkConst(Offset.zext(Width).shl(Width - P));
   if (Accepted < limits::kMinResidueProductFactors)
     return {};
-  const auto Cells = fieldCells(Fields.size(), llvm::count(HasMoment, true));
-  if (Cells > Storage / CellBytes || Cells > Budget.available() / (8 * MulWork))
+  const unsigned Live = L - std::min(D, L - 1);
+  const unsigned Bits = Quadratic ? L - K + 1 : 0;
+  const size_t Active = Bits > D ? llvm::count(HasMoment, true) : 0;
+  const size_t Pairs = fieldCells(0, Active);
+  const size_t Cells = Fields.size() + Pairs;
+  const size_t LiveWords = llvm::APInt::getNumWords(Live);
+  const size_t SlopeWork = 8 * (2 + LiveWords * LiveWords);
+  const size_t PairWords = Bits > D ? llvm::APInt::getNumWords(Bits - D) : 0;
+  // Only the final shift of a quadratic coefficient spans the live field.
+  const size_t PairWork =
+      8 * (2 + PairWords * PairWords) + LiveWords - PairWords;
+  if (Cells > Storage / CellBytes ||
+      Fields.size() > Budget.available() / SlopeWork)
+    return {};
+  const size_t SlopesWork = Fields.size() * SlopeWork;
+  if (Pairs > (Budget.available() - SlopesWork) / PairWork)
     return {};
   Storage -= Cells * CellBytes;
-  Budget.consume(Cells * 8 * MulWork);
+  Budget.consume(SlopesWork + Pairs * PairWork);
   return emit(D, Width, Budget, Storage);
 }
 

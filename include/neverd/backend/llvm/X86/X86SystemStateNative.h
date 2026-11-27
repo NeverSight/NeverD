@@ -25,20 +25,27 @@ class Function;
 
 namespace neverd {
 
-/// RTM builtins and LLVM instruction selection require the same CPU feature.
-inline bool isX86RtmNativeName(std::string_view Name) {
-  return Name == "llvm.x86.xbegin" || Name == "llvm.x86.xend" ||
-         Name == "llvm.x86.xabort" || Name == "llvm.x86.xtest";
-}
+struct X86NativeFeature {
+  std::string_view Name;
+  const char *Feature;
+};
+
+inline constexpr X86NativeFeature X86SystemNativeFeatures[] = {
+    {"llvm.x86.xbegin", "rtm"},    {"llvm.x86.xend", "rtm"},
+    {"llvm.x86.xabort", "rtm"},    {"llvm.x86.xtest", "rtm"},
+    {"llvm.x86.clzero", "clzero"}, {"llvm.x86.hreset", "hreset"}};
 
 inline const char *x86SystemNativeTargetFeature(std::string_view Name) {
-  if (isX86RtmNativeName(Name))
-    return "rtm";
-  if (Name == "llvm.x86.clzero")
-    return "clzero";
-  if (Name == "llvm.x86.hreset")
-    return "hreset";
+  for (const auto &Entry : X86SystemNativeFeatures)
+    if (Name == Entry.Name)
+      return Entry.Feature;
   return nullptr;
+}
+
+/// RTM builtins and LLVM instruction selection require the same CPU feature.
+inline bool isX86RtmNativeName(std::string_view Name) {
+  const char *Feature = x86SystemNativeTargetFeature(Name);
+  return Feature && std::string_view(Feature) == "rtm";
 }
 
 /// Retain native instruction-selection requirements in exported LLVM IR.

@@ -962,8 +962,13 @@ TEST(SymMBAResiduePowers, RepeatedFieldsKeepTheirLastSquareAndOddCopies) {
 }
 
 TEST(SymMBAResiduePowers, RepeatedPowersRetainQuadraticsAndResidualCopies) {
-  for (const auto [Precision, D] :
-       {std::pair{8u, 2u}, {9u, 3u}, {16u, 3u}, {25u, 4u}, {130u, 4u}}) {
+  for (const auto [Precision, D] : {std::pair{8u, 2u},
+                                    {9u, 3u},
+                                    {16u, 3u},
+                                    {25u, 4u},
+                                    {38u, 7u},
+                                    {130u, 4u},
+                                    {131u, 8u}}) {
     const unsigned Bits = Precision / 2, Shift = Precision - Bits;
     const unsigned Width = Precision + 5, K = Shift - D, Group = 1u << D;
     for (const unsigned Extra : {0u, 1u, Group - 1}) {

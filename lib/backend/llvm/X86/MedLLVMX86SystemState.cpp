@@ -12,10 +12,12 @@
 #include "neverd/backend/llvm/X86/X86SystemStateNative.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 
@@ -26,13 +28,20 @@
 namespace neverd {
 
 void applyX86SystemNativeTargetFeatures(llvm::Function &Function) {
+  // A direct intrinsic call must have a declaration in the emitted module.
+  // Most functions can avoid a scan of their whole instruction list.
+  const auto *Module = Function.getParent();
+  if (Module && llvm::none_of(X86SystemNativeFeatures, [&](const auto &Entry) {
+        return Module->getFunction(Entry.Name);
+      }))
+    return;
   std::set<std::string> Required;
   for (const auto &Block : Function)
     for (const auto &Instruction : Block)
       if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
         if (const auto *Callee = Call->getCalledFunction())
           if (const char *Feature =
-                  x86SystemNativeTargetFeature(Callee->getName().str()))
+                  x86SystemNativeTargetFeature(Callee->getName()))
             Required.insert(Feature);
   if (Required.empty())
     return;

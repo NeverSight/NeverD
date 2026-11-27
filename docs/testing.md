@@ -4841,6 +4841,14 @@ multiplicities and `--reference` for the interpolated polynomial. The
 611-factor native fixture exercises blocks of 32 with three remaining copies
 in both source views.
 
+Group logs 7 and 8 use twelve overlapping word expressions with both signed
+and unsigned slices. Some rows have four differently weighted fields and
+several incomplete blocks survive. To reproduce a constrained run, generate
+width 65,536, case 7, group log 8 and pass it to `neverd simplify` with
+`--width=65536 --max-work=65536`. With the same case and group log, width
+14,680,111 generates 1,572,880 factors across 317 distinct rows. Use
+`--exhaustive` to simplify it or generate its compact form with `--counted`.
+
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
 coordinates through chains of left and right rotations. A coefficient may
