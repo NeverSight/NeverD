@@ -85,8 +85,16 @@ enum class MachOAddressForm { Single, PagePair, Expanded };
 /// An AUT or authenticated return which must consume the installed signing PC.
 struct MachOSigningConsumer {
   va_t Instruction;
-  /// An extra ADR sets this otherwise dead GPR for the register form.
+  /// An ADR sets this GPR for the register form.
   std::optional<unsigned> ModifierRegister;
+  /// Rematerialize the input value in its own register after a fallthrough
+  /// authentication when all Darwin scratch registers are live.
+  bool RestoreSource = false;
+
+  unsigned insertedWords() const {
+    return ModifierRegister ? 1 + restoreWords() : 0;
+  }
+  unsigned restoreWords() const { return RestoreSource ? 2 : 0; }
 };
 
 /// A numeric source address produced by a PC-relative instruction or pair.

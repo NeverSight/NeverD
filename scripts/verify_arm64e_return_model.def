@@ -170,7 +170,10 @@
     "artifact_property": "signing_address_model_assembly",
     "count_property": "exported_signing_address_bodies",
     "assembly_hash_property": "assembly_sha256",
-    "bodies": 66
+    "inventory_property": "signing_address_inventory",
+    "inventory": "live-signing-modifier",
+    "legacy_bodies": 66,
+    "bodies": 96
   },
   "commands": {
     "build_signing_address": "build-signing-address",

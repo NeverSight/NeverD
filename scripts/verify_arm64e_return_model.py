@@ -161,7 +161,7 @@ def build_signing_address(binary, output):
         guest = link_guest(staged / name, entry, driver, obj)
         write_json(staged / CONFIG["manifest"], {"return_profile": name, "guests": {name: guest},
                    "test_binary_sha256": digest(binary), profile["assembly_hash_property"]: digest(assembly),
-                   profile["count_property"]: profile["bodies"]})
+                   profile["inventory_property"]: profile["inventory"], profile["count_property"]: profile["bodies"]})
         staged.rename(output)
 
 
@@ -322,6 +322,16 @@ def run_native_ordered(guests, output):
     return first["exit_code"]
 
 
+def check_signing_address_inventory(manifest):
+    profile = CONFIG["signing_address"]
+    version = profile["inventory_property"]
+    if version in manifest and manifest[version] != profile["inventory"]:
+        raise ValueError(CONFIG["bad_inventory"])
+    count = profile["bodies"] if version in manifest else profile["legacy_bodies"]
+    if manifest.get(profile["count_property"]) != count:
+        raise ValueError(CONFIG["bad_inventory"])
+
+
 def run(model, guests, output, cursor=False, ordered=False, *, writeback=False):
     output.mkdir()
     version = subprocess.check_output([model, *CONFIG["version_flags"]], text=True, stderr=subprocess.STDOUT)
@@ -341,8 +351,7 @@ def run(model, guests, output, cursor=False, ordered=False, *, writeback=False):
                    manifest.get("return_profile") == CONFIG["signing_address"]["profile"])
     if publication:
         names = [CONFIG["signing_address"]["profile"]]
-        if manifest.get(CONFIG["signing_address"]["count_property"]) != CONFIG["signing_address"]["bodies"]:
-            raise ValueError(CONFIG["bad_inventory"])
+        check_signing_address_inventory(manifest)
     elif ordered:
         profile = manifest.get("ordered_profile", policy["quadword_profile"])
         names = [label for label, _, _ in ordered_routes(policy, profile)]

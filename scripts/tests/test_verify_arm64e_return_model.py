@@ -80,6 +80,18 @@ class NativeOrderedReportTests(unittest.TestCase):
 
 
 class ModelProfileTests(unittest.TestCase):
+    def test_signing_address_inventory_matches_the_exporting_generation(self):
+        policy = model.CONFIG["signing_address"]
+        version, count = policy["inventory_property"], policy["count_property"]
+        current = {version: policy["inventory"], count: policy["bodies"]}
+        legacy = {count: policy["legacy_bodies"]}
+        model.check_signing_address_inventory(current)
+        model.check_signing_address_inventory(legacy)
+        for invalid in ({}, {count: current[count]}, {**current, count: legacy[count]},
+                        {**legacy, version: None}, {**current, version: policy["profile"]}):
+            with self.subTest(manifest=invalid), self.assertRaisesRegex(ValueError, model.CONFIG["bad_inventory"]):
+                model.check_signing_address_inventory(invalid)
+
     def test_two_direct_backends_share_both_caller_optimizations(self):
         config = model.CONFIG
         previous = set(model.cases(config["previous_return_profile"]))

@@ -76,6 +76,7 @@ struct RegisterBody {
   bool HasSIMDData = false;
   std::vector<MachODataInCodeRange> RecoveredData;
   llvm::SmallVector<MachOLiftedSourceAddress, 0> SourceAddresses;
+  llvm::SmallVector<va_t, 0> RestoreBoundaries;
   llvm::SmallVector<va_t, 0> SourcePointerSlots;
   std::optional<ExceptionAddressRange> RetainedTail;
   bool HasDataPage = false;
@@ -566,7 +567,12 @@ bool emitLanguageTable(
   if (SymbolicSites) {
     // All instruction labels belong to this copy of the frame. A linker may
     // widen ADR after lifting, so express the bounds as differences in text.
-    const auto Label = [&](va_t PC) {
+    const auto Label = [&](va_t PC, bool Guard = true) {
+      if (Guard && llvm::binary_search(Body.RestoreBoundaries, PC)) {
+        OS << kRestoreBoundary
+           << (PC - Frame.CodeRange.Begin) / aarch64::kInsnSize;
+        return;
+      }
       if (PC == TextEnd) {
         OS << kTextEnd;
         return;
@@ -597,7 +603,7 @@ bool emitLanguageTable(
       Label(Site.GuardedRange.Begin);
       OS << '\n' << kLong;
       if (Site.LandingPadVA) {
-        Label(Site.LandingPadVA);
+        Label(Site.LandingPadVA, false);
         OS << '-' << kLocal << 0 << '+' << BaseBias;
       } else {
         OS << 0;
@@ -753,6 +759,11 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
 
   RegisterBody Body;
   std::optional<MachOAuthenticationReplacement> NextAuthentication;
+  struct RestoredAddress {
+    va_t PC, Target;
+    uint32_t SigningWord;
+  };
+  std::optional<RestoredAddress> Restored;
   if (ControlFlow && Source->Embedded.empty()) {
     Body.RetainedTail =
         addressedReturnTail(Decode, Image, *Source, *ControlFlow);
@@ -833,13 +844,18 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
   llvm::GlobalVariable *PageOffset = nullptr;
   auto Islands = Source->Embedded;
   auto Unreached = llvm::ArrayRef(Dispatch.UnreachedCode);
-  for (va_t PC = Start, NextPC; PC < End; PC = NextPC) {
-    NextPC = PC + Word;
+  const auto EmitRows = [&](va_t PC) {
     while (!Rows.empty() && Rows.front().CodeOffset == PC - Start) {
       if (!emitFrameRow(Rows.front(), OS))
-        return std::nullopt;
+        return false;
       Rows = Rows.drop_front();
     }
+    return true;
+  };
+  for (va_t PC = Start, NextPC; PC < End; PC = NextPC) {
+    NextPC = PC + Word;
+    if (!EmitRows(PC))
+      return std::nullopt;
     if (!Islands.empty() && Islands.front().Begin == PC) {
       const auto R = Islands.front();
       const char *Directive = nullptr;
@@ -1090,10 +1106,18 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
         return std::nullopt;
       const bool TableAddress = Dispatch.TableAddresses.contains(PC);
       const auto AuthProducer = NumericPage ? NextPC : PC;
-      const auto Sign = !OutsideCFG && !TableAddress
-                            ? machOSigningAddress(Decode, *Source, Start,
-                                                  AuthProducer, Target, Reg)
-                            : MachOSigningAddress{};
+      auto Sign = !OutsideCFG && !TableAddress
+                      ? machOSigningAddress(Decode, *Source, Start,
+                                            AuthProducer, Target, Reg)
+                      : MachOSigningAddress{};
+      if (Restored && Restored->PC == PC && Restored->Target == Target) {
+        Sign.Use = MachOSigningAddress::Observable;
+        Sign.InstalledSigner = Restored->SigningWord;
+        Restored.reset();
+      }
+      if (Sign.RestorePC)
+        Restored =
+            RestoredAddress{*Sign.RestorePC, Target, *Sign.InstalledSigner};
       const bool Moves =
           !NumericPage && !Rebased && !OutsideCFG &&
           (TableAddress || Sign.Use == MachOSigningAddress::Local);
@@ -1199,6 +1223,18 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
           NextAuthentication && NextAuthentication->Consumer.Instruction == PC;
       OS << kInstructionWord
          << (Replace ? NextAuthentication->Encoding : Encoding) << '\n';
+      if (Replace && NextAuthentication->Consumer.RestoreSource) {
+        // Fallthrough has already authenticated LR. Start the next unwind
+        // row here, but keep branches to the next instruction past the pair.
+        if (!EmitRows(NextPC))
+          return std::nullopt;
+        Body.RestoreBoundaries.push_back(NextPC);
+        const auto Reg = *NextAuthentication->Consumer.ModifierRegister;
+        const auto Name = cs_reg_name(Decode.getHandle(), AARCH64_REG_X0 + Reg);
+        OS << kRestoreBoundary << (NextPC - Start) / Word << kEndLabel
+           << kInstructionWord << (aarch64::kADRP_Op | Reg) << '\n'
+           << kRestoreAdd << Name << kSeparator << Name << kZeroAddressOffset;
+      }
       if (Replace)
         NextAuthentication.reset();
     } else if ((I.Id == AARCH64_INS_MOV || I.Id == AARCH64_INS_MOVZ) &&
@@ -1282,7 +1318,8 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     llvm::SmallVector<va_t> Insertions;
     for (const auto &Site : Sites)
       if (Site.insertsSigningModifier())
-        Insertions.push_back(Site.Authentication->Instruction);
+        Insertions.append(Site.Authentication->insertedWords(),
+                          Site.Authentication->Instruction);
     for (const auto &[From, To, Branch] : References) {
       const auto [Low, High] = std::minmax(From, To);
       const auto Inside = llvm::make_range(Before(Low), Before(High));

@@ -881,34 +881,45 @@ TEST(AArch64LiftedImage, ObservableSigningAddressesKeepBothIdentities) {
           kSigningAddressStore, kSigningPairStore, kSigningAddressBoth,
           kSigningAddressReturn, kSigningBeforeAuth, kSigningPagePair,
           kSigningForwardReturn, kSigningForwardStore, kBothIPLive,
-          kNoModifierRegister, kOtherModifierEntry}) {
+          kAllSigningScratchLive, kLiveModifierCopy, kLiveFallthrough,
+          kLivePage, kSigningReturnAliases, kOtherModifierEntry}) {
       SCOPED_TRACE(Use ? Use : kOriginal);
       SCOPED_TRACE(KeyB);
-      llvm::SmallVector<llvm::StringRef> Args{kCompiler, kTargetFlag, kTarget,
+      const bool Fallthrough = Use == kLiveFallthrough;
+      const auto *Compiler = Fallthrough ? kCxxCompiler : kCompiler;
+      llvm::SmallVector<llvm::StringRef> Args{Compiler, kTargetFlag, kTarget,
                                               kDylib};
       if (KeyB)
         Args.push_back(kSigningAddressKeyB);
       if (Use)
         Args.push_back(Use);
       const bool OtherEntry = Use == kOtherModifierEntry;
-      const bool ForwardReturn = Use == kSigningForwardReturn;
+      const bool ForwardReturn =
+          Use == kSigningForwardReturn || Use == kSigningReturnAliases;
       const bool IPPair = Use == kBothIPLive;
-      const bool NoScratch = Use == kNoModifierRegister;
-      const bool Refusal = OtherEntry || NoScratch;
+      const bool LiveCopy = Use == kLiveModifierCopy;
+      const bool LivePage = Use == kLivePage;
+      const bool AllLive =
+          Use == kAllSigningScratchLive || LiveCopy || Fallthrough || LivePage;
+      const bool Refusal = OtherEntry;
       const bool ForwardStore =
-          Use == kSigningForwardStore || IPPair || NoScratch;
+          Use == kSigningForwardStore || IPPair || AllLive;
       const bool Forward = ForwardReturn || ForwardStore;
       const bool AuthReturn = Use == kSigningAddressReturn || ForwardReturn;
       const bool Before = Use == kSigningBeforeAuth;
-      const bool Page = Use == kSigningPagePair;
+      const bool Page = Use == kSigningPagePair || LivePage;
+      if (Use == kSigningReturnAliases)
+        Args.push_back(kSigningForwardReturn);
       if (OtherEntry)
         Args.push_back(kSigningAddressStore);
-      if (Page)
+      if (Use == kSigningPagePair)
         Args.push_back(kSigningAddressBoth);
-      if (IPPair || NoScratch)
+      if (AllLive && Use != kAllSigningScratchLive)
+        Args.push_back(kAllSigningScratchLive);
+      if (IPPair || AllLive)
         Args.push_back(kSigningForwardStore);
       Args.append({Source, kOutput, Original});
-      ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Args), 0);
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(Compiler, Args), 0);
       auto Reader = Loader::create(BinaryFormat::MachO);
       auto Image = Reader->load(Original);
       ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
@@ -933,9 +944,10 @@ TEST(AArch64LiftedImage, ObservableSigningAddressesKeepBothIdentities) {
                                int64_t(Observable - Entry), unsigned(Returns),
                                unsigned(Stores),
                                unsigned(AuthReturn || Before || ForwardStore),
-                               unsigned(Before || ForwardStore))
+                               unsigned(Before || ForwardStore),
+                               unsigned(AllLive), unsigned(Fallthrough))
                      .str();
-        if (Page)
+        if (Page || AllLive)
           Bodies += llvm::formatv(kSigningModelPage, branch::A64PageBytes,
                                   Entry % branch::A64PageBytes)
                         .str();
@@ -945,11 +957,38 @@ TEST(AArch64LiftedImage, ObservableSigningAddressesKeepBothIdentities) {
                                   readLE<uint32_t>(Body->Bytes.data() + Offset))
                         .str();
       };
-      const unsigned SignOffset = (IPPair          ? kForwardIPPairSignerWords
-                                   : ForwardStore  ? kForwardStoreSignerWords
-                                   : ForwardReturn ? kForwardReturnSignerWords
-                                                   : unsigned(KeyB)) *
-                                  Word;
+      // The Apple-linked input determines the three instruction offsets; new
+      // instructions and data references are checked against it on each lift.
+      const auto *InputFrame = Image->ExceptionMetadata.findFunction(Owner);
+      ASSERT_NE(InputFrame, nullptr);
+      const auto InputBody =
+          machOLiftedSource(*Image, Owner, InputFrame->CodeRange.End);
+      ASSERT_TRUE(InputBody);
+      Decoder SourceDecode;
+      ASSERT_TRUE(SourceDecode.init(*Image));
+      std::optional<size_t> SourceSign, SourceAddress, SourceAuth;
+      for (size_t Offset = 0; Offset < InputBody->Bytes.size();
+           Offset += Word) {
+        DecodedInsn I{};
+        ASSERT_EQ(SourceDecode.decodeOne(InputBody->Bytes.data() + Offset, Word,
+                                         Owner + Offset, I),
+                  int(Word));
+        if (I.Id == (KeyB ? AARCH64_INS_PACIBSPPC : AARCH64_INS_PACIASPPC)) {
+          ASSERT_FALSE(SourceSign);
+          SourceSign = Offset;
+        } else if (I.Id == AARCH64_INS_ADR || I.Id == AARCH64_INS_ADRP) {
+          ASSERT_FALSE(SourceAddress);
+          SourceAddress = Offset;
+        } else if (I.Id ==
+                       (KeyB ? AARCH64_INS_AUTIBSPPC : AARCH64_INS_AUTIASPPC) ||
+                   I.Id ==
+                       (KeyB ? AARCH64_INS_RETABSPPC : AARCH64_INS_RETAASPPC)) {
+          ASSERT_FALSE(SourceAuth);
+          SourceAuth = Offset;
+        }
+      }
+      ASSERT_TRUE(SourceSign && SourceAddress && SourceAuth);
+      const auto SignOffset = *SourceSign;
       ASSERT_NO_FATAL_FAILURE(ExportBody(*Image, Owner, Owner + SignOffset));
       std::string Input = Original;
       for (auto Name : {kPublished, kRepublishedSigningImage}) {
@@ -988,17 +1027,17 @@ TEST(AArch64LiftedImage, ObservableSigningAddressesKeepBothIdentities) {
         ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
         Public = Image->findSymbol(kSignalTickSymbol);
         ASSERT_NE(Public, nullptr);
-        const va_t Sign = Owner + SignOffset + (Forward ? Word : 0);
+        const va_t Sign = Owner + SignOffset +
+                          (AllLive   ? 3 * Word
+                           : Forward ? Word
+                                     : 0);
         const va_t OriginalSign = Public->Addr + SignOffset;
         ASSERT_NE(OriginalSign, Sign);
-        const va_t AddressPC = Forward ? Owner + (IPPair         ? 3
-                                                  : ForwardStore ? 2
-                                                                 : 1) *
-                                                     Word
-                                       : Sign + Word;
-        const va_t AuthPC = AddressPC + Word * (Before            ? 3
-                                                : Page || Forward ? 2
-                                                                  : 1);
+        const va_t AddressPC = Owner + *SourceAddress;
+        const va_t AuthPC = Owner + *SourceAuth + (Forward ? Word : 0);
+        if (LivePage)
+          EXPECT_FALSE(aarch64::encodePCRelativeAddress(
+              aarch64::AddressInstruction::ADR, 0, AddressPC, OriginalSign));
         const auto *SignedWord = Image->readVA(Sign, Word);
         const auto *AddressBytes =
             Image->readVA(AddressPC, AuthPC - AddressPC + Word);
@@ -1041,7 +1080,9 @@ TEST(AArch64LiftedImage, ObservableSigningAddressesKeepBothIdentities) {
         ASSERT_EQ(D.op_count, 1u);
         if (Forward) {
           ASSERT_EQ(D.operands[0].type, AARCH64_OP_REG);
-          const auto Scratch = IPPair         ? AARCH64_REG_X10
+          const auto Scratch = LiveCopy       ? AARCH64_REG_X0
+                               : AllLive      ? AARCH64_REG_X15
+                               : IPPair       ? AARCH64_REG_X10
                                : ForwardStore ? AARCH64_REG_X17
                                               : AARCH64_REG_X16;
           EXPECT_EQ(D.operands[0].reg, Scratch);
@@ -1063,7 +1104,7 @@ TEST(AArch64LiftedImage, ObservableSigningAddressesKeepBothIdentities) {
         }
         const auto *Frame = Image->ExceptionMetadata.findFunction(Sign);
         ASSERT_NE(Frame, nullptr);
-        if (IPPair) {
+        if (IPPair || AllLive) {
           ASSERT_TRUE(Frame->Dwarf);
           EXPECT_TRUE(
               llvm::any_of(Frame->Dwarf->Instructions, [&](const auto &CFI) {
@@ -1071,6 +1112,37 @@ TEST(AArch64LiftedImage, ObservableSigningAddressesKeepBothIdentities) {
                        CFI.Register == kSigningFrameSameValueRegister &&
                        CFI.CodeOffset == AuthPC - Word - Owner;
               }));
+        }
+        if (AllLive) {
+          EXPECT_TRUE(
+              llvm::any_of(Frame->Dwarf->Instructions, [&](const auto &CFI) {
+                return CFI.Kind == CFIOpKind::Restore &&
+                       CFI.Register == kSigningFrameSameValueRegister &&
+                       CFI.CodeOffset == AuthPC + Word - Owner;
+              }));
+          const auto *Restore = Image->readVA(AuthPC + Word, 2 * Word);
+          ASSERT_NE(Restore, nullptr);
+          auto Base = aarch64::decodePCRelativeAddress(
+              readLE<uint32_t>(Restore), AuthPC + Word);
+          ASSERT_TRUE(Base);
+          ASSERT_EQ(
+              Decode.decodeOne(Restore + Word, Word, AuthPC + 2 * Word, I),
+              int(Word));
+          ASSERT_EQ(I.Id, AARCH64_INS_ADD);
+          const auto &Add = I.Raw->detail->aarch64;
+          const auto Reg = LiveCopy ? AARCH64_REG_X0 : AARCH64_REG_X15;
+          ASSERT_EQ(Add.operands[0].reg, Reg);
+          ASSERT_EQ(Add.operands[1].reg, Reg);
+          EXPECT_EQ(*Base + Add.operands[2].imm, OriginalSign);
+        }
+        if (Fallthrough) {
+          ASSERT_TRUE(Frame->Itanium);
+          const auto &Sites = Frame->Itanium->CallSites;
+          ASSERT_EQ(Sites.size(), 2u);
+          EXPECT_EQ(Sites[0].GuardedRange.End, AuthPC + Word);
+          EXPECT_EQ(Sites[1].GuardedRange.Begin, AuthPC + Word);
+          EXPECT_EQ(Sites[0].LandingPadVA, Sites[1].LandingPadVA);
+          EXPECT_GT(Sites[1].LandingPadVA, AuthPC + Word);
         }
         auto Rows = recoverDarwinAArch64Unwind(*Image, *Frame);
         ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());

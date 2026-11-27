@@ -2738,11 +2738,22 @@ in the installed image. This also preserves the row if an unwind starts
 between the modifier setup and AUT. The test keeps X16 and X17 live and
 checks stores through both registers after authentication.
 
-A rewritten consumer must have a single reaching definition. The publisher
-declines an alternate entry that can supply a different modifier and a
-forward case in which all eligible scratch registers are live. On a second
-lift it follows the original entry's forwarding chain and checks the
-retained signing word even when the old unwind range is one instruction.
+When every scratch register is live after a forward authentication, the
+publisher sets the original modifier register to the installed signing PC for
+the AUT. On fallthrough, an ADRP/ADD pair restores the caller-visible address
+in that same register. This also works when the address already went through a
+copy or store and when the original signer is outside ADR range. A direct
+branch or landing pad targeting the following original instruction lands past
+the pair. The next DWARF row and LSDA guard boundary take effect at the first
+restore instruction because LR is already authenticated there.
+
+At an authenticated return, a scratch register containing a copy of the address
+can supply the modifier if its value is dead at the return. The original value
+in X0 still reaches the caller. The publisher requires a single reaching
+definition for a rewritten consumer and rejects an alternate entry that can
+supply a different modifier. On a second lift it follows the original entry's
+forwarding chain, verifies the retained signing word and checks both register
+operands and the target of the restore pair.
 
 The unwind analysis also recognizes a full-width literal load from an
 immutable, dyld-rebased slot as a possible signing address. Recovery checks

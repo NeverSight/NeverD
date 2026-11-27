@@ -35,6 +35,8 @@ struct MachOSigningAddress {
   std::optional<MachOAuthenticationReplacement> Authentication;
   /// Retained instruction identity in a previously published image.
   std::optional<uint32_t> InstalledSigner;
+  /// A following published address pair restores the authenticated register.
+  std::optional<va_t> RestorePC;
 };
 
 /// Classify the address materialized at PC. A nonempty sorted Consumers list
@@ -44,6 +46,10 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
                                         va_t Start, va_t PC, va_t Target,
                                         aarch64_reg Register,
                                         llvm::ArrayRef<va_t> Consumers = {});
+
+/// Check both register operands and the address of a published restore pair.
+bool machORestoresSigningAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes,
+                                 va_t PC, unsigned Register, va_t Target);
 
 inline std::optional<AArch64PAuthLROperation>
 machOPCSigningInstruction(unsigned Id) {
