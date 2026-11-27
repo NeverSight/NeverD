@@ -13,7 +13,12 @@
 
 #include "ResourceLimits.h"
 
+#if NEVERD_USE_SIMDJSON
+#include "simdjson.h"
+#endif
+
 #include <charconv>
+#include <optional>
 
 namespace neverd::worker {
 
@@ -178,6 +183,79 @@ void JsonWriter::value(const Json &value) {
 void JsonWriter::fragment(const EncodedJson &piece) {
   separate();
   text_ += piece.text();
+}
+
+#if NEVERD_USE_SIMDJSON
+namespace {
+// The SDK writes object keys in order. Emit that order directly and leave
+// unordered keys, duplicates and decimal conversion to the normal decoder.
+bool writeOrderedReport(simdjson::dom::element V, JsonWriter &Out) {
+  using Type = simdjson::dom::element_type;
+  switch (V.type()) {
+  case Type::OBJECT: {
+    Out.beginObject();
+    std::optional<std::string_view> Previous;
+    const auto Object = V.get_object().value_unsafe();
+    for (const auto Field : Object) {
+      if (Previous && Field.key <= *Previous)
+        return false;
+      Previous = Field.key;
+      Out.key(Field.key);
+      if (!writeOrderedReport(Field.value, Out))
+        return false;
+    }
+    Out.endObject();
+    return true;
+  }
+  case Type::ARRAY: {
+    Out.beginArray();
+    const auto Array = V.get_array().value_unsafe();
+    for (auto Child : Array)
+      if (!writeOrderedReport(Child, Out))
+        return false;
+    Out.endArray();
+    return true;
+  }
+  case Type::STRING:
+    Out.string(V.get_string().value_unsafe());
+    return true;
+  case Type::INT64:
+    Out.number(V.get_int64().value_unsafe());
+    return true;
+  case Type::UINT64:
+    Out.number(V.get_uint64().value_unsafe());
+    return true;
+  case Type::BOOL:
+    Out.boolean(V.get_bool().value_unsafe());
+    return true;
+  case Type::NULL_VALUE:
+    Out.value(nullptr);
+    return true;
+  case Type::BIGINT:
+  case Type::DOUBLE:
+    return false;
+  }
+  return false;
+}
+} // namespace
+#endif
+
+std::optional<EncodedScriptReport>
+tryEncodeScriptReport(std::string_view Text) {
+#if NEVERD_USE_SIMDJSON
+  transport::checkJsonFrameBounds(Text, MaxFrameBytes);
+  JsonWriter Out;
+  std::string Status;
+  if (transport::visitSIMDDocument(Text, [&](simdjson::dom::element Root) {
+        std::string_view Value;
+        if (Root["status"].get(Value) || !writeOrderedReport(Root, Out))
+          return false;
+        Status = Value;
+        return true;
+      }))
+    return EncodedScriptReport{std::move(Status), EncodedJson(std::move(Out))};
+#endif
+  return std::nullopt;
 }
 
 EncodedJson::EncodedJson(const Json &value)

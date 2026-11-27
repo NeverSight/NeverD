@@ -65,6 +65,12 @@ bool canBindMachOLanguageTable(const BinaryImage &Image,
 bool needsMachONativeRegisterBody(const MedFunc &Function,
                                   const BinaryImage &Image, const LowFunc *CFG);
 
+/// Sorted FunctionStarts bound source storage when a published image has
+/// forwarding entries beyond the original Mach-O function starts.
+bool needsMachONativeRegisterBody(const MedFunc &Function,
+                                  const BinaryImage &Image, const LowFunc *CFG,
+                                  llvm::ArrayRef<va_t> FunctionStarts);
+
 /// Lower audited patch-mode entries that use Darwin variadic cursors, indexed
 /// SP accesses, ordinary indexed/writeback memory, scalar FP/NEON data
 /// operations, compact FP/frameless saved frames (including PAuth_LR FP
@@ -82,6 +88,13 @@ lowerMachORegisterResults(llvm::Module &Module, const BinaryImage &Image,
 
 enum class MachOAddressForm { Single, PagePair, Expanded };
 
+/// Direct entries selecting one copy of an authenticator. The first copy also
+/// serves the ordinary fallthrough edge.
+struct MachOSigningRoute {
+  va_t Signer;
+  llvm::SmallVector<va_t, 1> Branches;
+};
+
 /// An AUT or authenticated return which must consume the installed signing PC.
 struct MachOSigningConsumer {
   va_t Instruction;
@@ -93,7 +106,19 @@ struct MachOSigningConsumer {
   /// Each predecessor sets the register before its own numeric address.
   bool PrepareAtSource = false;
 
+  /// Each additional route repeats the shared prefix and authenticates with
+  /// its own signing PC. Only a fallthrough AUT needs a branch to the join.
+  llvm::SmallVector<MachOSigningRoute, 0> Routes{};
+  bool Returns = false;
+  unsigned PrefixWords = 0;
+
+  unsigned routeWords() const { return PrefixWords + (Returns ? 1 : 2); }
+  unsigned routeEntry(unsigned Index) const {
+    return Index * routeWords() - PrefixWords;
+  }
   unsigned insertedWords() const {
+    if (!Routes.empty())
+      return (Routes.size() - 1) * routeWords();
     return ModifierRegister ? 1 + restoreWords() : 0;
   }
   unsigned restoreWords() const { return RestoreSource ? 2 : 0; }
@@ -111,13 +136,13 @@ struct MachOLiftedSourceAddress {
   bool CanExpand = true;
   std::optional<MachOSigningConsumer> Authentication;
 
-  va_t modifierSite() const {
+  va_t signingExpansionSite() const {
     return Authentication->PrepareAtSource ? Instruction
                                            : Authentication->Instruction;
   }
 
-  bool insertsSigningModifier() const {
-    return Authentication && Authentication->ModifierRegister.has_value();
+  bool expandsAuthentication() const {
+    return Authentication && Authentication->insertedWords() != 0;
   }
 };
 

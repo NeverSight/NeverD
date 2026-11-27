@@ -4155,7 +4155,7 @@ DBI cannot be newer than Info. GUID and effective age must still match the PE.
 `PDBSectionIdentity.h` shares the native section checks: only a trailing
 resource/relocation suffix permits layout changes, and names and permissions
 must still agree. The name hint keeps its indexed GSI bucket lookup and does
-not construct a full debug context. NB10 retains its separate reader.
+not construct a full debug context. NB10 retains its separate reader. For Windows x64 and ARM64, a native PDB can authenticate an individual `void` or pointer return from an ordinary CodeView procedure. The scan requires an exact entry and a single executable contribution covering the whole procedure. Folded contributions and untranslated OMAP addresses provide no return declaration.
 
 `PDBDebugContext::inspect` owns manual PE/PDB validation. A missing CodeView
 identity allows machine- and section-checked inspection without changing the
@@ -11647,7 +11647,19 @@ predecessor's operations followed by its own, for at most
 `kMaxJumpTableGuardFlagSearchBlocks` blocks. This only proposes syntax: every
 definition unfolded there keeps its all-path definition query, so a second
 path into the block refuses the guard, and an index written after the compare
-is no longer the compared value.
+is no longer the compared value. A compare of a narrower low lane of the index
+register that the block never writes walks on the same way to the lane's
+definition, whose extension ties the lane to the index. sqlite's
+`sqlite3VdbeRecordCompareWithSkip` loads a byte with `movzbl`, bounds it with
+`cmp $9, %eax; ja`, and three blocks later with `cmp $6, %al; ja`, then
+indexes with `%rax`. Without that definition the lane was an unknown leaf, the
+dword guard admitted ten slots, and the dispatch stayed unresolved. The walk
+serves only a guard whose branch reaches the index's block, directly or by
+falling through blocks that only it enters and that leave the index register
+alone, and it keeps the blocks it walked only once the definition is in view.
+libzstd's sequence decoder also compares `%dl` after a shift, long before a
+dispatch that indexes with `%rdx`: that compare keeps the syntax it had,
+since unfolding it into the shift makes a condition the proof cannot use.
 The address-role proof takes a table load's scale from the role's own index
 occurrence first. An AArch64 extended-register operand widens the index into
 a temporary the same instruction scales. An x86 32-bit write widens it into
@@ -12540,6 +12552,29 @@ identity or source ABI. Successful classification emits an explicit
 `INDIR_CALL + RETURN` pair; HighIR cannot infer another tail call from a
 successorless `INDIR_BR`. An unresolved transfer without a usable switch
 remains an explicit failure path.
+
+An x86-64 candidate has no link register to restore: its caller's CALL left
+the return address on the stack, so `restoredX64IndirectTailFrames`
+(`X86/IndirectTailFrameX86.cpp`) requires every reaching path to leave RSP at
+its incoming value. The proof follows what each register and temporary
+derives from the incoming RSP: pushes, pops, constant adjustments, LEAVE and
+copies through RBP or a temporary carry an exact offset, and any other
+operation of a derived value, a partial or guarded write and a disagreeing
+join keep the derivation and lose the offset. A call keeps RSP and the
+registers both x86-64 conventions preserve. Landing pads and other roots
+enter at an unknown offset. An unknown or nonzero offset keeps the indirect
+branch. A value read from memory, an argument or a call's result derives
+from nothing here, so a jump whose RSP derives from nothing on every path
+resumes saved state on another stack, as `gogo<>`, longjmp and a fiber switch
+do, and stays a tail call, as does PLT0's jump through the DT_PLTGOT slot the
+dynamic linker fills with its lazy-binding resolver
+(`RuntimeCallablePointerSlotKind::ELFLazyResolver`), which receives the word
+PLT0 pushes. Before the condition, a jump inside its frame through a
+relative table the resolver could not bound became a call of its case labels
+in a stripped library, which no relocation names the table in: liblzma's
+encoder, libjq, gawk, sqlite3Parser and bash each had one. A frameless
+function's unresolved local dispatch still depends on the resolver's table
+identity.
 
 The CLI parses commands in `tools/neverd`, creates a `neverd_session_t`, and
 calls the public API in `include/neverd/sdk/NeverDCAPI.h`. Engine state lives in
@@ -19483,7 +19518,7 @@ for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
 
 ### Experimental RISC-V and PowerPC ELF analysis
 
-The ELF loader admits little-endian RV32I/ILP32 and RV64I/LP64, classic PPC32
+The ELF loader admits little-endian RISC-V ILP32, LP64, ILP32D and LP64D, classic PPC32
 System V, and PPC64 ELFv1 and ELFv2 in either byte order. On PPC32 the runtime
 jump table identifies the secure PLT's pointer slots or the classic BSS-PLT's
 executable entries. For a secure PIC stub, MedIR binds the call to a slot
@@ -19498,7 +19533,7 @@ reaching r2 and carries its saved value through the return edge. For ELFv2,
 reads the global prologue for its TOC and associates linkage stubs with
 eight-byte jump slots. MedIR checks the register required at the selected
 entry and tracks the native save and reload at 24(r1).
-RISC-V extension evidence belongs to the image. Decode,
+RISC-V extension evidence belongs to the image. The double-float ABI uses `fa0` through `fa7` for named floating arguments and `fa0`/`fa1` for results. Source placement also handles mixed scalar records and the integer convention for unnamed arguments. Decode,
 lift and function discovery share the physical instruction size and
 control-transfer semantics.
 Both families feed the existing LowIR, ABI recovery, HighC and LLVM backends.

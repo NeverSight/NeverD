@@ -29,6 +29,8 @@ def profiles():
         )
     for name, abi in (("riscv32", "ilp32"), ("riscv64", "lp64")):
         yield name, name, ["-march=rv" + name[-2:] + "i", "-mabi=" + abi], None
+        yield name + "-" + abi + "d", name, ["-march=rv" + name[-2:] + "gc",
+                                              "-mabi=" + abi + "d"], None
 
 
 def main():
@@ -50,7 +52,8 @@ def main():
             compiler = [args.clang, "--target=" + target + "-unknown-linux-gnu",
                         "-O1", "-g0", "-ffreestanding", "-fno-stack-protector"]
             static = [*compiler, *flags, "-fno-pic", "-fno-pie", "-c"]
-            subprocess.run([*static, sources / "frame.c", "-o", obj], check=True)
+            frame = "hard_float.c" if name.endswith(("ilp32d", "lp64d")) else "frame.c"
+            subprocess.run([*static, sources / frame, "-o", obj], check=True)
             linker = [args.ppc64_ld, "-m", emulation] if emulation else [args.lld]
             image = args.output / name
             subprocess.run([*linker, *linker_flags, "-static", "-e", "first",

@@ -152,13 +152,14 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
     break;
   case Arch::RISCV32:
   case Arch::RISCV64:
+  case Arch::RISCV32D:
+  case Arch::RISCV64D:
     if (Mode != InstructionMode::Default)
       return false;
     CsArch = CS_ARCH_RISCV;
-    CsMode =
-        cs_mode((TheArch == Arch::RISCV64 ? CS_MODE_RISCV64 : CS_MODE_RISCV32) |
-                CS_MODE_RISCV_C | CS_MODE_RISCV_A | CS_MODE_RISCV_ZBA |
-                CS_MODE_RISCV_ZBB | CS_MODE_RISCV_ZBS);
+    CsMode = cs_mode((isRISCV64(TheArch) ? CS_MODE_RISCV64 : CS_MODE_RISCV32) |
+                     CS_MODE_RISCV_FD | CS_MODE_RISCV_C | CS_MODE_RISCV_A |
+                     CS_MODE_RISCV_ZBA | CS_MODE_RISCV_ZBB | CS_MODE_RISCV_ZBS);
     break;
   case Arch::PPC32:
   case Arch::PPC32LE:
@@ -391,7 +392,7 @@ Decoder::decodeOtherPhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
     const unsigned Alignment = RISCV.hasCompressed() ? 2 : 4;
     if ((Addr & (Alignment - 1)) || Len < 2 ||
         (!RISCV.hasCompressed() && (Bytes[0] & 3) != 3) ||
-        (TargetArch == Arch::RISCV32 && Addr > UINT32_MAX))
+        (isRISCV32(TargetArch) && Addr > UINT32_MAX))
       return false;
   } else if (isPowerPC(TargetArch) &&
              ((Addr & 3) || (!isPowerPC64(TargetArch) && Addr > UINT32_MAX))) {

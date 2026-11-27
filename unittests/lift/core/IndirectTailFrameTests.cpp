@@ -20,6 +20,26 @@
 
 namespace {
 
+neverd::LowFunc build(const neverd::BinaryImage &Image,
+                      const std::string &Name) {
+  const auto *Function = Image.findSymbol(Name);
+  EXPECT_NE(Function, nullptr);
+  if (!Function)
+    return {};
+  neverd::Decoder Decoder;
+  EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+}
+
+bool hasOpcode(const neverd::LowFunc &Function, neverd::NdOp Opcode) {
+  for (const auto &Block : Function.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Opcode == Opcode)
+        return true;
+  return false;
+}
+
 class IndirectTailFrame : public NeverDLiftTest {
 protected:
   void SetUp() override {
@@ -38,27 +58,72 @@ protected:
     EXPECT_TRUE(Built.ok()) << Built.err;
     return Object;
   }
+};
 
-  static neverd::LowFunc build(const neverd::BinaryImage &Image,
-                               const std::string &Name) {
-    const auto *Function = Image.findSymbol(Name);
-    EXPECT_NE(Function, nullptr);
-    if (!Function)
-      return {};
-    neverd::Decoder Decoder;
-    EXPECT_TRUE(Decoder.init(Image.Arch, Image.Mode));
-    neverd::CFGBuilder Builder;
-    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
-  }
-
-  static bool hasOpcode(const neverd::LowFunc &Function, neverd::NdOp Opcode) {
-    for (const auto &Block : Function.Blocks)
-      for (const auto &Op : Block.Ops)
-        if (Op.Opcode == Opcode)
-          return true;
-    return false;
+// The x86-64 fixture is linked and stripped at build time.
+class X64IndirectTailFrame : public NeverDLiftTest {
+protected:
+  static fs::path linkedFixture() {
+    return fs::path(TEST_OBJ_DIR) / "test_indirect_tail_frame_x64.so";
   }
 };
+
+// An x86-64 indirect jump is a tail call only when every path to it leaves
+// RSP where the caller's CALL left the return address: after pops, LEAVE
+// (also undoing a realignment), an added-back frame, `lea -8(%rbp), %rsp`,
+// a balanced diamond or loop, or with nothing pushed.  One whose RSP derives
+// from nothing of its incoming stack pointer runs on another stack: a fiber
+// switch to an argument's stack, or a resumption that loads RSP from memory.
+TEST_F(X64IndirectTailFrame, RestoredStackPointerKeepsTheTailCall) {
+  auto Image = neverd::loadBinary(linkedFixture().string());
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  for (const char *Name : {"tf_leaf", "tf_pop_frame", "tf_leave", "tf_aligned",
+                           "tf_add_back", "tf_diamond", "tf_lea_restore",
+                           "tf_loop_balanced", "tf_switch", "tf_resume"}) {
+    SCOPED_TRACE(Name);
+    const auto Low = build(*Image, Name);
+    EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+    EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
+    EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::RETURN));
+  }
+}
+
+// PLT0 pushes the lazy-binding resolver's argument and jumps through the
+// DT_PLTGOT slot the dynamic linker fills with that resolver, so its jump
+// stays a tail call although RSP sits a word below its incoming value.
+TEST_F(X64IndirectTailFrame, LazyBindingResolverJumpKeepsTheTailCall) {
+  auto Image = neverd::loadBinary(linkedFixture().string());
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  const neverd::Section *Plt = nullptr;
+  for (const neverd::Section &Section : Image->Sections)
+    if (Section.Name == ".plt")
+      Plt = &Section;
+  ASSERT_NE(Plt, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image->Arch, Image->Mode));
+  neverd::CFGBuilder Builder;
+  const auto Low = Builder.build(*Image, Decoder, Plt->VA, "plt0");
+  EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::RETURN));
+}
+
+// A live, disagreeing or unknown frame keeps the jump an unresolved branch:
+// its target would return to whatever the frame left on the stack.  No
+// relocation names tf_live_table's table in the stripped library, so only its
+// frame keeps the case labels from being called as functions.
+TEST_F(X64IndirectTailFrame, LiveOrUnknownStackPointerKeepsTheBranch) {
+  auto Image = neverd::loadBinary(linkedFixture().string());
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  for (const char *Name :
+       {"tf_live", "tf_live_table", "tf_join", "tf_aligned_lost", "tf_dynamic",
+        "tf_frame_lost", "tf_loop_push"}) {
+    SCOPED_TRACE(Name);
+    const auto Low = build(*Image, Name);
+    EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+    EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  }
+}
 
 TEST_F(IndirectTailFrame, ActiveOrUnknownTailFrameRetainsItsIndirectBranch) {
   auto Image = neverd::loadBinary(compileTailFrameFixture().string());

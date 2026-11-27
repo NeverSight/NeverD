@@ -3569,6 +3569,7 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_lane_entry_paths.s
   x86_64/test_jumptable_reload_cursor.s
   x86_64/test_jumptable_flags_carry.s
+  x86_64/test_jumptable_lane_carry.s
   x86_64/test_jumptable_scale_after_extend.s
   x86_64/test_jumptable_alias_share.s
   x86_64/test_jumptable_guard_session.s
@@ -4963,6 +4964,28 @@ if(LLD_EXEC)
     list(APPEND ELF_EXECUTABLES ${entry_like_obj} ${entry_like_so}
                                 ${entry_like_stripped})
   endforeach()
+
+  # x86-64 indirect jumps with restored, live and unknown stack frames,
+  # linked and stripped so no relocation names the table one of them reads.
+  set(tail_frame_x64_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_indirect_tail_frame_x64.s")
+  set(tail_frame_x64_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_indirect_tail_frame_x64.o")
+  set(tail_frame_x64_so
+      "${CMAKE_CURRENT_BINARY_DIR}/test_indirect_tail_frame_x64.so")
+  add_custom_command(
+    OUTPUT ${tail_frame_x64_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -c ${tail_frame_x64_src}
+            -o ${tail_frame_x64_obj}
+    DEPENDS ${tail_frame_x64_src}
+    COMMENT "Compiling x86-64 indirect tail frame fixture")
+  add_custom_command(
+    OUTPUT ${tail_frame_x64_so}
+    COMMAND ${LLD_EXEC} -shared --eh-frame-hdr -s -o ${tail_frame_x64_so}
+            ${tail_frame_x64_obj}
+    DEPENDS ${tail_frame_x64_obj}
+    COMMENT "Linking x86-64 indirect tail frame fixture")
+  list(APPEND ELF_EXECUTABLES ${tail_frame_x64_obj} ${tail_frame_x64_so})
 
   # A state machine whose first state is a constant, linked so its table holds
   # plain offsets: exact scalar recovery first takes the dispatch as a direct

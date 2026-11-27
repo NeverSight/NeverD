@@ -106,8 +106,8 @@ elf-arm64: $(BUILD)/safety_cases_elf_arm64.o \
 # companion together so a missing or stale dSYM cannot survive unnoticed.
 # Build the dSYM before removing local image symbols: DWARF keeps the hidden
 # wrapper identities, while only genuine external definitions remain exports.
-# Suppress ld's randomized LC_UUID so the checked-in image and DWARF reproduce
-# byte-for-byte; the companion is paired by its exact adjacent bundle name.
+# Derive the build UUID from the linked contents. The reader can then match
+# the adjacent dSYM to this image before using its return declarations.
 macho-x64: $(SRC) $(INTERPROC_SRC) $(INTERPROC_LEAF_SRC) | $(OUT) $(BUILD)
 	$(DARWIN_CLANG) -arch x86_64 $(CFLAGS) $(REPRO_DEBUG) -c $(SRC) \
 	  -o $(BUILD)/safety_cases_macho_x64.o
@@ -118,7 +118,7 @@ macho-x64: $(SRC) $(INTERPROC_SRC) $(INTERPROC_LEAF_SRC) | $(OUT) $(BUILD)
 	$(DARWIN_CLANG) -arch x86_64 $(BUILD)/safety_cases_macho_x64.o \
 	  $(BUILD)/interproc_cases_macho_x64.o \
 	  $(BUILD)/interproc_leaves_macho_x64.o \
-	  -Wl,-no_uuid \
+	  -Wl,-reproducible,-oso_prefix,. \
 	  -Wl,-map,$(OUT)/safety_cases_macho_x64.map \
 	  -o $(OUT)/safety_cases_macho_x64
 	$(DSYMUTIL) $(OUT)/safety_cases_macho_x64 \
@@ -135,7 +135,7 @@ macho-arm64: $(SRC) $(INTERPROC_SRC) $(INTERPROC_LEAF_SRC) | $(OUT) $(BUILD)
 	$(DARWIN_CLANG) -arch arm64 $(BUILD)/safety_cases_macho_arm64.o \
 	  $(BUILD)/interproc_cases_macho_arm64.o \
 	  $(BUILD)/interproc_leaves_macho_arm64.o \
-	  -Wl,-no_uuid \
+	  -Wl,-reproducible,-oso_prefix,. \
 	  -Wl,-map,$(OUT)/safety_cases_macho_arm64.map \
 	  -o $(OUT)/safety_cases_macho_arm64
 	$(DSYMUTIL) $(OUT)/safety_cases_macho_arm64 \

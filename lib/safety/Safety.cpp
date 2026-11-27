@@ -109,8 +109,13 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
     if (!Incomplete)
       continue;
     BudgetHit = Audit.Disposition == Disposition::SkippedLimit;
-    return "incomplete safety lift at 0x" + llvm::utohexstr(Audit.Entry) +
-           " (" + pipelineFunctionDispositionName(Audit.Disposition) + ")";
+    std::string Error =
+        "incomplete safety lift at 0x" + llvm::utohexstr(Audit.Entry) + " (" +
+        pipelineFunctionDispositionName(Audit.Disposition) + ")";
+    if (Audit.Disposition == Disposition::MedIRFailed &&
+        !Audit.Diagnostic.empty())
+      Error += " " + llvm::json::fixUTF8(Audit.Diagnostic);
+    return Error;
   }
   std::set<va_t> LowEntries;
   for (const LowFunc &F : Result.LowFuncs) {

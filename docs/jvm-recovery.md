@@ -40,7 +40,7 @@ The Java renderer handles qualified expressions, field effects, constructors, st
 
 A `reconstructed_source` row contains generated Java for one method. An `extracted_source` row contains the original attached text. Abstract and native methods have declaration metadata. A `disassembly_only` row can also have typed IR. A component or job can report `partial_reconstruction`, `malformed`, `budget_exceeded`, `unsupported` or `cancelled`, with a reason and input offset where available. Kotlin annotations retain their own metadata version, kind and available values. Their interpretation follows the [Kotlin metadata documentation](https://kotlinlang.org/docs/metadata-jvm.html).
 
-In the workbench, open **File → Inspect JVM classes and JARs**, select a release and inspect the inventory. Choose a physical member and a raw method key to analyze. The tabs show Java, bytecode, typed IR and artifact evidence. Selecting an instruction locates its source line. Selecting a source line highlights its mapped instructions. Copy operates on the active tab. View and report exports create a new file.
+In the workbench, open **File → Inspect JVM classes and JARs**, select a release and inspect the inventory. Choose a physical member and a raw method key to analyze. The tabs show Java, bytecode, typed IR and artifact evidence. The workbench formats each detail tab the first time you open it for a selection. A full report export includes data from unopened tabs. Selecting an instruction locates its source line. Selecting a source line highlights its mapped instructions. Copy operates on the active tab. View and report exports create a new file.
 
 ## SDK, limits and qualification
 

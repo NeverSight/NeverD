@@ -881,14 +881,20 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
     Use Behavior;
   };
   constexpr Case Cases[] = {
-      {kJoinCommon, Common},     {kJoinDistinct, Distinct},
-      {kJoinCopyPage, Distinct}, {kJoinLocal, Local},
-      {kJoinReturn, Returns},    {kJoinScratch, Distinct},
-      {kJoinUnknown, Refuse},    {kJoinCrossed, Refuse},
-      {kJoinSwapped, Refuse},    {kJoinOverwrite, Refuse},
-      {kJoinClobber, Refuse},    {kJoinWrongKey, Refuse}};
+      {kJoinCommon, Common},           {kJoinDistinct, Distinct},
+      {kJoinCopyPage, Distinct},       {kJoinLocal, Local},
+      {kJoinReturn, Returns},          {kJoinScratch, Distinct},
+      {kJoinPressureStore, Distinct},  {kJoinPressureReturn, Returns},
+      {kJoinPressurePrefix, Distinct}, {kJoinPressureConflict, Refuse},
+      {kJoinPressureScope, Refuse},    {kJoinUnknown, Refuse},
+      {kJoinCrossed, Refuse},          {kJoinSwapped, Refuse},
+      {kJoinOverwrite, Refuse},        {kJoinClobber, Refuse},
+      {kJoinWrongKey, Refuse}};
   for (bool KeyB : {false, true})
     for (auto [Flag, Behavior] : Cases) {
+      const bool Pressure = Flag == kJoinPressureStore ||
+                            Flag == kJoinPressureReturn ||
+                            Flag == kJoinPressurePrefix;
       SCOPED_TRACE(Flag);
       SCOPED_TRACE(KeyB);
       std::string Input = (Root / kOriginal).string();
@@ -913,7 +919,8 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
         Decoder Decode;
         ASSERT_TRUE(Decode.init(*Image));
         llvm::SmallVector<va_t, 2> Signs;
-        std::optional<va_t> Auth;
+        llvm::SmallVector<va_t, 2> Auths;
+        const bool Split = Pressure && !Original.empty();
         for (size_t Offset = 0; Offset < Body->Bytes.size(); Offset += Word) {
           DecodedInsn I{};
           ASSERT_EQ(Decode.decodeOne(Body->Bytes.data() + Offset, Word,
@@ -923,11 +930,15 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
             Signs.push_back(Owner + Offset);
           if (I.Id == (KeyB ? AARCH64_INS_AUTIBSPPC : AARCH64_INS_AUTIASPPC) ||
               I.Id == (KeyB ? AARCH64_INS_RETABSPPC : AARCH64_INS_RETAASPPC)) {
-            ASSERT_FALSE(Auth);
-            Auth = Owner + Offset;
+            ASSERT_NE(I.Raw, nullptr);
+            ASSERT_NE(I.Raw->detail, nullptr);
+            if (Split)
+              EXPECT_EQ(I.Raw->detail->aarch64.operands[0].type,
+                        AARCH64_OP_IMM);
+            Auths.push_back(Owner + Offset);
           }
         }
-        ASSERT_TRUE(Auth);
+        ASSERT_EQ(Auths.size(), Split ? 2u : 1u);
         ASSERT_EQ(Signs.size(), Behavior == Common ? 1u : 2u);
         if (Original.empty())
           Original = Signs;
@@ -942,46 +953,66 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
           ++VerifiedRows;
         }
         const auto Range = Frame->CodeRange;
-        const auto &Before = aarch64UnwindRowAt(*Rows, *Auth - Range.Begin);
-        if (Signs.size() == 1) {
-          ASSERT_TRUE(Before.Signing.State);
-          EXPECT_EQ(Before.Signing.State->SigningPC, Signs.front());
-        } else {
-          EXPECT_EQ(Before.Signing.Status,
-                    dwarf_eh::AArch64RAQueryStatus::Unknown);
-          ASSERT_TRUE(Before.LiveSigningModifier);
-          EXPECT_EQ(Before.LiveSigningModifier->SigningPCs, Signs);
-          std::array<va_t, aarch64_unwind::kRegisters> GPRs{};
-          const auto R = Before.LiveSigningModifier->Register;
-          ASSERT_LT(R, GPRs.size());
-          EXPECT_FALSE(
-              prepareDarwinArm64eSystemCaller(Before, Range, Range.End));
-          for (va_t Sign : Signs) {
-            GPRs[R] = Range.End + (Sign - Range.Begin);
-            auto Plan =
-                prepareDarwinArm64eSystemCaller(Before, Range, Range.End, GPRs);
+        llvm::SmallVector<va_t, 2> Selected;
+        for (va_t Auth : Auths) {
+          const auto &Before = aarch64UnwindRowAt(*Rows, Auth - Range.Begin);
+          if (Split) {
+            ASSERT_TRUE(Before.Signing.State);
+            ASSERT_TRUE(Before.Signing.State->SigningPC);
+            const auto Signer = *Before.Signing.State->SigningPC;
+            Selected.push_back(Signer);
+            const auto Plan =
+                prepareDarwinArm64eSystemCaller(Before, Range, Range.End);
             ASSERT_TRUE(Plan);
-            EXPECT_EQ(Plan->Frame.SigningPC, GPRs[R]);
+            EXPECT_EQ(Plan->Frame.SigningPC,
+                      Range.End + (Signer - Range.Begin));
             EXPECT_EQ(Plan->Frame.Signing, KeyB ? NDArm64eSignedIBWithCFAPC
                                                 : NDArm64eSignedIAWithCFAPC);
-            ++ResolvedPCs;
+          } else if (Signs.size() == 1) {
+            ASSERT_TRUE(Before.Signing.State);
+            EXPECT_EQ(Before.Signing.State->SigningPC, Signs.front());
+          } else {
+            EXPECT_EQ(Before.Signing.Status,
+                      dwarf_eh::AArch64RAQueryStatus::Unknown);
+            ASSERT_TRUE(Before.LiveSigningModifier);
+            EXPECT_EQ(Before.LiveSigningModifier->SigningPCs, Signs);
+            std::array<va_t, aarch64_unwind::kRegisters> GPRs{};
+            const auto R = Before.LiveSigningModifier->Register;
+            ASSERT_LT(R, GPRs.size());
+            EXPECT_FALSE(
+                prepareDarwinArm64eSystemCaller(Before, Range, Range.End));
+            for (va_t Sign : Signs) {
+              GPRs[R] = Range.End + (Sign - Range.Begin);
+              auto Plan = prepareDarwinArm64eSystemCaller(Before, Range,
+                                                          Range.End, GPRs);
+              ASSERT_TRUE(Plan);
+              EXPECT_EQ(Plan->Frame.SigningPC, GPRs[R]);
+              EXPECT_EQ(Plan->Frame.Signing, KeyB ? NDArm64eSignedIBWithCFAPC
+                                                  : NDArm64eSignedIAWithCFAPC);
+              ++ResolvedPCs;
+            }
+          }
+          if (Behavior != Returns) {
+            const auto &After =
+                aarch64UnwindRowAt(*Rows, Auth + Word - Frame->CodeRange.Begin)
+                    .Signing;
+            ASSERT_TRUE(After.State);
+            EXPECT_EQ(After.State->Kind,
+                      dwarf_eh::AArch64RASigningKind::Unsigned);
+            ++VerifiedRows;
           }
         }
-        if (Behavior != Returns) {
-          const auto &After =
-              aarch64UnwindRowAt(*Rows, *Auth + Word - Frame->CodeRange.Begin)
-                  .Signing;
-          ASSERT_TRUE(After.State);
-          EXPECT_EQ(After.State->Kind,
-                    dwarf_eh::AArch64RASigningKind::Unsigned);
-          ++VerifiedRows;
+        if (Split) {
+          llvm::sort(Selected);
+          EXPECT_EQ(Selected, Signs);
         }
         if (Export) {
           Calls +=
               llvm::formatv(
                   kJoinModelCall, ModelCases, int64_t(Original.front() - Owner),
                   int64_t(Original.back() - Owner), unsigned(Behavior != Local),
-                  unsigned(Behavior != Returns && Behavior != Local))
+                  unsigned(Behavior != Returns && Behavior != Local),
+                  unsigned(Pressure), unsigned(Flag == kJoinPressurePrefix))
                   .str();
           Bodies += llvm::formatv(kSigningModelPage, branch::A64PageBytes,
                                   Owner % branch::A64PageBytes)

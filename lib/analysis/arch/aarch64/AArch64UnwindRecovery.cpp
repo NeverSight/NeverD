@@ -581,26 +581,30 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
     if (const auto R = reg(Ops.front().reg))
       S.Registers[*R].CodeAddress =
           machORebasedLiteralAddress(Image, Word, I.Addr);
+  const auto CopyRegister = [&](unsigned Dest, unsigned Src) {
+    S.Registers[Dest] = Before.Registers[Src];
+    if (Dest == kLR && Src == kLR)
+      S.Modifiers = Before.Modifiers;
+    if (Dest < kLR && (Before.Modifiers.Registers & (uint32_t(1) << Src)))
+      S.Modifiers.Registers |= uint32_t(1) << Dest;
+  };
   if ((I.Id == AARCH64_INS_MOV || I.Raw->alias_id == AARCH64_INS_ALIAS_MOV) &&
       Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
       Ops[1].type == AARCH64_OP_REG && wide(Ops[0].reg) && wide(Ops[1].reg)) {
     const auto Dest = reg(Ops[0].reg), Src = reg(Ops[1].reg);
-    if (Dest && Src) {
-      S.Registers[*Dest] = Before.Registers[*Src];
-      if (*Dest < kLR && (Before.Modifiers.Registers & (uint32_t(1) << *Src)))
-        S.Modifiers.Registers |= uint32_t(1) << *Dest;
-    }
+    if (Dest && Src)
+      CopyRegister(*Dest, *Src);
   }
   if ((I.Id == AARCH64_INS_ADD || I.Id == AARCH64_INS_SUB) && Ops.size() == 3 &&
       Ops[0].type == AARCH64_OP_REG && Ops[1].type == AARCH64_OP_REG &&
-      Ops[2].type == AARCH64_OP_IMM && !Ops[2].shift.value &&
+      Ops[2].type == AARCH64_OP_IMM && (!Ops[2].shift.value || !Ops[2].imm) &&
       wide(Ops[0].reg) && wide(Ops[1].reg)) {
     const auto Dest = reg(Ops[0].reg), Src = reg(Ops[1].reg);
     if (Dest && Src && Ops[2].imm >= 0) {
       const auto &Base = Before.Registers[*Src];
       const uint64_t Magnitude = Ops[2].imm;
       if (!Magnitude) {
-        S.Registers[*Dest] = Base;
+        CopyRegister(*Dest, *Src);
       } else {
         const bool Subtract = I.Id == AARCH64_INS_SUB;
         S.Registers[*Dest].StackOffset =

@@ -5,8 +5,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// C 2.0 integer quadrants. Reserved and floating encodings have no integer
-/// expansion.
+/// Expand C, Zca, Zcf and Zcd memory forms using the image's XLEN and ISA.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -22,8 +21,9 @@ uint32_t iType(unsigned Op, unsigned Rd, unsigned Fun, unsigned Rs,
                unsigned Imm) {
   return Op | Rd << 7 | Fun << 12 | Rs << 15 | (Imm & 0xfff) << 20;
 }
-uint32_t store(unsigned Fun, unsigned Base, unsigned Rs, unsigned Off) {
-  return opcode::Store | (Off & 31) << 7 | Fun << 12 | Base << 15 | Rs << 20 |
+uint32_t store(unsigned Op, unsigned Fun, unsigned Base, unsigned Rs,
+               unsigned Off) {
+  return Op | (Off & 31) << 7 | Fun << 12 | Base << 15 | Rs << 20 |
          (Off >> 5) << 25;
 }
 uint32_t regOp(unsigned Op, unsigned D, unsigned Fun, unsigned A, unsigned B,
@@ -32,13 +32,21 @@ uint32_t regOp(unsigned Op, unsigned D, unsigned Fun, unsigned A, unsigned B,
 }
 } // namespace
 
-std::optional<uint32_t> expandCompressed(uint16_t H, bool RV64) {
+std::optional<uint32_t> expandCompressed(uint16_t H, bool RV64,
+                                         RISCVProfile Profile) {
   const unsigned Q = H & 3, F = H >> 13;
   const unsigned Rd = H >> 7 & 31, Rs = H >> 2 & 31;
   const unsigned R1 = 8 + (Rd & 7), R2 = 8 + (Rs & 7);
   const unsigned High = H >> 12 & 1;
   const unsigned UI = Rs | High << 5;
   const uint32_t SI = llvm::SignExtend32<6>(UI);
+  const bool FloatDouble = (F == 1 || F == 5) && Profile.DoubleFloat &&
+                           (Profile.Compressed || Profile.Zcd);
+  const bool FloatSingle = !RV64 && (F == 3 || F == 7) && Profile.SingleFloat &&
+                           (Profile.Compressed || Profile.Zcf);
+  const bool Float = FloatSingle || FloatDouble;
+  const bool Wide = FloatDouble || (RV64 && (F == 3 || F == 7));
+  const unsigned WidthField = Wide ? 3 : 2;
   if (Q == 0) {
     if (F == 0) { // ADDI4SPN
       unsigned N = (H >> 7 & 15) << 6 | (H >> 11 & 3) << 4 | (H >> 5 & 1) << 3 |
@@ -46,13 +54,14 @@ std::optional<uint32_t> expandCompressed(uint16_t H, bool RV64) {
       if (N)
         return iType(opcode::OpImm, R2, 0, 2, N);
     }
-    const bool Wide = F == 3 || F == 7;
-    if (F == 2 || F == 6 || (Wide && RV64)) {
+    if (F == 2 || F == 6 || Wide || FloatSingle) {
       unsigned Off =
           (H >> 10 & 7) << 3 |
           (Wide ? (H >> 5 & 3) << 6 : (H >> 5 & 1) << 6 | (H >> 6 & 1) << 2);
-      return F < 4 ? iType(opcode::Load, R2, Wide ? 3 : 2, R1, Off)
-                   : store(Wide ? 3 : 2, R1, R2, Off);
+      return F < 4 ? iType(Float ? opcode::LoadFP : opcode::Load, R2,
+                           WidthField, R1, Off)
+                   : store(Float ? opcode::StoreFP : opcode::Store, WidthField,
+                           R1, R2, Off);
     }
   } else if (Q == 1) {
     if (F == 0 || F == 2)
@@ -108,13 +117,14 @@ std::optional<uint32_t> expandCompressed(uint16_t H, bool RV64) {
   } else if (Q == 2) {
     if (F == 0 && (!High || RV64))
       return iType(opcode::OpImm, Rd, 1, Rd, UI);
-    if (F == 2 || (F == 3 && RV64)) {
-      if (!Rd)
+    if (F < 4 && (F == 2 || Wide || FloatSingle)) {
+      if (!Rd && !Float)
         return std::nullopt;
       unsigned Off =
-          High << 5 | (F == 2 ? (H >> 4 & 7) << 2 | (H >> 2 & 3) << 6
-                              : (H >> 5 & 3) << 3 | (H >> 2 & 7) << 6);
-      return iType(opcode::Load, Rd, F, 2, Off);
+          High << 5 | (!Wide ? (H >> 4 & 7) << 2 | (H >> 2 & 3) << 6
+                             : (H >> 5 & 3) << 3 | (H >> 2 & 7) << 6);
+      return iType(Float ? opcode::LoadFP : opcode::Load, Rd, WidthField, 2,
+                   Off);
     }
     if (F == 4) {
       if (Rs)
@@ -124,10 +134,11 @@ std::optional<uint32_t> expandCompressed(uint16_t H, bool RV64) {
       if (High)
         return 0x00100073; // EBREAK
     }
-    if (F == 6 || (F == 7 && RV64)) {
-      unsigned Off = F == 6 ? (H >> 9 & 15) << 2 | (H >> 7 & 3) << 6
-                            : (H >> 10 & 7) << 3 | (H >> 7 & 7) << 6;
-      return store(F - 4, 2, Rs, Off);
+    if (F >= 4 && (F == 6 || Wide || FloatSingle)) {
+      unsigned Off = !Wide ? (H >> 9 & 15) << 2 | (H >> 7 & 3) << 6
+                           : (H >> 10 & 7) << 3 | (H >> 7 & 7) << 6;
+      return store(Float ? opcode::StoreFP : opcode::Store, WidthField, 2, Rs,
+                   Off);
     }
   }
   return std::nullopt;

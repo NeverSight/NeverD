@@ -26,6 +26,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
+#include <iterator>
 #include <utility>
 
 namespace neverd {
@@ -160,6 +161,13 @@ bool machODeadSigningScratch(Decoder &Decode, const MachOLiftedSource &Source,
                              va_t Start, va_t At, aarch64_reg Reg) {
   return signingAddressUse(Decode, Source, Start, At, Reg, false) ==
          SigningAddressUse::Local;
+}
+
+bool machOObservesSigningAddress(Decoder &Decode,
+                                 const MachOLiftedSource &Source, va_t Start,
+                                 va_t After, aarch64_reg Reg) {
+  return signingAddressUse(Decode, Source, Start, After, Reg, false) ==
+         SigningAddressUse::Observable;
 }
 
 // Use the ISA's PC-relative encoding of the same operation. It uses the same
@@ -376,9 +384,42 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
   return {};
 }
 
+bool machORetainsSigningWord(const BinaryImage &Image, va_t Current, va_t Entry,
+                             va_t Address, uint32_t Word) {
+  const auto *Section = Image.getSectionFor(Entry);
+  if (Entry == Current || Entry == Address || !Section ||
+      Section != Image.getSectionFor(Address) ||
+      !rangeInBounds(Address - Section->VA, aarch64::kInsnSize,
+                     Section->FileSz) ||
+      !machODataInCodeRanges(Image.MachODataInCode, Address, aarch64::kInsnSize)
+           .empty())
+    return false;
+  const auto *Bytes = Image.readVA(Address, aarch64::kInsnSize);
+  if (!Bytes || readLE<uint32_t>(Bytes) != Word)
+    return false;
+  llvm::SmallDenseSet<va_t, 4> Seen;
+  while (Entry != Current) {
+    if (!Seen.insert(Entry).second)
+      return false;
+    const auto Source =
+        machOLiftedSource(Image, Entry, Entry + aarch64::kInsnSize);
+    if (!Source || !Source->ForwardTarget)
+      return false;
+    Entry = *Source->ForwardTarget;
+  }
+  return true;
+}
+
 bool needsMachONativeRegisterBody(const MedFunc &Function,
                                   const BinaryImage &Image,
                                   const LowFunc *CFG) {
+  return needsMachONativeRegisterBody(Function, Image, CFG,
+                                      Image.MachOFunctionStarts);
+}
+
+bool needsMachONativeRegisterBody(const MedFunc &Function,
+                                  const BinaryImage &Image, const LowFunc *CFG,
+                                  llvm::ArrayRef<va_t> FunctionStarts) {
   constexpr auto Word = aarch64::kInsnSize;
   llvm::SmallVector<va_t, 4> Consumers;
   for (const auto &Block : Function.Blocks)
@@ -407,24 +448,26 @@ bool needsMachONativeRegisterBody(const MedFunc &Function,
   Decoder Decode;
   if (!Source || Source->ForwardTarget || !Decode.init(Image))
     return false;
-  // Compact rows can span adjacent functions. Stop scanning at this
-  // function's last authentication and verify the matched consumer below.
-  const auto End = std::min<uint64_t>(Source->Bytes.size(),
-                                      Consumers.back() - Function.Entry);
-  for (size_t Offset = 0; Offset < End; Offset += Word) {
+  auto Joins = CFG ? machOSigningJoins(Image, Decode, *Source, *CFG)
+                   : MachOSigningJoins{};
+  if (Joins.Unresolved || !Joins.Addresses.empty())
+    return true;
+  const auto NeedsAddress = [&](va_t PC) {
+    const auto Offset = PC - Function.Entry;
+    if (!rangeInBounds(Offset, Word, Source->Bytes.size()))
+      return false;
     const auto Bytes = Source->Bytes.drop_front(Offset);
     const auto Encoding = readLE<uint32_t>(Bytes.data());
-    va_t PC = Function.Entry + Offset;
     auto Target = aarch64::decodePCRelativeAddress(Encoding, PC);
     if (!Target && aarch64::isPointerLiteralLoad(Encoding))
       Target = machORebasedLiteralAddress(Image, Encoding, PC);
     if (!Target || !machODataInCodeRanges(Source->Embedded, PC, Word).empty())
-      continue;
+      return false;
     aarch64_reg Reg;
     if ((Encoding & aarch64::kADRP_Mask) == aarch64::kADRP_Op) {
       const auto Pair = decodeMachOPageAddress(Decode, Bytes, PC);
       if (!Pair)
-        continue;
+        return false;
       PC += Word;
       Reg = Pair->ResultRegister;
       Target = Pair->Target;
@@ -432,18 +475,39 @@ bool needsMachONativeRegisterBody(const MedFunc &Function,
       DecodedInsn Producer{};
       if (Decode.decodeOne(Bytes.data(), Word, PC, Producer) != int(Word) ||
           !Producer.Raw || !Producer.Raw->detail)
-        continue;
+        return false;
       Reg = Producer.Raw->detail->aarch64.operands[0].reg;
     }
-    if (machOSigningAddress(Decode, *Source, Function.Entry, PC, *Target, Reg,
+    if (PC < Consumers.back() &&
+        machOSigningAddress(Decode, *Source, Function.Entry, PC, *Target, Reg,
                             Consumers)
-            .Use == MachOSigningAddress::Observable)
+                .Use == MachOSigningAddress::Observable)
       return true;
-  }
-  if (CFG) {
-    const auto Joins = machOSigningJoins(Image, Decode, *Source, *CFG);
-    return Joins.Unresolved || !Joins.Addresses.empty() ||
-           !Joins.RetainedSigningWords.empty();
+    // An ordinary compact return can use the PC solely for authentication.
+    // For a numerical reference into old storage, prove that its owning
+    // entry forwards to this function.
+    if (Joins.RetainedSigningWords.empty())
+      return false;
+    const auto Next = llvm::upper_bound(FunctionStarts, *Target);
+    return Next != FunctionStarts.begin() &&
+           llvm::any_of(Joins.RetainedSigningWords, [&](uint32_t SigningWord) {
+             return machORetainsSigningWord(
+                 Image, Function.Entry, *std::prev(Next), *Target, SigningWord);
+           });
+  };
+  if (CFG && !Joins.RetainedSigningWords.empty()) {
+    // A caller-visible address can be materialized after the last AUT.
+    // Compact unwind ranges can also span unrelated adjacent functions.
+    for (const auto &B : CFG->Blocks)
+      for (const auto &Boundary : B.InstructionBoundaries)
+        if (NeedsAddress(Boundary.Address))
+          return true;
+  } else {
+    const auto End = std::min<uint64_t>(Source->Bytes.size(),
+                                        Consumers.back() - Function.Entry);
+    for (size_t Offset = 0; Offset < End; Offset += Word)
+      if (NeedsAddress(Function.Entry + Offset))
+        return true;
   }
   return false;
 }

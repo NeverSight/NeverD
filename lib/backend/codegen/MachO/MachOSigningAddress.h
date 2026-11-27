@@ -39,6 +39,11 @@ struct MachOSigningAddress {
   std::optional<va_t> RestorePC;
 };
 
+/// Check the retained source instruction and the forwarding chain from the
+/// entry owning Address to Current, even for a one-word unwind range.
+bool machORetainsSigningWord(const BinaryImage &Image, va_t Current, va_t Entry,
+                             va_t Address, uint32_t Word);
+
 /// Classify the address materialized at PC. A nonempty sorted Consumers list
 /// restricts the proof to authentications belonging to the current MedFunc.
 MachOSigningAddress machOSigningAddress(Decoder &Decode,
@@ -75,6 +80,12 @@ inline MachOAuthenticationForm machOPCAuthenticationForm(uint32_t Bits) {
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuthLR.def"
   return MachOAuthenticationForm::None;
 }
+
+/// An ordinary reference to a proved signer can escape independently of the
+/// reaching definition used by AUT. Follow its aliases through their uses.
+bool machOObservesSigningAddress(Decoder &Decode,
+                                 const MachOLiftedSource &Source, va_t Start,
+                                 va_t After, aarch64_reg Reg);
 
 /// Check both register operands and the address of a published restore pair.
 bool machORestoresSigningAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes,

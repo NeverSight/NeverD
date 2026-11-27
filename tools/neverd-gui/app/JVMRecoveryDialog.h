@@ -10,6 +10,7 @@
 #define NEVERD_GUI_JVMRECOVERYDIALOG_H
 #include "../EngineClient.h"
 
+#include <QBitArray>
 #include <QDialog>
 #include <QJsonArray>
 class QCheckBox;
@@ -42,12 +43,16 @@ private:
   QPlainTextEdit *Java, *IR, *Bytecode, *Evidence;
   QListWidget *Mappings;
   QJsonObject Report, Index;
+  QBitArray RenderedTabs;
   void request(bool InventoryOnly);
   void receive(const QJsonObject &Message);
   void updateActions();
+  void updateViewActions();
   void classes();
   void methods();
-  void select();
+  QJsonObject currentFunction() const;
+  void select(bool ChooseTab = false);
+  void showCurrentTab();
   void resetIndex();
   QByteArray selectedText() const;
 };

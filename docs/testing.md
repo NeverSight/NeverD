@@ -1605,6 +1605,12 @@ relay block that keeps them: both dispatches read their eight slots, while an
 index changed after the compare, a second compare into the `ja` block that
 admits 101 values, or an address of the `ja` block that .data holds, stays
 unresolved.
+`JTE_X86_64.LaneGuardFindsItsExtensionInAnEarlierBlock` bounds a byte that
+`movzbl` loaded by ten with `cmp $9, %eax` and, one block and three blocks
+later, by seven with `cmp $6, %al` before the dispatch indexes with `%rax`:
+both dispatches read their seven slots. A second path into the lane compare
+that loads all of `%rax`, a load of all of `%rax` before both compares, or a
+write of `%ah` between them stays unresolved.
 `JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
 whose first state is a constant: scalar recovery first takes its dispatch as a
 direct branch and withdraws that guess when the cases loop back, and the
@@ -16176,6 +16182,17 @@ in a live frame, and after an `svc`.
 the `__release_weak` shape through HighC, LLVM-C and unoptimized LLVM-C: none
 keeps the unresolved-branch trap, each calls through the loaded vtable slot,
 and the HighC compiles for AArch64.
+`X64IndirectTailFrame.RestoredStackPointerKeepsTheTailCall` links and strips
+x86-64 jumps that leave RSP at its incoming value (nothing pushed, pops,
+LEAVE after a realignment, an added-back frame, `lea -8(%rbp), %rsp`, a
+balanced diamond and loop) or at nothing derived from it (a fiber switch to an
+argument's stack, RSP loaded from memory): each becomes `INDIR_CALL + RETURN`.
+`LiveOrUnknownStackPointerKeepsTheBranch` keeps the indirect branch inside a
+live frame, through an unbounded relative table inside one, after a push on
+one of two paths, after an unrestored realignment or a register adjustment,
+after LEAVE reads an RBP a call result moved, and after a pushing loop.
+`LazyBindingResolverJumpKeepsTheTailCall` keeps the library's PLT0 jump to
+the lazy-binding resolver a tail call after its push.
 `LowIntrinsicMemoryOperands.DecodeOnlyTheLiftedShapes` rejects width, ordering
 and segment mismatches and intrinsics without a memory contract.
 

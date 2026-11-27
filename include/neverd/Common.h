@@ -340,8 +340,18 @@ enum class Arch : uint8_t {
 #include "neverd/ELFIntegerTargets.def"
 };
 
-constexpr bool isRISCV(Arch A) {
-  return A == Arch::RISCV32 || A == Arch::RISCV64;
+constexpr bool isRISCV32(Arch A) {
+  return A == Arch::RISCV32 || A == Arch::RISCV32D;
+}
+
+constexpr bool isRISCV64(Arch A) {
+  return A == Arch::RISCV64 || A == Arch::RISCV64D;
+}
+
+constexpr bool isRISCV(Arch A) { return isRISCV32(A) || isRISCV64(A); }
+
+constexpr bool hasRISCVDoubleABI(Arch A) {
+  return A == Arch::RISCV32D || A == Arch::RISCV64D;
 }
 
 constexpr bool isPowerPC64ELFv1(Arch A) {

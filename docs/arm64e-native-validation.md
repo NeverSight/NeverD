@@ -2771,6 +2771,28 @@ unknown. After a matching AUT at the original SP, instruction recovery can
 establish an unsigned LR on all paths. A wrong key or a clobbered modifier
 cannot establish this post-authentication state.
 
+When all temporary registers are live, the publisher can route a direct
+incoming edge to its own PC-relative AUT or authenticated return. Each edge
+must prove one matching key and signing PC. Fallthrough keeps its own copy. The caller retains the numerical source address.
+Independent materializations of the same signing address also keep its numeric source
+value when their uses prove an observable store. A shared,
+position-independent prefix can run on each route when its unwind and
+language scope agree with the authenticator. The final image check resolves
+each direct target, decodes each authentication against the installed signer
+and compares the duplicated prefix with the source instructions.
+
+A compact saved-register frame can use a PC-relative authenticated return
+without materializing the signing address as data. The publisher keeps its
+compact unwind recipe. When the function does reference a signing address in
+old storage, both lifting and publication check the retained instruction and
+follow its owning entry to the current function. An address can be materialized
+after the last authentication in the function.
+
+Full-width MOV and ADD/SUB by zero carry a joined signing-PC relation
+through a register copy. A full-width self-copy of LR also preserves the
+relation between LR and its modifier. A partial copy or nonzero adjustment cannot
+supply that proof.
+
 The unwind analysis also recognizes a full-width literal load from an
 immutable, dyld-rebased slot as a possible signing address. Recovery checks
 the loaded address against the recorded signer. A wrong address, a writable
@@ -2817,6 +2839,18 @@ four EnPACM configurations (576 calls). The same run replayed the earlier
 [Release evidence](evidence/arm64e-joined-signing-address-2026-11-27.json) ·
 [Arm model execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45997050094) ·
 [Hosted macOS Release run](https://github.com/gmh5225/test_mac_intel/actions/runs/45989233449)
+
+Across nine joined-signing fixtures, including three with every candidate
+scratch register live, O0 publication and O2 republication produced 36 images.
+The tests checked 152 signing rows, resolved 72 interrupted signing PCs, and
+rejected 16 incomplete or conflicting cases. The clean r6 macOS Release run
+passed 329 tests with zero skips. The Arm FVP executed the 54 original and
+published bodies with two caller inputs at EL0 and EL1 under four EnPACM
+settings (864 calls). The independent M4 and hosted Release exports both passed this matrix. The disabled-feature control and the three
+archived guest inventories also passed.
+[Validation record](evidence/arm64e-scratch-free-signing-2026-11-28.json) ·
+[Hosted Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46046283283) ·
+[Arm FVP execution](https://github.com/gmh5225/test_mac_intel/actions/runs/46051104410)
 
 ### Native x1 runner qualification
 
