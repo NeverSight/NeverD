@@ -18,9 +18,10 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.h"
 #include "neverd/ir/intrinsics/RISCV/RISCVFloating.h"
 
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -51,7 +52,7 @@ std::optional<uint32_t> word(Arch A, RISCVProfile P, const cs_insn &I) {
 }
 
 IntegerControl branch(Arch A, uint32_t W, va_t PC) {
-  const unsigned Op = W & 127, Rd = W >> 7 & 31, F = W >> 12 & 7,
+  const unsigned Op = W & opcode::MajorMask, Rd = W >> 7 & 31, F = W >> 12 & 7,
                  Rs = W >> 15 & 31;
   if (Op == opcode::Jalr && !F) {
     if (!Rs) {
@@ -263,7 +264,7 @@ bool bitManipulation(State &S, RISCVProfile P, uint32_t W, bool Imm, bool Word,
 // Floating loads, stores, moves and sign injection transfer the IEEE encoding
 // without changing rounding mode or exception flags. Preserve the payload bits.
 bool floating(State &S, RISCVProfile P, uint32_t W) {
-  const unsigned Op = W & 127, Rd = W >> 7 & 31, F = W >> 12 & 7;
+  const unsigned Op = W & opcode::MajorMask, Rd = W >> 7 & 31, F = W >> 12 & 7;
   const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
   const unsigned FLen = P.DoubleFloat ? 8 : 4;
   const auto Reg = [FLen](unsigned Index) {
@@ -367,31 +368,26 @@ bool floating(State &S, RISCVProfile P, uint32_t W) {
   return true;
 }
 
-bool liftCycleRead(State &S, Arch A, uint32_t W, unsigned Rd) {
+bool liftCounterRead(State &S, Arch A, uint32_t W, unsigned Rd) {
   Intrinsic Id;
   switch (W & opcode::ExceptRdMask) {
-#define NEVERD_RISCV_CYCLE(Name, Value, Word, High, Text)                      \
+#define NEVERD_RISCV_COUNTER(Name, Value, Word, Kind, High, Text)              \
   case Word:                                                                   \
     Id = Intrinsic::Name;                                                      \
     break;
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.def"
   default:
     return false;
   }
-  if (!cycleRead(Id)->admits(A))
+  if (!counterRead(Id)->admits(A))
     return false;
   S.emitIntrinsic(Id, Rd ? S.reg(Rd) : S.makeTemp(S.Width), {});
   return true;
 }
 
-bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
-  const unsigned Op = W & 127, Rd = W >> 7 & 31, F = W >> 12 & 7;
-  const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
-  if (Op == opcode::LoadFP || Op == opcode::StoreFP || Op == opcode::OpFP ||
-      Op == 0x43 || Op == 0x47 || Op == 0x4b || Op == 0x4f)
-    return floating(S, P, W);
-  if (Op == opcode::System && P.SingleFloat && (W >> 20) >= 1 &&
-      (W >> 20) <= 3 && (F & 3)) {
+bool liftSystem(State &S, Arch A, RISCVProfile P, uint32_t W) {
+  const unsigned Rd = W >> 7 & 31, F = W >> 12 & 7, R1 = W >> 15 & 31;
+  if (P.SingleFloat && (W >> 20) >= 1 && (W >> 20) <= 3 && (F & 3)) {
     const unsigned Action = R1 == 0 && (F & 3) != 1 ? 0 : F & 3;
     const auto Code = NdVar::scalar(((W >> 20) << 2) | Action, 2);
     const auto Out = Rd ? S.reg(Rd) : S.makeTemp(S.Width);
@@ -402,6 +398,18 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
       S.emitIntrinsic(Intrinsic::RISCVFPControl, Out, {Code});
     return true;
   }
+  return P.Zicntr && liftCounterRead(S, A, W, Rd);
+}
+
+// CSR instructions do not need the stack frame used by general integer lifting.
+LLVM_ATTRIBUTE_NOINLINE bool integer(State &S, Arch A, RISCVProfile P,
+                                     uint32_t W) {
+  const unsigned Op = W & opcode::MajorMask, Rd = W >> 7 & 31, F = W >> 12 & 7;
+  const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
+  if (Op == opcode::LoadFP || Op == opcode::StoreFP || Op == opcode::OpFP ||
+      Op == opcode::FMAdd || Op == opcode::FMSub || Op == opcode::FNMSub ||
+      Op == opcode::FNMAdd)
+    return floating(S, P, W);
   const uint64_t Immediate = SignExtend64<12>(W >> 20);
   NdVar X = S.read(R1);
   NdVar Y = S.read(R2);
@@ -487,7 +495,7 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
   const bool Imm = Op == opcode::OpImm || Op == opcode::OpImm32;
   const bool Word = Op == opcode::OpImm32 || Op == opcode::Op32;
   if (!Imm && Op != opcode::Op && Op != opcode::Op32)
-    return Op == opcode::System && P.Zicntr && liftCycleRead(S, A, W, Rd);
+    return false;
   if (Word && S.Width != 8)
     return false;
   if (F7 && P.Zbb && basicBitManipulation(S, W, Imm, Word, Rd, X, Y))
@@ -536,11 +544,17 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
   S.write(Rd, S.op(Kind, X, Y, F == 2 || F == 3 ? 1 : Bytes), Word);
   return true;
 }
+
+bool liftWord(State &S, Arch A, RISCVProfile P, uint32_t W) {
+  if ((W & opcode::MajorMask) == opcode::System)
+    return liftSystem(S, A, P, W);
+  return integer(S, A, P, W);
+}
 } // namespace
 
 std::optional<va_t> pcRelativeCall(Arch A, RISCVProfile P, uint32_t Upper,
                                    const cs_insn &I) {
-  if ((Upper & 127) != opcode::Auipc)
+  if ((Upper & opcode::MajorMask) != opcode::Auipc)
     return std::nullopt;
   const unsigned Base = Upper >> 7 & 31;
   const auto W = word(A, P, I);
@@ -561,7 +575,7 @@ IntegerControl control(Arch A, RISCVProfile P, const cs_insn &I) {
 
 void lift(Arch A, RISCVProfile P, const cs_insn &I, std::vector<LowOp> &Ops) {
   State S(I.address, I.size, Ops, isRISCV64(A) ? 8 : 4);
-  if (auto W = word(A, P, I); W && integer(S, A, P, *W)) {
+  if (auto W = word(A, P, I); W && liftWord(S, A, P, *W)) {
     if (S.OpsStart == Ops.size())
       S.emit(NdOp::NOP, {}, {});
     return;

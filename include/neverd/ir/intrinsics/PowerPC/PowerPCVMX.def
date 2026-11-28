@@ -5,9 +5,11 @@
 //===----------------------------------------------------------------------===//
 /// \file
 /// VX-form fixed fields omit vD, vA and vB.
-/// NEVERD_PPC_VMX(Id, Value, Word, Mnemonic)
+/// NEVERD_PPC_VMX(Id, Value, Word, Mnemonic, LaneBytes)
 //===----------------------------------------------------------------------===//
 
-NEVERD_PPC_VMX(PPCVaddubm, 18018, 0x10000000, "vaddubm")
+NEVERD_PPC_VMX(PPCVaddubm, 18018, 0x10000000, "vaddubm", 1)
+NEVERD_PPC_VMX(PPCVadduhm, 18025, 0x10000040, "vadduhm", 2)
+NEVERD_PPC_VMX(PPCVadduwm, 18026, 0x10000080, "vadduwm", 4)
 
 #undef NEVERD_PPC_VMX
