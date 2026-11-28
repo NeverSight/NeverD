@@ -19,7 +19,8 @@ void applyReturningCallState(SymState &State, SymRef FrameRoot,
                              SymRef CallerStack, int64_t PreservedBegin,
                              int64_t FrameEnd, va_t GuestContinuation,
                              const RecoveryCallTransition &Policy,
-                             ReturningCallStateEffect &Effect) {
+                             ReturningCallStateEffect &Effect,
+                             llvm::ArrayRef<ReturningCallFrameOutput> Outputs) {
   Effect.WorkUsed = 0;
   Effect.Status = SpecializationStatus::InvalidInput;
   Effect.Diagnostic = "returning-call state effect was not applied";
@@ -84,6 +85,27 @@ void applyReturningCallState(SymState &State, SymRef FrameRoot,
   State.write(SymSpace::Register, Policy.Stack.Offset, CallerStack);
   State.write(SymSpace::Register, Policy.ProgramCounter.Offset,
               Ctx.mkConst(Policy.ProgramCounter.Size * 8, GuestContinuation));
+  for (const auto &Output : Outputs)
+    for (uint16_t I = 0; I < Output.Bytes; ++I) {
+      if (!charge(2))
+        return;
+      const uint64_t Offset = Output.Offset + I;
+      const SymRef Address = Ctx.mkAdd(FrameRoot, Ctx.mkConst(64, Offset));
+      // A valid symbolic-region store returns false when it must forget other
+      // regions. Check the written byte itself, not that alias-preservation
+      // result, before accepting the effect.
+      State.store(Address, Ctx.mkFreshVar(8, "returning_call_output"));
+      if (!State.hasMaterializedRegionRange(FrameRoot, Offset, 1)) {
+        fail(SpecializationStatus::InvalidInput,
+             "returning-call frame output write was refused");
+        return;
+      }
+      if (Ctx.numNodes() > Effect.MaxNodes) {
+        fail(SpecializationStatus::BudgetExceeded,
+             "returning-call frame output node budget exhausted");
+        return;
+      }
+    }
   Effect.Status = SpecializationStatus::Complete;
   Effect.Diagnostic = "";
 }

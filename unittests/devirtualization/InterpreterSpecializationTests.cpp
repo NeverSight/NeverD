@@ -483,6 +483,46 @@ TEST(InterpreterSpecialization, BusinessLoopConvergesByWeakeningConstants) {
     EXPECT_EQ(execute(Result.Residual, {{8, Limit}}), Limit);
 }
 
+TEST(InterpreterSpecialization, NegatedFrameRegisterSurvivesJoin) {
+  for (bool BreakRelation : {false, true}) {
+    Provider P;
+    P.add(0x100,
+          {op(NdOp::INT_SUB, reg(48), {reg(32), constant(64)}),
+           op(NdOp::INT_SUB, reg(8), {constant(0), reg(48)}),
+           op(NdOp::COPY, reg(0), {reg(48)}),
+           op(NdOp::COND_BR, {}, {constant(0x110), reg(24, 1)})},
+          0x120);
+    P.add(0x110,
+          {op(NdOp::INT_ADD, reg(0), {reg(0), constant(8)}), jump(0x130)});
+    std::vector<LowOp> Other{op(NdOp::INT_ADD, reg(0), {reg(0), constant(16)})};
+    if (BreakRelation)
+      Other.push_back(op(NdOp::INT_ADD, reg(8), {reg(8), constant(40)}));
+    Other.push_back(jump(0x130));
+    P.add(0x120, std::move(Other));
+    P.add(0x130,
+          {op(NdOp::INT_ADD, reg(56), {reg(0), reg(8)}),
+           op(NdOp::INT_LESS, reg(64, 1), {reg(56), constant(32)}),
+           op(NdOp::COND_BR, {}, {constant(0x140), reg(64, 1)})},
+          0x150);
+    P.add(0x140, {op(NdOp::COPY, reg(0), {reg(56)}), ret()});
+    if (BreakRelation)
+      P.add(0x150, {op(NdOp::COPY, reg(0), {constant(99)}), ret()});
+
+    SpecializationOptions Options;
+    Options.FrameBaseRegister = SymRegisterRange{32, 8};
+    Options.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+    Options.ProveStoreFrameSeparation = true;
+    Options.MaxChainedTransfers = 0;
+    const auto Result = specializeInterpreter(P, {0x100}, Options);
+    ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+    for (uint64_t Stack : {0x1000u, 0x2000u}) {
+      EXPECT_EQ(execute(Result.Residual, {{24, 1}, {32, Stack}}), 8u);
+      EXPECT_EQ(execute(Result.Residual, {{24, 0}, {32, Stack}}),
+                BreakRelation ? 99u : 16u);
+    }
+  }
+}
+
 TEST(InterpreterSpecialization, JoinsDoNotLeakFirstPredecessorConstant) {
   Provider P;
   P.add(0x100, {op(NdOp::COND_BR, {}, {constant(0x110), reg(8, 1)})}, 0x120);
@@ -5404,7 +5444,9 @@ TEST(InterpreterSpecialization, ProducerHintProvesFiniteFrameWordAtJoin) {
         0x120);
   P.add(0x110, {op(NdOp::STORE, {}, {reg(48), constant(0x8080)}), jump(0x130)});
   P.add(0x120, {op(NdOp::STORE, {}, {reg(48), constant(0x8090)}), jump(0x130)});
-  P.add(0x130, {op(NdOp::LOAD, reg(56), {reg(48)}),
+  P.add(0x130, {jump(0x138)});
+  P.add(0x138, {jump(0x13c)});
+  P.add(0x13c, {op(NdOp::LOAD, reg(56), {reg(48)}),
                 op(NdOp::STORE, {}, {reg(56), constant(17)}), jump(0x140)});
   P.add(0x140, {op(NdOp::LOAD, reg(32), {reg(40)}),
                 op(NdOp::COPY, reg(0), {constant(9)}), ret()});
@@ -5446,7 +5488,77 @@ TEST(InterpreterSpecialization, ProducerHintProvesFiniteFrameWordAtJoin) {
   EXPECT_FALSE(NarrowResult.complete());
   EXPECT_TRUE(NarrowResult.Residual.Blocks.empty());
 
+  auto &Middle = P.Code.at(0x138).Ops;
+  Middle.insert(Middle.begin(), op(NdOp::STORE, {}, {reg(48), reg(16)}));
+  const auto Clobbered = specializeInterpreter(P, {0x100}, O);
+  EXPECT_FALSE(Clobbered.complete());
+  EXPECT_TRUE(Clobbered.Residual.Blocks.empty());
+  Middle.erase(Middle.begin());
+
   P.Code.at(0x120).Ops[0].Inputs[1] = reg(16);
+  const auto Unbounded = specializeInterpreter(P, {0x100}, O);
+  EXPECT_FALSE(Unbounded.complete());
+  EXPECT_TRUE(Unbounded.Residual.Blocks.empty());
+}
+
+TEST(InterpreterSpecialization,
+     LiveNativeReturnWordCarriesFiniteDomainAcrossTransfers) {
+  Provider P;
+  P.add(0x100, {op(NdOp::CALL, reg(0), {constant(0x200)})});
+  P.Code.at(0x100).NativeStackControl = SpecializationNativeStackControl::Call;
+  P.add(0x101, {op(NdOp::COPY, reg(0), {constant(11)}), jump(0x104)});
+  P.add(0x103, {op(NdOp::COPY, reg(0), {constant(22)}), jump(0x104)});
+  P.add(0x104, {ret()});
+  P.Code.at(0x104).NativeStackControl =
+      SpecializationNativeStackControl::Return;
+  P.add(
+      0x200,
+      {op(NdOp::SELECT, reg(48), {reg(8, 1), constant(0x101), constant(0x103)}),
+       op(NdOp::STORE, {}, {reg(32), reg(48)}),
+       op(NdOp::INT_AND, reg(64), {reg(24), constant(1)}),
+       op(NdOp::COND_BR, {}, {constant(0x210), reg(64)})},
+      0x211);
+  P.add(0x210, {jump(0x218)});
+  P.add(0x211, {jump(0x218)});
+  P.add(0x218, {jump(0x220)});
+  P.add(0x220, {ret()});
+  P.Code.at(0x220).NativeStackControl =
+      SpecializationNativeStackControl::Return;
+
+  auto O = ordinaryReturnOptions();
+  O.DiscoverControlState = false;
+  const auto R = specializeInterpreter(P, {0x100}, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  for (uint64_t Root : {0x1008u, 0x2008u})
+    for (uint64_t Selector : {0u, 1u})
+      for (uint64_t Branch : {0u, 1u}) {
+        SCOPED_TRACE(Root);
+        SCOPED_TRACE(Selector);
+        SCOPED_TRACE(Branch);
+        WideByteOracle Actual(llvm::endianness::little);
+        Actual.word(reg(8, 1), Selector);
+        Actual.word(reg(24), Branch);
+        Actual.word(reg(32), Root);
+        for (unsigned I = 0; I != 8; ++I)
+          Actual.Memory[Root + I] = 0xa0 + I;
+        ASSERT_TRUE(Actual.run(R.Residual)) << Actual.Diagnostic;
+        EXPECT_EQ(Actual.number(reg(0)), Selector ? 11u : 22u);
+        EXPECT_EQ(Actual.number(reg(32)), Root);
+        const uint64_t Target = Selector ? 0x101 : 0x103;
+        for (unsigned I = 0; I != 8; ++I) {
+          EXPECT_EQ(Actual.Memory.at(Root - 8 + I),
+                    static_cast<uint8_t>(Target >> (8 * I)));
+          EXPECT_EQ(Actual.Memory.at(Root + I), 0xa0 + I);
+        }
+      }
+
+  auto Narrow = O;
+  Narrow.MaxControlTuples = 1;
+  const auto NarrowResult = specializeInterpreter(P, {0x100}, Narrow);
+  EXPECT_FALSE(NarrowResult.complete());
+  EXPECT_TRUE(NarrowResult.Residual.Blocks.empty());
+
+  P.Code.at(0x200).Ops[0].Inputs[2] = reg(16);
   const auto Unbounded = specializeInterpreter(P, {0x100}, O);
   EXPECT_FALSE(Unbounded.complete());
   EXPECT_TRUE(Unbounded.Residual.Blocks.empty());

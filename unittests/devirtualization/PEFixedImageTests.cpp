@@ -27,6 +27,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <map>
 #include <vector>
