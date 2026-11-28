@@ -95,8 +95,12 @@ NEVERD_ACTION(FileNewInstance, QT_TRANSLATE_NOOP("Actions", "&New instance"),
               QT_TRANSLATE_NOOP("Actions", "Open a new instance of NeverD"))
 NEVERD_ACTION(FileOpen, QT_TRANSLATE_NOOP("Actions", "&Open..."), "", "open",
               QT_TRANSLATE_NOOP("Actions", "Open a binary for analysis"))
-NEVERD_ACTION(FileJVMRecovery, QT_TRANSLATE_NOOP("Actions", "Inspect JVM classes and JARs…"), "",
-              "open", QT_TRANSLATE_NOOP("Actions", "Inspect Java bytecode, typed IR and reconstructed methods"))
+NEVERD_ACTION(FileJVMRecovery,
+              QT_TRANSLATE_NOOP("Actions", "Inspect JVM classes and JARs…"), "",
+              "open",
+              QT_TRANSLATE_NOOP(
+                  "Actions",
+                  "Inspect Java bytecode, typed IR and reconstructed methods"))
 NEVERD_ACTION(FilePythonRecovery,
               QT_TRANSLATE_NOOP("Actions", "Recover Python source…"), "",
               "open",
@@ -707,6 +711,11 @@ NEVERD_ACTION(
     "Ctrl+Shift+R", "palette_repeat",
     QT_TRANSLATE_NOOP("Actions",
                       "Run the last command chosen in the palette again"))
+NEVERD_ACTION(OptionsModelScan,
+              QT_TRANSLATE_NOOP("Actions", "Model Security Scan..."), "",
+              "analyze",
+              QT_TRANSLATE_NOOP(
+                  "Actions", "Inspect local model files and package templates"))
 NEVERD_ACTION(OptionsMemorySafetyScan,
               QT_TRANSLATE_NOOP("Actions", "Memory Safety Scan..."), "",
               "analyze",

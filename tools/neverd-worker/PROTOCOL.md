@@ -13,6 +13,8 @@ A progress reply precedes the offline read. The normal `cancel` request targets
 the recovery request ID. Its terminal reply distinguishes an observed stop from
 completion before cancellation. See the [dialect matrix](../../docs/lua-recovery.md).
 
+A worker advertising `model_scan` accepts a local `path` and an optional `options` object before opening a project. Its terminal payload is the shared model report. The standard cancel request uses the active request ID. See the [model scan options and evidence fields](../../docs/model-scan.md).
+
 ## Transport and lifecycle
 
 Each message is a **4-byte unsigned big-endian byte length**, followed by that

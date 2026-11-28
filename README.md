@@ -381,6 +381,7 @@ setting as `neverd_session_set_arm_function_mode()`.
 | `funcs` | Discovered functions |
 | `disasm` | Disassemble (`--func` name or hex) |
 | `sym-explore` | Bounded native LowIR path exploration (`--func`; JSON output) |
+| `scan --gguf` | [Inspect local model directories, tensor ranges and templates (JSON)](docs/model-scan.md) |
 | `scan` | [Check object lifetime, initialization, bounds and format strings (JSON)](docs/memory-safety-scan.md) |
 | `hex` | Hex dump at an address |
 | `cfg` / `callgraph` | CFG / call graph (JSON; DOT/SVG optional) |

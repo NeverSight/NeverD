@@ -90,6 +90,10 @@ add_neverd_unittest(NeverDSupportSharedValueTests
 target_include_directories(NeverDSupportSharedValueTests PRIVATE
   "${CMAKE_SOURCE_DIR}/include")
 
+add_neverd_unittest(NeverDModelArtifactTests
+  model/ModelArtifactTests.cpp
+  LINK_COMPONENTS Model)
+
 add_neverd_unittest(NeverDJVMRecoveryTests
   jvm/JVMRecoveryTests.cpp
   LINK_COMPONENTS JVMRecovery

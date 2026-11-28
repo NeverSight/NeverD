@@ -136,6 +136,31 @@ struct Request {
   Request(Json Value, std::size_t Bytes)
       : value(std::move(Value)), bytes(Bytes) {}
 };
+auto modelScanner() {
+  static auto Scan = engineSymbol<decltype(&neverd_model_scan_json_v1)>(
+      "neverd_model_scan_json_v1");
+  return Scan;
+}
+Engine::Reply scanModel(const Json &Input, std::atomic<bool> &Cancelled) {
+  auto Scan = modelScanner();
+  if (!Scan)
+    throw Error("unsupported", "This engine does not provide model scanning");
+  auto Path = stringField(Input, "path");
+  if (Path.empty() || Path.find(char(0)) != Path.npos)
+    throw Error("invalid_request", "Invalid local model path");
+  auto Options = Input.value("options", Json::object());
+  if (!Options.is_object())
+    throw Error("invalid_request", "Model options must be an object");
+  auto Stop = [](void *Context) -> int {
+    return static_cast<std::atomic<bool> *>(Context)->load();
+  };
+  std::unique_ptr<const char, decltype(&neverd_free_string)> Report(
+      Scan(Path.c_str(), Options.dump().c_str(), Stop, &Cancelled),
+      neverd_free_string);
+  if (!Report)
+    throw Error("engine_error", "Model scan returned no report");
+  return {parseJson(Report.get()), {}};
+}
 auto jvmRecovery() {
   static auto Recover = engineSymbol<decltype(&neverd_jvm_recover_json_v1)>(
       "neverd_jvm_recover_json_v1");
@@ -446,6 +471,8 @@ Json hello() {
          {"patch_context", "patch_preview", "patch_apply", "patch_revert",
           "patches", "patch_export"})
       result["capabilities"].push_back(operation);
+  if (modelScanner())
+    result["capabilities"].push_back("model_scan");
   if (Engine::keepsSourcePatches())
     for (const char *operation : {"source_patch", "source_patch_context"})
       result["capabilities"].push_back(operation);
@@ -704,7 +731,8 @@ void executeLoop(State &state, Transport &transport) {
         if (scriptOperation(op))
           transport.send(response(value, revision(), project(), "progress",
                                   {{"phase", "reading"}}));
-        auto reply = scriptOperation(op)
+        auto reply = op == "model_scan" ? scanModel(input, request->cancelled)
+                     : scriptOperation(op)
                          ? recoverScript(op, input, request->cancelled)
                      : webRequest ? Engine::Reply{web.execute(op, input), {}}
                                   : engine.executeResponse(op, input);
@@ -753,7 +781,8 @@ void executeLoop(State &state, Transport &transport) {
           }
           result["completed_before_cancellation"] =
               !ComparisonStopped && !scanStopped &&
-              !(scriptOperation(op) && result["status"] == "ok" &&
+              !((scriptOperation(op) || op == "model_scan") &&
+                result["status"] == "ok" &&
                 result["payload"].value("status", std::string()) ==
                     "cancelled");
           if (ComparisonOperation)

@@ -19862,6 +19862,8 @@ file and guest-process execution remain separate capabilities.
 
 ## Where to edit
 
+`lib/model` owns seekable local model inputs, storage ranges, template findings, graph inventories and compatible-baseline comparison. The independent `neverd_model_scan_json_v1` entry point serves the explicit CLI scan and the workbench worker before any native image session is loaded. See the [model report](model-scan.md).
+
 Some lifters share instruction forms through local tables. PowerPC and
 RISC-V use integer opcode tables. MIPS uses
 `MIPSIntegerOpcodes.def` for classic fields shared with microMIPS and MIPS16

@@ -25,6 +25,7 @@ target_link_libraries(NeverDIR PUBLIC NeverDLift)
 target_link_libraries(NeverDIRMed PUBLIC NeverDLibC)
 
 add_subdirectory(support)
+add_subdirectory(model)
 if(NEVERD_ENABLE_WEB_ANALYSIS)
   add_subdirectory(web)
 endif()

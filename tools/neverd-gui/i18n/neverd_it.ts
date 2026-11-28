@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Model Security Scan...</source>
+        <translation>Analisi di sicurezza del modello...</translation>
+    </message>
+    <message>
+        <source>Inspect local model files and package templates</source>
+        <translation>Esamina i file dei modelli locali e i template associati</translation>
+    </message>
+    <message>
         <source>Inspect JVM classes and JARs…</source>
         <translation>Esamina classi JVM e archivi JAR…</translation>
     </message>
@@ -11588,6 +11596,157 @@ Il grafo precedente è ancora disponibile.</translation>
     <message>
         <source>Save native component to a new file</source>
         <translation>Salva il componente nativo in un nuovo file</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ModelScanDialog</name>
+    <message>
+        <source>Inferred projection layouts</source>
+        <translation>Strutture di proiezione inferite</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>Disattivato</translation>
+    </message>
+    <message>
+        <source>&amp;Quantization sample (KiB)</source>
+        <translation>Campione di &amp;quantizzazione (KiB)</translation>
+    </message>
+    <message>
+        <source>Model Security Scan</source>
+        <translation>Analisi di sicurezza del modello</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Cartella…</translation>
+    </message>
+    <message>
+        <source>File…</source>
+        <translation>File…</translation>
+    </message>
+    <message>
+        <source>Select model package</source>
+        <translation>Seleziona pacchetto del modello</translation>
+    </message>
+    <message>
+        <source>Select model file</source>
+        <translation>Seleziona file del modello</translation>
+    </message>
+    <message>
+        <source>&amp;Model</source>
+        <translation>&amp;Modello</translation>
+    </message>
+    <message>
+        <source>&amp;Baseline (optional)</source>
+        <translation>&amp;Riferimento (facoltativo)</translation>
+    </message>
+    <message>
+        <source>Scan</source>
+        <translation>Analizza</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>Annulla analisi</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Avvio del processo di analisi…</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Evidenze</translation>
+    </message>
+    <message>
+        <source>Status or type</source>
+        <translation>Stato o tipo</translation>
+    </message>
+    <message>
+        <source>Selected evidence</source>
+        <translation>Evidenza selezionata</translation>
+    </message>
+    <message>
+        <source>Previous page</source>
+        <translation>Pagina precedente</translation>
+    </message>
+    <message>
+        <source>Next page</source>
+        <translation>Pagina successiva</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Esporta rapporto…</translation>
+    </message>
+    <message>
+        <source>Save report to a new file</source>
+        <translation>Salva il rapporto in un nuovo file</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>Il processo di analisi si è arrestato.</translation>
+    </message>
+    <message>
+        <source>Reading model artifacts…</source>
+        <translation>Lettura dei file del modello…</translation>
+    </message>
+    <message>
+        <source>Model scanning is unavailable in this worker.</source>
+        <translation>Questo processo di analisi non supporta i modelli.</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Annullato</translation>
+    </message>
+    <message>
+        <source>%1 tensors</source>
+        <translation>%1 tensori</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>Risultati</translation>
+    </message>
+    <message>
+        <source>Coverage gaps</source>
+        <translation>Aree non esaminate</translation>
+    </message>
+    <message>
+        <source>Artifacts</source>
+        <translation>File del modello</translation>
+    </message>
+    <message>
+        <source>Templates</source>
+        <translation>Template</translation>
+    </message>
+    <message>
+        <source>Tensors</source>
+        <translation>Tensori</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>Metadati</translation>
+    </message>
+    <message>
+        <source>Exported graphs</source>
+        <translation>Grafi esportati</translation>
+    </message>
+    <message>
+        <source>Layers inferred from names</source>
+        <translation>Livelli dedotti dai nomi</translation>
+    </message>
+    <message>
+        <source>Baseline comparison</source>
+        <translation>Confronto con il riferimento</translation>
+    </message>
+    <message>
+        <source>Tensor comparison</source>
+        <translation>Confronto dei tensori</translation>
+    </message>
+    <message>
+        <source>Component changes</source>
+        <translation>Modifiche ai componenti</translation>
     </message>
 </context>
 </TS>

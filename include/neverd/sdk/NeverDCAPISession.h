@@ -41,6 +41,13 @@ extern "C" {
 /// nonthrowing. Its context must remain alive until the synchronous call ends.
 typedef int (*neverd_cancel_probe_fn)(void *user_data);
 
+/// Offline model scan over a local file or package directory. Options is a JSON
+/// object or NULL for defaults. Release the report with neverd_free_string.
+NEVERD_API const char *neverd_model_scan_json_v1(const char *Path,
+                                                 const char *Options,
+                                                 neverd_cancel_probe_fn Stop,
+                                                 void *Context);
+
 NEVERD_API neverd_session_t neverd_session_create(void);
 NEVERD_API void neverd_session_destroy(neverd_session_t Sess);
 /// Returns 1 on success, replacing the image, analysis, and per-image edits.

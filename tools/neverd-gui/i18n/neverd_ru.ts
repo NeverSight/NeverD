@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Model Security Scan...</source>
+        <translation>Проверка безопасности модели...</translation>
+    </message>
+    <message>
+        <source>Inspect local model files and package templates</source>
+        <translation>Проверить локальные файлы моделей и сопутствующие шаблоны</translation>
+    </message>
+    <message>
         <source>Inspect JVM classes and JARs…</source>
         <translation>Исследовать классы JVM и JAR-файлы…</translation>
     </message>
@@ -11624,6 +11632,157 @@ Your previous graph is still available.</source>
     <message>
         <source>Save native component to a new file</source>
         <translation>Сохранить нативный компонент в новый файл</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ModelScanDialog</name>
+    <message>
+        <source>Inferred projection layouts</source>
+        <translation>Предполагаемые структуры проекций</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>Отключено</translation>
+    </message>
+    <message>
+        <source>&amp;Quantization sample (KiB)</source>
+        <translation>Выборка &amp;квантования (КиБ)</translation>
+    </message>
+    <message>
+        <source>Model Security Scan</source>
+        <translation>Проверка безопасности модели</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Папка…</translation>
+    </message>
+    <message>
+        <source>File…</source>
+        <translation>Файл…</translation>
+    </message>
+    <message>
+        <source>Select model package</source>
+        <translation>Выбрать пакет модели</translation>
+    </message>
+    <message>
+        <source>Select model file</source>
+        <translation>Выбрать файл модели</translation>
+    </message>
+    <message>
+        <source>&amp;Model</source>
+        <translation>&amp;Модель</translation>
+    </message>
+    <message>
+        <source>&amp;Baseline (optional)</source>
+        <translation>&amp;Эталон (необязательно)</translation>
+    </message>
+    <message>
+        <source>Scan</source>
+        <translation>Проверить</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>Отменить проверку</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Запуск процесса анализа…</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Данные анализа</translation>
+    </message>
+    <message>
+        <source>Status or type</source>
+        <translation>Состояние или тип</translation>
+    </message>
+    <message>
+        <source>Selected evidence</source>
+        <translation>Выбранные данные проверки</translation>
+    </message>
+    <message>
+        <source>Previous page</source>
+        <translation>Предыдущая страница</translation>
+    </message>
+    <message>
+        <source>Next page</source>
+        <translation>Следующая страница</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Экспортировать отчёт…</translation>
+    </message>
+    <message>
+        <source>Save report to a new file</source>
+        <translation>Сохранить отчёт в новом файле</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>Процесс анализа остановлен.</translation>
+    </message>
+    <message>
+        <source>Reading model artifacts…</source>
+        <translation>Чтение файлов модели…</translation>
+    </message>
+    <message>
+        <source>Model scanning is unavailable in this worker.</source>
+        <translation>Этот процесс анализа не поддерживает проверку моделей.</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Отменено</translation>
+    </message>
+    <message>
+        <source>%1 tensors</source>
+        <translation>Тензоров: %1</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>Результаты</translation>
+    </message>
+    <message>
+        <source>Coverage gaps</source>
+        <translation>Непроверенные области</translation>
+    </message>
+    <message>
+        <source>Artifacts</source>
+        <translation>Файлы модели</translation>
+    </message>
+    <message>
+        <source>Templates</source>
+        <translation>Шаблоны</translation>
+    </message>
+    <message>
+        <source>Tensors</source>
+        <translation>Тензоры</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>Метаданные</translation>
+    </message>
+    <message>
+        <source>Exported graphs</source>
+        <translation>Экспортированные графы</translation>
+    </message>
+    <message>
+        <source>Layers inferred from names</source>
+        <translation>Слои, определённые по именам</translation>
+    </message>
+    <message>
+        <source>Baseline comparison</source>
+        <translation>Сравнение с эталоном</translation>
+    </message>
+    <message>
+        <source>Tensor comparison</source>
+        <translation>Сравнение тензоров</translation>
+    </message>
+    <message>
+        <source>Component changes</source>
+        <translation>Изменения компонентов</translation>
     </message>
 </context>
 </TS>
