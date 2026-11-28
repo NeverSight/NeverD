@@ -1714,6 +1714,12 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
+    "neverd_warm_initial_view_json",
+    "const char *",
+    ["neverd_session_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_prepare_call_summaries_json",
     "const char *",
     ["neverd_session_t"],
