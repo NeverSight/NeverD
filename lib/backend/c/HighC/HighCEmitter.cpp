@@ -2190,9 +2190,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     bool IntegerCallsOnly = true;
   };
   std::map<std::string, CallUse> CallUses;
-  const bool Precall = Opts.PrecallMemory != Win64PrecallMemory::None &&
-                       Opts.TheArch == Arch::X64 &&
-                       Opts.Format == BinaryFormat::COFF;
+  const bool Win64 =
+      Opts.TheArch == Arch::X64 && Opts.Format == BinaryFormat::COFF;
   c_detail::Win64OpenCallDeclarations OpenCalls;
   std::map<std::string, TypeRef> SourceCalleeTypes;
   std::map<std::string, TypeRef> FloatingResults;
@@ -2231,7 +2230,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
                     "HighC callees disagree on MIPS instruction mode");
             }
           CallUse &Use = CallUses[Name];
-          if (Precall && Use.IntegerCallsOnly)
+          if (Win64 && Use.IntegerCallsOnly)
             Use.IntegerCallsOnly = c_detail::isWin64IntegerCall(E);
           uint16_t &Bytes = Use.ResultBytes;
           // An indirect call declares no function: the record it returns is
@@ -2766,7 +2765,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
       // declaration needs nothing else: a re-spelling from its types would
       // lose `const`, and conflict with the header a unit includes too.
       const FunctionSym &Library = DebugExternSigs[Name];
-      if (Precall && !ImportSlot && c_detail::hasOnlyWin64SymbolName(Library) &&
+      if (Win64 && !ImportSlot && c_detail::hasOnlyWin64SymbolName(Library) &&
           !msvcCallee(Identifier, Opts.Format)) {
         const auto Use = CallUses.find(Name);
         if (Use != CallUses.end() && Use->second.IntegerCallsOnly) {
@@ -2850,7 +2849,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         // from the output leaves them to it, where its parameters fill the
         // slots its decoration spells.
         const auto Known = knownArity(Symbol, Name);
-        if (Precall && !ImportSlot && !Known && Read != CallUses.end() &&
+        if (Win64 && !ImportSlot && !Known && Read != CallUses.end() &&
             Read->second.IntegerCallsOnly && !DoubleWord &&
             Floating == FloatingResults.end() &&
             Record == RegisterRecordResults.end()) {

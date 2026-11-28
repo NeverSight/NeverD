@@ -372,7 +372,7 @@ TEST(X64CallRCX, HighCUsesTheSharedAssemblyAndOneEvaluationPerInput) {
   E->IntrinsicOutputs.push_back(Aux);
   unsigned Reads = 0;
   const auto C = renderX64CallRCXExpression(
-      Arch::X64, *E,
+      Arch::X64, *E, true,
       [&](const HighExpr &V) {
         ++Reads;
         return "input_" + std::to_string(V.ConstVal) + "()";
@@ -401,10 +401,21 @@ TEST(X64CallRCX, HighCUsesTheSharedAssemblyAndOneEvaluationPerInput) {
   EXPECT_NE(Full.find("NEVERD_X64_CALL_RCX"), std::string::npos) << Full;
   EXPECT_NE(Full.find("no-avx"), std::string::npos) << Full;
   EXPECT_NE(Full.find("neverd.analysis-only"), std::string::npos) << Full;
+  HighStmt Effect;
+  Effect.Kind = StmtKind::Call;
+  Effect.CallExpr = E;
+  F.Body.front() = std::move(Effect);
+  F.ReturnType = NdType::makeVoid();
+  std::string Discarded;
+  llvm::raw_string_ostream DiscardedOut(Discarded);
+  ASSERT_TRUE(HighCEmitter().emit({F}, DiscardedOut, Options));
+  EXPECT_NE(Discarded.find("callq *%%rax"), std::string::npos);
+  EXPECT_EQ(Discarded.find("__neverd_call_ax; })"), std::string::npos);
   if (const auto *Directory = std::getenv("NEVERD_TEST_X64_CALL_RCX_EXPORT")) {
     const char *Names[] = {"target", "a0", "a1", "a2", "a3"};
     const auto Body = renderX64CallRCXExpression(
-        Arch::X64, *E, [&](const HighExpr &V) { return Names[V.ConstVal]; },
+        Arch::X64, *E, true,
+        [&](const HighExpr &V) { return Names[V.ConstVal]; },
         [](const MedVar &) { return "*out"; },
         [](const MedVar &) { return true; });
     std::error_code Error;
@@ -420,7 +431,7 @@ TEST(X64CallRCX, HighCUsesTheSharedAssemblyAndOneEvaluationPerInput) {
   }
   E->IntrinsicOutputs[0].Size = 4;
   EXPECT_THROW(renderX64CallRCXExpression(
-                   Arch::X64, *E, [](const HighExpr &) { return "0"; },
+                   Arch::X64, *E, true, [](const HighExpr &) { return "0"; },
                    [](const MedVar &) { return "x"; },
                    [](const MedVar &) { return true; }),
                std::invalid_argument);
