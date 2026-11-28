@@ -178,8 +178,9 @@ struct SpecializationX64ReturningCall {
   SpecializationX64CallProfile Profile = SpecializationX64CallProfile::None;
   uint64_t OutgoingBytes = 0;
   /// Versions 2 through 5. Sorted, disjoint, nonempty entry-frame-relative
-  /// spans. Version 4 may omit earlier spans while retaining the caller-frame
-  /// suffix above the outgoing arguments.
+  /// spans when present. Versions 2 and 3 require at least one; versions 4
+  /// and 5 may omit them while retaining the caller-frame suffix above the
+  /// outgoing arguments.
   /// Only bytes materialized immediately before the call are retained.
   std::vector<SpecializationCallPreservedFrameRange> PreservedFrameRanges;
   /// Version 4 only. Sorted, disjoint absolute ranges missed by the complete
