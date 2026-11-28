@@ -21741,6 +21741,9 @@ and jump/local-unwind contracts retain their distinct provider sets.
 PE32 also uses the UCRT stdio provider set for the caller-cleanup convention
 of `__acrt_iob_func` and `__stdio_common_vfprintf`. Proving a stream, a format
 string or the effects of output requires the arguments at the call.
+PE32 callers also remove their arguments after a returning `malloc`, `calloc`,
+`realloc` or `free` from the legacy CRT or the UCRT heap provider. Allocation
+callbacks and changes to heap storage require their own call-site evidence.
 The PE32 CRT startup ABI assigns caller cleanup to the argument, environment
 and on-exit table routines in the runtime API set, including
 `_crt_atexit` and `_crt_at_quick_exit`. The math and locale

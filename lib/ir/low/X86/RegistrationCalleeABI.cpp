@@ -38,6 +38,7 @@ bool isCallerCleanupCRTImport(const Import &Imported) {
     Stdio,
     Runtime,
     Heap,
+    StandardHeap,
     Initializers
   };
   const auto Provider = llvm::StringSwitch<Family>(Imported.Name)
@@ -60,6 +61,9 @@ bool isCallerCleanupCRTImport(const Import &Imported) {
     return coff_loader::isUCRTRuntimeProvider(Imported.Module);
   if (Provider == Family::Heap)
     return coff_loader::isUCRTHeapProvider(Imported.Module);
+  if (Provider == Family::StandardHeap)
+    return coff_loader::isX86LegacyCRTProvider(Imported.Module) ||
+           coff_loader::isUCRTHeapProvider(Imported.Module);
   if (Provider == Family::Initializers)
     return coff_loader::isX86LegacyCRTProvider(Imported.Module) ||
            coff_loader::isUCRTRuntimeProvider(Imported.Module);

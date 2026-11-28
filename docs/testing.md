@@ -21231,6 +21231,9 @@ The original startup `FNCLEX` also checks the integer and floating-state
 boundary. Its stack pointer, private stack word and integer result survive.
 The test seeds a known x87 status word and checks that the frame analysis
 withdraws it after the instruction in both loader selections.
+The heap ABI tests cover caller cleanup through both PE32 import call forms,
+including the heap API set in the original xcpt4 deallocation path. They check
+provider mismatches, delay imports and conflicting slot evidence.
 The outer stdio wrapper
 restores ESP from EBP after its nested calls. The inner wrapper depends on
 the UCRT calling convention. On Windows,
