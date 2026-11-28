@@ -31,6 +31,7 @@ using namespace neverd;
 namespace {
 #include "../lift/fixtures/CycleVMX.inc"
 #include "../lift/fixtures/RISCVConditionalZero.inc"
+#include "../lift/fixtures/RISCVPack.inc"
 #include "ELFIntegerExtendedFixture.inc"
 
 TEST(PowerPCPrefixed, SignedD34AndFetchBoundaries) {
@@ -215,6 +216,52 @@ void expectRISCVResult(const BinaryImage &Img, Decoder &D, uint32_t Word,
   EXPECT_EQ(Emu.getRegister(integerreg::gpr(0)).value_or(0), 0u);
 }
 
+TEST(RISCVPacking, OperandOrderAliasesAndExtensionSelection) {
+  using namespace pack_fixture;
+  constexpr uint64_t X = UINT64_C(0xaabbccdd12349955);
+  constexpr uint64_t Y = UINT64_C(0x11223344dead80ab);
+  for (Arch A : {Arch::RISCV32, Arch::RISCV64}) {
+    const bool Wide = isRISCV64(A);
+    const uint64_t Packed = Wide ? UINT64_C(0xdead80ab12349955) : 0x80ab9955;
+    for (bool Zbkb : {false, true})
+      for (bool Zbb : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << " Zbkb=" << Zbkb << " Zbb=" << Zbb);
+        BinaryImage Img;
+        Img.Arch = A;
+        Img.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+        Img.RISCV = {.Zbb = Zbb, .Zbkb = Zbkb};
+        Decoder D;
+        ASSERT_TRUE(D.init(Img));
+        const auto Check = [&](uint32_t Word, bool Enabled, uint64_t Value,
+                               unsigned Dst = 10) {
+          if (Enabled) {
+            expectRISCVResult(Img, D, Word, X, Y, Value, Dst);
+            return;
+          }
+          uint8_t Code[4];
+          llvm::support::endian::write32le(Code, Word);
+          DecodedInsn I;
+          if (D.decodeOneForLift(Code, sizeof(Code), 0x1000, I)) {
+            std::vector<LowOp> Ops;
+            EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+            EXPECT_TRUE(Ops.empty());
+          }
+        };
+        Check(Pack, Zbkb, Packed);
+        Check(PackIntoHigh, Zbkb, Packed, 11);
+        Check(PackDiscard, Zbkb, X);
+        Check(PackH, Zbkb, 0xab55);
+        Check(PackHZeroLow, Zbkb, 0xab00);
+        Check(PackW, Wide && Zbkb, UINT64_C(0xffffffff80ab9955));
+        Check(PackZeroHigh, Zbkb || (!Wide && Zbb),
+              Wide ? uint32_t(X) : uint16_t(X));
+        Check(PackWZeroHigh, Wide && (Zbkb || Zbb), uint16_t(X));
+        Check(Brev8, false, 0);
+      }
+  }
+}
+
 TEST(RISCVCounter, SamplesOncePerReadAcrossRV32Rollover) {
   for (Arch A :
        {Arch::RISCV32, Arch::RISCV32D, Arch::RISCV64, Arch::RISCV64D}) {
@@ -344,7 +391,7 @@ TEST(PowerPCVMX, LanesWrapAndOverlappingOperandsReadTheirOldValues) {
                 N >= 2 && N <= 13);
       EXPECT_EQ(TRI.isCallPreserved(ppc::vr(N), ppc::VectorBytes), N >= 20);
     }
-    for (const auto &Form : vmx_fixture::Adds) {
+    for (const auto &Form : vmx_fixture::Operations) {
       SCOPED_TRACE(::testing::Message()
                    << unsigned(A) << " " << std::hex << Form.Word);
       uint8_t Code[4];
@@ -362,13 +409,13 @@ TEST(PowerPCVMX, LanesWrapAndOverlappingOperandsReadTheirOldValues) {
         Left[N] = 255 - 7 * N;
         Right[N] = Form.A == Form.B ? Left[N] : 1 + 19 * N;
       }
-      unsigned Carry = 0;
+      int Carry = 0;
       for (unsigned N = 0; N < Left.size(); ++N) {
         if (N % Form.LaneBytes == 0)
           Carry = 0;
-        const unsigned Sum = unsigned(Left[N]) + Right[N] + Carry;
-        Expected[N] = Sum;
-        Carry = Sum >> 8;
+        int Result = Left[N] + Carry + (Form.Subtract ? -Right[N] : Right[N]);
+        Expected[N] = static_cast<uint8_t>(Result);
+        Carry = Result < 0 ? -1 : Result >> 8;
       }
       Emu.setRegisterBytes(ppc::vr(Form.B), Right);
       Emu.setRegisterBytes(ppc::vr(Form.A), llvm::ArrayRef(Left).drop_back());

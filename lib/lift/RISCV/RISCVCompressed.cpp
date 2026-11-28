@@ -33,7 +33,7 @@ uint32_t regOp(unsigned Op, unsigned D, unsigned Fun, unsigned A, unsigned B,
 } // namespace
 
 std::optional<uint32_t> expandCompressed(uint16_t H, bool RV64,
-                                         RISCVProfile Profile) {
+                                         const RISCVProfile &Profile) {
   const unsigned Q = H & 3, F = H >> 13;
   const unsigned Rd = H >> 7 & 31, Rs = H >> 2 & 31;
   const unsigned R1 = 8 + (Rd & 7), R2 = 8 + (Rs & 7);

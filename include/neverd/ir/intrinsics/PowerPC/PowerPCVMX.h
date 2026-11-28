@@ -11,15 +11,25 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 
+#include <cstdint>
+#include <optional>
+
 namespace neverd::ppc {
-inline unsigned vmxAddLaneBytes(Intrinsic Id) {
+enum class VMXOperation : uint8_t { Add, Sub };
+
+struct VMXBinaryForm {
+  uint8_t LaneBytes;
+  VMXOperation Operation;
+};
+
+inline std::optional<VMXBinaryForm> vmxBinaryForm(Intrinsic Id) {
   switch (Id) {
-#define NEVERD_PPC_VMX(Name, Value, Word, Text, LaneBytes)                     \
+#define NEVERD_PPC_VMX(Name, Value, Word, Text, Bytes, Operation)              \
   case Intrinsic::Name:                                                        \
-    return LaneBytes;
+    return VMXBinaryForm{Bytes, VMXOperation::Operation};
 #include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.def"
   default:
-    return 0;
+    return std::nullopt;
   }
 }
 

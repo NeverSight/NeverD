@@ -68,7 +68,7 @@ inline constexpr std::array<const char *, 8> FPRoundingNames{
 /// Selector is the form ID followed by the three-bit rounding field.
 const FPForm *floatingForm(uint64_t Selector, unsigned XLen);
 std::optional<unsigned> decodeFloating(uint32_t Word, unsigned XLen,
-                                       RISCVProfile Profile);
+                                       const RISCVProfile &Profile);
 
 /// CSR 1/2/3 selects fflags/frm/fcsr. Operation 0 is a read, 1 a swap,
 /// 2 sets bits and 3 clears bits. Immediate sources are ordinary constants.

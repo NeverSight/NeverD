@@ -454,7 +454,7 @@ bool integer(State &S, Arch A, uint32_t W) {
   case opcode::VMX: {
     Intrinsic Id;
     switch (W & VXFormMask) {
-#define NEVERD_PPC_VMX(Name, Value, Word, Text, LaneBytes)                     \
+#define NEVERD_PPC_VMX(Name, Value, Word, Text, ...)                           \
   case Word:                                                                   \
     Id = Intrinsic::Name;                                                      \
     break;
