@@ -30,16 +30,24 @@ def observation():
     # import and cross-check two separate exports before using the table.
     # Only boolean predicates on these fixed application/runtime images
     # leave CDB. The workflow separately runs the file outside the debugger.
+    # Compare the two halves of the PE32 sentinel so debugger-expression
+    # sign extension cannot change the native 32-bit comparison.
+    default_table = "(wo(@$exentry+0x43ca) == 0xffff) and (wo((@$exentry+0x43ca)+2) == 0xffff)"
     entry = {
         "pc": "@eip == @$exentry-0x272",
         "app_type_export": "poi(@$exentry+0x128e) == @$t0+0x85a00",
         "commode_export": "poi(@$exentry+0x12ca) == @$t0+0x879d0",
         "callback": "poi(@esp) == @$exentry+0x6eb",
-        "uses_default": "poi(@$exentry+0x43ca) == 0xffffffff",
+        "uses_default": default_table,
         "mode0_zero": "poi(@$t0+0x1043c4) == 0",
         "mode1_zero": "poi(@$t0+0x1043c8) == 0",
         "handler0_null": "poi(@$t0+0x1043bc) == poi(@$t0+0x103300)",
         "handler1_null": "poi(@$t0+0x1043c0) == poi(@$t0+0x103300)",
+    }
+    dispatch = {
+        "pc": "@eip == @$exentry+0x338",
+        "uses_default": default_table,
+        "compared_equal": "(@efl & 0x40) != 0",
     }
     table = {
         "pc": "@eip == @$t0+0x616e0",
@@ -74,6 +82,7 @@ def observation():
         ".expr /s masm", *stop_at("@$exentry"), ".echo XCPT4_PROCESS_ENTRY",
         *stop_at("@$exentry-0x272"),
         "r $t0 = poi(@$exentry+0x127a)-0x61640", marker("ENTRY", entry),
+        *stop_at("@$exentry+0x338"), marker("DISPATCH", dispatch),
         *stop_at("@$t0+0x616e0"), "r $t1 = poi(@esp+4)",
         '.if ((@$t1 != (@$t0+0x10475c)) and (@$t1 != (@$exentry+0x43ca))) { .echo XCPT4_UNKNOWN_TABLE; qd }',
         marker("TABLE", table),
@@ -81,7 +90,7 @@ def observation():
         *stop_at("@$exentry-0x26d"), marker("RETURN", returned),
         "qd",
     ]
-    return steps, {"ENTRY": entry, "TABLE": table, "COMPARE": comparison, "RETURN": returned}
+    return steps, {"ENTRY": entry, "DISPATCH": dispatch, "TABLE": table, "COMPARE": comparison, "RETURN": returned}
 
 
 def parse_markers(output, groups):
@@ -120,10 +129,10 @@ def main():
                   if re.search(r"last event:|xcpt4.*\+0x[0-9a-f]+:$|\be\s+[0-9a-f]{8}\b|XCPT4_PROCESS_ENTRY$|XCPT4_UNEXPECTED_STOP$", line, re.I)]
         raise ValueError(f"CDB stopped outside the fixed startup observations: {events[-20:]}")
     results = parse_markers(completed.stdout, groups)
-    before, table, branch, after = (results[n] for n in ("ENTRY", "TABLE", "COMPARE", "RETURN"))
+    before, dispatch, table, branch, after = (results[n] for n in ("ENTRY", "DISPATCH", "TABLE", "COMPARE", "RETURN"))
     if not (all(before[key] for key in ("pc", "app_type_export", "commode_export", "callback"))
             and table["pc"] and table["callback"] and table["ucrt_table"] != table["program_table"]
-            and table["ucrt_table"] == before["uses_default"]
+            and dispatch["pc"] and dispatch["compared_equal"] == dispatch["uses_default"] == table["ucrt_table"]
             and branch["pc"] and after["pc"] and branch["first_null"] == table["first_null"]
             and branch["take_growth_branch"] == branch["equal"] == table["full"]):
         events = [line for line in completed.stdout.splitlines() if "Last event:" in line]
