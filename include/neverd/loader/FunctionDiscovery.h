@@ -189,10 +189,10 @@ inline void runPostLoadDiscovery(BinaryImage &Img,
   registerLoaderRunFunctions(Img);
   Progress.check();
   // A `--func` PE load already has `.pdata` ranges and the requested body.
-  // Import-thunk scanning walks every executable byte looking for IAT veneers
-  // outside that table; skip it when the caller named the work set.
+  // Windows ARM64 can check just its direct callees for IAT veneers.
   Progress.report("load-discovery", 0, 1, "import thunks");
-  if (Img.LoadOnlyFunctionEntries.empty())
+  if (Img.LoadOnlyFunctionEntries.empty() ||
+      (Img.Format == BinaryFormat::COFF && Img.Arch == Arch::AArch64))
     scanImportThunks(Img);
   // x64/ARM PE .pdata is the format-native function table, the same role as
   // Mach-O LC_FUNCTION_STARTS.  Padding and data-pointer scans walk every
