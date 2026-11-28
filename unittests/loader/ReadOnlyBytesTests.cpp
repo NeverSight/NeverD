@@ -19,6 +19,7 @@
 #include "neverd/object/ELFLayout.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 
@@ -51,6 +52,31 @@ BinaryImage codeImage() {
   Image.Sections.push_back(std::move(Section));
   Image.BaseRelocations.push_back({OperandVA, 3});
   return Image;
+}
+
+TEST(ReadOnlyBytes, LinkedPE32InitializersKeepWritableDataFileScoped) {
+  auto Image = codeImage();
+  constexpr va_t FormatVA = TextVA + 0x40;
+  auto &Seg = Image.Segments.front();
+  auto &Sec = Image.Sections.front();
+  Sec.Flags = Seg.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  const std::vector<uint8_t> Original = {'%', 'd', 0};
+  std::copy(Original.begin(), Original.end(),
+            Seg.Data.begin() + (FormatVA - TextVA));
+  EXPECT_EQ(readInitialImageBytes(Image, FormatVA, 3), Original);
+  EXPECT_FALSE(readImmutableImageBytes(Image, FormatVA, 3));
+
+  Image.BaseRelocations.push_back({FormatVA - 2, 3});
+  EXPECT_FALSE(readInitialImageBytes(Image, FormatVA, 3));
+  Image.BaseRelocations.clear();
+  Sec.FileSz = FormatVA - TextVA + 2;
+  EXPECT_FALSE(readInitialImageBytes(Image, FormatVA, 3));
+  Sec.FileSz = Sec.Size;
+  Image.Sections.push_back(Sec);
+  EXPECT_FALSE(readInitialImageBytes(Image, FormatVA, 3));
+  Image.Sections.pop_back();
+  Image.IsRelocatable = true;
+  EXPECT_FALSE(readInitialImageBytes(Image, FormatVA, 3));
 }
 
 TEST(ELFIndexedData, ReadExtentRespectsSymbolsAndSectionlessFileLayout) {

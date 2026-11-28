@@ -16759,6 +16759,14 @@ intrinsic reject. `DivideFaultCannotCertifyLaterImportBindings` adds 72 physical
 variants of direct slot calls, fresh cached loads, retained register targets and
 reloads. A potential divide fault withdraws later bindings while a target held
 before the divide remains a separate positive control.
+`RegistrationCRTFrame.XCPT4CPUInitializerRestoresTheCallerStack` follows
+the original PE32 CPU initializer through its feature query, CPUID and XGETBV
+in full and selected-function loads. Both graphs restore the caller's stack.
+The feature result stays unknown. A processor instruction can fault, so the
+returning stack proof drops fresh import bindings. The CPUID check requires a
+private EBX save and restore in the same block. The register controls in
+`RegistrationImportABI.CPUQueriesDiscardOverwrittenStackCoordinates` exercise
+each CPU result register and an unaffected stack coordinate.
 `CRTMemoryImportsProveOnlyReturningStackCleanup` checks eleven legacy CRT
 imports through both IAT calls and jump veneers. Provider, name, delayed-import,
 conflicting-slot, addend, backing-byte, metadata, architecture and caller-cleanup
@@ -16774,6 +16782,10 @@ zero callee cleanup, while private object/initializer borrows and exception
 dispatch remain unproved. `StackCleanupCannotAuthorizeDispatchOrObservation`
 also checks that these table, lock and exit-registration imports cannot acquire
 the separate RaiseException caller-frame contract from their stack fact.
+The two PE32 startup-mode tests check the UCRT provider and caller cleanup,
+then decode the actual arguments to `_set_app_type`, `_set_fmode` and
+`_set_new_mode` in the MSVC `xcpt4` fixture. They exercise whole-image and
+selected-function loading, including a changed getter and a split call sequence.
 Managed-name variants, partial or missing caller cleanup, and stale provider or
 slot bindings receive no normal-return stack contract.
 `CxxCookieSourceProofReachesTheParentAndMedCallABI` also checks an independent
@@ -16871,10 +16883,12 @@ consumers and rejects malformed effect contracts. Frame transfer tests also
 ensure preservation cannot revive a lost binding or invent a pointer result.
 `ReturningHelperMayReplaceRuntimeSlot` proves from machine bytes that a balanced
 returning helper can overwrite an IAT slot. `CallsNeedIndependentRuntimeBindingEffects`
-checks the later EH3/EH4 output call across opaque calls, imports and veneers,
+checks the later EH3/EH4 output call across ordinary helpers, imports and veneers
+with and without a proved normal-return binding effect,
 while `ImageEffectsGateLaterCapture` covers checked callee image writes.
 `OpaqueCallsRevokeExceptionalRuntimeBindings` rejects stale filter/finally
-resumptions after an opaque terminating call. `LaterIterationsRevokeEarlierRuntimeReceipts`
+resumptions after a terminating call, including one with a normal-return
+binding effect. `LaterIterationsRevokeEarlierRuntimeReceipts`
 keeps an explicit stack restoration while revoking a prior loop iteration's
 runtime receipt after its binding becomes unproved.
 `CachedImportsRespectCumulativeWork` checks the exact work boundary and refusal
@@ -21228,6 +21242,61 @@ an incoming-object conditional finally separately from its returning-stack
 contract. Far returns, unknown stack restoration, malformed metadata, writable
 code, changed frame registers and nested calls that only have a pop summary
 refuse. This regression does not certify the helper's object-memory effects.
+The PE32 stdio tests cover the direct and veneer calls for the one-DWORD
+stream lookup and six-DWORD formatted output. They check the original xcpt4
+imports, caller cleanup and refusals for a changed provider, delayed binding
+or conflicting slot.
+
+The PE32 startup ABI test covers the argument, environment, on-exit, math and
+locale routines used by the original MSVC program. It checks direct imports
+and their jump veneers against the owning API set and both UCRT DLLs. A
+different API set, a delayed import or conflicting storage withdraws the
+stack contract. Both loader selections check the two exit-registration veneers
+in the original executable against their individual eager import slots.
+The original exit-registration wrappers forward a DWORD from their caller.
+The tests check both wrappers with the real push and a same-relocation
+register move. Separate cases cover a 16-bit push, a read crossing the
+argument boundary, a write, and an earlier change to the required import.
+
+The CRT data tests check which import bindings survive a full-width
+store through an eager `_fmode`, `_commode` or `__p__commode` address.
+They check both the direct return and the later call to `Sleep`.
+The original startup sequence also exercises the store between its pushed
+mode argument and the call that consumes it.
+
+The PE32 startup fixture also checks both UCRT initializer walkers and the
+three relocated callbacks in their read-only tables.
+`InitializerCallsKeepOnlyProvenCallbackEffects` covers a callback that
+uses an eager import, an earlier store that replaces its slot, and a
+delay-loaded callback dependency. The stdio initializer uses one framed and
+one frameless getter for its two option records. Whole-image and selected
+loading check each store with the real instructions. Missing relocations,
+a changed destination register or an overlapping import withdraw the effect.
+The original on-exit table initializer takes mode 1 after the store through
+the UCRT commode pointer. Whole-image and selected loading check its two
+possible image reads, seven possible writes, and returned AL. The tests vary
+the mode, incoming EAX, physical call ownership, relocations and nested leaf
+effects. A caller with two distinct return cleanups also checks that the
+actual argument survives the CRT store and selects the correct return.
+The type-info initializer calls `KERNEL32.dll!InitializeSListHead` with an
+eight-byte header. Both loader selections check the original call and reject
+a changed DLL, delay binding, missing relocation, unaligned address, an
+overlapping import on the final byte, and shared, discardable or read-only
+storage.
+The original startup `FNCLEX` also checks the integer and floating-state
+boundary. Its stack pointer, private stack word and integer result survive.
+The test seeds a known x87 status word and checks that the frame analysis
+withdraws it after the instruction in both loader selections.
+The heap ABI tests cover caller cleanup through both PE32 import call forms,
+including the heap API set in the original xcpt4 deallocation path. They check
+provider mismatches, delay imports and conflicting slot evidence.
+The outer stdio wrapper
+restores ESP from EBP after its nested calls. The inner wrapper depends on
+the UCRT calling convention. On Windows,
+`RegistrationCRTFrame.OriginalPE32XCPT4RunsOnWindows` executes the original
+file and checks all 90 outcomes in order. The x86 source enables 85 cases
+and explicitly skips 29, 58, 61, 87 and 89.
+
 The public xcpt4 PE32 and PE64 issue tests remain separate required acceptance
 checks; passing these focused tests does not close either issue.
 

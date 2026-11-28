@@ -40,6 +40,7 @@ FrameValue projectX86CallReturnValue(const FrameValue &Value) {
     return Value;
   auto Opaque = FrameValue::taint(true);
   Opaque.FrameOnlyFromCall = true;
+  Opaque.PartialLowByte = Value.PartialLowByte;
   return Opaque;
 }
 
@@ -57,6 +58,9 @@ FrameValue join(FrameValue Left, const FrameValue &Right) {
   Result.FrameOnlyFromSEHScalar =
       MayBeFrame && (!Left.MayBeFrame || Left.FrameOnlyFromSEHScalar) &&
       (!Right.MayBeFrame || Right.FrameOnlyFromSEHScalar);
+  if (const auto Byte = Left.numericLowByte();
+      Byte && Byte == Right.numericLowByte())
+    Result.PartialLowByte = Byte;
   return Result;
 }
 
@@ -202,6 +206,8 @@ FrameValue FrameTransfer::read(const NdVar &Value) const {
         Byte + Value.Size <= 4)
       return FrameValue::constant((*Register.Constant >> (Byte * 8)) &
                                   (UINT32_MAX >> ((4 - Value.Size) * 8)));
+    if (Byte == 0 && Value.Size == 1 && Register.PartialLowByte)
+      return FrameValue::constant(*Register.PartialLowByte);
     return FrameValue::taint(Register.MayBeFrame,
                              Register.FrameOnlyFromSEHScalar);
   }
@@ -529,14 +535,21 @@ void FrameTransfer::write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA,
     State.OtherRegistersMayBeFrame = true;
     Value = {{}, {}, false, true, true};
   }
-  if (Op.Opcode == NdOp::INTRINSIC && !isFramePreservingIntrinsic(Op)) {
-    State.ImportBindingsIntact = false;
-    for (auto &Register : State.Registers)
-      if (Register.ImportTarget)
-        Register = {};
-    for (auto &[Offset, Temporary] : Temps)
-      if (Temporary.ImportTarget)
-        Temporary = {};
+  if (Op.Opcode == NdOp::INTRINSIC) {
+    if (!isFramePreservingIntrinsic(Op)) {
+      State.ImportBindingsIntact = false;
+      for (auto &Register : State.Registers)
+        if (Register.ImportTarget)
+          Register = {};
+      for (auto &[Offset, Temporary] : Temps)
+        if (Temporary.ImportTarget)
+          Temporary = {};
+    } else if (Op.Inputs[0].Offset == uint64_t(Intrinsic::X87Fnclex)) {
+      // A later FNSTSW reads the new status. Its condition codes are
+      // undefined, and the old exception flags no longer reach that read.
+      State.OtherRegisterBytes.erase(x86reg::FPU_SW);
+      State.OtherRegisterBytes.erase(x86reg::FPU_SW + 1);
+    }
   }
   if (Op.Output.isTemp())
     Temps[Op.Output.Offset] = Value;
@@ -547,9 +560,14 @@ void FrameTransfer::write(const LowOp &Op, FrameValue Value, va_t CookieCheckVA,
     if (Op.Output.Offset % x86reg::GeneralRegStride == 0 && Op.Output.Size >= 4)
       Register = Value;
     else {
+      const auto Byte = Op.Output.Offset % x86reg::GeneralRegStride;
+      const auto Low =
+          Byte ? Register.numericLowByte() : Value.numericLowByte();
       const auto Merged = join(Register, Value);
       Register =
           FrameValue::taint(Merged.MayBeFrame, Merged.FrameOnlyFromSEHScalar);
+      if (Op.Output.Size && Byte < 4 && Op.Output.Size <= 4 - Byte)
+        Register.PartialLowByte = Low;
     }
   } else if (Op.Output.isReg()) {
     for (uint64_t Byte = 0; Byte < Op.Output.Size; ++Byte)

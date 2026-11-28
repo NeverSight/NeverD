@@ -204,16 +204,26 @@ TEST(RegistrationStartupInfo, CheckedOutputPreservesOnlyLiveImportBindings) {
 }
 
 TEST(RegistrationStartupInfo, CallsNeedIndependentRuntimeBindingEffects) {
+  enum class CallKind { None, Ordinary, Indirect, Veneer };
+  struct Case {
+    CallKind Kind;
+    bool Preserves;
+  };
+  constexpr Case Cases[] = {
+      {CallKind::None, false},    {CallKind::Ordinary, false},
+      {CallKind::Ordinary, true}, {CallKind::Indirect, false},
+      {CallKind::Indirect, true}, {CallKind::Veneer, false},
+      {CallKind::Veneer, true}};
   for (unsigned Protocol = 0; Protocol != 3; ++Protocol)
-    for (unsigned Mode = 0; Mode != 6; ++Mode) {
+    for (const auto &C : Cases) {
       SCOPED_TRACE(Protocol);
-      SCOPED_TRACE(Mode);
+      SCOPED_TRACE(::testing::Message() << int(C.Kind) << ' ' << C.Preserves);
       auto F = makeStartupFrame(Protocol);
       std::vector<RegistrationCalleeStackContract> Stacks;
-      if (Mode) {
-        const bool Imported = Mode >= 2;
-        const bool Indirect = Mode == 2 || Mode == 3;
-        const va_t Target = Mode >= 4 ? 0x4400 : 0x4300;
+      if (C.Kind != CallKind::None) {
+        const bool Imported = C.Kind != CallKind::Ordinary;
+        const bool Indirect = C.Kind == CallKind::Indirect;
+        const va_t Target = C.Kind == CallKind::Veneer ? 0x4400 : 0x4300;
         LowBlock Call;
         Call.Id = 10;
         Call.StartAddr = Imported ? 0x106d : 0x1070;
@@ -238,10 +248,10 @@ TEST(RegistrationStartupInfo, CallsNeedIndependentRuntimeBindingEffects) {
         F.Blocks.push_back(std::move(Call));
         RegistrationCalleeStackContract Stack{Target, Imported ? 4u : 0u,
                                               Indirect};
-        Stack.ImportVeneer = Mode >= 4;
+        Stack.ImportVeneer = C.Kind == CallKind::Veneer;
         if (Stack.ImportVeneer)
           Stack.RequiredImports = {0x4300};
-        Stack.PreservesImportBindings = Mode == 3 || Mode == 5;
+        Stack.PreservesImportBindings = C.Preserves;
         Stacks.push_back(std::move(Stack));
       }
       SEHJumpRuntime Runtime;
@@ -253,7 +263,7 @@ TEST(RegistrationStartupInfo, CallsNeedIndependentRuntimeBindingEffects) {
                                      nullptr, &Stacks, nullptr, nullptr,
                                      nullptr, nullptr, &Runtime);
       const auto Result = Solver.run();
-      const bool Preserved = Mode == 0 || Mode == 3 || Mode == 5;
+      const bool Preserved = C.Kind == CallKind::None || C.Preserves;
       EXPECT_EQ(Result.HasBoundSEHCallees, Preserved);
       if (Preserved)
         EXPECT_TRUE(Result.Complete);

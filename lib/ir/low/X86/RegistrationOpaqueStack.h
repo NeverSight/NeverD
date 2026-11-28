@@ -31,6 +31,11 @@ std::optional<uint32_t> projectOpaqueCallReturnStack(const BinaryImage &Image,
                                                      const LowFunc &Function,
                                                      size_t &Work);
 
+/// Obtain the physical graph for one plain entry, reusing the current
+/// immutable-image memo. Charge the opaque-call transfer to the caller.
+std::optional<uint32_t> projectOpaqueCallReturnStack(const BinaryImage &Image,
+                                                     va_t Target, size_t &Work);
+
 } // namespace registration_abi
 } // namespace neverd
 

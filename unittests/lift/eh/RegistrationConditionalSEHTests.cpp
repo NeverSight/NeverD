@@ -774,6 +774,45 @@ TEST(RegistrationConditionalSEH, OriginalImageReadsRetainAddressProvenance) {
         }
 }
 
+TEST(RegistrationConditionalSEH, IndexedPEHeaderReadUsesTheCurrentOffset) {
+  for (uint32_t Base : {0x400000u, 0x18000000u}) {
+    SCOPED_TRACE(Base);
+    HeaderReadSEHFixture F(Base, 5, false);
+    auto &Text = F.Image.Segments.front().Data;
+    // MOV EAX,[EBP+8]; MOVZX EAX,word ptr [EAX+image_base]
+    const uint8_t Body[] = {0x8b, 0x45, 8, 0x0f, 0xb7, 0x80, 0, 0, 0, 0, 0x90};
+    std::copy(std::begin(Body), std::end(Body), Text.begin() + 12);
+    const va_t Field = Base + 0x1012;
+    writeLE<uint32_t>(Text.data() + 18, Base);
+    F.Image.BaseRelocations.push_back(
+        {Field, llvm::COFF::IMAGE_REL_BASED_HIGHLOW});
+    F.Image.DataAddressRelocOperands[Field] = {Base, Base, 4, Base};
+    const auto Prove = [&] {
+      size_t Work = 0;
+      return proveBoundOriginalImageSEHCallee(F.Image, F.Call, F.Parent, Work,
+                                              &F.Initialized);
+    };
+    for (const auto &[Offset, Value] :
+         {std::pair{0u, 0x5a4du}, std::pair{0x86u, 5u}}) {
+      F.Parent.store(-64, 4, FrameValue::constant(Offset));
+      const auto Proof = Prove();
+      ASSERT_TRUE(Proof);
+      EXPECT_EQ(Proof->ReturnValue, Value);
+      EXPECT_FALSE(Proof->Call.ConstantReturn);
+      EXPECT_EQ(Proof->CodeOperands.at(Field), Base);
+      EXPECT_TRUE(Proof->ReadAddressIdentities.at({Base + Offset, 2}));
+    }
+    F.Parent.store(-64, 4, FrameValue{});
+    EXPECT_FALSE(Prove());
+    F.Parent.store(-64, 4, FrameValue::constant(0x86));
+    F.Image.BaseRelocations.back().Type = llvm::COFF::IMAGE_REL_BASED_DIR64;
+    EXPECT_FALSE(Prove());
+    F.Image.BaseRelocations.back().Type = llvm::COFF::IMAGE_REL_BASED_HIGHLOW;
+    F.Image.DataAddressRelocOperands.erase(Field);
+    EXPECT_FALSE(Prove());
+  }
+}
+
 TEST(RegistrationConditionalSEH, ReadAddressIdentityRequiresEveryObservation) {
   HeaderReadSEHFixture F(0x400000, 5, false);
   for (bool ImageFirst : {false, true}) {

@@ -758,14 +758,23 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
                  : StackPops.end();
       const auto Boundary = Boundaries.find(Op.Addr);
       if (It != StackPops.end() && Op.Seq >= 0 &&
-          (!Op.Inputs[0].isConst() || After.Frame.ImportBindingsIntact ||
-           (Op.Opcode == NdOp::CALL && !StackBindingCallees.count(*Target))) &&
           Boundary != Boundaries.end() && Boundary->second.first == Block.Id &&
           Boundary->second.second.Control == LowInstructionControl::Call) {
-        ImportedCall =
-            Op.Opcode == NdOp::INDIR_CALL || StackImportVeneers.count(*Target);
-        PreserveImportBindings = StackBindingPreservers.count(It->first);
-        if (!CallSP) {
+        const bool Bound =
+            !Op.Inputs[0].isConst() || After.Frame.ImportBindingsIntact ||
+            (Op.Opcode == NdOp::CALL && !StackBindingCallees.count(*Target));
+        if (Bound) {
+          ImportedCall = Op.Opcode == NdOp::INDIR_CALL ||
+                         StackImportVeneers.count(*Target);
+          PreserveImportBindings = StackBindingPreservers.count(It->first);
+        }
+        // A real call may explicitly restore its caller's ESP even after a
+        // previous operation invalidated its nested import bindings.
+        if (!CallSP &&
+            (Bound ||
+             (Op.Opcode == NdOp::CALL && !StackImportVeneers.count(*Target) &&
+              JumpRuntime && JumpRuntime->OpaqueStack &&
+              JumpRuntime->OpaqueStack(Op, WorkUsed) == It->second))) {
           LowOp Adjust;
           Adjust.Opcode = NdOp::INT_ADD;
           Adjust.Output = NdVar::reg(x86reg::RSP, 4);
@@ -776,10 +785,9 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         }
       }
     }
-    // Stack cleanup does not preserve a future runtime target. A separate
-    // imported normal-return effect may retain a still-live binding, but it
-    // cannot repair earlier loss or authorize the exceptional path above.
-    if (UnprovedCallEffects && !(ImportedCall && PreserveImportBindings))
+    // The checked normal-return effect also applies to an ordinary helper.
+    // Its exceptional continuation keeps the binding loss recorded above.
+    if (UnprovedCallEffects && !PreserveImportBindings)
       After.JumpBindingsIntact = false;
     recordSEHStackRestore(Op, After, Transfer, Value);
     if (ProveCxxDispatch &&
