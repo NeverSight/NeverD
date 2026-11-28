@@ -28,11 +28,23 @@
 
 namespace neverd::safety {
 
+/// Evidence for reads with a recovered runtime index, on normal return.
+struct IndexedReadOutput {
+  uint64_t ReturnedValue = 0;
+  uint64_t ReturnedStorage = 0;
+  uint64_t NoOutput = 0;
+  uint64_t OutputUnknown = 0; ///< The source bytes were proved initialized.
+  uint64_t WriteUnknown = 0;
+  uint64_t UnmatchedNative = 0; ///< A native indexed load has no MedIR origin.
+};
+
 /// Counts direct MedIR loads and read-modify-write operations visited by Audit.
 struct DirectReadInitialization {
   uint64_t PrecedingConstantStore = 0;
   uint64_t LocalStack = 0;
   uint64_t OutsideOrUnresolved = 0;
+  uint64_t BoundedIndexStore = 0;
+  IndexedReadOutput Indexed;
 };
 
 /// Run the heap-lifetime audit over every lifted function and return one

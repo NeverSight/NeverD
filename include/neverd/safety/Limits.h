@@ -20,6 +20,9 @@ namespace neverd::limits::safety {
 
 // lib/safety/AllocLifetime.cpp
 inline constexpr unsigned kAllocLifetimeMaxProofSteps = 4096;
+// Bound same-block SSA walks for a byte range or returned value independently
+// of function size. A longer chain retains an unknown proof.
+inline constexpr unsigned kIndexedReadMaxValueSteps = 32;
 
 // lib/safety/ArgSlicer.cpp
 inline constexpr unsigned kArgSlicerMaxProofSteps = 4096;

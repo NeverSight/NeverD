@@ -158,10 +158,36 @@ std::string neverd::safety::toJson(const ScanReport &Scan, bool Pretty) {
          R.BudgetHit || Result.State == ScanState::BudgetExhausted}};
     if (Result.DirectReads) {
       const DirectReadInitialization &Reads = *Result.DirectReads;
-      Summary["direct_read_initialization"] = json::Object{
+      json::Object Direct{
           {"preceding_constant_store", Reads.PrecedingConstantStore},
           {"local_stack", Reads.LocalStack},
           {"outside_or_unresolved", Reads.OutsideOrUnresolved}};
+      if (Reads.BoundedIndexStore)
+        Direct["bounded_index_store"] = Reads.BoundedIndexStore;
+      Summary["direct_read_initialization"] = std::move(Direct);
+
+      const auto &I = Reads.Indexed;
+      const uint64_t Output = I.ReturnedValue + I.ReturnedStorage;
+      const uint64_t Written = Output + I.NoOutput + I.OutputUnknown;
+      const uint64_t WriteUnknown = I.WriteUnknown + I.UnmatchedNative;
+      const uint64_t OutputUnknown = I.OutputUnknown + WriteUnknown;
+      const uint64_t Total = Written + WriteUnknown;
+      const auto Property = Finished && Total && !OutputUnknown
+                                ? Verdict::Safe
+                                : Verdict::Unknown;
+      Summary["indexed_read_output"] = json::Object{
+          {"reads", Total},
+          {"verdict", toString(Property)},
+          {"written_before_read",
+           json::Object{{"YES", Written}, {"UNKNOWN", WriteUnknown}}},
+          {"reaches_output", json::Object{{"YES", Output},
+                                          {"NO", I.NoOutput},
+                                          {"UNKNOWN", OutputUnknown}}},
+          {"returned_value", I.ReturnedValue},
+          {"returned_storage", I.ReturnedStorage},
+          {"unmatched_native", I.UnmatchedNative}};
+      if (Total)
+        V = combine(V, Property);
     }
     if (Enabled) {
       Complete &= Finished;

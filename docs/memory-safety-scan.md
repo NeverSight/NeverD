@@ -70,10 +70,26 @@ When Audit reaches the memory pass, `analyzers.audit.direct_read_initialization`
 | Counter | Evidence for the read |
 | --- | --- |
 | `preceding_constant_store` | The immediately preceding ordinary store in the same block wrote constant bytes covering the entire ordinary load. The two operations use the same recovered address or a provably contained stack range. |
+| `bounded_index_store` | A preceding ordinary constant store covers the entire range of a runtime-indexed read. This counter is present when nonzero. |
 | `local_stack` | The entire read lies below the function-entry stack pointer. The local stack analysis checks reaching writes. Consult `uninitialized_read` findings for failures or uncertainty. |
 | `outside_or_unresolved` | The audit has no whole-read proof from the preceding store and cannot assess the entire read as a local stack slot. This includes caller storage, unresolved addresses and unsupported address widths or spaces. |
 
 The counters describe lifted operations visited, including a partial inventory if a scan stops after starting Audit. A missing object means the pass did not run. Reads performed by callees, including cataloged copy functions, have separate checks. A nonzero `outside_or_unresolved` can accompany `SAFE` and `coverage_complete: true`. In a routine that fills a caller-provided buffer, such a result leaves initialization of those bytes open. Proving that a source is within the buffer also leaves its write history open.
+
+### Runtime-indexed reads and function outputs
+
+`analyzers.audit.indexed_read_output` reports two separate questions for an ordinary load with a recovered runtime address calculation. The `written_before_read` and `reaches_output` objects count reads by answer. Each histogram sums to `reads`.
+
+| Question | Evidence |
+| --- | --- |
+| `written_before_read.YES` | A completed constant store in the same block covers every possible byte of the load. Audit checks the entire access width. An exact shared address or a bounded runtime displacement can establish coverage. |
+| `reaches_output.YES` | All the loaded bytes survive in the explicit scalar machine result (`returned_value`) or in the final store at the address returned by that function (`returned_storage`). |
+| `reaches_output.NO` | A constant return has no later observable write from the read, or the function completely replaces its only such write at a returned address whose value is independent of the read. |
+| `UNKNOWN` | Evidence for the question is incomplete. An unresolved source leaves both questions open. A proved source can still have an unresolved output. |
+
+A bounded backwards lookup can use a variable distance into a previously written region. The proof follows same-width SSA address arithmetic, an AND bound or a signed OR bound, and byte-preserving register views. Indexing visible through a truncated or extended address stays in the inventory and has an unresolved address identity. A call, atomic operation, unmodeled effect or control transfer can end the proof. `unmatched_native` counts recognized instruction-local indexed loads missing from machine MedIR. These contribute one `UNKNOWN` to each question.
+
+With any unresolved indexed read, Audit and the overall scan return `UNKNOWN` (exit 1) unless another check establishes `UNSAFE`. `coverage_complete` still refers to completion of the selected inventories. With zero observed indexed reads the property itself is `UNKNOWN` and other checks determine the overall verdict. A proven result describes the modeled function return. Cross-iteration write history, arbitrary transforms, callers and eventual process or device output require their own evidence.
 
 ## MIPS, PowerPC and RISC-V ELF
 
