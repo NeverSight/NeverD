@@ -5082,6 +5082,36 @@ if(LLD_EXEC)
   list(APPEND ELF_EXECUTABLES ${frame_argument_obj}
        ${frame_argument_callers_obj} ${frame_argument_exe})
 
+  # Two static executables whose build ID authenticates their DWARF: one
+  # built with line tables only, which records no signature, and one built
+  # with -g, which records every one, `void dfs_none(void)` included.
+  foreach(debug_level line_tables full_signatures)
+    set(debug_src
+        "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_debug_${debug_level}.c")
+    set(debug_obj "${CMAKE_CURRENT_BINARY_DIR}/test_debug_${debug_level}_exe.o")
+    set(debug_exe "${CMAKE_CURRENT_BINARY_DIR}/test_debug_${debug_level}.exe")
+    if(debug_level STREQUAL "line_tables")
+      set(debug_flag -gline-tables-only)
+      set(debug_entry dlt_caller)
+    else()
+      set(debug_flag -g)
+      set(debug_entry dfs_caller)
+    endif()
+    add_custom_command(
+      OUTPUT ${debug_obj}
+      COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -O1 -fno-pic
+              ${debug_flag} -c ${debug_src} -o ${debug_obj}
+      DEPENDS ${debug_src}
+      COMMENT "Compiling x86-64 ${debug_level} debug fixture")
+    add_custom_command(
+      OUTPUT ${debug_exe}
+      COMMAND ${LLD_EXEC} --build-id -static -e ${debug_entry}
+              -o ${debug_exe} ${debug_obj}
+      DEPENDS ${debug_obj}
+      COMMENT "Linking x86-64 ${debug_level} debug fixture")
+    list(APPEND ELF_EXECUTABLES ${debug_obj} ${debug_exe})
+  endforeach()
+
   # Functions that never return, and callers whose compiler knew it, linked
   # and stripped.
   set(noreturn_calls_x64_src

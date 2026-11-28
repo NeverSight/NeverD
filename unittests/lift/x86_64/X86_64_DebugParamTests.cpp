@@ -156,3 +156,44 @@ TEST_F(X86_64_DebugParams, CallsPassTheFrameAddressTheirArgumentHolds) {
     EXPECT_NE(Source.find(Expected), std::string::npos) << Expected << "\n"
                                                         << Source;
 }
+
+static fs::path debugLevelExe(const char *Level) {
+  return fs::path(TEST_OBJ_DIR) / (std::string("test_debug_") + Level + ".exe");
+}
+
+// A unit built with line tables only names the functions that hold inlined
+// code and records the type of none.  That silence is no void return and no
+// empty parameter list: dlt_caller still passes dlt_add both arguments, and
+// dlt_add still returns its sum.  Built with -g, every declaration the DWARF
+// records stays, `void dfs_none(void)` included.
+TEST_F(X86_64_DebugParams, LineTablesOnlyRecordNoSignature) {
+  for (const char *Level : {"line_tables", "full_signatures"})
+    if (!fs::exists(debugLevelExe(Level)))
+      GTEST_SKIP() << "ld.lld did not link " << debugLevelExe(Level).string();
+  const auto Decompile = [&](const char *Level) {
+    const auto CFile = tmpFile(std::string("debug_") + Level + ".c");
+    const auto R = exec(ndBin(), {"decompile", "-o", CFile.string(),
+                                  debugLevelExe(Level).string()});
+    EXPECT_EQ(R.exitCode, 0) << R.err;
+    std::ifstream Ifs(CFile);
+    return std::string((std::istreambuf_iterator<char>(Ifs)),
+                       std::istreambuf_iterator<char>());
+  };
+
+  const std::string LineTables = Decompile("line_tables");
+  for (const char *Expected :
+       {"int64_t dlt_add(int64_t arg0, int64_t arg1)", "dlt_add(arg0, 7)",
+        "int64_t dlt_caller(int64_t arg0)"})
+    EXPECT_NE(LineTables.find(Expected), std::string::npos) << Expected << "\n"
+                                                            << LineTables;
+  EXPECT_EQ(LineTables.find("void dlt_"), std::string::npos) << LineTables;
+  EXPECT_EQ(LineTables.find("no recovered semantics"), std::string::npos)
+      << LineTables;
+
+  const std::string Full = Decompile("full_signatures");
+  for (const char *Expected :
+       {"void dfs_none(void)", "int64_t dfs_add(int64_t a, int64_t b)",
+        "dfs_add(x, 7)"})
+    EXPECT_NE(Full.find(Expected), std::string::npos) << Expected << "\n"
+                                                      << Full;
+}

@@ -7277,6 +7277,21 @@ Where the DWARF states nothing, the lift's recovery decides, as it does without
 DWARF. A unit built with the stack ABI returns no register value. Results are
 never parameters.
 
+A unit built with line tables only (rustc's `-Cdebuginfo=1`, the level of the
+Rust standard library; clang's `-gline-tables-only`; gcc's `-g1`) names its
+functions and records the type of none: no subprogram has a `DW_AT_type`, a
+prototype, a parameter or `...`. Read as full DWARF, each of its functions
+returned nothing and took nothing, so its callers passed it no argument and
+every parameter it reads printed as an unknown value, and its result was lost
+(`__rust_alloc` forwarding `__rdl_alloc`'s pointer became a void call). The
+loader asks the unit first (`unitDescribesSignatures`): where no subprogram of
+it records a signature, a function that records none itself, directly or
+through its declaration or abstract instance, states nothing about its return.
+Without an authenticated return state its declaration binds no argument
+(`hasFixedPlatformCallDeclaration`), and the lift's recovery decides, as it
+does without DWARF. A unit built with `-g` keeps every declaration, `void
+f(void)` included.
+
 Go's parameter list names no positions either: a string takes two registers.
 The DWARF parameters bind nothing (`bindDebugParams`), and the C writer prints
 a Go function's parameters as it prints those of a function with no signature
