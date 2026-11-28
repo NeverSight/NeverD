@@ -1880,14 +1880,17 @@ MedFunc LowToMedConverter::convertFunction(
         if (const std::optional<va_t> Own = importOwnRoutine(
                 *Image, CallArgumentSources, LOp.Inputs[0].Offset))
           CallArgumentsFrom = *Own;
-      if (StaticAllocatorSlots && (MOp.Opcode == NdOp::CALL || MOp.Opcode == NdOp::INDIR_CALL)) {
-        if (MOp.Opcode == NdOp::INDIR_CALL && RegisterCallSlot && MOp.CallSiteId) {
+      if (StaticAllocatorSlots &&
+          (MOp.Opcode == NdOp::CALL || MOp.Opcode == NdOp::INDIR_CALL)) {
+        if (MOp.Opcode == NdOp::INDIR_CALL && RegisterCallSlot &&
+            MOp.CallSiteId) {
           if (StaticAllocatorSlots->contains(RegisterCallSlot))
             StaticAllocatorCalls.push_back(MOp.CallSiteId);
           else if (!StaticReleaseSlots->contains(RegisterCallSlot))
             AllStaticCallsBound = false;
-        } else if (MOp.Opcode != NdOp::CALL || !MOp.NumInputs || !MOp.Inputs[0].isConst() ||
-                   !SourceCalleeFunctions || !SourceCalleeFunctions->contains(MOp.Inputs[0].ConstVal))
+        } else if (MOp.Opcode != NdOp::CALL || !MOp.NumInputs ||
+                   !MOp.Inputs[0].isConst() || !SourceCalleeFunctions ||
+                   !SourceCalleeFunctions->contains(MOp.Inputs[0].ConstVal))
           AllStaticCallsBound = false;
       }
       // How many vector registers the call tells a variadic callee it
@@ -2428,11 +2431,12 @@ MedFunc LowToMedConverter::convertFunction(
         ResultInputs = EntrySignature->ReturnType->Kind == NdTypeKind::Struct
                            ? EntrySignature->ReturnComponents.size()
                            : 1;
-      MIPSReturnsQualified =
-          hasMIPSSourceReturnTargets(Low, Func, TheArch, Fmt, ResultInputs,
-                                     StaticAllocatorCalls, &Func.UsesStaticAllocatorBinding,
-                                     StaticAllocatorSlots && AllStaticCallsBound
-                                         ? &Func.PreservesStaticAllocationBindings : nullptr);
+      MIPSReturnsQualified = hasMIPSSourceReturnTargets(
+          Low, Func, TheArch, Fmt, ResultInputs, StaticAllocatorCalls,
+          &Func.UsesStaticAllocatorBinding,
+          StaticAllocatorSlots && AllStaticCallsBound
+              ? &Func.PreservesStaticAllocationBindings
+              : nullptr);
       if (!MIPSReturnsQualified)
         throw LowToMedConversionError("MIPS source return target is not proven "
                                       "to preserve the incoming link and mode");

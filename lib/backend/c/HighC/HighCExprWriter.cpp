@@ -44,6 +44,7 @@
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
 #include "neverd/backend/RISCV/RISCVCycleSource.h"
+#include "neverd/backend/RISCV/RISCVFloatingSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthLoadC.h"
@@ -2364,6 +2365,37 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
       return "(__builtin_bit_cast(" + Bytes + ", " + exprStr(*E.Operands[0]) +
              ") + __builtin_bit_cast(" + Bytes + ", " +
              exprStr(*E.Operands[1]) + "))";
+    }
+    if (E.IntrinsicId == Intrinsic::RISCVFloating ||
+        E.IntrinsicId == Intrinsic::RISCVFPControl) {
+      const unsigned XLen = getTargetRegInfo(Opts.TheArch).PointerSize;
+      if (!isRISCV(Opts.TheArch) || E.Operands.empty() ||
+          E.Operands.front()->Kind != ExprKind::Const)
+        throw std::runtime_error("invalid RISC-V FP selector");
+      auto Asm = riscv::fpAssembly(E.IntrinsicId, E.Operands.front()->ConstVal,
+                                   XLen, '%');
+      if (!Asm || E.Operands.size() != 1 + Asm->Count)
+        throw std::runtime_error("invalid RISC-V FP operands");
+      std::vector<std::string> Args;
+      for (unsigned I = 0; I < Asm->Count; ++I) {
+        const auto &V = *E.Operands[1 + I];
+        std::string Arg = exprStr(V);
+        if (riscv::fpRegister(Asm->Inputs[I]) &&
+            (!V.Type || V.Type->Kind != NdTypeKind::Float))
+          Arg = "__builtin_bit_cast(" +
+                std::string(riscv::fpNativeC(Asm->Inputs[I], XLen)) + ", (" +
+                riscv::fpIntegerC(riscv::fpBytes(Asm->Inputs[I], XLen)) + ")(" +
+                Arg + "))";
+        Args.push_back(std::move(Arg));
+      }
+      std::string Result = riscv::fpSource(*Asm, Args, XLen);
+      if (riscv::fpRegister(Asm->Result) &&
+          (!E.Type || E.Type->Kind != NdTypeKind::Float))
+        return "__builtin_bit_cast(" +
+               std::string(
+                   riscv::fpIntegerC(riscv::fpBytes(Asm->Result, XLen))) +
+               ", " + Result + ")";
+      return Result;
     }
     if (const auto *Read = riscv::cycleRead(E.IntrinsicId)) {
       if (!Read->admits(Opts.TheArch) || !E.Operands.empty())

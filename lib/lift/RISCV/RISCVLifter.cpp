@@ -19,6 +19,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVFloating.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
@@ -293,26 +294,60 @@ bool floating(State &S, RISCVProfile P, uint32_t W) {
     return false;
   const unsigned Bytes = Format ? 8 : 4;
   const unsigned Function = F7 >> 2;
-  if ((Function == 28 || Function == 30) && !F && !R2 && Bytes <= S.Width) {
+  if (Op == opcode::OpFP && (Function == 28 || Function == 30) && !F && !R2 &&
+      Bytes <= S.Width) {
     if (Function == 28) // FMV.X.W / FMV.X.D
       S.write(Rd, S.resize(Reg(R1), Bytes), true);
     else // FMV.W.X / FMV.D.X
       Write(Rd, S.resize(S.read(R1), Bytes));
     return true;
   }
-  if (Function != 4 || F > 2)
-    return false;
-  const auto Read = [&](unsigned Source) {
+  const auto Read = [&](unsigned Source, unsigned Precision) {
     NdVar Bits = Reg(Source);
-    if (Bytes == FLen)
+    if (Precision == FLen)
       return Bits;
     // A narrow arithmetic operand with invalid NaN boxing is a canonical NaN.
     NdVar Top = S.makeTemp(4);
     S.emit(NdOp::SUBBYTES, Top, {Bits, NdVar::scalar(4, 4)});
     return S.select(S.op(NdOp::INT_EQUAL, Top, NdVar::scalar(UINT32_MAX, 4), 1),
-                    S.resize(Bits, Bytes), NdVar::scalar(0x7fc00000, 4));
+                    S.resize(Bits, Precision), NdVar::scalar(0x7fc00000, 4));
   };
-  NdVar Left = Read(R1);
+  if (Op != opcode::OpFP || Function != 4) {
+    const auto Selector = decodeFloating(W, S.Width, P);
+    if (!Selector)
+      return false;
+    const auto &Form = *floatingForm(*Selector, S.Width);
+    const unsigned Registers[] = {R1, R2, W >> 27};
+    const auto Operand = [&](unsigned I) {
+      const FPValue Type = Form.Inputs[I];
+      const unsigned Size = fpBytes(Type, S.Width);
+      return fpRegister(Type) ? Read(Registers[I], Size)
+                              : S.resize(S.read(Registers[I]), Size);
+    };
+    const auto Code = NdVar::scalar(*Selector, 2);
+    const auto Result = S.makeTemp(fpBytes(Form.Result, S.Width));
+    switch (Form.arity()) {
+    case 1:
+      S.emitIntrinsic(Intrinsic::RISCVFloating, Result, {Code, Operand(0)});
+      break;
+    case 2:
+      S.emitIntrinsic(Intrinsic::RISCVFloating, Result,
+                      {Code, Operand(0), Operand(1)});
+      break;
+    case 3:
+      S.emitIntrinsic(Intrinsic::RISCVFloating, Result,
+                      {Code, Operand(0), Operand(1), Operand(2)});
+      break;
+    }
+    if (fpRegister(Form.Result))
+      Write(Rd, Result);
+    else
+      S.write(Rd, Result, true);
+    return true;
+  }
+  if (F > 2)
+    return false;
+  NdVar Left = Read(R1, Bytes);
   if (R1 == R2) {
     if (F != 0)
       Left = S.op(F == 1 ? NdOp::FLOAT_NEG : NdOp::FLOAT_ABS, Left);
@@ -320,7 +355,7 @@ bool floating(State &S, RISCVProfile P, uint32_t W) {
     return true;
   }
   const NdVar SignMask = NdVar::scalar(uint64_t(1) << (Bytes * 8 - 1), Bytes);
-  NdVar Signs = Read(R2);
+  NdVar Signs = Read(R2, Bytes);
   if (F == 1)
     Signs = S.op(NdOp::INT_NOT, Signs);
   else if (F == 2)
@@ -352,8 +387,21 @@ bool liftCycleRead(State &S, Arch A, uint32_t W, unsigned Rd) {
 bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
   const unsigned Op = W & 127, Rd = W >> 7 & 31, F = W >> 12 & 7;
   const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
-  if (Op == opcode::LoadFP || Op == opcode::StoreFP || Op == opcode::OpFP)
+  if (Op == opcode::LoadFP || Op == opcode::StoreFP || Op == opcode::OpFP ||
+      Op == 0x43 || Op == 0x47 || Op == 0x4b || Op == 0x4f)
     return floating(S, P, W);
+  if (Op == opcode::System && P.SingleFloat && (W >> 20) >= 1 &&
+      (W >> 20) <= 3 && (F & 3)) {
+    const unsigned Action = R1 == 0 && (F & 3) != 1 ? 0 : F & 3;
+    const auto Code = NdVar::scalar(((W >> 20) << 2) | Action, 2);
+    const auto Out = Rd ? S.reg(Rd) : S.makeTemp(S.Width);
+    if (Action)
+      S.emitIntrinsic(Intrinsic::RISCVFPControl, Out,
+                      {Code, (F & 4) ? S.imm(R1) : S.read(R1)});
+    else
+      S.emitIntrinsic(Intrinsic::RISCVFPControl, Out, {Code});
+    return true;
+  }
   const uint64_t Immediate = SignExtend64<12>(W >> 20);
   NdVar X = S.read(R1);
   NdVar Y = S.read(R2);

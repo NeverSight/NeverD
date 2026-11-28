@@ -159,6 +159,7 @@ void NdOpEmulator::forgetReservations() {
 
 void NdOpEmulator::reset() {
   forgetReservations();
+  RISCVFCSR.reset();
   UnknownBits.clear();
   Registers.clear();
   WideRegisters.clear();
@@ -1099,6 +1100,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
     if (!StepOverCalls)
       return false;
     clobberVolatileRegisters();
+    if (RISCVFCSR)
+      RISCVFCSR.reset();
     return true;
 
   case NdOp::INTRINSIC:
@@ -1186,7 +1189,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
           Id == Intrinsic::AesEncLast || Id == Intrinsic::AesDec ||
           Id == Intrinsic::AesDecLast || Id == Intrinsic::Pclmulqdq ||
           isX86AtomicIntrinsic(Id) || Id == Intrinsic::PPCVaddubm ||
-          riscv::cycleRead(Id))
+          riscv::cycleRead(Id) || Id == Intrinsic::RISCVFloating ||
+          Id == Intrinsic::RISCVFPControl)
         return executeIntrinsic(Op);
     }
     // Opaque intrinsic (SSE/NEON vector op, etc.): it cannot alter control

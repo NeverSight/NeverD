@@ -1274,7 +1274,8 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     Local.setBinaryImage(&Img, &IndexedData);
     Local.setRuntimeRoutineCalls(RuntimeRoutines);
     if (!Opts.StaticAllocatorSlots.empty())
-      Local.setStaticAllocationBindings(Opts.StaticAllocatorSlots, Opts.StaticReleaseSlots);
+      Local.setStaticAllocationBindings(Opts.StaticAllocatorSlots,
+                                        Opts.StaticReleaseSlots);
     Local.setSourceCallHintsEnabled(Opts.usesSourceDeclarations());
     Local.setSourceCallRuntimeHintsEnabled(!Opts.usesMachineMedIR());
     Local.setSourceEntryTypeHints(&SourceEntryHints);

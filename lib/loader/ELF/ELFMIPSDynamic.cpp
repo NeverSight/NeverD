@@ -230,7 +230,9 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
       if (Section.sh_type == SHT_GNU_versym &&
           Section.sh_addr == Tags.at(DT_VERSYM) &&
           Section.sh_link == size_t(Symbols - Sections.data())) {
-        auto Table = ELF.template getSectionContentsAsArray<typename ELFT::Versym>(Section);
+        auto Table =
+            ELF.template getSectionContentsAsArray<typename ELFT::Versym>(
+                Section);
         if (!Table)
           return Table.takeError();
         if (!Versions.empty() || Table->size() != Entries->size())
@@ -250,7 +252,11 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
         for (const auto &Aux : Need.AuxV) {
           const unsigned Index = Aux.Other & VERSYM_VERSION;
           if (Index <= VER_NDX_GLOBAL ||
-              !Providers.try_emplace(Index, MIPSImageMetadata::ImportVersion{Need.File, Aux.Name}).second)
+              !Providers
+                   .try_emplace(
+                       Index,
+                       MIPSImageMetadata::ImportVersion{Need.File, Aux.Name})
+                   .second)
             return Fail("has ambiguous version dependency indices");
         }
     }
@@ -294,7 +300,8 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
     Imported.Name = Name->str();
     Imported.Module = kExternModule.str();
     if (!Versions.empty() && Symbol.getType() == STT_FUNC &&
-        Symbol.getBinding() == STB_GLOBAL && Symbol.getVisibility() == STV_DEFAULT) {
+        Symbol.getBinding() == STB_GLOBAL &&
+        Symbol.getVisibility() == STV_DEFAULT) {
       const auto It = Providers.find(Versions[I].vs_index);
       if (It != Providers.end())
         Img.MIPS->RequiredImportVersions.emplace(Slot, It->second);

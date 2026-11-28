@@ -73,6 +73,8 @@ struct CNameTable {
 #define NEVERD_PPC_VMX(Id, Value, Word, Name)                                  \
   C(Intrinsic::Id, "neverd_ppc_" Name);
 #include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.def"
+    C(Intrinsic::RISCVFloating, "neverd_riscv_floating");
+    C(Intrinsic::RISCVFPControl, "neverd_riscv_fp_control");
     C(Intrinsic::GoClosureContext, "__neverd_go_closure_context");
 
 #include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64_cnames.inc"
@@ -178,6 +180,8 @@ struct SideEffectTable {
 #define NEVERD_RISCV_CYCLE(Id, ...) SIDEEFFECT(Intrinsic::Id);
 #include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
     SIDEEFFECT(Intrinsic::Syscall);
+    SIDEEFFECT(Intrinsic::RISCVFloating);
+    SIDEEFFECT(Intrinsic::RISCVFPControl);
     SIDEEFFECT(Intrinsic::RawEnvironmentRequirementV1);
     SIDEEFFECT(Intrinsic::ArchitecturalValueV1);
     SIDEEFFECT(Intrinsic::RawReturningCallV1);

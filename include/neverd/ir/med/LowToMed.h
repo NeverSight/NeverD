@@ -236,7 +236,8 @@ public:
   /// optional, null = no-op.
   void setStackProbeSlots(const std::set<va_t> *S) { StackProbeSlots = S; }
 
-  void setStaticAllocationBindings(const std::set<va_t> &Alloc, const std::set<va_t> &Release) {
+  void setStaticAllocationBindings(const std::set<va_t> &Alloc,
+                                   const std::set<va_t> &Release) {
     StaticAllocatorSlots = &Alloc;
     StaticReleaseSlots = &Release;
   }

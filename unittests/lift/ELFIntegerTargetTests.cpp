@@ -20,6 +20,7 @@
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVFloating.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/NdOpEmulator.h"
@@ -935,6 +936,77 @@ TEST(RISCVProfile, FloatingTransfersPreservePayloadsAndValidateNaNBoxes) {
     EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)),
               isRISCV64(A) ? UINT64_C(0xffffffffbf800000)
                            : UINT64_C(0xbf800000));
+  }
+}
+
+TEST(RISCVProfile, RoundedResultsAccrueFlagsAndObserveAliasedCSRFields) {
+  using integerreg::riscv::fpr;
+  for (Arch A : {Arch::RISCV32D, Arch::RISCV64D}) {
+    BinaryImage Image;
+    Image.Arch = A;
+    Image.Bits = isRISCV32(A) ? Bitness::Bits32 : Bitness::Bits64;
+    Image.RISCV.SingleFloat = Image.RISCV.DoubleFloat = true;
+    Decoder Dec;
+    ASSERT_TRUE(Dec.selectMode(Image, 0x1000));
+    NdOpEmulator Emu(Image);
+    Emu.setStrictMode(true);
+    auto Run = [&](uint32_t W) {
+      uint8_t Bytes[4];
+      llvm::support::endian::write32le(Bytes, W);
+      DecodedInsn Insn;
+      if (Dec.decodeOneForLift(Bytes, 4, 0x1000, Insn) != 4)
+        return false;
+      std::vector<LowOp> Ops;
+      Dec.liftToLow(Insn, Ops);
+      return !Ops.empty() &&
+             llvm::all_of(Ops, [&](const LowOp &O) { return Emu.step(O); });
+    };
+    const auto RR = [](unsigned F7, unsigned R2, unsigned RM) {
+      return (F7 << 25) | (R2 << 20) | (11u << 15) | (RM << 12) | (10u << 7) |
+             0x53u;
+    };
+    const auto CSR = [](unsigned C, unsigned Source, unsigned F, unsigned Dst) {
+      return (C << 20) | (Source << 15) | (F << 12) | (Dst << 7) | 0x73u;
+    };
+    constexpr uint64_t One = UINT64_C(0x3ff0000000000000);
+    Emu.setRegister(fpr(11), One);
+    Emu.setRegister(fpr(12), UINT64_C(0x3ca0000000000000));
+    EXPECT_FALSE(Run(RR(1, 12, 7)));
+    for (unsigned RM = 0; RM <= 4; ++RM) {
+      Emu.setRISCVFCSR(0x10);
+      ASSERT_TRUE(Run(CSR(2, RM, 5, 0))); // fsrmi zero,rm
+      ASSERT_TRUE(Run(RR(1, 12, 7)));     // fadd.d fa0,fa1,fa2,dyn
+      EXPECT_EQ(Emu.getRegister(fpr(10)), One + unsigned(RM >= 3));
+      EXPECT_EQ(Emu.getRISCVFCSR(), (RM << 5) | 0x11);
+    }
+    ASSERT_TRUE(Run(CSR(1, 1, 7, 10))); // clear NX, return the old flags
+    EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)), 17u);
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x90);
+    Emu.setRegister(fpr(12), 0);
+    ASSERT_TRUE(Run(RR(13, 12, 0))); // fdiv.d 1/0
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x98);
+    Emu.setRegister(fpr(11), UINT64_C(0xbff0000000000000));
+    ASSERT_TRUE(Run(RR(45, 0, 0))); // fsqrt.d -1
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0x7ff8000000000000));
+    Emu.setRegister(fpr(11), UINT64_C(0x4000000000000000));
+    ASSERT_TRUE(Run(RR(45, 0, 1))); // sqrt(2) toward zero
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0x3ff6a09e667f3bcc));
+    Emu.setRegister(fpr(11), UINT64_C(0xffffffff00000001));
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff3f000000));
+    ASSERT_TRUE(Run(RR(8, 12, 0))); // fmul.s smallest subnormal by 0.5
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff00000000));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x9b);
+    Emu.setRegister(fpr(11), UINT64_C(0xffffffff7f7fffff));
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff40000000));
+    ASSERT_TRUE(Run(RR(8, 12, 0)));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x9f);
+    Emu.setRegister(integerreg::gpr(10), UINT32_MAX);
+    ASSERT_TRUE(Run(CSR(3, 10, 1, 10))); // csrrw a0,fcsr,a0
+    EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)), 0x9fu);
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0xff);
+    EXPECT_FALSE(Run(RR(1, 12, 7))); // reserved dynamic frm
+    EXPECT_FALSE(riscv::decodeFloating(RR(1, 12, 5), 4, Image.RISCV));
+    EXPECT_FALSE(riscv::decodeFloating(RR(45, 1, 0), 8, Image.RISCV));
   }
 }
 

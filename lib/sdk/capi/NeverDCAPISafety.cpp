@@ -114,12 +114,12 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
   PipelineOptions PO;
   PO.LiftMode = true;
   PO.EmitLiftedLLVM = false;
-  if (Request.Selection != safety::ScanSelection::Hunt && isMIPSN32(S->Img.Arch) &&
-      S->Img.MIPS) {
+  if (Request.Selection != safety::ScanSelection::Hunt &&
+      isMIPSN32(S->Img.Arch) && S->Img.MIPS) {
     for (const auto &[Slot, Required] : S->Img.MIPS->RequiredImportVersions) {
       const auto *Import = S->Img.findImportAt(Slot);
-      if (!Import || Import->IATAddr != Slot || Required.Library != "libc.so.6" ||
-          Required.Version != "GLIBC_2.0" ||
+      if (!Import || Import->IATAddr != Slot ||
+          Required.Library != "libc.so.6" || Required.Version != "GLIBC_2.0" ||
           !llvm::is_contained(S->Img.DynInfo.NeededLibs, Required.Library))
         continue;
       const auto *Sink = Cat.matchSink(Import->Name);
