@@ -22,7 +22,7 @@ ABIS = {
     "n64": ("mips64", "gnuabi64", 5058),
 }
 MODES = ("section", "inplace")
-PRODUCT_VERSION = 11
+PRODUCT_VERSION = 12
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -108,10 +108,11 @@ class Profile:
     linkage: str = ""
     gp64_o32: bool = False
     dwarf_version: int = 0
+    entry_alias: bool = False
 
     @property
     def high_address(self):
-        return self.abi == "n64" and bool(self.shrinking or self.linkage or self.dwarf_version)
+        return self.abi == "n64" and bool(self.shrinking or self.linkage or self.dwarf_version or self.entry_alias)
 
     @property
     def tls_model(self):
@@ -129,6 +130,8 @@ class Profile:
     @property
     def name(self):
         suffix = f"{self.abi}-{'le' if self.little else 'be'}"
+        if self.entry_alias:
+            return f"entry-alias-{self.isa}-{suffix}"
         if self.dwarf_version:
             return f"dwarf{self.dwarf_version}-{suffix}"
         if self.gp64_o32:
@@ -167,6 +170,10 @@ def profiles(version=PRODUCT_VERSION):
             yield Profile(abi, little)
             if version == 1:
                 continue
+            if version >= 12:
+                encodings = ("classic", "micromips", "mips16") if abi == "o32" else ("classic", "micromips")
+                for isa in encodings:
+                    yield Profile(abi, little, isa, compressed_entry=isa != "classic", entry_alias=True)
             if version >= 11:
                 for dwarf_version in (4, 5):
                     yield Profile(abi, little, dwarf_version=dwarf_version)
@@ -221,6 +228,10 @@ def scalar_release_profiles(abi, little, version):
 
 
 def startup(profile):
+    if profile.entry_alias:
+        return ((FIXTURES / "entry_exit.s").read_text()
+                .replace("EXIT_ISA", ".set micromips" if profile.isa == "micromips" else "")
+                .replace("EXIT_NR", str(profile.exit_nr)))
     source = STARTUP
     callee = "invoke" if profile.isa == "mips16" else "calc"
     for value in (0, 1, 7):
@@ -243,6 +254,8 @@ def startup(profile):
 
 
 def calculator(profile, updated):
+    if profile.entry_alias:
+        return (FIXTURES / "entry_alias.ll").read_text().replace("STATUS", "37" if updated else "25")
     if profile.dwarf_version:
         return ((FIXTURES / "debug_calc.ll").read_text()
                 .replace("DWARF_VERSION", str(profile.dwarf_version))
@@ -328,6 +341,8 @@ def build_arithmetic_objects(args, build, profile):
     assemble_startup(args, build, profile)
     compile_arithmetic_object(args, build, profile, "calc.o", calculator(profile, False))
     compile_arithmetic_object(args, build, profile, "updated.o", calculator(profile, True))
+    if profile.entry_alias:
+        return ["start.o", "calc.o"]
     if not profile.dwarf_version:
         compile_arithmetic_object(args, build, profile, "grown.o", GROWING_CALC)
     objects = ["start.o"]
@@ -615,7 +630,8 @@ def qualify(args):
 
             for mode in MODES:
                 patch(mode, out / f"{mode}.elf")
-                if profile.dwarf_version or profile.linkage in ("init-arrays", "large-segments", "callback-table"):
+                if (profile.entry_alias or profile.dwarf_version
+                        or profile.linkage in ("init-arrays", "large-segments", "callback-table")):
                     reference = build / "reference.elf"
                     script = build / ("section.ld" if mode == "section" else "base.ld")
                     run([args.lld, "-static", "-T", script, "-o", reference,
@@ -623,7 +639,7 @@ def qualify(args):
                     if digest(reference) != digest(out / f"{mode}.elf"):
                         raise ValueError(f"{name}: {mode} output differs from the direct link")
             results[name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
-            if profile.dwarf_version:
+            if profile.dwarf_version or profile.entry_alias:
                 continue
             if profile.linkage:
                 object_hashes[name] = {}
@@ -734,7 +750,9 @@ def inspect_elf(image, profile, *, require_pic_marker=False):
     (index, symbol), = ((i, s) for i, s in enumerate(symtab.iter_symbols()) if s.name == "calc")
     # MIPS16 uses the whole high nibble. Other functions can carry STO_MIPS_PIC
     # alongside their encoding, for example after a relocatable link.
-    other = symtab.data()[index * symtab["sh_entsize"] + (5 if image.elfclass == 64 else 13)]
+    other_offset = 5 if image.elfclass == 64 else 13
+    table = symtab.data()
+    other = table[index * symtab["sh_entsize"] + other_offset]
     if other & 0xf0 == 0xf0:
         isa = "mips16"
     elif other & 0x80:
@@ -747,6 +765,13 @@ def inspect_elf(image, profile, *, require_pic_marker=False):
         raise ValueError(f"{profile.name}: missing STO_MIPS_PIC on the partially linked calc")
     section = image.get_section(symbol["st_shndx"])
     va, size = symbol["st_value"], symbol["st_size"]
+    if profile.entry_alias:
+        (index, alias), = ((i, s) for i, s in enumerate(symtab.iter_symbols()) if s.name == "_start")
+        if (alias["st_info"]["bind"] != "STB_GLOBAL" or alias["st_info"]["type"] != "STT_FUNC"
+                or any(alias[key] != symbol[key] for key in ("st_value", "st_size", "st_shndx"))
+                or table[index * symtab["sh_entsize"] + other_offset] != other
+                or image["e_entry"] & ~1 != va):
+            raise ValueError(f"{profile.name}: ELF entry and _start must both designate calc")
     if (symbol["st_info"]["type"] != "STT_FUNC" or not section["sh_flags"] & 4 or size <= 0
             or not section["sh_addr"] <= va <= section["sh_addr"] + section["sh_size"] - size
             or (profile.high_address and va < 1 << 32)):
@@ -904,7 +929,7 @@ def execute(args):
             original, updated = 41, 73
             verify_linkage_objects(root / profile.name, profile, object_hashes[profile.name], digest)
         expected_results = {"original": original, "section": updated, "inplace": updated}
-        if version >= 3 and not profile.linkage and not profile.dwarf_version:
+        if version >= 3 and not (profile.linkage or profile.dwarf_version or profile.entry_alias):
             # The larger body returns 61, 56 and 44 for the three startup calls.
             expected_results["section-grown"] = 161
         second_updates = version >= 10 and profile == Profile(profile.abi, profile.little)
