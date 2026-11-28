@@ -247,6 +247,12 @@ void scanImportThunks(BinaryImage &Img) {
   if (TargetImports.empty() && Img.RuntimeCallablePointerSlots.empty())
     return;
 
+  if (!Img.LoadOnlyFunctionEntries.empty() &&
+      Img.Format == BinaryFormat::COFF && Img.Arch == Arch::AArch64) {
+    scanSelectedImportThunksAArch64(Img, TargetImports);
+    return;
+  }
+
   auto Existing = Img.getSymbolAddresses();
   const ImportThunkCandidates Candidates(Img);
   [[maybe_unused]] size_t Added = 0;

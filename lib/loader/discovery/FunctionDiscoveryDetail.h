@@ -60,6 +60,10 @@ size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
                                std::set<va_t> &Existing,
                                const ImportThunkCandidates &Candidates);
 
+/// Resolve direct import calls made by the selected Windows ARM64 functions.
+void scanSelectedImportThunksAArch64(BinaryImage &Img,
+                                     const std::map<va_t, size_t> &Targets);
+
 /// ARM32: LDR pc,[pc,#-4] veneer followed by the absolute target word.
 size_t scanImportThunksARM(BinaryImage &Img, const Segment &Seg,
                            const std::map<va_t, size_t> &Targets,
