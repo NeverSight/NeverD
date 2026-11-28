@@ -23,10 +23,11 @@
 namespace neverd::cli {
 using namespace llvm;
 bool modelScanRequested() {
-  return ModelGGUF || ModelBaseline.getNumOccurrences() ||
-         ModelGap.getNumOccurrences() || ModelScales.getNumOccurrences() ||
-         ModelCompare.getNumOccurrences() || ModelOffset.getNumOccurrences() ||
-         ModelLimit.getNumOccurrences();
+  return ModelGGUF || ModelOptions.getNumOccurrences() ||
+         ModelExternalData.getNumOccurrences() ||
+         ModelBaseline.getNumOccurrences() || ModelGap.getNumOccurrences() ||
+         ModelScales.getNumOccurrences() || ModelCompare.getNumOccurrences() ||
+         ModelOffset.getNumOccurrences() || ModelLimit.getNumOccurrences();
 }
 int runModelScan() {
   if (!ModelGGUF) {
@@ -37,20 +38,21 @@ int runModelScan() {
     WithColor::error() << "--baseline requires a local model path\n";
     return 1;
   }
-  if (ModelCompare.getNumOccurrences() && ModelBaseline.empty()) {
-    WithColor::error() << "--compare-bytes requires --baseline\n";
-    return 1;
-  }
   for (const auto &[Name, Opt] : cl::getRegisteredOptions(ScanCmd)) {
-    if (Opt->getNumOccurrences() && Opt != &ModelGGUF &&
-        Opt != &ModelBaseline && Opt != &ModelGap && Opt != &ModelScales &&
-        Opt != &ModelCompare && Opt != &ModelOffset && Opt != &ModelLimit &&
-        Opt != &InputFile && Opt != &OutputFile && Opt != &JsonOutput) {
+    if (Opt->getNumOccurrences() && Opt != &ModelGGUF && Opt != &ModelOptions &&
+        Opt != &ModelExternalData && Opt != &ModelBaseline &&
+        Opt != &ModelGap && Opt != &ModelScales && Opt != &ModelCompare &&
+        Opt != &ModelOffset && Opt != &ModelLimit && Opt != &InputFile &&
+        Opt != &OutputFile && Opt != &JsonOutput) {
       WithColor::error() << "--gguf cannot be combined with --" << Name << "\n";
       return 1;
     }
   }
   json::Object Options;
+  if (ModelOptions.getNumOccurrences())
+    Options["options_json"] = ModelOptions.getValue();
+  if (ModelExternalData)
+    Options["external_data"] = true;
   if (!ModelBaseline.empty())
     Options["baseline"] = ModelBaseline.getValue();
   if (ModelGap.getNumOccurrences())

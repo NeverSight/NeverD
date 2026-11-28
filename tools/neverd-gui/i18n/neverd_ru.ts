@@ -11784,5 +11784,9 @@ Your previous graph is still available.</source>
         <source>Component changes</source>
         <translation>Изменения компонентов</translation>
     </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>Дополнительные параметры (JSON)</translation>
+    </message>
 </context>
 </TS>

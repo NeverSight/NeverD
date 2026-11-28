@@ -11712,5 +11712,9 @@ Your previous graph is still available.</source>
         <source>Component changes</source>
         <translation>组件差异</translation>
     </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>高级选项（JSON）</translation>
+    </message>
 </context>
 </TS>

@@ -34,7 +34,7 @@ private:
   bool Ready = false;
   int Offset = 0;
   QJsonObject Report;
-  QLineEdit *Input, *Baseline;
+  QLineEdit *Input, *Baseline, *OptionsJSON;
   QSpinBox *ScaleKiB;
   QPushButton *Run, *Cancel, *Previous, *Next, *Save;
   QLabel *Status;

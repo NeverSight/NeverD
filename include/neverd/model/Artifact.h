@@ -14,11 +14,18 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace neverd::model {
+struct TensorRange {
+  std::string Name;
+  uint64_t Offset, Length;
+};
 struct Options {
+  std::optional<TensorRange> Range;
   std::filesystem::path Baseline;
+  bool ExternalData = false;
   uint64_t GapBytes = limits::kGapBytes;
   uint64_t ScaleBytes = 0;
   uint64_t CompareBytes = limits::kCompareBytes;

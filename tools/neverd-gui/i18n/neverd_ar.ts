@@ -11892,5 +11892,9 @@ Your previous graph is still available.</source>
         <source>Component changes</source>
         <translation>تغييرات المكونات</translation>
     </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>خيارات متقدمة (JSON)</translation>
+    </message>
 </context>
 </TS>

@@ -73,6 +73,9 @@ ModelScanDialog::ModelScanDialog(const QString &Worker, QWidget *Parent)
   Input = inputRow(tr("&Model"));
   Input->setObjectName("modelPath");
   Baseline = inputRow(tr("&Baseline (optional)"));
+  OptionsJSON = new QLineEdit(this);
+  OptionsJSON->setObjectName("modelOptionsJSON");
+  Form->addRow(tr("Advanced options (JSON)"), OptionsJSON);
   ScaleKiB = new QSpinBox(this);
   ScaleKiB->setObjectName("scaleSampleKiB");
   ScaleKiB->setRange(0, std::numeric_limits<int>::max());
@@ -133,7 +136,7 @@ ModelScanDialog::ModelScanDialog(const QString &Worker, QWidget *Parent)
     Status->clear();
     updateActions();
   };
-  for (auto *Line : {Input, Baseline})
+  for (auto *Line : {Input, Baseline, OptionsJSON})
     connect(Line, &QLineEdit::textChanged, this, invalidate);
   connect(ScaleKiB, &QSpinBox::valueChanged, this, invalidate);
   connect(Evidence, &QTreeWidget::currentItemChanged, this,
@@ -179,6 +182,8 @@ void ModelScanDialog::start() {
   if (!Ready || !Active.isEmpty() || Input->text().isEmpty())
     return;
   QJsonObject O{{"offset", Offset}, {"limit", PageSize}};
+  if (!OptionsJSON->text().isEmpty())
+    O["options_json"] = OptionsJSON->text();
   if (ScaleKiB->value())
     O["scale_bytes"] = qint64(ScaleKiB->value()) * 1024;
   if (!Baseline->text().isEmpty())

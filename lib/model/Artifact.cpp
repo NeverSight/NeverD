@@ -14,8 +14,10 @@
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <utility>
 
@@ -93,6 +95,14 @@ File::File(fs::path R, fs::path Name)
   }
 }
 File::~File() { sysfs::closeFile(Handle); }
+std::string File::snapshotID() const {
+  const auto ID = Snapshot.getUniqueID();
+  return digest(
+      Json::array(
+          {pathToUTF8(Relative), ID.getDevice(), ID.getFile(), size(),
+           Snapshot.getLastModificationTime().time_since_epoch().count()})
+          .dump());
+}
 void File::verify() const {
   sysfs::file_status Now;
   const auto Path = pathToUTF8(memberPath(Root, Relative));
@@ -127,6 +137,25 @@ std::string File::header(uint64_t At, uint64_t Length, Budget &B) {
   std::string Data(Length, '\0');
   read(At, Data);
   return Data;
+}
+std::string hashRange(File &Input, uint64_t Offset, uint64_t Length, Budget &B,
+                      llvm::raw_ostream *Copy) {
+  if (Offset > Input.size() || Length > Input.size() - Offset)
+    throw Error("hash range outside file");
+  SHA256Stream Hash;
+  std::array<char, limits::kChunk> Buffer;
+  while (Length) {
+    B.tick();
+    auto Chunk =
+        std::span(Buffer).first(std::min<uint64_t>(Length, Buffer.size()));
+    Input.read(Offset, Chunk);
+    Hash.update(llvm::StringRef(Chunk.data(), Chunk.size()));
+    if (Copy)
+      Copy->write(Chunk.data(), Chunk.size());
+    Offset += Chunk.size();
+    Length -= Chunk.size();
+  }
+  return llvm::toHex(Hash.final(), true);
 }
 File &Package::file(const std::string &Name) {
   if (auto I = Files.find(Name); I != Files.end())
@@ -178,6 +207,12 @@ void Package::gap(std::string Source, std::string Reason, Json Evidence) {
                     {"reason", Reason},
                     {"evidence", std::move(Evidence)}});
 }
+std::string Package::snapshotID() const {
+  SHA256Stream Hash;
+  for (const auto &[Name, F] : Files)
+    Hash.update(llvm::StringRef(F->snapshotID()));
+  return llvm::toHex(Hash.final(), true);
+}
 void Package::verify() const {
   for (const auto &[Name, F] : Files)
     F->verify();
@@ -197,9 +232,12 @@ public:
 };
 Json publish(const Package &P, const Options &O) {
   Json Rows = Json::array();
+  Json Members = Json::array();
   size_t Index = 0;
   uint64_t Read = 0, FileBytes = 0, Known = 0;
   for (const auto &[Name, F] : P.Files) {
+    Members.push_back(
+        {{"id", Name}, {"size", F->size()}, {"snapshot_id", F->snapshotID()}});
     Read = sum(Read, F->ReadBytes);
     FileBytes = sum(FileBytes, F->size());
   }
@@ -214,7 +252,7 @@ Json publish(const Package &P, const Options &O) {
          {"type", T.Type},
          {"shape", T.Shape},
          {"logical_elements", T.Elements},
-         {"offset", T.Offset},
+         {"offset", T.HasOffset ? Json(T.Offset) : Json(nullptr)},
          {"storage_bytes", T.Bytes ? Json(*T.Bytes) : Json(nullptr)}});
     if (T.Packing)
       Rows.back()["storage_block"] = {{"elements", T.Packing->Elements},
@@ -224,6 +262,8 @@ Json publish(const Package &P, const Options &O) {
   for (const auto &[Source, Record] : P.Templates)
     Templates.push_back(Record);
   return {{"id", P.Id},
+          {"snapshot_id", P.snapshotID()},
+          {"members", std::move(Members)},
           {"artifacts", P.Artifacts},
           {"declared_architectures", P.Architectures},
           {"named_layer_tensor_counts", P.Layers},
@@ -252,7 +292,7 @@ std::string scan(const fs::path &Input, const Options &O) {
   Json Report = {
       {"schema", "neverd.model-scan.v1"},
       {"packages", Json::array()},
-      {"reader_revision", 1},
+      {"reader_revision", 2},
       {"scope", "static file layout, templates and package declarations"},
       {"behavior_evaluated", false}};
   try {
@@ -260,6 +300,30 @@ std::string scan(const fs::path &Input, const Options &O) {
       throw Error("tensor page size exceeds limit");
     Budget B(O);
     auto Packages = readInputs(Input, B);
+    if (O.Range) {
+      if (Packages.size() != 1)
+        throw Error("select one package for a tensor range");
+      auto &P = *Packages.front();
+      auto I = P.Tensors.find(O.Range->Name);
+      if (I == P.Tensors.end() || !I->second.Bytes)
+        throw Error("tensor has no validated storage range");
+      auto &T = I->second;
+      if (O.Range->Offset > *T.Bytes ||
+          O.Range->Length > *T.Bytes - O.Range->Offset ||
+          O.Range->Length > limits::kCompareBytes)
+        throw Error("requested tensor window exceeds storage or byte limit");
+      auto At = sum(T.Offset, O.Range->Offset);
+      auto &F = P.file(T.FileId);
+      F.verify();
+      auto Hash = hashRange(F, At, O.Range->Length, B);
+      P.WeightBytesRead += O.Range->Length;
+      F.verify();
+      Report["tensor_range"] = {{"tensor", I->first},
+                                {"artifact", T.FileId},
+                                {"offset", At},
+                                {"length", O.Range->Length},
+                                {"sha256", Hash}};
+    }
     if (!O.Baseline.empty()) {
       auto Base = readInputs(O.Baseline, B);
       if (Base.size() != 1 || Packages.size() != 1)
@@ -291,6 +355,7 @@ std::string scan(const fs::path &Input, const Options &O) {
     Report["error"] = E.what();
     Report["exit_code"] = 1;
   } catch (const Error &E) {
+    Report.erase("tensor_range");
     Report.erase("comparison");
     Report.erase("baseline");
     Report["status"] = "failed";
@@ -329,12 +394,26 @@ std::string scanJSON(const char *Path, const char *Settings,
     if (Text.size() > limits::kTemplateBytes)
       throw Error("model options exceed byte limit");
     auto J = parseObject(Text, Admission);
+    if (auto Embedded = J.find("options_json"); Embedded != J.end()) {
+      auto Combined =
+          parseObject(Embedded->get_ref<const std::string &>(), Admission);
+      J.erase(Embedded);
+      Combined.update(J);
+      J = std::move(Combined);
+    }
     for (auto &[Key, V] : J.items()) {
       if (Key == "baseline") {
         auto S = V.get<std::string>();
         validName(S);
         O.Baseline = utf8Path(S);
-      } else if (Key == "scale_bytes")
+      } else if (Key == "tensor_range") {
+        auto Name = V.at("name").get<std::string>();
+        validName(Name);
+        O.Range = TensorRange{std::move(Name), natural(V.at("offset")),
+                              natural(V.at("length"))};
+      } else if (Key == "external_data")
+        O.ExternalData = V.get<bool>();
+      else if (Key == "scale_bytes")
         O.ScaleBytes = natural(V);
       else if (Key == "gap_bytes")
         O.GapBytes = natural(V);

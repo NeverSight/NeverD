@@ -9,10 +9,14 @@
 
 #include "ModelInternal.h"
 
+#include "neverd/support/FilePath.h"
 #include "neverd/support/SHA256.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <array>
@@ -27,12 +31,22 @@ struct Proto {
   File &F;
   Budget &B;
   uint64_t Pos, End;
+  SHA256Stream &Observed;
+  std::string metadata(uint64_t At, uint64_t Length) const {
+    auto Bytes = F.header(At, Length, B);
+    std::array<uint8_t, 16> Range;
+    llvm::support::endian::write64le(Range.data(), At);
+    llvm::support::endian::write64le(Range.data() + 8, Length);
+    Observed.update(Range);
+    Observed.update(llvm::StringRef(Bytes));
+    return Bytes;
+  }
   uint64_t varint() {
     uint64_t V = 0;
     for (unsigned I = 0; I < 10; ++I) {
       if (Pos == End)
         throw Error("truncated protobuf varint");
-      auto C = static_cast<unsigned char>(F.header(Pos++, 1, B)[0]);
+      auto C = static_cast<unsigned char>(metadata(Pos++, 1)[0]);
       if (I == 9 && C > 1)
         throw Error("protobuf varint overflow");
       V |= uint64_t(C & 127) << (7 * I);
@@ -76,12 +90,12 @@ struct Proto {
   Proto sub(Field X) const {
     if (X.Wire != 2)
       throw Error("wrong wire type for embedded message");
-    return {F, B, X.At, X.End};
+    return {F, B, X.At, X.End, Observed};
   }
   std::string label(Field X) const {
     if (X.Wire != 2 || X.End - X.At > limits::kNameBytes)
       throw Error("invalid ONNX label");
-    auto S = F.header(X.At, X.End - X.At, B);
+    auto S = metadata(X.At, X.End - X.At);
     if (!S.empty())
       validName(S);
     return S;
@@ -148,12 +162,34 @@ Json port(Proto R) {
   }
   return V;
 }
+std::optional<uint64_t> storageBytes(unsigned Type, uint64_t Elements) {
+  static constexpr unsigned Bits[] = {0, 32, 8,  8,  16, 16, 32,  64, 0,
+                                      8, 16, 64, 32, 64, 64, 128, 16, 8,
+                                      8, 8,  8,  4,  4,  4,  8,   2,  2};
+  if (Type >= std::size(Bits) || !Bits[Type])
+    return std::nullopt;
+  return llvm::divideCeil(product(Elements, Bits[Type]), uint64_t(8));
+}
+
+std::optional<uint64_t> externalNumber(const Json &Refs, const char *Key) {
+  auto It = Refs.find(Key);
+  if (It == Refs.end())
+    return std::nullopt;
+  llvm::StringRef Text(It->get_ref<const std::string &>());
+  uint64_t Value;
+  if (Text.empty() || !llvm::all_of(Text, llvm::isDigit) ||
+      Text.getAsInteger(10, Value))
+    throw Error("invalid external initializer offset or length");
+  return Value;
+}
+
 class GraphReader {
   Package &P;
   const std::string &Source;
   std::string tensor(Proto R, const std::string &Scope) {
     Tensor T;
     T.FileId = Source;
+    T.HasOffset = false;
     std::string Name;
     unsigned Type = 0;
     std::optional<Field> Raw;
@@ -241,26 +277,51 @@ class GraphReader {
     T.Elements = 1;
     for (auto D : T.Shape)
       T.Elements = product(T.Elements, D);
+    auto Expected = storageBytes(Type, T.Elements);
     if (External || !References.empty()) {
       if (!References.contains("location"))
         throw Error("missing external initializer location");
       auto S = References.at("location").get<std::string>();
       if (S.find_first_of(":\\") != S.npos)
         throw Error("nonlocal external initializer reference");
-      memberPath(P.Root, utf8Path(Source).parent_path() / utf8Path(S));
-      P.gap(Source, "external initializer bytes not opened",
-            {{"tensor", Name}, {"member", S}});
+      if (Raw || Typed)
+        throw Error("conflicting inline and external initializer storage");
+      auto Relative = utf8Path(Source).parent_path() / utf8Path(S);
+      memberPath(P.Root, Relative);
+      uint64_t Offset = externalNumber(References, "offset").value_or(0);
+      auto Length = externalNumber(References, "length");
+      if (!P.B.Opts.ExternalData)
+        P.gap(Source, "external initializer bytes not opened",
+              {{"tensor", Name},
+               {"member", S},
+               {"offset", Offset},
+               {"length", Length ? Json(*Length) : Json(nullptr)}});
+      else {
+        T.FileId = pathToUTF8(Relative);
+        auto &ExternalFile = P.file(T.FileId);
+        if (Offset > ExternalFile.size() ||
+            (Length && *Length > ExternalFile.size() - Offset))
+          throw Error("external initializer range exceeds local member");
+        auto Bytes = Length.value_or(ExternalFile.size() - Offset);
+        if (!Expected)
+          P.gap(Source, "unverified external initializer dtype",
+                {{"tensor", Name}});
+        else if (*Expected != Bytes)
+          throw Error("external initializer byte size conflicts with shape");
+        else {
+          T.Offset = Offset;
+          T.HasOffset = true;
+          T.Bytes = Bytes;
+        }
+      }
     } else if (Raw && !Typed) {
-      static constexpr unsigned Bits[] = {0, 32, 8,  8,  16, 16, 32,  64, 0,
-                                          8, 16, 64, 32, 64, 64, 128, 16, 8,
-                                          8, 8,  8,  4,  4,  4,  8,   2,  2};
-      if (Type >= std::size(Bits) || !Bits[Type])
+      if (!Expected)
         P.gap(Source, "unverified initializer dtype", {{"tensor", Name}});
-      else if (sum(product(T.Elements, Bits[Type]), 7) / 8 !=
-               Raw->End - Raw->At)
+      else if (*Expected != Raw->End - Raw->At)
         throw Error("ONNX initializer byte size conflicts with shape");
       else {
         T.Offset = Raw->At;
+        T.HasOffset = true;
         T.Bytes = Raw->End - Raw->At;
       }
     } else
@@ -430,7 +491,8 @@ public:
 } // namespace
 void readONNX(Package &P, const std::string &Name) {
   File &F = P.file(Name);
-  Proto R{F, P.B, 0, F.size()};
+  SHA256Stream Observed;
+  Proto R{F, P.B, 0, F.size(), Observed};
   GraphReader Reader(P, Name);
   bool Graph = false;
   uint64_t IR = 0;
@@ -457,10 +519,13 @@ void readONNX(Package &P, const std::string &Name) {
     throw Error("missing ONNX IR version or graph");
   if (IR > 14)
     P.gap(Name, "unqualified ONNX IR version", {{"version", IR}});
-  P.Artifacts.push_back({{"id", Name},
-                         {"format", "onnx"},
-                         {"ir_version", IR},
-                         {"opsets", Ops},
-                         {"size", F.size()}});
+  P.Artifacts.push_back(
+      {{"id", Name},
+       {"format", "onnx"},
+       {"observed_fields_sha256", llvm::toHex(Observed.final(), true)},
+       {"hash_scope", "offset, length and bytes of each metadata read"},
+       {"ir_version", IR},
+       {"opsets", Ops},
+       {"size", F.size()}});
 }
 } // namespace neverd::model

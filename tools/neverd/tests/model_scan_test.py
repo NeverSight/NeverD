@@ -566,6 +566,33 @@ class ModelScan(unittest.TestCase):
         self.file.write_bytes(gguf(tensors))
         self.assertEqual(self.scan()["packages"][0]["inferred_projection_layouts"], [])
 
+    def test_external_initializer_and_bounded_tensor_window(self):
+        path = self.root / "model.onnx"
+        raw = self.root / "weights.data"
+        raw.write_bytes(b"head" + bytes(range(12)) + b"tail")
+
+        def initializer(location, offset="4", length="12"):
+            tensor = field(8, "weights") + field(2, 2) + field(1, 12) + field(14, 1)
+            for k, v in (("location", location), ("offset", offset), ("length", length)):
+                tensor += field(13, field(1, k) + field(2, v))
+            path.write_bytes(field(1, 9) + field(7, field(5, tensor)))
+
+        initializer(raw.name)
+        self.assertEqual(self.scan(path, code=1)["packages"][0]["tensor_payload_bytes_read"], 0)
+        p = self.scan(path, "--onnx-external-data")["packages"][0]
+        self.assertEqual(p["tensor_payload_bytes_read"], 0)
+        t = p["tensors"][0]
+        self.assertEqual((t["artifact"], t["offset"], t["storage_bytes"]), (raw.name, 4, 12))
+        settings = {"tensor_range": {"name": "graph/weights", "offset": 3, "length": 5}}
+        r = self.scan(path, "--onnx-external-data", "--model-options=" + json.dumps(settings))
+        self.assertEqual(r["tensor_range"]["sha256"], hashlib.sha256(bytes(range(3, 8))).hexdigest())
+        self.assertEqual(r["packages"][0]["tensor_payload_bytes_read"], 5)
+        self.assertEqual(r["packages"][0]["snapshot_id"], p["snapshot_id"])
+        for location, offset, length in [(raw.name, "-1", "12"), (raw.name, "4", "20"),
+                                         ("../escape", "4", "12"), ("https://example.invalid/x", "0", "12")]:
+            initializer(location, offset, length)
+            self.assertGreater(self.scan(path, "--onnx-external-data", code=1)["packages"][0]["gap_count"], 0)
+
     def test_onnx_unpacked_initializer_is_skipped_without_reading_values(self):
         model = self.root / "typed.onnx"
         many_values = field(5, 1) * 1024

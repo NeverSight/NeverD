@@ -87,6 +87,7 @@ Json jsonFile(Package &P, const std::string &Name) {
   if (F.size() > limits::kJsonBytes)
     throw Error("JSON member exceeds byte limit");
   auto Text = F.header(0, F.size(), P.B);
+  P.Fingerprints["metadata-file/" + Name] = digest(Text);
   return parseObject(Text, P.B);
 }
 void templateValues(Package &P, const std::string &Name, const Json &T) {
@@ -182,6 +183,9 @@ void readCompanion(Package &P, const std::string &Name) {
                          {"format", "companion"},
                          {"size", F.size()},
                          {"declarations", std::move(Declarations)}});
+  if (auto It = P.Fingerprints.find("metadata-file/" + Name);
+      It != P.Fingerprints.end())
+    P.Artifacts.back()["file_sha256"] = It->second;
 }
 std::string relativeMember(const Json &V) {
   if (!V.is_string())
@@ -212,9 +216,11 @@ void index(Package &P, const std::string &Name, Mapping &M,
       throw Error("tensor appears in multiple indexes");
     Shards.insert(Shard);
   }
-  P.Artifacts.push_back({{"id", Name},
-                         {"format", "safetensors-index"},
-                         {"mapped_tensors", Map.size()}});
+  P.Artifacts.push_back(
+      {{"id", Name},
+       {"format", "safetensors-index"},
+       {"mapped_tensors", Map.size()},
+       {"file_sha256", P.Fingerprints.at("metadata-file/" + Name)}});
 }
 void protectedRead(Package &P, const std::string &Name, const auto &Fn) {
   try {
@@ -281,26 +287,27 @@ void inspect(Package &P, const Names &Files,
       if (Shards.contains(T.FileId) && !Map.contains(Name))
         P.gap(T.FileId, "unindexed tensor", {{"tensor", Name}});
   }
-  if (!P.B.Opts.Baseline.empty()) {
-    for (auto Name :
-         {"tokenizer.json", "vocab.json", "merges.txt", "tokenizer.model"}) {
-      if (!fs::exists(P.Root / Name))
-        continue;
-      protectedRead(P, Name, [&] {
-        File &F = P.file(Name);
-        SHA256Stream Hash;
+  for (auto Name :
+       {"tokenizer.json", "vocab.json", "merges.txt", "tokenizer.model"}) {
+    if (fs::symlink_status(P.Root / Name).type() == fs::file_type::not_found)
+      continue;
+    protectedRead(P, Name, [&] {
+      File &F = P.file(Name);
+      Json Artifact = {{"id", Name},
+                       {"format", "tokenizer"},
+                       {"size", F.size()},
+                       {"hash_scope", "not requested"}};
+      if (!P.B.Opts.Baseline.empty()) {
         if (F.size() > P.B.HeaderLeft)
           throw Error("tokenizer digest exceeds remaining metadata budget");
-        for (uint64_t At = 0; At < F.size();) {
-          auto Data = F.header(
-              At, std::min<uint64_t>(limits::kChunk, F.size() - At), P.B);
-          Hash.update(llvm::StringRef(Data));
-          At += Data.size();
-        }
-        P.Fingerprints[std::string("tokenizer/") + Name] =
-            llvm::toHex(Hash.final(), true);
-      });
-    }
+        P.B.HeaderLeft -= F.size();
+        auto Hash = hashRange(F, 0, F.size(), P.B);
+        P.Fingerprints[std::string("tokenizer/") + Name] = Hash;
+        Artifact["file_sha256"] = Hash;
+        Artifact["hash_scope"] = "complete file";
+      }
+      P.Artifacts.push_back(std::move(Artifact));
+    });
   }
   if (P.Architectures.size() > 1)
     P.gap(P.Id, "conflicting declared architectures");

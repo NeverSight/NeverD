@@ -11748,5 +11748,9 @@ Il grafo precedente è ancora disponibile.</translation>
         <source>Component changes</source>
         <translation>Modifiche ai componenti</translation>
     </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>Opzioni avanzate (JSON)</translation>
+    </message>
 </context>
 </TS>
