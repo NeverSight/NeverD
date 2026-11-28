@@ -23,7 +23,7 @@ ABIS = {
 }
 MODES = ("section", "inplace")
 SAVED_ASSEMBLY_FLAGS = ("-fintegrated-as", "-save-temps=obj")
-PRODUCT_VERSION = 14
+PRODUCT_VERSION = 15
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -113,6 +113,7 @@ class Profile:
     c_call: bool = False
     saved_assembly: bool = False
     large_frame: bool = False
+    optimization: str = "O2"
 
     @property
     def high_address(self):
@@ -137,6 +138,8 @@ class Profile:
         suffix = f"{self.abi}-{'le' if self.little else 'be'}"
         if self.c_call:
             prefix = "c-call-large-frame" if self.large_frame else "c-call"
+            if self.optimization != "O2":
+                prefix += "-" + self.optimization.lower()
             if self.saved_assembly:
                 prefix += "-asm"
             return f"{prefix}-{self.isa}-{suffix}"
@@ -192,6 +195,10 @@ def profiles(version=PRODUCT_VERSION):
                             if isa == "mips16":
                                 yield replace(c_profile, large_frame=True)
                                 yield replace(c_profile, large_frame=True, saved_assembly=True)
+                        if version >= 15:
+                            for level in ("O0", "Os", "O3"):
+                                for saved in (False, True):
+                                    yield replace(c_profile, optimization=level, saved_assembly=saved)
             if version >= 11:
                 for dwarf_version in (4, 5):
                     yield Profile(abi, little, dwarf_version=dwarf_version)
@@ -359,7 +366,7 @@ def build_c_call_objects(args, build, profile, replacement_clang=None, replaceme
     sources = FIXTURES / "c_abi"
     abi = {"o32": "32", "n32": "n32", "n64": "64"}[profile.abi]
     flags = ["--target=" + profile.triple, "-march=" + profile.cpu, "-mabi=" + abi,
-             "-mno-abicalls", "-fno-pic", "-G0", "-O2", "-ffreestanding", "-fno-stack-protector",
+             "-mno-abicalls", "-fno-pic", "-G0", "-" + profile.optimization, "-ffreestanding", "-fno-stack-protector",
              "-fno-ident", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables"]
     if profile.isa != "classic":
         flags.append("-mips16" if profile.isa == "mips16" else "-mmicromips")
