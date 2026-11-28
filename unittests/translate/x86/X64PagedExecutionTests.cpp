@@ -1042,6 +1042,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X86ModeMachineCheckTests.inc"
 #include "X86ModeSegmentTests.inc"
 #include "X86ModeSgxNotificationTests.inc"
+#include "X86ModeSgxOperandTests.inc"
 #include "X86ModeSgxTests.inc"
 #include "X86ModeSmmTests.inc"
 #include "X86ModeStartupTests.inc"

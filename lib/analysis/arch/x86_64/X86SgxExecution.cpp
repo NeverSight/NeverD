@@ -25,7 +25,6 @@ namespace neverd::analysis::detail {
 using namespace translate;
 namespace {
 namespace le = llvm::support::endian;
-constexpr unsigned ReportTargetAndKeyRequestAlignment = 512;
 constexpr unsigned PageSize = 4096, GprOffset = PageSize - 184;
 constexpr unsigned FlagsOffset = 128, IpOffset = 136, UserSPOffset = 144,
                    UserBPOffset = 152;
@@ -347,13 +346,8 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   }
   if (Leaf > 4)
     return Fault(13);
-  if (Leaf < 2) {
-    // TARGETINFO and KEYREQUEST both start on a 512-byte boundary in ELRANGE.
-    if (!EPC.Active || (R.GPR[3] & (ReportTargetAndKeyRequestAlignment - 1)) ||
-        !EPC.Active->contains(R.GPR[3]))
-      return Fault(13);
-    return invalid("enclave EREPORT and EGETKEY require platform key state");
-  }
+  if (Leaf < 2)
+    return keyOrReport(S, M, Progress, ExpectedBytes.size(), std::move(Out));
   if (EPC.Active)
     return Fault(13);
   if (!EPC.X87)

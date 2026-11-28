@@ -29,6 +29,7 @@ add_neverd_component_library(NeverDX64PagedEventDelivery
   arch/x86_64/X86SmmExecution.cpp
   arch/x86_64/X86SmmSaveMap.cpp
   arch/x86_64/X86SgxExecution.cpp
+  arch/x86_64/X86SgxKeyReport.cpp
   arch/x86_64/X64PagedPortIO.cpp
   LINK_COMPONENTS BinaryInterpreterSpecialization Translate
 )
