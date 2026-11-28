@@ -89,5 +89,24 @@
       "f2d259f476474a9b3e7506d229a18180800cf922644b3216b5024edadf2db880",
       "f747cdd7279b903b77037c432db19eeff39bb9ae9f1cf17a761a172446bec630"
     ]
+  },
+  {
+    "path": "docs/evidence/x86-code64-prefix-faults-2026-11-28.json",
+    "rule": "private-path",
+    "commits": [
+      "7f784518126b773be0fd339695503aa31008c153",
+      "c611675c3730670e1100ae91ca7c214ed0a445af"
+    ],
+    "line": "",
+    "reason": "Thirteen inherited Google Test skip diagnostics contain the hosted runner checkout prefix. The cleanup preserves both repository-relative source locations in each message. These digests identify the original publication and its removal.",
+    "line_sha256": [
+      "12a2040958a1a47460392e46827492178f6dfce93dcc73810460a2e09b141d68",
+      "33168561ba6657f1ddd4648ac7a1a6b7226a5f5dc4f7df4104777c4443826e7a",
+      "541b552a83efb57a8b714ce79da00f180f2c7d0baefafc08a3f22b6760eedc8b",
+      "7a0a13fe534d39f767de4a897a61e5049b3e3fbb93cf36ed52442e1fc8f819f6",
+      "bb62c89077a774963a71a12c4e97bca687c2d19b89db51c794c8aef6ae06412b",
+      "cdcb6b40fee2f3751f8b0a480673e3f12acaf050c5dbc2e699212381bd18051e",
+      "df9c4fc3b4e5ea19ffb61b2679dca06a91b51f383b21986a20311522b0954809"
+    ]
   }
 ]
