@@ -459,6 +459,9 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     std::string Refusal;
     for (;;) {
       MedLLVMEmitter MedEmitter;
+      MedEmitter.setRelocatedDispatchLabels(
+          Opts.PatchMode && Img.isMachO() && Img.Arch == Arch::AArch64 &&
+          !Img.IsRelocatable && !Img.isArm64e());
       // The mask holds only bodies the unit notes left out.
       MedEmitter.setMaskedBodiesOwnedElsewhere(!Mask.empty());
       MedEmitter.setPreserveUnknownSourceValues(Opts.SourceProjection &&

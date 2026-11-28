@@ -3065,7 +3065,11 @@ that names no kept label fails as loudly as before. The comparison needs every
 label as a number. HighC prints the image's words as numbers already. The LLVM
 mirror of a relocated slot that holds such a label keeps the label's original
 address as a plain integer for the same reason: LLVM defines no comparison of
-block addresses, and an optimizer may give two labels one. The proof-based
+block addresses, and an optimizer may give two labels one. A linked AArch64
+Mach-O executable reads its label slots after dyld has applied the image slide.
+When recompiling a function into that image, the emitter compares each loaded
+label's offset from the original function entry with the corresponding case
+offset. Both addresses move together. The proof-based
 recoveries run first and are unchanged; a dispatch by value claims no table
 storage, no index and no relocation suppression.
 
