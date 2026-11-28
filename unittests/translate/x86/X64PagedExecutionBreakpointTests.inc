@@ -84,6 +84,38 @@ TEST_F(X64PagedExecutionBreakpointTest, BoundControlsAndBridgePrecedeEffects) {
   }
 }
 
+TEST_F(X64PagedExecutionBreakpointTest, PrefixLengthFaultWithUnboundPriority) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "No test Clang";
+  const std::vector<uint8_t> Code(x86::kMaxInstructionLen, 0x66);
+  for (bool LLVM : {false, true}) {
+    Run Driver = nullptr;
+    Schedule Scheduled = nullptr;
+    ASSERT_NO_FATAL_FAILURE(compileDebug(Code, LLVM, Driver, Scheduled));
+    resetDebug(Code);
+    X64PagedDebugState Debug;
+    Debug.DR[0] = 0x1000;
+    Debug.DR7 = 0x401;
+    auto O = breakpointOptions(Debug);
+    const auto Before = State;
+    const auto BeforeDebug = Debug;
+    Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+    X64PagedExecution Context(*Memory, O);
+    uint64_t Budget = 1;
+    EXPECT_EQ(Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget),
+              5u);
+    EXPECT_NE(Context.lastError().find("instruction-length fault priority"),
+              std::string::npos);
+    EXPECT_EQ(Budget, 1u);
+    EXPECT_EQ(Memory->controls().RFlags, Controls.RFlags);
+    EXPECT_FALSE(Context.lastResult().InstructionAttempted);
+    EXPECT_EQ(std::memcmp(&Before, &State, sizeof(State)), 0);
+    EXPECT_EQ(std::memcmp(&BeforeDebug, &Debug, sizeof(Debug)), 0);
+    EXPECT_EQ(Memory->physicalMemory().snapshotMemoryRegions().front().Bytes,
+              RAM.Memory.front().Bytes);
+  }
+}
+
 TEST_F(X64PagedExecutionBreakpointTest,
        BreakpointPrecedesFetchAndResumesAcceptedEntry) {
   if (!hasCrossTargetClang())
@@ -131,6 +163,186 @@ TEST_F(X64PagedExecutionBreakpointTest,
 }
 
 #if defined(__linux__) && defined(__x86_64__)
+TEST_F(X64PagedExecutionBreakpointTest,
+       PrefixLengthFaultMatchesOriginalBreakpointAndFetchPriority) {
+  if (!neverd::test::hostCpuIsIntel() || !hasCrossTargetClang())
+    GTEST_SKIP() << "Intel KVM and test Clang are required";
+  X64PagedNativeCPU CPU;
+  ASSERT_NO_FATAL_FAILURE(CPU.initialize());
+  if (IsSkipped())
+    return;
+  ASSERT_NO_FATAL_FAILURE(CPU.pinForReturnComparison());
+  if (CPU.ReturnCoreType != 0x20 && CPU.ReturnCoreType != 0x40)
+    GTEST_SKIP() << "Prefix fetch priority is unqualified on this core";
+  std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
+  if (const char *NeverC = std::getenv("NEVERD_TEST_NEVERC"))
+    Compilers.emplace_back(NeverC);
+  unsigned Comparisons = 0;
+  for (unsigned Available : {0u, 14u, 15u}) {
+    const uint64_t PC = 0x2000 - Available;
+    const unsigned Offset = PC - 0x1000;
+    std::vector<uint8_t> Code(Offset + x86::kMaxInstructionLen, 0x90);
+    std::fill(Code.begin() + Offset, Code.end(), 0x66);
+    if (Available == 14)
+      Code.back() = 0x0f;
+    for (const auto &Compiler : Compilers)
+      for (bool LLVM : {false, true})
+        for (const std::string Optimization : {"-O0", "-O2"}) {
+          Run Driver = nullptr;
+          Schedule Scheduled = nullptr;
+          ASSERT_NO_FATAL_FAILURE(compileDebug(Code, LLVM, Driver, Scheduled,
+                                               {PC}, Compiler, Optimization));
+          for (unsigned CPL : {0u, 1u, 2u, 3u})
+            for (bool RF : {false, true})
+              for (bool Match : {false, true}) {
+                SCOPED_TRACE(testing::Message()
+                             << "available=" << Available << " cpl=" << CPL
+                             << " rf=" << RF << " match=" << Match << ' '
+                             << Compiler << Optimization << " llvm=" << LLVM);
+                resetDebug(Code, CPL);
+                auto &Core = State.Core.Core.Core.Core;
+                Core.PC = PC;
+                Core.RFlags = RF ? 0x10202 : 0x202;
+                put(0x13010, 0); // Next code page absent.
+                X64PagedDebugState Debug;
+                Debug.DR[0] = Match ? PC : PC + 1;
+                Debug.DR7 = 0x401;
+                CPU.DebugRegisters.emplace();
+                CPU.DebugRegisters->dr6 = Debug.DR6;
+                CPU.DebugRegisters->dr7 = Debug.DR7;
+                std::copy(Debug.DR.begin(), Debug.DR.end(),
+                          CPU.DebugRegisters->db);
+                X64ContinuationStateV6 Native;
+                bool Handler = false;
+                ASSERT_NO_FATAL_FAILURE(
+                    CPU.execute(RAM.Memory.front().Bytes, State, Controls.CR0,
+                                x86::kMaxInstructionLen, Native, Handler, true,
+                                nullptr, Controls.CR4, true, false));
+                ASSERT_TRUE(Handler);
+                const unsigned Vector = Match && !RF     ? 1
+                                        : Available < 15 ? 14
+                                                         : 13;
+                ASSERT_EQ(Native.Core.Core.Core.Core.PC,
+                          0x4000u + Vector * 16u);
+                Memory = llvm::cantFail(
+                    X86PagedMemory::create(RAM, Features, Controls));
+                auto O = breakpointOptions(Debug);
+                O.PrefixLengthFaultAfter15Bytes = true;
+                X64PagedExecution Context(*Memory, O);
+                Shadows Shadow;
+                Producer P;
+                P.Ready = 0;
+                uint64_t Budget = 1, Polls = 1;
+                EXPECT_EQ(Scheduled(&State,
+                                    reinterpret_cast<uint8_t *>(&Context),
+                                    &Budget, &Shadow, &Polls, Producer::peek,
+                                    Producer::accepted, &P),
+                          7u)
+                    << Context.lastError();
+                EXPECT_EQ(Budget, 0u);
+                EXPECT_EQ(Debug.DR6, CPU.DebugRegisters->dr6);
+                EXPECT_EQ(Debug.DR7, CPU.DebugRegisters->dr7);
+                ASSERT_NO_FATAL_FAILURE(
+                    expectPagedSegmentCPU(State, Native, *Memory, CPU));
+                const auto Actual =
+                    Memory->physicalMemory().snapshotMemoryRegions();
+                EXPECT_TRUE(std::equal(Actual.front().Bytes.begin(),
+                                       Actual.front().Bytes.end(), CPU.RAM));
+                if (HasFailure())
+                  return;
+                ++Comparisons;
+              }
+        }
+  }
+  RecordProperty("core_type", CPU.ReturnCoreType);
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+
+TEST_F(X64PagedExecutionBreakpointTest,
+       VirtualInterruptPrecedesRsmAndEncluBreakpointsAndFetch) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
+  X64PagedNativeCPU CPU;
+  ASSERT_NO_FATAL_FAILURE(CPU.initialize());
+  if (IsSkipped())
+    return;
+  ASSERT_NO_FATAL_FAILURE(CPU.pinForReturnComparison());
+  unsigned Comparisons = 0;
+  for (const auto &Code :
+       {std::vector<uint8_t>{0x0f, 0xaa},
+        std::vector<uint8_t>{0x0f, 0x01, 0xd7}, std::vector<uint8_t>{0xf4}}) {
+    for (bool PVI : {false, true})
+      for (bool VIP : {false, true})
+        for (bool Match : {false, true})
+          for (bool Mapped : {false, true}) {
+            const bool Conflict = PVI && VIP;
+            if (!Conflict && !Match && Mapped)
+              continue; // The leaf's own behavior is tested by its owner.
+            SCOPED_TRACE(testing::Message()
+                         << testing::PrintToString(Code) << " pvi=" << PVI
+                         << " vip=" << VIP << " match=" << Match
+                         << " mapped=" << Mapped);
+            resetDebug(Code, 3);
+            Controls.CR4 |= PVI ? 2u : 0u;
+            State.Core.Core.Core.Core.RFlags = 0x80202 | (VIP ? 0x100000 : 0);
+            State.Core.Core.Core.Core.GPR[0] = 2; // EENTER if fetched.
+            if (!Mapped)
+              put(0x13008, 0);
+            X86ModeState S;
+            S.Core.Core = State;
+            S.SMM.emplace();
+            S.Debug.emplace();
+            S.Debug->DR[0] = 0x1000;
+            S.Debug->DR7 = Match ? 0x401 : 0x400;
+            CPU.DebugRegisters.emplace();
+            CPU.DebugRegisters->dr6 = S.Debug->DR6;
+            CPU.DebugRegisters->dr7 = S.Debug->DR7;
+            std::copy(S.Debug->DR.begin(), S.Debug->DR.end(),
+                      CPU.DebugRegisters->db);
+            X64ContinuationStateV6 Native;
+            bool Handler = false;
+            ASSERT_NO_FATAL_FAILURE(CPU.execute(
+                RAM.Memory.front().Bytes, State, Controls.CR0, Code.size(),
+                Native, Handler, true, nullptr, Controls.CR4, true, false));
+            ASSERT_TRUE(Handler);
+            const unsigned Vector = Conflict ? 13 : Match ? 1 : 14;
+            ASSERT_EQ(Native.Core.Core.Core.Core.PC, 0x4000u + Vector * 16u);
+            Memory = llvm::cantFail(X86PagedMemory::createWithSgx(
+                RAM, Features, Controls,
+                llvm::cantFail(X86SgxMemory::create({}))));
+            X86ModeExecutionOptions O;
+            O.Undefined.emplace();
+            O.MXCSRMask = 0xffff;
+            O.PagingAddressBits = 48;
+            O.Legacy.Segments.FullLimitChoice = X86FullSegmentLimitChoice::Wrap;
+            O.Legacy.Debug = O.Long.DebugProfile =
+                X86InstructionDebugProfile::ExecuteBreakpoints;
+            X86ModeExecution Execution(*Memory, O);
+            const X86ModeInstruction I{0x1000, X86ExecutionMode::Long64, Code};
+            uint64_t Budget = 1;
+            auto Got = Execution.run(S, llvm::ArrayRef(I), Budget);
+            ASSERT_TRUE(bool(Got)) << llvm::toString(Got.takeError());
+            ASSERT_EQ(Got->DeliveredVector, Vector) << Got->OwnerError;
+            EXPECT_EQ(Got->Attempts, 1u);
+            EXPECT_EQ(Got->Completions, 0u);
+            EXPECT_EQ(Budget, 0u);
+            EXPECT_FALSE(Memory->sgxMemory()->active());
+            EXPECT_FALSE(S.SMM->Active);
+            EXPECT_EQ(S.Debug->DR6, CPU.DebugRegisters->dr6);
+            ASSERT_NO_FATAL_FAILURE(
+                expectPagedSegmentCPU(S.Core.Core, Native, *Memory, CPU));
+            const auto Actual =
+                Memory->physicalMemory().snapshotMemoryRegions();
+            EXPECT_TRUE(std::equal(Actual.front().Bytes.begin(),
+                                   Actual.front().Bytes.end(), CPU.RAM));
+            if (HasFailure())
+              return;
+            ++Comparisons;
+          }
+  }
+  RecordProperty("cpu_comparisons", Comparisons);
+}
+
 TEST_F(X64PagedExecutionBreakpointTest, OriginalComparatorsAndFaultPriority) {
   if (!neverd::test::hostCpuIsIntel())
     GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;

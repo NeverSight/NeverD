@@ -13,19 +13,55 @@
 #include "neverd/pipeline/X64ContinuationExport.h"
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <cstdint>
+#include <cstddef>
 #include <filesystem>
+#include <fstream>
 #include <string>
+#include <utility>
 
 namespace neverd::cli {
+namespace {
+llvm::Expected<std::string> readContinuationInput(llvm::StringRef Path,
+                                                  size_t Limit) {
+  const std::filesystem::path File(std::u8string(Path.begin(), Path.end()));
+  std::error_code EC;
+  const auto Size = std::filesystem::file_size(File, EC);
+  if (EC)
+    return llvm::createFileError(Path, EC);
+  if (!Size || Size > Limit)
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "continuation input size is outside the request limit");
+  std::ifstream Input(File, std::ios::binary);
+  std::string Text(static_cast<size_t>(Size), '\0');
+  if (!Input.read(Text.data(), static_cast<std::streamsize>(Size)) ||
+      Input.peek() != std::char_traits<char>::eof())
+    return llvm::createFileError(Path, llvm::errc::io_error);
+  return Text;
+}
+} // namespace
+
 int runContinuation(neverd_session_t Sess) {
+  if (DecompileCheckAll) {
+    llvm::WithColor::error()
+        << "--check-all requires the default C route for every loaded "
+           "function and cannot be combined with explicit source export\n";
+    return 1;
+  }
   const bool Legacy = X86LegacySource.getNumOccurrences();
   const auto &Request = Legacy ? X86LegacySource : X64Continuation;
+  const bool HasObservation = X64XbeginObservation.getNumOccurrences();
+  if (HasObservation &&
+      (Legacy || X64Continuation.empty() || X64XbeginObservation.empty())) {
+    llvm::WithColor::error() << "--x64-xbegin-observation requires an "
+                                "observation file and --x64-continuation\n";
+    return 1;
+  }
   if (Request.empty() || (Legacy && X64Continuation.getNumOccurrences()) ||
       (Legacy && LlvmRoute.getNumOccurrences()) || ContinuationReport.empty() ||
       OutputLanguage != NEVERD_OUTPUT_C || !ExportFunc.empty() || NoOpt ||
@@ -57,36 +93,42 @@ int runContinuation(neverd_session_t Sess) {
   if (SameFile(OutputFile, ContinuationReport) ||
       SameFile(OutputFile, Request) || SameFile(OutputFile, InputFile) ||
       SameFile(ContinuationReport, Request) ||
-      SameFile(ContinuationReport, InputFile)) {
+      SameFile(ContinuationReport, InputFile) ||
+      (HasObservation &&
+       (SameFile(OutputFile, X64XbeginObservation) ||
+        SameFile(ContinuationReport, X64XbeginObservation)))) {
     llvm::WithColor::error()
         << "continuation source and manifest must use distinct output files, "
            "separate from the inputs\n";
     return 1;
   }
-  uint64_t Size = 0;
   const auto RequestLimit =
       Legacy ? limits::pipeline::kX86LegacySourceRequestBytes
              : limits::pipeline::kX64ContinuationRequestBytes;
-  if (llvm::sys::fs::file_size(Request, Size) || !Size || Size > RequestLimit) {
-    llvm::WithColor::error() << "cannot read a bounded continuation request\n";
+  auto Text = readContinuationInput(Request, RequestLimit);
+  if (!Text) {
+    llvm::WithColor::error() << "cannot read continuation request: "
+                             << llvm::toString(Text.takeError()) << "\n";
     return 1;
   }
-  auto Buffer = llvm::MemoryBuffer::getFile(Request, /*IsText=*/false,
-                                            /*RequiresNullTerminator=*/false);
-  if (!Buffer) {
-    llvm::WithColor::error()
-        << "cannot read continuation request: " << Buffer.getError().message()
-        << "\n";
-    return 1;
+  std::string Observation;
+  if (HasObservation) {
+    auto Saved = readContinuationInput(X64XbeginObservation, RequestLimit);
+    if (!Saved) {
+      llvm::WithColor::error() << "cannot read XBEGIN observation: "
+                               << llvm::toString(Saved.takeError()) << "\n";
+      return 1;
+    }
+    Observation = std::move(*Saved);
   }
   const char *Manifest = nullptr;
   const char *Source =
-      Legacy
-          ? neverd_x86_legacy_source_v1(Sess, (*Buffer)->getBufferStart(),
-                                        (*Buffer)->getBufferSize(), &Manifest)
-          : neverd_x64_continuation_source_v1(Sess, (*Buffer)->getBufferStart(),
-                                              (*Buffer)->getBufferSize(),
-                                              LlvmRoute, &Manifest);
+      Legacy ? neverd_x86_legacy_source_v1(Sess, Text->data(), Text->size(),
+                                           &Manifest)
+             : neverd_x64_continuation_source_with_observation_v1(
+                   Sess, Text->data(), Text->size(),
+                   HasObservation ? Observation.data() : nullptr,
+                   Observation.size(), LlvmRoute, &Manifest);
   auto Free = llvm::scope_exit([&] {
     neverd_free_string(Source);
     neverd_free_string(Manifest);

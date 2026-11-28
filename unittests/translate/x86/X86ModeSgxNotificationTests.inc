@@ -77,6 +77,52 @@ protected:
   }
 };
 
+TEST_F(X86ModeSgxThreadTest, PendingVirtualInterruptRestartsEnclaveExit) {
+  startThread();
+  privateInstruction(0, Enclu);
+  Controls.CR4 |= 2; // PVI.
+  const auto Outside = Machine;
+  bindThread();
+  X86ModeExecution Execution(*Memory, Options);
+  uint64_t Budget = 1;
+  auto Enter = llvm::cantFail(Execution.run(Machine, Program, Budget));
+  ASSERT_EQ(Enter.Completions, 1u) << Enter.OwnerError;
+  ASSERT_TRUE(Memory->sgxMemory()->active());
+  auto &R = Machine.Core.Core.Core.Core.Core.Core;
+  ASSERT_EQ(R.PC, Code.Linear);
+  R.GPR[0] = 4;
+  R.GPR[3] = 0x2000;
+  R.RFlags |= 0x180000; // Both virtual interrupt bits pending at EEXIT.
+  Budget = 1;
+  auto Interrupted = llvm::cantFail(Execution.run(Machine, Program, Budget));
+  ASSERT_EQ(Interrupted.DeliveredVector, 13u) << Interrupted.OwnerError;
+  EXPECT_EQ(Interrupted.Attempts, 1u);
+  EXPECT_EQ(Interrupted.Completions, 0u);
+  EXPECT_FALSE(Memory->sgxMemory()->active());
+  const auto OutsideFrame = bytes(*Memory);
+  EXPECT_EQ(word(OutsideFrame, R.GPR[4], 8), 0u);
+  EXPECT_EQ(word(OutsideFrame, R.GPR[4] + 8, 8), 0x1800u);
+
+  // The outside handler resolves the virtual interrupt condition before
+  // ERESUME. The retained SSA must select the original EEXIT and operands.
+  Machine = Outside;
+  Controls.CR4 &= ~uint64_t{2};
+  llvm::cantFail(Memory->bindControls(Controls));
+  R.GPR[0] = 3;
+  Budget = 1;
+  auto Resume = llvm::cantFail(Execution.run(Machine, Program, Budget));
+  ASSERT_EQ(Resume.Completions, 1u) << Resume.OwnerError;
+  ASSERT_TRUE(Memory->sgxMemory()->active());
+  EXPECT_EQ(R.PC, Code.Linear);
+  EXPECT_EQ(R.GPR[0], 4u);
+  EXPECT_EQ(R.GPR[3], 0x2000u);
+  Budget = 1;
+  auto Exit = llvm::cantFail(Execution.run(Machine, Program, Budget));
+  EXPECT_EQ(Exit.Completions, 1u) << Exit.OwnerError;
+  EXPECT_FALSE(Memory->sgxMemory()->active());
+  EXPECT_EQ(R.PC, 0x2000u);
+}
+
 TEST_F(X86ModeSgxThreadTest,
        EnclaveNotificationResumeAndDecrementSelectCorrectFrames) {
   namespace le = llvm::support::endian;

@@ -854,6 +854,11 @@ cl::opt<std::string> X64Continuation(
     "x64-continuation",
     cl::desc("Export explicit x64 state C using a declared request JSON"),
     cl::value_desc("path"), cl::sub(DecompileCmd));
+cl::opt<std::string> X64XbeginObservation(
+    "x64-xbegin-observation",
+    cl::desc(
+        "Use a saved GDB or QEMU XBEGIN observation with --x64-continuation"),
+    cl::value_desc("path"), cl::sub(DecompileCmd));
 cl::opt<std::string> X86LegacySource(
     "x86-legacy-source",
     cl::desc(

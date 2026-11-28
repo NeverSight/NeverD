@@ -523,15 +523,19 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
           "paged instruction resume changed body, bytes, mask or shadow");
     return executeTransition(State, *P);
   }
-  const auto UD0Offset =
-      x86PagedCode64UD0OpcodeOffset(Bytes.data(), Bytes.size());
-  const bool UD0 = UD0Offset.has_value();
+  const auto FetchFault =
+      x86PagedCode64FaultEncoding(Bytes.data(), Bytes.size());
+  const bool UD0 =
+      FetchFault && FetchFault->Operation == X86PagedCode64FaultEncoding::UD0;
+  const bool PrefixLengthFault = FetchFault && !UD0;
   if (UD0 && (!Options.UD0Fetch ||
               (*Options.UD0Fetch != X86UD0FetchProfile::OpcodeOnly &&
                *Options.UD0Fetch != X86UD0FetchProfile::CompleteModRM)))
     return invalid("paged UD0 requires a bound instruction-fetch profile");
-  const unsigned FetchBytes =
-      UD0 ? *UD0Offset + X86PagedCode64UD0OpcodeBytes : Bytes.size();
+  if (PrefixLengthFault && !Options.PrefixLengthFaultAfter15Bytes)
+    return invalid("overlong prefix stream requires a bound instruction-length "
+                   "fault priority");
+  const unsigned FetchBytes = FetchFault ? FetchFault->Size : Bytes.size();
   auto Controls = Memory.controls();
   const auto &Original = State.Core.Core.Core.Core;
   const bool SingleStep = Original.RFlags & 0x100;
@@ -554,25 +558,27 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
   auto *NextBytes = reinterpret_cast<uint8_t *>(&Next);
   auto *ExchangeBytes = reinterpret_cast<uint8_t *>(&Exchange);
   Controls.RFlags = Original.RFlags;
-  if (auto Failure = Memory.bindControls(Controls))
-    return std::move(Failure);
   // PVI's pending interrupt condition precedes instruction breakpoints and
   // fetch. External event selection already happened at the scheduler boundary.
-  if (x86PendingVirtualInterrupt(CPL, Controls.CR4, Controls.RFlags)) {
-    T.Access.Status = X86PageWalkStatus::Exception;
-    T.Access.Exception = X86MemoryException{13, 0, std::nullopt};
-  } else if (DebugSSBlocked &&
-             (!Memory.sgxMemory() ||
-              Memory.sgxMemory()->instructionBreakpointsAt(Address))) {
-    const auto Matches =
+  const bool PendingVirtualInterrupt =
+      x86PendingVirtualInterrupt(CPL, Controls.CR4, Controls.RFlags);
+  uint8_t Matches = 0;
+  if (!PendingVirtualInterrupt && DebugSSBlocked &&
+      (!Memory.sgxMemory() ||
+       Memory.sgxMemory()->instructionBreakpointsAt(Address)))
+    Matches =
         x86ExecutionBreakpoints(Options.Debug->DR, Options.Debug->DR7, Address,
                                 Original.RFlags, *DebugSSBlocked);
-    if (Matches) {
-      Last.InstructionAttempted = true;
-      if (auto Failure = deliverDebug(State, false, MXCSRMask, Matches, true))
-        return std::move(Failure);
-      return Last;
-    }
+  if (auto Failure = Memory.bindControls(Controls))
+    return std::move(Failure);
+  if (PendingVirtualInterrupt) {
+    T.Access.Status = X86PageWalkStatus::Exception;
+    T.Access.Exception = X86MemoryException{13, 0, std::nullopt};
+  } else if (Matches) {
+    Last.InstructionAttempted = true;
+    if (auto Failure = deliverDebug(State, false, MXCSRMask, Matches, true))
+      return std::move(Failure);
+    return Last;
   }
   // Stop at the first changed byte before fetching a later old instruction
   // byte. The environment must relift changed code; it is never executed as
@@ -623,8 +629,10 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
   }
   if (!T.Error && T.Access.Status == X86PageWalkStatus::Completed &&
       Memory.sgxMemory() && Memory.sgxMemory()->active()) {
+    // UD0's live address tail belongs to the fetch profile, including when a
+    // full-mode binding supplied those optional bytes alongside the opcode.
     auto Denied = detail::X86SgxExecution::instructionException(
-        Bytes, Address, *Memory.sgxMemory());
+        Bytes.take_front(FetchBytes), Address, *Memory.sgxMemory());
     if (!Denied)
       return Denied.takeError();
     if (*Denied) {

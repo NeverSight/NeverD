@@ -26,10 +26,8 @@ enum class X86UD0FetchProfile : uint8_t {
   CompleteModRM,
 };
 
-/// Qualified code64 UD0 prefixes exclude LOCK. Capstone reports the opcode
-/// without the ModR/M address tail. The opcode must fit within the x86
-/// instruction limit; the processor-bound fetch profile decides whether the
-/// address tail matters and whether a later byte would exceed that limit.
+/// The explicit code64 fetch profile records the prefixes and UD0 opcode.
+/// A CPU that requires an address tail fetches it from live instruction memory.
 inline constexpr unsigned X86PagedCode64UD0OpcodeBytes = 2;
 inline constexpr unsigned X86PagedCode64UD0QualifiedPrefixLimit =
     static_cast<unsigned>(x86::kMaxInstructionLen) -
@@ -51,6 +49,7 @@ constexpr bool x86PagedCode64UD0Prefix(uint8_t Byte) {
   case 0x65: // Segment override.
   case 0x66: // Operand size.
   case 0x67: // Address size.
+  case 0xf0: // LOCK.
   case 0xf2:
   case 0xf3: // REP/REPNZ.
     return true;
@@ -59,16 +58,39 @@ constexpr bool x86PagedCode64UD0Prefix(uint8_t Byte) {
   }
 }
 
-constexpr std::optional<unsigned>
-x86PagedCode64UD0OpcodeOffset(const uint8_t *Bytes, size_t Size) {
+struct X86PagedCode64FaultEncoding {
+  enum Kind { UD0, PrefixLengthFault } Operation;
+  unsigned Size;
+};
+
+/// Return the bytes to authenticate at the original RIP. Fifteen prefixes, or
+/// fourteen followed by the 0F escape, already prove that a complete opcode
+/// cannot fit. The byte after the architectural limit has no role in selection.
+constexpr std::optional<X86PagedCode64FaultEncoding>
+x86PagedCode64FaultEncoding(const uint8_t *Bytes, size_t Size) {
   unsigned Offset = 0;
-  while (Offset < X86PagedCode64UD0QualifiedPrefixLimit && Offset < Size &&
+  while (Offset < x86::kMaxInstructionLen && Offset < Size &&
          x86PagedCode64UD0Prefix(Bytes[Offset]))
     ++Offset;
+  if (Offset == x86::kMaxInstructionLen ||
+      (Offset == x86::kMaxInstructionLen - 1 && Offset < Size &&
+       Bytes[Offset] == 0x0f))
+    return X86PagedCode64FaultEncoding{
+        X86PagedCode64FaultEncoding::PrefixLengthFault,
+        x86::kMaxInstructionLen};
   if (Size < Offset + X86PagedCode64UD0OpcodeBytes || Bytes[Offset] != 0x0f ||
       Bytes[Offset + 1] != 0xff)
     return std::nullopt;
-  return Offset;
+  return X86PagedCode64FaultEncoding{X86PagedCode64FaultEncoding::UD0,
+                                     Offset + X86PagedCode64UD0OpcodeBytes};
+}
+
+constexpr std::optional<unsigned>
+x86PagedCode64UD0OpcodeOffset(const uint8_t *Bytes, size_t Size) {
+  const auto Fault = x86PagedCode64FaultEncoding(Bytes, Size);
+  if (!Fault || Fault->Operation != X86PagedCode64FaultEncoding::UD0)
+    return std::nullopt;
+  return Fault->Size - X86PagedCode64UD0OpcodeBytes;
 }
 
 /// The encoded address extent after UD0's two opcode bytes in 32/64-bit

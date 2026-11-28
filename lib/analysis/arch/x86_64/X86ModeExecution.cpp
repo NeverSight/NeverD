@@ -444,9 +444,7 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
   if (!Mode)
     return Mode.takeError();
   const uint64_t Address =
-      *Mode == X86ExecutionMode::Long64
-          ? modeRegisters(S).PC
-          : uint32_t(S.Core.Core.Core.CS.Base + modeRegisters(S).PC);
+      detail::modeInstructionAddress(S, *Mode == X86ExecutionMode::Long64);
   // A published task may suspend while validating its incoming selectors.
   // The journal still belongs to the already authenticated outgoing opcode.
   if (!P->Low.PendingTask &&
@@ -898,10 +896,8 @@ llvm::Expected<X86ModeExecutionResult> X86ModeExecution::runBoundaries(
       auto Current = mode(S);
       if (!Current)
         return Current.takeError();
-      const auto Address =
-          *Current == X86ExecutionMode::Long64
-              ? modeRegisters(S).PC
-              : uint32_t(S.Core.Core.Core.CS.Base + modeRegisters(S).PC);
+      const auto Address = detail::modeInstructionAddress(
+          S, *Current == X86ExecutionMode::Long64);
       for (const auto &Candidate : Instructions)
         if (Candidate.Mode == *Current && Candidate.Address == Address) {
           if (I)

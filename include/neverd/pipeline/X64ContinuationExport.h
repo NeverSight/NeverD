@@ -122,6 +122,11 @@ llvm::Expected<X64ContinuationExport>
 exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                       bool UseLLVM, DebugContext *Debug = nullptr);
 
+/// Read a separately saved observation from the supplied JSON buffer.
+llvm::Expected<X64ContinuationExport> exportX64ContinuationWithObservation(
+    const BinaryImage &Image, llvm::StringRef RequestJSON, bool UseLLVM,
+    DebugContext *Debug, llvm::StringRef XbeginObservationJSON);
+
 } // namespace neverd
 
 #endif // NEVERD_PIPELINE_X64CONTINUATIONEXPORT_H

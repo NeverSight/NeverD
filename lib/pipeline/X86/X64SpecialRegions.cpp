@@ -18,6 +18,7 @@
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/decode/X86/X86TransactionEncoding.h"
+#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 #include "neverd/lift/X86/X86HleEncoding.h"
 #include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86MpxEncoding.h"
@@ -127,10 +128,19 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     for (const auto &Audit : Result.FunctionAudits) {
       if (!Pending.count(Audit.Entry))
         continue;
-      if (!Audit.DecodeFailures.empty())
-        return invalid("selected entry " + hex(Audit.Entry) +
-                       " contains an undecodable instruction at " +
-                       hex(Audit.DecodeFailures.front()));
+      for (va_t Address : Audit.DecodeFailures) {
+        const auto Bytes = bytesAt(Image, Address);
+        // Only the CFG owner can retain an undecodable, fully owned terminal
+        // span among the native sites. Other decode failures still reject.
+        if (!SourceOptions.PagedMemory ||
+            !sorted::contains64(Audit.NativeInstructionAddresses.data(),
+                                Audit.NativeInstructionAddresses.size(),
+                                Address) ||
+            !x86PagedCode64FaultEncoding(Bytes.data(), Bytes.size()))
+          return invalid("selected entry " + hex(Audit.Entry) +
+                         " contains an undecodable instruction at " +
+                         hex(Address));
+      }
       if (Audit.NativeInstructionAddresses.empty())
         return invalid("selected entry " + hex(Audit.Entry) +
                        " has no decoded region: " +
@@ -138,11 +148,6 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
       Found.insert(Audit.Entry);
       llvm::json::Array PCs;
       llvm::json::Array DirectJumps;
-      std::vector<va_t> RegionAddresses;
-      if (FollowDirectJumps) {
-        RegionAddresses = Audit.NativeInstructionAddresses;
-        std::sort(RegionAddresses.begin(), RegionAddresses.end());
-      }
       for (va_t Address : Audit.NativeInstructionAddresses) {
         Unique.insert(Address);
         PCs.push_back(hex(Address));
@@ -153,6 +158,9 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
           // Use the decoder's original direct-call classification, never an
           // optimized CALL or a register constant propagated across VMEXIT.
           const auto Bytes = bytesAt(Image, Address);
+          if (SourceOptions.PagedMemory &&
+              x86PagedCode64FaultEncoding(Bytes.data(), Bytes.size()))
+            continue;
           DecodedInsn Instruction;
           if (!Decode.selectMode(Image, Address) ||
               !Decode.decodeOneForLift(Bytes.data(), Bytes.size(), Address,
@@ -176,8 +184,9 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
               if (Op.Opcode == NdOp::BRANCH && Op.NumInputs == 1 &&
                   Op.Inputs[0].isConst()) {
                 const va_t Target = Op.Inputs[0].Offset;
-                if (!sorted::contains64(RegionAddresses.data(),
-                                        RegionAddresses.size(), Target) &&
+                if (!sorted::contains64(Audit.NativeInstructionAddresses.data(),
+                                        Audit.NativeInstructionAddresses.size(),
+                                        Target) &&
                     !Image.findImportAt(Target) &&
                     Image.isCodeAddress(Target)) {
                   if (auto Error = Enqueue(Target, Depth))

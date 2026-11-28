@@ -12,6 +12,7 @@
 #include "MachOPageAddress.h"
 #include "MachOSigningJoins.h"
 
+#include "neverd/decode/AArch64/AArch64RegisterCopy.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -40,13 +41,10 @@ constexpr aarch64_reg SigningScratchRegisters[] = {
 
 std::optional<aarch64_reg> copiedAddress(const DecodedInsn &I,
                                          aarch64_reg From) {
-  const auto &D = I.Raw->detail->aarch64;
-  if ((I.Id == AARCH64_INS_MOV || I.Raw->alias_id == AARCH64_INS_ALIAS_MOV) &&
-      D.op_count == 2 && D.operands[0].type == AARCH64_OP_REG &&
-      D.operands[0].reg >= AARCH64_REG_X0 &&
-      D.operands[0].reg <= AARCH64_REG_X28 &&
-      D.operands[1].type == AARCH64_OP_REG && D.operands[1].reg == From)
-    return D.operands[0].reg;
+  if (const auto Copy = aarch64::fullWidthRegisterCopy(I);
+      Copy && Copy->second == From && Copy->first >= AARCH64_REG_X0 &&
+      Copy->first <= AARCH64_REG_X28)
+    return Copy->first;
   return std::nullopt;
 }
 
@@ -320,9 +318,9 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
                 .InstalledSigner = At(SignedAt)};
       if (auto Relative =
               machOPCRelativeAuthentication(Auth->Id, AuthPC, Target))
-        return {.Use = MachOSigningAddress::Observable,
-                .Authentication = MachOAuthenticationReplacement{
-                    {AuthPC, std::nullopt}, *Relative, Target}};
+        return {
+            .Use = MachOSigningAddress::Observable,
+            .Authentications = {{{AuthPC, std::nullopt}, *Relative, Target}}};
       // The immediate counts backwards. Use a proven-dead Darwin scratch
       // register when the signer follows AUT or lies beyond its unsigned
       // immediate.
@@ -338,8 +336,7 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
             (At(AuthPC) & ~(kAArch64PAuthLRRegMask << Shift)) |
             (Number << Shift);
         return {.Use = MachOSigningAddress::Observable,
-                .Authentication = MachOAuthenticationReplacement{
-                    {AuthPC, Number}, Encoding, Target}};
+                .Authentications = {{{AuthPC, Number}, Encoding, Target}}};
       }
       // The input value has an exact source relocation. AUT falls through
       // without changing this GPR, so it can be reconstructed immediately
@@ -350,10 +347,10 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
                                            AuthRegister - AARCH64_REG_X0,
                                            AuthPC, Target))
         return {.Use = MachOSigningAddress::Observable,
-                .Authentication = MachOAuthenticationReplacement{
-                    {AuthPC, unsigned(AuthRegister - AARCH64_REG_X0), true},
-                    At(AuthPC),
-                    Target}};
+                .Authentications = {
+                    {{AuthPC, unsigned(AuthRegister - AARCH64_REG_X0), true},
+                     At(AuthPC),
+                     Target}}};
     }
     return {};
   }

@@ -13,6 +13,7 @@
 #include "X86ModeState.h"
 
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Errc.h"
@@ -153,6 +154,11 @@ X86SgxExecution::instructionException(llvm::ArrayRef<uint8_t> Bytes,
                                       uint64_t PC, const X86SgxMemory &Memory) {
   if (!Memory.Running)
     return invalid("enclave instruction admission requires a running thread");
+  // These spans fault during ordinary code64 execution. The paged owner
+  // authenticates the bytes and resolves fetch faults before enclave exit.
+  const auto Fault = x86PagedCode64FaultEncoding(Bytes.data(), Bytes.size());
+  if (Fault && Fault->Size == Bytes.size())
+    return std::optional<uint8_t>{};
   const uint64_t XFRM = Memory.Running->XFRM;
   Decoder D;
   if (!D.init(Arch::X64))
@@ -262,17 +268,8 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   if ((R.RFlags & 0x100) && !S.Debug)
     return invalid("software enclave transfer with TF requires its debug bank");
   if (!Fetched) {
-    if (S.Debug && EPC.instructionBreakpointsAt(R.PC)) {
-      const auto Matches = x86ExecutionBreakpoints(S.Debug->DR, S.Debug->DR7,
-                                                   R.PC, R.RFlags, S.SSBlocked);
-      if (Matches) {
-        x86PublishInstructionDebug(*S.Debug, false, Matches);
-        FaultKind = X86EventKind::InstructionBreakpoint;
-        Out.InstructionAttempted = true;
-        return Fault(1);
-      }
-    }
-    auto OK = fetchX86SystemInstruction(S, M, ExpectedBytes, {}, Out);
+    auto OK =
+        fetchX86SystemInstruction(S, M, ExpectedBytes, {}, Out, FaultKind);
     if (!OK)
       return OK.takeError();
     if (!*OK)
