@@ -2562,6 +2562,27 @@ TEST(AllocLifetime, IndexedReadRequiresAllPossibleBytesWithinTheWrite) {
         false);
 }
 
+TEST(AllocLifetime, IndexedAddressSurvivesWidthChangesOnlyAsAnUnknown) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const auto Base = mkReg(0x38, 0);
+  FB B("narrow_address", 0x100);
+  const int Block = B.block();
+  B.op(Block, NdOp::STORE, MedVar{}, {Base, MedVar::makeConst(7, 4)});
+  B.op(Block, NdOp::INT_AND, temp(10),
+       {mkReg(0x30, 0), MedVar::makeConst(3, 8)});
+  B.op(Block, NdOp::INT_ADD, temp(11), {Base, temp(10)});
+  B.op(Block, NdOp::SUBBYTES, temp(12, 4), {temp(11), MedVar::makeConst(0, 4)});
+  B.op(Block, NdOp::INT_SEXT, temp(13), {temp(12, 4)});
+  B.op(Block, NdOp::LOAD, temp(14, 1), {temp(13)}, 0x108);
+  B.ret(Block, {temp(14, 1)});
+  DirectReadInitialization Reads;
+  audit({B.F}, &Img, true, true, nullptr, &Reads);
+  EXPECT_EQ(Reads.Indexed.WriteUnknown, 1u);
+  EXPECT_EQ(Reads.Indexed.ReturnedValue, 0u);
+  EXPECT_EQ(Reads.BoundedIndexStore, 0u);
+}
+
 TEST(AllocLifetime, IndexedWriteRequiresAnUninterruptedMatchingAddress) {
   BinaryImage Img;
   Img.Arch = Arch::X64;

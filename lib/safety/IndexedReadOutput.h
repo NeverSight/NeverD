@@ -149,31 +149,43 @@ struct IndexedReadBlock {
     int64_t Offset = 0;
     const MedOp *Index = nullptr;
     int Before = 0;
+    bool Exact = true;
   };
 
   // Peel exact-width copies and fixed byte displacements. Stop at the first
   // runtime add/subtract so the caller can prove its index separately.
-  std::optional<Address> address(MedVar V, int Before) const {
+  std::optional<Address> address(MedVar V, int Before,
+                                 bool Inventory = false) const {
     int64_t Offset = 0;
+    bool Exact = true;
     for (unsigned I = 0; I < limits::safety::kIndexedReadMaxValueSteps; ++I) {
       const MedOp *D = definition(V, Before);
       if (!D)
-        return Address{V, Offset, nullptr, Before};
+        return Address{V, Offset, nullptr, Before, Exact};
       if (D->Opcode == NdOp::COPY && D->NumInputs == 1 &&
           D->Inputs[0].Size == V.Size) {
         if (sameReadValue(D->Inputs[0], V))
-          return Address{V, Offset, nullptr, Before};
+          return Address{V, Offset, nullptr, Before, Exact};
+        V = D->Inputs[0];
+        continue;
+      }
+      // A width-changing view may retain evidence of indexing without
+      // preserving the address. Never use that history to prove a write.
+      if (Inventory && (lowBytes(*D) || ((D->Opcode == NdOp::INT_ZEXT ||
+                                          D->Opcode == NdOp::INT_SEXT) &&
+                                         D->NumInputs == 1))) {
+        Exact = false;
         V = D->Inputs[0];
         continue;
       }
       const bool Sub = D->Opcode == NdOp::INT_SUB;
       if ((!Sub && D->Opcode != NdOp::INT_ADD) || D->NumInputs != 2)
-        return Address{V, Offset, nullptr, Before};
+        return Address{V, Offset, nullptr, Before, Exact};
       const MedVar *Base = &D->Inputs[0], *Delta = &D->Inputs[1];
       if (!Sub && Base->isConst())
         std::swap(Base, Delta);
       if (!Delta->isConst())
-        return Address{V, Offset, D, Before};
+        return Address{V, Offset, D, Before, Exact};
       const auto Fixed = detail::signedStackConstant(*Delta);
       if (!Fixed || Base->Size != V.Size || Delta->Size != V.Size)
         return std::nullopt;
@@ -267,7 +279,7 @@ struct IndexedReadBlock {
   }
 
   bool written(const Address &Read, uint16_t Bytes, int StoreIdx) const {
-    if (!Read.Index || StoreIdx < 0)
+    if (!Read.Exact || !Read.Index || StoreIdx < 0)
       return false;
     const MedOp &Store = Block.Ops[StoreIdx];
     const MedVar *Dest = detail::memoryAddress(Store);

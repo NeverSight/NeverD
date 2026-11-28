@@ -34,6 +34,7 @@ Read `analyzers.audit.indexed_read_output`. On a single retained indexed load, t
 | Fully replace the only copied byte at an independent returned address before exit | YES | NO |
 | Use the selected byte to compute the returned address, then overwrite the copied byte | YES | UNKNOWN |
 | The allowed source range extends beyond the known write | UNKNOWN | UNKNOWN |
+| A width-changing address view hides the identity of the original buffer, as in mixed-width MIPS code | UNKNOWN | UNKNOWN |
 | Apply arithmetic to an initialized byte before returning it | YES | UNKNOWN for whole-byte transport |
 | A recognized native indexed load vanished from machine MedIR | UNKNOWN | UNKNOWN, with `unmatched_native` |
 

@@ -2941,7 +2941,7 @@ private:
         if (!Addr || Op.Output.Size == 0) {
           const MedVar *Raw = detail::rawMemoryAddress(Op);
           const auto Shape = Op.Opcode == NdOp::LOAD && Raw
-                                 ? Proof.address(*Raw, Oi)
+                                 ? Proof.address(*Raw, Oi, /*Inventory=*/true)
                                  : std::nullopt;
           DirectReads->Indexed.WriteUnknown +=
               NativeIndex || (Shape && Shape->Index);
@@ -2961,7 +2961,7 @@ private:
             ValidWidth && Oi > 0 &&
             precedingStoreInitializes(B.Ops[Oi - 1], Op, *Addr, Offset, Mem);
         if (Op.Opcode == NdOp::LOAD && (!Offset || NativeIndex)) {
-          const auto Shape = Proof.address(*Addr, Oi);
+          const auto Shape = Proof.address(*Addr, Oi, /*Inventory=*/true);
           if (NativeIndex ||
               (Shape &&
                (Shape->Index || Mem.PhiDef.count(keyOf(Shape->Base))))) {
