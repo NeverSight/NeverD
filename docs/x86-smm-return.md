@@ -24,9 +24,14 @@ Invalid control combinations enter shutdown. A backing stop retains the
 authenticated instruction and restore progress. CR2, CR8, vector registers
 and debug address registers follow their live CPU bank across the SMI and
 RSM pair. A firmware instruction breakpoint on RSM enters the SMM debug
-handler before the save image is consumed. Firmware TF produces a single-step
-trap after a successful RSM using the restored register bank and IDT. TF set
-only in the save image steps the next resumed instruction. The software
+handler before the save image is consumed. With BTF clear, firmware TF produces
+a single-step trap after a successful RSM using the restored register bank and
+IDT. When firmware sets both TF and BTF, the processor binding determines whether
+RSM counts as a branch. An invalid save image or a missing PAE page takes
+precedence. TF set only in the save image steps the next resumed instruction.
+[Branch single-stepping on return from SMM](x86-mode-execution.md#returning-from-smm-with-branch-single-stepping)
+
+The software
 profile uses non-CET state. The save-map layout follows Linux KVM.
 [Linux KVM SMM](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/smm.c)
 

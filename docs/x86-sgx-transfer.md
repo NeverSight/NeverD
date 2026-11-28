@@ -332,6 +332,8 @@ When the two outcomes differ, an unknown binding stops at the original
 instruction with the incoming RAX and flags intact.
 [Intel SDM 332831-093, EVERIFYREPORT2](https://cdrdv2-public.intel.com/929362/332831-093-sdm-vol-3d.pdf) · [Intel TDX CPU 343754-002, section 3.1](https://cdrdv2-public.intel.com/733582/intel-tdx-cpu-architectural-specification.pdf)
 
+[Report authentication vectors, original CPU observations and runner receipts](evidence/x86-sgx-256bit-2026-11-28.json)
+
 The software profile starts with initialized EPC pages. Supervisor enclave
 construction and paging, CET and XSTATE beyond AVX remain open. The designated
 hosts reported zero usable EPC sections. Native enclave qualification and the

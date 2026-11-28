@@ -356,7 +356,11 @@ assembles the public report body and commits the prepared store. The platform
 supplies the processor-specific key derivation and local report MAC. The same
 EPC bank owns the contents, permissions and tracking result of each SGX2 page.
 EACCEPTCOPY publishes a page and its access rights together after both operands
-have been checked. [Software SGX1](x86-sgx-transfer.md#software-sgx1-enclave-execution) · [SGX2 page operations](x86-sgx-transfer.md#sgx2-dynamic-enclave-pages)
+have been checked. For EREPORT2 the executor assembles the report and submits its
+authentication prefix to the platform. EVERIFYREPORT2 checks the CPU security
+version before authenticating the 224-byte prefix. EGETKEY256 requests a distinct
+32-byte key derivation.
+[Wide keys and reports](x86-sgx-transfer.md#egetkey256-and-ereport2) · [Software SGX1](x86-sgx-transfer.md#software-sgx1-enclave-execution) · [SGX2 page operations](x86-sgx-transfer.md#sgx2-dynamic-enclave-pages)
 
 Faultable IRET and RETF reuse the same continuation
 return and descriptor templates through that concrete evaluator. Their bound

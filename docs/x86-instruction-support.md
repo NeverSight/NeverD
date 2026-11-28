@@ -147,7 +147,7 @@ and fetch for ENCLU, RSM and HLT in the mixed-mode executor.
 | --- | --- |
 | Real, virtual-8086, protected, compatibility and 64-bit code | Control-register and far transfers, task gates and nested IRET, Intel SYSENTER and SYSEXIT, and original-IDT fault frames. An incoming task or a backing pause preserves the completed stores and the original restart point. |
 | Software SMM | SMI enters private RAM and RSM restores firmware edits. The processor’s long-mode capability selects the 32-bit or 64-bit KVM save map. Both 512-byte images were compared with original KVM execution. |
-| Software SGX | Initialized x64 TCS, EPCM, SSA, EENTER, EEXIT, ERESUME, AEX, debug opt-in, EXINFO and AEX notification. A nested handler repairs a saved divisor and retries the original instruction through both C emitters. Software EGETKEY and EREPORT validate EPC operands and retire against a bound key platform. SGX2 EACCEPT, EMODPE and EACCEPTCOPY update the imported EPCM and page contents. |
+| Software SGX | Initialized x64 TCS, EPCM, SSA, EENTER, EEXIT, ERESUME, AEX, debug opt-in, EXINFO and AEX notification. A nested handler repairs a saved divisor and retries the original instruction through both C emitters. Software EGETKEY and EREPORT validate EPC operands and retire against a bound key platform. SGX2 EACCEPT, EMODPE and EACCEPTCOPY update the imported EPCM and page contents. A processor with SGX256 can execute EGETKEY256 and EREPORT2 against a bound platform. EVERIFYREPORT2 authenticates the complete MAC prefix on a processor that enumerates leaf 8. |
 | Asynchronous events | Fixed APIC interrupts, NMI, SMI, machine checks, threshold-triggered CMCI, and INIT/SIPI retain their priority, inhibition and acceptance across CPU transitions. A guest-programmed local TSC deadline can expire at HLT and remain pending through SMI and RSM. |
 
 NeverD emits host C for x64 Clang or x64 NeverC. Other x86 compilation targets
@@ -176,11 +176,37 @@ comparisons. Intel’s signed simulation enclave independently exercised key and
 report operations and resumed two divide faults at the original instruction.
 [Qualification record](evidence/x86-code64-prefix-faults-2026-11-28.json) · [Runner discovery](https://github.com/gmh5225/test_mac_intel/actions/runs/46144355081) · [Independent KVM repeats](https://github.com/gmh5225/test_mac_intel/actions/runs/46145102623) · [Signed enclave simulation](https://github.com/gmh5225/test_mac_intel/actions/runs/46139290670)
 
-The production submodule and SDK tag both select LLVM r12. The independently
-published r17 SDK was tested as a candidate. The hosted r17 rebuilds
-matched all eight VMRUN objects and images, and the AMD guests agreed on
-normal return and #GP(0) for the two RAX inputs. Native enclave execution
-remains a release prerequisite. [VMRUN comparison](x86-vmrun-context.md#local-ida-counterexample) · [Candidate SDK release](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r17)
+At `2e999385dc`, the r12 and r17 builds each passed all 70 selected tests locally.
+Each build read the upper eight bytes of the generated 256-bit key through HighC
+and LLVM-to-C with Clang and x64 NeverC at O0 and O2. The two original KVM
+SMM save maps also matched all 512 bytes apiece. The RSM retirement tests
+covered nine combinations of save-area and branch-step state.
+[Software results and hardware observations](evidence/x86-sgx-256bit-2026-11-28.json)
+
+At `d3f236e236`, both SDK builds passed all 76 selected tests locally with
+x64 NeverC `6d63a76bd6`. Each passed all 286 mode tests on each of the P and E
+cores, all 265 generated-C tests and all 133 export tests. Each passed 859 of
+861 paging tests. The two skips require a CPU that exposes LA57. On the hosted
+Linux runner, 73 of 76 selected cases passed and three KVM comparisons skipped.
+[Hosted software run](https://github.com/gmh5225/test_mac_intel/actions/runs/46164278006) · [Per-test counts and software authenticator vectors](evidence/x86-sgx-256bit-2026-11-28.json)
+
+The merged dev revision `764a88f8d6` passed the same 76 cases locally with r17
+and reproduced both VMRUN C exports. The hosted run passed 73 of 76. Immediately
+before the first isolated comparison, the launching process read KVM API
+version 12. That test received `EACCES` opening `/dev/kvm`, as did subsequent
+probes and isolated tests. Local KVM completed five mode-transition comparisons,
+eight timer comparisons and both SMM save maps.
+[Merged-source workflow](https://github.com/gmh5225/test_mac_intel/actions/runs/46165445785)
+
+The production submodule and SDK tag select LLVM r12. The r17 candidate produced
+the eight VMRUN objects and images used in the hosted AMD runs. Release
+qualification still requires native enclave execution on a machine with usable
+EPC. Processor-specific SMM state needs a hardware comparison. The SGX software
+executor starts with initialized EPC pages. Supervisor construction and paging,
+CET and XSTATE beyond AVX still need execution support. The interrupt model
+binds one logical CPU. Cross-CPU machine-check banks and external error sources
+need platform state.
+[Software enclave profile](x86-sgx-transfer.md#everifyreport2) · [Machine-check routing](x86-mode-execution.md#conventional-machine-checks) · [VMRUN comparison](x86-vmrun-context.md#hosted-amd-svm-execution) · [Candidate SDK release](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r17)
 
 After the `0d5a4ee1df` merge, each SDK again passed 243 complete mode-execution
 cases, 853 paging cases with two LA57-only skips, 48 alternate-core execution
