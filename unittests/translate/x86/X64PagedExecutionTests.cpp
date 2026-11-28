@@ -1048,6 +1048,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X86ModeSgxOperandTests.inc"
 #include "X86ModeSgxKeyPlatformTests.inc"
 #include "X86ModeSgxWideKeyReportTests.inc"
+#include "X86ModeSgxVerifyReportTests.inc"
 #include "X86ModeSgxDynamicMemoryTests.inc"
 #include "X86ModeSgxTests.inc"
 #include "X86ModeSmmTests.inc"

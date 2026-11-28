@@ -20,7 +20,7 @@ using namespace translate;
 namespace {
 namespace le = llvm::support::endian;
 enum class Leaf : uint32_t { Accept = 5, Extend = 6, Copy = 7 };
-constexpr uint64_t PageSize = 4096, SecInfoSize = 64;
+constexpr uint64_t PageSize = X86SgxPage::Size, SecInfoSize = 64;
 constexpr uint64_t RWX = 7, Pending = 8, Modified = 16, Restricted = 32;
 constexpr uint8_t TCS = 1, Regular = 2, Trimmed = 4;
 constexpr unsigned NotTracked = 11, AttributeMismatch = 19;

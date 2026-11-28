@@ -20,6 +20,7 @@ namespace neverd::analysis::detail {
 using namespace translate;
 namespace {
 constexpr unsigned RequestSize = 512, ReportDataSize = 64, ReportSize = 432;
+constexpr unsigned ReportMACStructSize = 256;
 constexpr unsigned ReportDataAlignment = 128, ReportAlignment = 512;
 enum KeyName : uint16_t {
   InitToken = 0,
@@ -28,12 +29,45 @@ enum KeyName : uint16_t {
   Report = 3,
   Seal = 4,
 };
-constexpr uint64_t InvalidAttribute = 2, InvalidCPUSVN = 32, InvalidISVSVN = 64,
-                   InvalidKeyName = 256, InvalidReportSubtype = 33;
+constexpr uint64_t InvalidAttribute = 2, InvalidReportMAC = 28,
+                   InvalidCPUSVN = 32, InvalidISVSVN = 64, InvalidKeyName = 256,
+                   InvalidReportSubtype = 33;
 
 bool hasReservedBytes(llvm::ArrayRef<uint8_t> Bytes) {
   return std::any_of(Bytes.begin(), Bytes.end(),
                      [](uint8_t B) { return B != 0; });
+}
+
+llvm::Expected<uint64_t>
+verifyReport2Status(X86SgxVerifyReport2Profile Profile,
+                    const X86SgxKeyPlatform *Platform, const X86SgxPage &SECS,
+                    std::span<const uint8_t, ReportMACStructSize> Input) {
+  if (Profile == X86SgxVerifyReport2Profile::Unbound)
+    return llvm::createStringError(
+        "EVERIFYREPORT2 requires a bound verification profile");
+  const bool Legacy = Profile == X86SgxVerifyReport2Profile::TDX002;
+  if (Legacy && (Input[0] != 0x81 || hasReservedBytes({Input.data() + 1, 15}) ||
+                 hasReservedBytes({Input.data() + 192, 32})))
+    return InvalidReportMAC;
+  if (!Platform)
+    return llvm::createStringError(
+        "EVERIFYREPORT2 requires current platform identity");
+  const auto SVN = Input.subspan<16, 16>();
+  if (Legacy) {
+    if (!Platform->acceptsCPUSVN(SVN))
+      return InvalidCPUSVN;
+  } else {
+    auto Identity = Platform->reportIdentity(SECS);
+    if (!Identity)
+      return Identity.takeError();
+    if (!std::equal(SVN.begin(), SVN.end(), Identity->CPUSVN.begin()))
+      return InvalidCPUSVN;
+  }
+  auto Matches =
+      Platform->verifyReport2MAC(Input.first<224>(), Input.last<32>());
+  if (!Matches)
+    return Matches.takeError();
+  return *Matches ? 0 : InvalidReportMAC;
 }
 
 bool reservedTargetInfo(llvm::ArrayRef<uint8_t> Target) {
@@ -116,6 +150,7 @@ llvm::Expected<X86ModeExecutionResult> X86SgxExecution::keyOrReport(
   auto &EPC = *M.sgxMemory();
   auto &R = modeRegisters(S);
   const bool Report2 = Leaf == KeyReportLeaf::Report2;
+  const bool VerifyReport = Leaf == KeyReportLeaf::VerifyReport2;
   const bool LegacyReport = Leaf == KeyReportLeaf::Report;
   const bool WideKey = Leaf == KeyReportLeaf::Key256;
   const bool Key = Leaf == KeyReportLeaf::Key || WideKey;
@@ -138,10 +173,40 @@ llvm::Expected<X86ModeExecutionResult> X86SgxExecution::keyOrReport(
       Out.Status = X86LegacyExecutionStatus::BackingFault;
     return Access.Status == X86PageWalkStatus::Completed;
   };
+  const auto Unavailable = [&](std::string Reason) {
+    Out.Status = X86LegacyExecutionStatus::ModeUnavailable;
+    Out.OwnerError = std::move(Reason);
+    return Out;
+  };
+  const auto Retire = [&](uint64_t Status) {
+    if (!LegacyReport) {
+      const uint64_t Flags =
+          (R.RFlags & ~uint64_t{0x8d5}) | (Status ? 0x40 : 0);
+      if (VerifyReport && !EPC.Features.VerifyReport2Flags && Flags != R.RFlags)
+        return Unavailable(
+            "EVERIFYREPORT2 requires a bound status-flag result");
+      R.GPR[0] = Status;
+      if (!VerifyReport ||
+          EPC.Features.VerifyReport2Flags != X86SgxVerifyReport2Flags::Preserve)
+        R.RFlags = Flags;
+    }
+    retireEnclaveLeaf(S, InstructionSize, Out);
+    return Out;
+  };
   if (Progress.Request.empty()) {
-    const unsigned InputSize = Report2 ? ReportDataSize : RequestSize;
-    if (!Admits(R.GPR[3], InputSize))
+    const unsigned InputSize = VerifyReport
+                                   ? ReportMACStructSize
+                                   : (Report2 ? ReportDataSize : RequestSize);
+    const auto Profile = EPC.Features.VerifyReport2;
+    const unsigned Alignment =
+        VerifyReport && Profile == X86SgxVerifyReport2Profile::SDM093
+            ? X86SgxPage::Size
+            : InputSize;
+    if (!Admits(R.GPR[3], Alignment))
       return Out;
+    if (VerifyReport && Profile == X86SgxVerifyReport2Profile::Unbound &&
+        (R.GPR[3] & (X86SgxPage::Size - 1)))
+      return Unavailable("EVERIFYREPORT2 requires a bound operand alignment");
     std::vector<uint8_t> Request(InputSize);
     auto Read = M.load({R.GPR[3], MemoryAccessKind::Read, 3}, Request);
     if (!Read)
@@ -149,6 +214,15 @@ llvm::Expected<X86ModeExecutionResult> X86SgxExecution::keyOrReport(
     if (!Accessed(*Read))
       return Out;
     Progress.Request = std::move(Request);
+  }
+  const std::span<const uint8_t> Input(Progress.Request);
+  if (VerifyReport) {
+    auto Status = verifyReport2Status(
+        *EPC.Features.VerifyReport2, EPC.Keys.get(),
+        EPC.EPC.at(EPC.Active->SECS), Input.first<ReportMACStructSize>());
+    if (!Status)
+      return Unavailable(llvm::toString(Status.takeError()));
+    return Retire(*Status);
   }
   if (LegacyReport && !Progress.ReportData) {
     if (reservedTargetInfo(Progress.Request)) {
@@ -183,23 +257,13 @@ llvm::Expected<X86ModeExecutionResult> X86SgxExecution::keyOrReport(
   if (!Accessed(*Write))
     return Out;
 
-  const auto Retire = [&](uint64_t Status) {
-    if (!LegacyReport) {
-      R.GPR[0] = Status;
-      R.RFlags = (R.RFlags & ~uint64_t{0x8d5}) | (Status ? 0x40 : 0);
-    }
-    retireEnclaveLeaf(S, InstructionSize, Out);
-    return Out;
-  };
   if (Report2 && R.GPR[2])
     return Retire(InvalidReportSubtype);
-  if (Report2 && !EPC.Features.Report2Write) {
-    Out.Status = X86LegacyExecutionStatus::ModeUnavailable;
-    Out.OwnerError = "EREPORT2 requires a bound output write footprint";
-    return Out;
-  }
+  if (Report2 && !EPC.Features.Report2Write)
+    return Unavailable("EREPORT2 requires a bound output write footprint");
+  if (Report2 && !EPC.Features.Report2MACCoverage)
+    return Unavailable("EREPORT2 requires a bound MAC prefix size");
   const auto &SECS = EPC.EPC.at(EPC.Active->SECS);
-  const std::span<const uint8_t> Input(Progress.Request);
   if (Key) {
     if (reservedKeyRequest(Progress.Request, llvm::support::endian::read64le(
                                                  SECS.Bytes.data() + 48))) {
@@ -210,25 +274,19 @@ llvm::Expected<X86ModeExecutionResult> X86SgxExecution::keyOrReport(
             keyError(Input.first<RequestSize>(), SECS, EPC.Keys.get(), WideKey))
       return Retire(Error);
   }
-  if (!EPC.Keys) {
-    Out.Status = X86LegacyExecutionStatus::ModeUnavailable;
-    Out.OwnerError =
-        "enclave report and key derivation require platform key state";
-    return Out;
-  }
+  if (!EPC.Keys)
+    return Unavailable(
+        "enclave report and key derivation require platform key state");
   const auto Publish = [&](auto Bytes) {
-    if (!Bytes) {
-      Out.Status = X86LegacyExecutionStatus::ModeUnavailable;
-      Out.OwnerError = llvm::toString(Bytes.takeError());
-      return Out;
-    }
+    if (!Bytes)
+      return Unavailable(llvm::toString(Bytes.takeError()));
     M.commitStore(*Write,
                   llvm::ArrayRef<uint8_t>(*Bytes).take_front(OutputSize));
     return Retire(0);
   };
   if (Report2)
-    return Publish(
-        buildReport2(*EPC.Keys, SECS, Input.first<ReportDataSize>()));
+    return Publish(buildReport2(*EPC.Keys, SECS, Input.first<ReportDataSize>(),
+                                *EPC.Features.Report2MACCoverage));
   const auto Request = Input.first<RequestSize>();
   if (WideKey)
     return Publish(EPC.Keys->deriveKey256(SECS, Request));
