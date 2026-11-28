@@ -5492,6 +5492,35 @@ TEST(AllocLifetime, N32OnlyTheABIResultRegisterCarriesAWideHeapHandle) {
   }
 }
 
+TEST(AllocLifetime, N32UnprovenReleaseConstantsKeepHeapLifetimeUnknown) {
+  using Provenance = ConstantAddressProvenance;
+  for (const Arch A : {Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Format = BinaryFormat::ELF;
+    const auto &TRI = getTargetRegInfo(A);
+    for (const MedVar &Argument :
+         {MedVar::makeConst(1ULL << 32, 8, Provenance::Scalar),
+          MedVar::makeConst(0, 8, Provenance::DataAddress),
+          MedVar::makeConst(0, 8),
+          MedVar::makeConst(0, 2, Provenance::Scalar)}) {
+      FB B("f", 0x100);
+      const int Block = B.block();
+      B.call(Block, "malloc", mkReg(TRI.IntReturnReg, 1, TRI.FullRegWidth),
+             {MedVar::makeConst(16, TRI.PointerSize)});
+      B.call(Block, "free", {}, {Argument});
+      B.ret(Block, {});
+      const auto Findings = audit({B.F}, &Img);
+      const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+      ASSERT_NE(Leak, nullptr);
+      EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+      EXPECT_EQ(Leak->Detail,
+                "heap lifetime depends on a call with unrecovered arguments");
+    }
+  }
+}
+
 TEST(AllocLifetime, NarrowAllocationResultFailsClosed) {
   BinaryImage Img;
   Img.Arch = Arch::X64;

@@ -1187,10 +1187,16 @@ private:
     const MedVar &Arg = CI.Args[Index];
     const auto &TRI = getTargetRegInfo(In.Img->Arch);
     const auto Registers = TRI.integerParamRegs(In.Img->abiFormat());
+    if (static_cast<size_t>(Index) >= Registers.size() ||
+        Arg.Size != TRI.addressRegisterBytes())
+      return false;
+    // SSA can propagate a full-register literal NULL from a call delay slot.
+    if (Arg.isConst())
+      return Arg.ConstVal == 0 &&
+             Arg.Provenance == ConstantAddressProvenance::Scalar;
     // SSA may retain the ABI argument register or propagate v0 directly
     // into it. Release still needs the allocation's exact alias at the call.
-    return static_cast<size_t>(Index) < Registers.size() &&
-           Arg.Kind == MedVar::Reg && Arg.Size == TRI.addressRegisterBytes() &&
+    return Arg.Kind == MedVar::Reg &&
            (Arg.RegOff == Registers[Index] || Arg.RegOff == TRI.IntReturnReg);
   }
 
