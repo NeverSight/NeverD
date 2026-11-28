@@ -1075,6 +1075,22 @@ TEST(RegistrationCRTFrame, XCPT4StdioImportsHaveCallerCleanup) {
   }
 }
 
+TEST(RegistrationCRTFrame, XCPT4DeallocationUsesCallerCleanup) {
+  for (bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    constexpr va_t Slot = 0x408074;
+    const auto *Import = Image->findImportAt(Slot);
+    ASSERT_TRUE(Import);
+    ASSERT_EQ(Import->Module, "api-ms-win-crt-heap-l1-1-0.dll");
+    ASSERT_EQ(Import->Name, "free");
+    EXPECT_EQ(registration_abi::checkedRegistrationImportStackPop(*Image, Slot),
+              0u);
+    EXPECT_FALSE(
+        registration_abi::preservesRegistrationImportBindings(*Image, Slot));
+  }
+}
+
 TEST(RegistrationCRTFrame, XCPT4HeaderGuardReadsItsImageHeaders) {
   for (bool Selected : {false, true}) {
     auto Image = loadXCPT4(Selected);

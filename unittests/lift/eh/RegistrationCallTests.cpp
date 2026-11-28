@@ -397,7 +397,8 @@ TEST(RegistrationCallABI, CRTImportQueriesKeepTheirStorageProofs) {
       {"exp", "MSVCRT.dll", false, 0},
       {"malloc", "msvcrt.dll", false, 0},
       {"malloc", "MSVCR100.dll", false, 0},
-      {"malloc", "ucrtbase.dll", false, std::nullopt},
+      {"malloc", "ucrtbase.dll", false, 0},
+      {"malloc", "api-ms-win-crt-runtime-l1-1-0.dll", false, std::nullopt},
       {"log", "msvcr100.dll", false, std::nullopt},
       {"_controlfp_s", "kernel32.dll", false, std::nullopt},
       {"_controlfp", "ucrtbase.dll", false, std::nullopt}};

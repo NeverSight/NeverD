@@ -216,6 +216,13 @@ TEST(RegistrationImportABI, UCRTStdioReturnsWithCallerCleanup) {
                            "api-ms-win-crt-runtime-l1-1-0.dll");
 }
 
+TEST(RegistrationImportABI, UCRTHeapCallsReturnWithCallerCleanup) {
+  for (const ImportCase C : {ImportCase{"malloc", 1}, ImportCase{"calloc", 2},
+                             ImportCase{"realloc", 2}, ImportCase{"free", 1}})
+    checkUCRTCallerCleanup(C, "api-ms-win-crt-heap-l1-1-0.dll",
+                           "api-ms-win-crt-runtime-l1-1-0.dll");
+}
+
 TEST(RegistrationImportABI, UCRTInitializerWalkersUseTheRuntimeProvider) {
   for (const ImportCase C :
        {ImportCase{"_initterm", 2}, ImportCase{"_initterm_e", 2}})
