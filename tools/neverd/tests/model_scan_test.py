@@ -2,6 +2,7 @@
 """Exercise model evidence through the shipped CLI, worker and local C ABI."""
 
 import ctypes
+import hashlib
 import json
 from pathlib import Path
 import os
@@ -163,6 +164,42 @@ class ModelScan(unittest.TestCase):
                         self.assertEqual(result, report)
                 finally:
                     lib.neverd_free_string(data)
+
+    def test_gguf_digests_cover_exact_encoded_ranges(self):
+        metadata = [
+            ("general.architecture", 8, "example"),
+            ("tokenizer.ggml.tokens", 9, ["a", "中", ""] * 6000 + ["b" * 90000]),
+            ("empty", 8, ""),
+            ("tokenizer.ggml.merges", 9, []),
+            ("signed", 5, -19),
+        ]
+        for order in ("<", ">"):
+            with self.subTest(order=order):
+                data = gguf([("w", [2], 0, 0, b"sentinel")], metadata, endian=order)
+                self.file.write_bytes(data)
+                pkg = self.scan()["packages"][0]
+                artifact = pkg["artifacts"][0]
+                self.assertEqual(pkg["tensor_payload_bytes_read"], 0)
+                # The last record is the tensor name, rank, dimension, type and offset.
+                tensor_record = struct.pack(order + "Q1sIQIQ", 1, b"w", 1, 2, 0, 0)
+                directory_end = data.index(
+                    tensor_record, pkg["metadata"][-1]["end"]
+                ) + len(tensor_record)
+                self.assertEqual(artifact["directory_end"], directory_end)
+                self.assertEqual(
+                    artifact["directory_sha256"],
+                    hashlib.sha256(data[:directory_end]).hexdigest(),
+                )
+                self.assertEqual(
+                    [row["key"] for row in pkg["metadata"]], [m[0] for m in metadata]
+                )
+                for row in pkg["metadata"]:
+                    start = row["offset"] + 8 + len(row["key"].encode()) + 4
+                    self.assertEqual(
+                        row["encoded_value_sha256"],
+                        hashlib.sha256(data[start : row["end"]]).hexdigest(),
+                        row["key"],
+                    )
 
     def test_verified_ranges_and_optional_sampling(self):
         payload = bytes([0, 0] + list(range(16)))

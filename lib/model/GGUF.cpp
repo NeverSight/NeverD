@@ -12,6 +12,7 @@
 #include "neverd/support/SHA256.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/JSON.h"
 
 #include <algorithm>
@@ -59,73 +60,116 @@ uint64_t bits(std::string_view S, bool Big) {
     V = (V << 8) | static_cast<unsigned char>(S[Big ? I : S.size() - 1 - I]);
   return V;
 }
-struct Reader {
-  File &F;
-  Budget &B;
-  uint64_t Pos = 0, MinimumEnd = 0, Start = 0;
+class DirectoryReader {
+  File &Input;
+  Budget &ReadBudget;
+  uint64_t Offset = 0;
+  uint64_t MinimumEnd = 0;
+  uint64_t CacheStart = 0;
+  uint64_t HashedThrough = 0;
   std::string Cache;
-  bool Big = false;
+  bool BigEndian = false;
   SHA256Stream DirectoryHash;
-  SHA256Stream *Hash = nullptr;
-  void expect(uint64_t N) { MinimumEnd = std::max(MinimumEnd, sum(Pos, N)); }
-  std::string_view take(uint64_t N) {
-    expect(N);
-    if (Pos < Start || sum(Pos, N) > Start + Cache.size()) {
-      Start = Pos;
-      // Look ahead only into bytes which outstanding directory records
-      // already require. No speculative read of the first tensor.
-      Cache =
-          F.header(Pos,
-                   std::max<uint64_t>(
-                       N, std::min<uint64_t>(limits::kChunk, MinimumEnd - Pos)),
-                   B);
-    }
-    auto V = std::string_view(Cache).substr(Pos - Start, N);
-    Pos += N;
-    DirectoryHash.update(llvm::StringRef(V));
-    if (Hash)
-      Hash->update(llvm::StringRef(V));
-    return V;
+  SHA256Stream ValueHash;
+  bool InMetadataValue = false;
+
+  // Both digests consume the same contiguous bytes while inside a value.
+  // Flush at digest boundaries and before replacing the backing storage.
+  void hashConsumedBytes() {
+    if (HashedThrough == Offset)
+      return;
+    llvm::StringRef Bytes = llvm::StringRef(Cache).substr(
+        HashedThrough - CacheStart, Offset - HashedThrough);
+    DirectoryHash.update(Bytes);
+    if (InMetadataValue)
+      ValueHash.update(Bytes);
+    HashedThrough = Offset;
   }
-  uint64_t number(unsigned N) { return bits(take(N), Big); }
-  std::string_view string(uint64_t Max) {
-    uint64_t N = number(8);
+
+public:
+  DirectoryReader(File &Input, Budget &ReadBudget)
+      : Input(Input), ReadBudget(ReadBudget) {}
+
+  uint64_t position() const { return Offset; }
+  bool isBigEndian() const { return BigEndian; }
+  void setBigEndian() { BigEndian = true; }
+
+  void expectBytes(uint64_t Size) {
+    MinimumEnd = std::max(MinimumEnd, sum(Offset, Size));
+  }
+
+  llvm::StringRef readBytes(uint64_t Size) {
+    uint64_t End = sum(Offset, Size);
+    MinimumEnd = std::max(MinimumEnd, End);
+    if (End > CacheStart + Cache.size()) {
+      hashConsumedBytes();
+      CacheStart = Offset;
+      // Look ahead only into bytes already required by directory records.
+      uint64_t Lookahead =
+          std::min<uint64_t>(limits::kChunk, MinimumEnd - Offset);
+      Cache = Input.header(Offset, std::max(Size, Lookahead), ReadBudget);
+    }
+    llvm::StringRef Bytes =
+        llvm::StringRef(Cache).substr(Offset - CacheStart, Size);
+    Offset = End;
+    return Bytes;
+  }
+
+  uint64_t readUInt(unsigned Size) { return bits(readBytes(Size), BigEndian); }
+  llvm::StringRef readString(uint64_t Max) {
+    uint64_t N = readUInt(8);
     if (N > Max)
       throw Error("GGUF string exceeds inspection limit");
-    auto V = take(N);
+    auto V = readBytes(N);
     if (!llvm::json::isUTF8(V))
       throw Error("invalid UTF-8 in GGUF string");
     return V;
   }
-  Json value(unsigned Type, unsigned Depth, bool KeepString) {
-    B.tick();
+  std::pair<Json, std::string> readMetadataValue(unsigned Type,
+                                                 bool KeepString) {
+    hashConsumedBytes();
+    InMetadataValue = true;
+    Json Value = readValue(Type, 0, KeepString);
+    hashConsumedBytes();
+    InMetadataValue = false;
+    return {std::move(Value), llvm::toHex(ValueHash.final(), true)};
+  }
+
+  std::string finishDirectoryHash() {
+    hashConsumedBytes();
+    return llvm::toHex(DirectoryHash.final(), true);
+  }
+
+private:
+  Json readValue(unsigned Type, unsigned Depth, bool KeepString) {
+    ReadBudget.tick();
     if (Depth > limits::kDepth || Type >= Width.size())
       throw Error("unsupported GGUF metadata type or nesting");
     if (Type == 8) {
-      auto S =
-          string(KeepString ? limits::kTemplateBytes : limits::kHeaderBytes);
-      return KeepString ? Json(std::string(S)) : Json(nullptr);
+      auto S = readString(KeepString ? limits::kTemplateBytes
+                                     : limits::kHeaderBytes);
+      return KeepString ? Json(S.str()) : Json(nullptr);
     }
     if (Type == 9) {
-      uint64_t Child = number(4), N = number(8);
+      uint64_t Child = readUInt(4), N = readUInt(8);
       if (Child >= Width.size())
         throw Error("unknown GGUF array element type");
       if (Width[Child]) {
-        auto Raw = take(product(N, Width[Child]));
+        auto Raw = readBytes(product(N, Width[Child]));
         if (Child == 7 && std::any_of(Raw.begin(), Raw.end(),
                                       [](unsigned char C) { return C > 1; }))
           throw Error("invalid GGUF boolean array");
       } else {
-        if (N > B.WorkLeft)
+        if (N > ReadBudget.WorkLeft)
           throw Stop("GGUF array exceeds work budget");
         for (uint64_t I = 0; I < N; ++I) {
-          expect(product(N - I, Child == 8 ? 8 : 12));
-          value(Child, Depth + 1, false);
+          expectBytes(product(N - I, Child == 8 ? 8 : 12));
+          readValue(Child, Depth + 1, false);
         }
       }
       return Json{{"element_type", Types[Child]}, {"count", N}};
     }
-    uint64_t V = number(Width[Type]);
+    uint64_t V = readUInt(Width[Type]);
     if (Type == 7) {
       if (V > 1)
         throw Error("invalid GGUF boolean");
@@ -277,41 +321,37 @@ void scales(Package &P, File &F, const std::string &Name,
 
 void readGGUF(Package &P, const std::string &Name) {
   File &F = P.file(Name);
-  Reader R{F, P.B};
-  if (R.take(4) != "GGUF")
+  DirectoryReader R(F, P.B);
+  if (R.readBytes(4) != "GGUF")
     throw Error("invalid GGUF magic");
-  auto V = R.take(4);
+  auto V = R.readBytes(4);
   uint64_t Version = bits(V, false);
   if (Version != 2 && Version != 3) {
     Version = bits(V, true);
-    R.Big = true;
+    R.setBigEndian();
     if (Version != 3)
       throw Error("unsupported GGUF version or byte order");
   }
-  uint64_t NT = R.number(8), NM = R.number(8), A = 32;
+  uint64_t NT = R.readUInt(8), NM = R.readUInt(8), A = 32;
   if (NT > limits::kEntries || NM > limits::kEntries)
     throw Error("GGUF directory count exceeds limit");
   std::set<std::string> Keys;
   Json Split = Json::object();
   for (uint64_t I = 0; I < NM; ++I) {
     P.B.entry();
-    R.expect(sum(product(NM - I, 13), product(NT, 24)));
-    uint64_t At = R.Pos;
-    std::string Key(R.string(limits::kNameBytes));
+    R.expectBytes(sum(product(NM - I, 13), product(NT, 24)));
+    uint64_t At = R.position();
+    std::string Key(R.readString(limits::kNameBytes));
     validName(Key);
     if (!Keys.insert(Key).second)
       throw Error("duplicate GGUF metadata key");
-    uint64_t Type = R.number(4), ValueAt = R.Pos;
+    uint64_t Type = R.readUInt(4), ValueAt = R.position();
     bool Template = Key == "tokenizer.chat_template" ||
                     Key.starts_with("tokenizer.chat_template.");
     bool Arch = Key == "general.architecture";
     if ((Template || Arch) && Type != 8)
       throw Error("invalid GGUF template or architecture type");
-    SHA256Stream Hash;
-    R.Hash = &Hash;
-    Json Value = R.value(Type, 0, Template || Arch);
-    R.Hash = nullptr;
-    std::string H = llvm::toHex(Hash.final(), true);
+    auto [Value, H] = R.readMetadataValue(Type, Template || Arch);
     if (Key == "general.alignment") {
       if (Type != 4 || !(A = natural(Value)) || A % 8)
         throw Error("invalid GGUF alignment");
@@ -341,7 +381,7 @@ void readGGUF(Package &P, const std::string &Name) {
         P.Metadata.size() < P.B.Opts.Limit) {
       Json Entry = {{"artifact", Name},    {"key", Key},
                     {"type", Types[Type]}, {"offset", At},
-                    {"end", R.Pos},        {"encoded_value_sha256", H}};
+                    {"end", R.position()}, {"encoded_value_sha256", H}};
       if (Type != 8 || Arch)
         Entry["value"] = Value;
       P.Metadata.push_back(std::move(Entry));
@@ -350,25 +390,25 @@ void readGGUF(Package &P, const std::string &Name) {
   std::vector<std::pair<std::string, Tensor>> List;
   for (uint64_t I = 0; I < NT; ++I) {
     P.B.tick();
-    R.expect(product(NT - I, 24));
-    std::string Id(R.string(64));
+    R.expectBytes(product(NT - I, 24));
+    std::string Id(R.readString(64));
     validName(Id);
-    unsigned Rank = R.number(4);
+    unsigned Rank = R.readUInt(4);
     if (!Rank || Rank > 4)
       throw Error("invalid GGUF tensor rank");
     Tensor T;
     T.FileId = Name;
     uint64_t Elements = 1;
     for (unsigned J = 0; J < Rank; ++J) {
-      auto D = R.number(8);
+      auto D = R.readUInt(8);
       if (!D)
         throw Error("zero GGUF dimension");
       T.Shape.push_back(D);
       Elements = product(Elements, D);
     }
     T.Elements = Elements;
-    uint64_t Type = R.number(4);
-    T.Offset = R.number(8);
+    uint64_t Type = R.readUInt(4);
+    T.Offset = R.readUInt(8);
     if (T.Offset % A)
       throw LayoutError(
           "unaligned GGUF tensor offset",
@@ -392,12 +432,13 @@ void readGGUF(Package &P, const std::string &Name) {
     }
     List.emplace_back(std::move(Id), std::move(T));
   }
-  auto Start = align(R.Pos, A);
-  if (!NT && R.Pos == F.size())
-    Start = R.Pos;
+  auto Start = align(R.position(), A);
+  if (!NT && R.position() == F.size())
+    Start = R.position();
   if (Start > F.size())
     throw Error("truncated GGUF directory padding");
-  inspectRange(P, F, Name, R.Pos, Start - R.Pos, Region::Alignment);
+  inspectRange(P, F, Name, R.position(), Start - R.position(),
+               Region::Alignment);
   std::sort(List.begin(), List.end(), [](const auto &L, const auto &R) {
     return std::tie(L.second.Offset, L.first) <
            std::tie(R.second.Offset, R.first);
@@ -430,7 +471,7 @@ void readGGUF(Package &P, const std::string &Name) {
     OpaquePredecessor |= !T.Bytes.has_value();
     Previous = T.Offset;
     End = T.Bytes ? std::optional<uint64_t>(T.Offset + *T.Bytes) : std::nullopt;
-    scales(P, F, Name, Id, T, R.Big, Scale);
+    scales(P, F, Name, Id, T, R.isBigEndian(), Scale);
     P.addTensor(std::move(Id), std::move(T));
   }
   if (End && !OpaquePredecessor) {
@@ -446,10 +487,10 @@ void readGGUF(Package &P, const std::string &Name) {
   P.Artifacts.push_back(
       {{"id", Name},
        {"format", "gguf"},
-       {"directory_end", R.Pos},
-       {"directory_sha256", llvm::toHex(R.DirectoryHash.final(), true)},
+       {"directory_end", R.position()},
+       {"directory_sha256", R.finishDirectoryHash()},
        {"version", Version},
-       {"byte_order", R.Big ? "big" : "little"},
+       {"byte_order", R.isBigEndian() ? "big" : "little"},
        {"size", F.size()},
        {"metadata_count", NM},
        {"tensor_count", NT},
