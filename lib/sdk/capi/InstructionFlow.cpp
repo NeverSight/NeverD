@@ -10,10 +10,14 @@
 
 #include "neverd/Limits.h"
 #include "neverd/decode/InstructionRelocations.h"
+#include "neverd/ir/low/LowAlignmentGuard.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
+#include "neverd/lift/IntegerRegisters.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/loader/ExceptionEntryPoints.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -173,6 +177,21 @@ public:
   }
 
   void clear() { Values.clear(); }
+  void seedPPC64Entry(const BinaryImage &Img, va_t Function, va_t Address) {
+    using namespace ppc_elf;
+    const auto It = Img.PPC64EntryContexts.find(Function);
+    if (It == Img.PPC64EntryContexts.end() || !It->second.TOC)
+      return;
+    const auto &Ctx = It->second;
+    if (Address == Function && isPowerPC64ELFv2(Img.Arch) &&
+        Ctx.LocalEntryOffset)
+      Values.push_back(
+          {NdVar::reg(integerreg::gpr(GlobalEntryRegister), WordSize),
+           {Function, Role::Fragment, UINT64_MAX}});
+    else if (Address - Function == Ctx.LocalEntryOffset)
+      Values.push_back({NdVar::reg(integerreg::gpr(TOCRegister), WordSize),
+                        {*Ctx.TOC, Role::Fragment, UINT64_MAX}});
+  }
   void invalidate(const NdVar &Out) {
     llvm::erase_if(Values, [&](const Slot &S) {
       return S.Variable.Space == Out.Space &&
@@ -196,13 +215,13 @@ public:
         invalidate(Effect.Output);
       }
   }
-  void advance(llvm::ArrayRef<LowOp> Ops,
+  void advance(Arch Target, llvm::ArrayRef<LowOp> Ops,
                llvm::ArrayRef<LowUndefinedEffect> Undefined) {
     beginInstruction();
     size_t Completed = 0;
     forgetUndefined(Undefined, Completed);
     for (const LowOp &Op : Ops) {
-      advance(Op);
+      advance(Target, Op);
       forgetUndefined(Undefined, ++Completed);
     }
   }
@@ -230,7 +249,20 @@ public:
     return Changed;
   }
 
-  void advance(const LowOp &Op) {
+  void advance(Arch Target, const LowOp &Op) {
+    // On a proven passing precondition the lift leaves all values intact.
+    // In particular, MIPS checks the address immediately before the load.
+    if (Op.Opcode == NdOp::INTRINSIC && isMIPS(Target)) {
+      if (isDefaultAddressAlignmentGuard(Op))
+        if (auto Address = value(Op.Inputs[1]);
+            Address && !(Address->Value & (Op.Inputs[2].Offset - 1)))
+          return;
+      if (isMIPS64(Target) && mipsScalarLowShapeIsValid(Op, Target) &&
+          Op.Inputs[0].Offset == unsigned(Intrinsic::MIPSRequireWord))
+        if (auto Word = value(Op.Inputs[1]);
+            Word && llvm::isInt<32>(static_cast<int64_t>(Word->Value)))
+          return;
+    }
     if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
         Op.Opcode == NdOp::INTRINSIC) {
       clear();
@@ -600,7 +632,7 @@ summarizeLowFlow(const BinaryImage &Img, llvm::ArrayRef<LowOp> Ops, va_t Next,
     default:
       break;
     }
-    Values.advance(Op);
+    Values.advance(Img.Arch, Op);
     Values.forgetUndefined(Undefined, ++Completed);
     // An address the instruction puts in a register, as `mov eax, offset X`.
     if (Op.Output.isReg())
@@ -926,6 +958,23 @@ struct ReferenceImageIndex {
 };
 
 namespace {
+uint64_t referenceCodeSize(const BinaryImage &Img, const FuncInfo &F) {
+  using namespace ppc_elf;
+  constexpr unsigned Trailer = InstructionAlignment + EmptyTracebackTableSize;
+  if (!isPowerPC64(Img.Arch) || !Img.isELF() || F.Size < Trailer ||
+      F.Size > InvalidVA - F.Entry || F.Size % InstructionAlignment)
+    return F.Size;
+  const uint8_t *End = Img.readVA(F.Entry + F.Size - Trailer, Trailer);
+  if (End &&
+      readTargetEndian<uint32_t>(End, archLittleEndian(Img.Arch)) ==
+          ReturnToLinkRegister &&
+      llvm::all_of(
+          llvm::ArrayRef(End + InstructionAlignment, EmptyTracebackTableSize),
+          [](uint8_t Byte) { return Byte == 0; }))
+    return F.Size - EmptyTracebackTableSize;
+  return F.Size;
+}
+
 bool decodeFunctionReferences(
     const BinaryImage &Img, const FunctionPage &Page,
     const ReferenceImageIndex &ImageIndex,
@@ -951,7 +1000,7 @@ bool decodeFunctionReferences(
   std::vector<std::pair<va_t, uint64_t>> Extents;
   Extents.reserve(Page.Functions.size());
   for (const FuncInfo *F : Page.Functions)
-    Extents.emplace_back(F->Entry, F->Size);
+    Extents.emplace_back(F->Entry, referenceCodeSize(Img, *F));
   const auto &NoReturnTargets = ImageIndex.NoReturnTargets;
   const auto &Independent = ImageIndex.Independent;
   const auto &Exceptional = ImageIndex.Exceptional;
@@ -1047,6 +1096,12 @@ bool decodeFunctionReferences(
             Leader[It->second] = Root[It->second] = true;
         };
         IndependentEntry(Extents[Index].first);
+        if (isPowerPC64ELFv2(Img.Arch)) {
+          const auto Context = Img.PPC64EntryContexts.find(Entry);
+          if (Context != Img.PPC64EntryContexts.end() &&
+              Context->second.LocalEntryOffset)
+            IndependentEntry(Entry + Context->second.LocalEntryOffset);
+        }
         for (size_t I = 0; I < Count; ++I) {
           const auto &N = S.Instructions[I];
           if (std::binary_search(Independent.begin(), Independent.end(),
@@ -1125,6 +1180,9 @@ bool decodeFunctionReferences(
         for (size_t B = 0; B < Blocks.size(); ++B)
           if (Root[Blocks[B].Begin] || !Blocks[B].Predecessors) {
             Blocks[B].Seen = true;
+            if (Root[Blocks[B].Begin] && isPowerPC64(Img.Arch))
+              Blocks[B].Incoming.seedPPC64Entry(
+                  Img, Entry, S.Instructions[Blocks[B].Begin].Address);
             Queue(B);
           }
         const auto Operations = [&](const Instruction &N) {
@@ -1142,7 +1200,7 @@ bool decodeFunctionReferences(
           for (size_t I = Current.Begin; I < Current.End; ++I) {
             const auto &N = S.Instructions[I];
             if (N.Transfer)
-              Values.advance(Operations(N), N.Undefined);
+              Values.advance(Img.Arch, Operations(N), N.Undefined);
             else
               Values.clear();
           }

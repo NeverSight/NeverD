@@ -80,6 +80,9 @@ bool recordIRelativeResolver(uint32_t RelocType, va_t Slot,
 bool recordRuntimeCallableRelocation(uint32_t RelocType, va_t Slot,
                                      BinaryImage &Img);
 
+/// Whether a relocation stores a full-width symbol address plus its addend.
+bool isAbsoluteSymbolRelocation(Arch Target, uint32_t Type);
+
 /// What the dynamic linker writes for relocation \p RelocType bound to a
 /// symbol at \p SymbolVA with \p Addend; none for a type that does not store
 /// its symbol's address.

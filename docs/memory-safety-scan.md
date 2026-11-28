@@ -13,7 +13,9 @@ In the desktop workbench, open the binary and select **Options → Analysis → 
 ## Data pointers
 
 `neverd scan binary --data-ptr` writes a `neverd.data-ptr-scan` v1 JSON
-report to stdout or `-o file`. This mode accepts x64 PE/COFF images.
+report to stdout or `-o file`. The native loader selects the ISA, ABI,
+pointer width and byte order. PE/COFF and ELF use `.data`. Mach-O uses
+`__data`.
 
 * `code_references` counts distinct instructions with a recovered read, write
   or address reference into `.data`. An instruction that both reads and
@@ -26,6 +28,19 @@ report to stdout or `-o file`. This mode accepts x64 PE/COFF images.
   relocation resolves inside a readable, non-executable data section.
   Separate slots can point to the same object. Stripping relocations can
   reduce this count even when the stored bytes stay identical.
+
+The regression inspects Windows x64 and ARM64 PE, Linux x64, ARM64,
+MIPS, RISC-V and PowerPC ELF, Android and FreeBSD ARM64 ELF, macOS x64
+and ARM64 Mach-O, and iOS ARM64 Mach-O. Linked ELF controls cover MIPS
+o32, n32 and n64 in both byte orders, RV32 and RV64 with soft- and
+double-float ABIs, and big- and little-endian PowerPC32 and PowerPC64
+ELFv1/ELFv2. The ELFv1 control uses GNU PowerPC64 ld.
+
+Code references require a recoverable address in a discovered function.
+Loads through mutable pointer tables can leave the final address unknown,
+including GOT-based accesses in MIPS and PowerPC PIC code. A stripped image
+can also lose function boundaries. Consult `functions_scanned` alongside
+the counts. For MIPS, RISC-V and PowerPC, scan linked ELF images.
 
 Success returns 0. A missing data section, a canceled scan or an incompatible
 memory-safety option returns 1. SDK callers can use
