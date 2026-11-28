@@ -1296,12 +1296,24 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
               OS << kInstructionWord << readLE<uint32_t>(Code + At - Start)
                  << '\n';
           }
-          References.push_back({PC, Route.Signer, 0,
-                                -int64_t(Index * Auth.routeWords() * Word),
-                                PCSigning->Id});
-          OS << llvm::formatv(kSigningRouteWord, Base, kLocal,
-                              (Route.Signer - Start) / Word,
-                              kAArch64PAuthLRScale, kAArch64PAuthLRImmShift);
+          if (Route.IslandWord) {
+            References.push_back({PC, Route.Signer, aarch64::kB_Op,
+                                  (int64_t(Route.IslandWord) -
+                                   int64_t(Index * Auth.routeWords())) *
+                                      int64_t(Word)});
+            OS << kTail << kLocal << (PC - Start) / Word << kSigningIslandSuffix
+               << Index << '\n';
+            if (!Auth.Returns)
+              OS << kLocal << (PC - Start) / Word << kSigningResumeSuffix
+                 << Index << kEndLabel;
+          } else {
+            References.push_back({PC, Route.Signer, 0,
+                                  -int64_t(Index * Auth.routeWords() * Word),
+                                  PCSigning->Id});
+            OS << llvm::formatv(kSigningRouteWord, Base, kLocal,
+                                (Route.Signer - Start) / Word,
+                                kAArch64PAuthLRScale, kAArch64PAuthLRImmShift);
+          }
           if (!Auth.Returns && Index + 1 != Auth.Routes.size())
             OS << kTail << kLocal << (NextPC - Start) / Word << '\n';
         }
@@ -1352,6 +1364,24 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       if (I.Id != AARCH64_INS_PACIBSPPC)
         return std::nullopt;
       OS << kSignWithPC;
+    }
+    if (auto It = Joins.Islands.find(PC); It != Joins.Islands.end()) {
+      OS << kTail << kLocal << (NextPC - Start) / Word << '\n';
+      for (const auto &Island : It->second) {
+        const auto &Auth = Joins.Dispatches.at(Island.Consumer);
+        OS << kLocal << (Island.Consumer - Start) / Word << kSigningIslandSuffix
+           << Island.Route << kEndLabel << kInstructionWord << Island.Encoding
+           << '\n';
+        if (!Auth.Returns) {
+          References.push_back(
+              {PC, Island.Consumer, aarch64::kB_Op,
+               (int64_t(Island.Route * Auth.routeWords()) -
+                int64_t(Auth.Routes[Island.Route].IslandWord)) *
+                   int64_t(Word)});
+          OS << kTail << kLocal << (Island.Consumer - Start) / Word
+             << kSigningResumeSuffix << Island.Route << '\n';
+        }
+      }
     }
   }
   // A classic compact recipe can carry a live PC-signed LR across a
@@ -1407,9 +1437,8 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     };
     llvm::SmallVector<va_t> Insertions;
     for (const auto &Site : Sites)
-      if (Site.expandsAuthentication())
-        Insertions.append(Site.Authentication->insertedWords(),
-                          Site.signingExpansionSite());
+      Site.forEachSigningExpansion(
+          [&](va_t At, unsigned Words) { Insertions.append(Words, At); });
     llvm::sort(Insertions);
     for (const auto &[From, To, Branch, Within, Authentication] : References) {
       const auto [Low, High] = std::minmax(From, To);

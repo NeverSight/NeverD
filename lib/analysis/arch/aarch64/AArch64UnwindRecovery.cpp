@@ -192,6 +192,7 @@ struct FrameRow {
   int64_t CFAOffset = 0;
   std::array<AArch64UnwindRegister, kFrameRegisters> Registers;
   std::bitset<NDArm64ePreservedDCount> DeclaredD;
+  bool operator==(const FrameRow &) const = default;
 };
 
 llvm::Expected<std::map<uint64_t, FrameRow>> frameRows(const DwarfCIE &CIE,
@@ -725,9 +726,9 @@ bool hasDarwinCallSitePersonality(ExceptionPersonality Personality) {
 // Darwin C++ and Objective-C personalities select a landing pad by its PC
 // range. Index only the owning frame's aligned, disjoint ranges. In
 // particular, the entry order of an SJLJ table does not describe PC ranges.
-llvm::Expected<std::vector<size_t>>
+llvm::Expected<llvm::SmallVector<const ItaniumCallSite *, 0>>
 landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
-            size_t Count, size_t Limit) {
+            size_t Limit) {
   const va_t DwarfLSDA = Function.Dwarf ? Function.Dwarf->LSDAVA : 0;
   const auto *Compact = Function.Compact ? &*Function.Compact : nullptr;
   const va_t CompactLSDA = Compact ? Compact->LSDAVA : 0;
@@ -735,7 +736,7 @@ landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
       Compact &&
       (Compact->HasLSDA || (Compact->NativeEncoding & macho_unwind::kHasLSDA));
   if (!Function.Itanium && !DwarfLSDA && !CompactLSDA && !HasCompactLSDA)
-    return std::vector<size_t>{};
+    return llvm::SmallVector<const ItaniumCallSite *, 0>{};
   const auto &Info = Function.Itanium;
   if (!Info || !hasDarwinCallSitePersonality(Function.Personality) ||
       !Info->IsCallSiteAddressForm || !Info->LSDAVA ||
@@ -746,7 +747,7 @@ landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
   if (Info->CallSites.size() > Limit)
     return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
 
-  std::vector<size_t> Pads(Count, Count);
+  llvm::SmallVector<const ItaniumCallSite *, 0> Pads;
   va_t PreviousEnd = Range.Begin;
   for (const auto &Site : Info->CallSites) {
     const auto Guard = Site.GuardedRange;
@@ -762,11 +763,7 @@ landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
     if (!Range.contains(Site.LandingPadVA) ||
         Site.LandingPadVA % neverd::aarch64::kInsnSize)
       return fail(kLandingPad);
-    const auto Index = [&](va_t PC) {
-      return (PC - Range.Begin) / neverd::aarch64::kInsnSize;
-    };
-    std::fill(Pads.begin() + Index(Guard.Begin),
-              Pads.begin() + Index(Guard.End), Index(Site.LandingPadVA));
+    Pads.push_back(&Site);
   }
   return Pads;
 }
@@ -914,10 +911,9 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
   if (Start % neverd::aarch64::kInsnSize || Size % neverd::aarch64::kInsnSize)
     return fail(kProfile);
   const auto Count = Size / neverd::aarch64::kInsnSize;
-  if (Count > Limits.MaxInstructions)
-    return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
-  auto Pads = landingPads(Function, {Start, Start + Size}, Count,
-                          Limits.MaxInstructions);
+  const bool Sparse = Count > Limits.MaxInstructions;
+  auto Pads =
+      landingPads(Function, {Start, Start + Size}, Limits.MaxInstructions);
   if (!Pads)
     return Pads.takeError();
   std::map<uint64_t, FrameRow> Rules;
@@ -927,7 +923,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
     if (FDE.InitialLocation != Start || CIE->IsSignalFrame ||
         CIE->ReturnAddressRegister != kLR)
       return fail(kProfile);
-    auto Parsed = frameRows(*CIE, FDE, Limits.MaxInstructions, !Pads->empty());
+    auto Parsed = frameRows(*CIE, FDE, Limits.MaxInstructions,
+                            Function.Itanium.has_value());
     if (!Parsed)
       return Parsed.takeError();
     Rules = std::move(*Parsed);
@@ -962,7 +959,17 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
   Decoder Decode;
   if (!Decode.init(Image))
     return fail(kCode);
-  std::vector<std::optional<State>> States(Count);
+  // Large gaps between reachable blocks need no instruction states. Keep
+  // direct indexing for small frames and charge the same instruction budget
+  // to each distinct reachable word in a sparse frame.
+  std::vector<std::optional<State>> States(Sparse ? 0 : Count);
+  std::map<size_t, State> SparseStates;
+  const auto StateAt = [&](size_t Index) -> State * {
+    if (!Sparse)
+      return States[Index] ? &*States[Index] : nullptr;
+    const auto It = SparseStates.find(Index);
+    return It == SparseStates.end() ? nullptr : &It->second;
+  };
   State Entry;
   Entry.Registers[kSP].StackOffset = 0;
   Entry.Registers[kLR].Return = AArch64ReturnAddressState{};
@@ -971,16 +978,26 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
   for (unsigned R = kFirstDSlot; R < kFrameRegisters; ++R)
     Entry.Registers[R].IncomingRegister = R;
   std::deque<size_t> Work;
-  for (size_t Index : Entries) {
-    States[Index] = Entry;
+  const auto Enqueue = [&](size_t Index, const State &Incoming) {
+    if (auto *Previous = StateAt(Index)) {
+      if (!merge(*Previous, Incoming))
+        return;
+    } else if (Sparse) {
+      SparseStates.try_emplace(Index, Incoming);
+    } else {
+      States[Index] = Incoming;
+    }
     Work.push_back(Index);
-  }
+  };
+  for (size_t Index : Entries)
+    Enqueue(Index, Entry);
   Entries.push_back(Count);
   std::optional<llvm::SmallVector<size_t>> Reentries;
   bool CheckSourceRows = false;
   size_t Transitions = 0;
   while (!Work.empty()) {
-    if (++Transitions > Limits.MaxTransitions)
+    if (++Transitions > Limits.MaxTransitions ||
+        SparseStates.size() > Limits.MaxInstructions)
       return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
     const size_t Index = Work.front();
     Work.pop_front();
@@ -993,8 +1010,9 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
             int(neverd::aarch64::kInsnSize) ||
         !I.Raw || !I.Raw->detail)
       return fail(kCode);
-    State After = *States[Index];
-    if (!transfer(After, *States[Index], Decode, I, Image))
+    const auto &Before = *StateAt(Index);
+    State After = Before;
+    if (!transfer(After, Before, Decode, I, Image))
       return fail(kCode);
     if (After.Stack.size() > Limits.MaxStackCells)
       return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
@@ -1003,12 +1021,7 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
     const auto Queue = [&](size_t Next, const State &Incoming) {
       if (Next < Begin || Next >= End)
         return;
-      if (!States[Next]) {
-        States[Next] = Incoming;
-        Work.push_back(Next);
-      } else if (merge(*States[Next], Incoming)) {
-        Work.push_back(Next);
-      }
+      Enqueue(Next, Incoming);
     };
     const bool IsEpilogue =
         Source && llvm::binary_search(Source->Epilogues, Offset);
@@ -1031,7 +1044,12 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       return true;
     };
     const bool IsCall = cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL);
-    if (!Pads->empty() && (*Pads)[Index] != Count) {
+    const va_t PC = Start + Offset;
+    const auto Pad =
+        llvm::upper_bound(*Pads, PC, [](va_t At, const auto *Site) {
+          return At < Site->GuardedRange.End;
+        });
+    if (Pad != Pads->end() && (*Pad)->GuardedRange.contains(PC)) {
       // The unwinder preserves the callee-saved registers and frame slots.
       // The personality supplies its exception arguments. No incoming LR or
       // volatile value can be inferred from them. A protected range can also
@@ -1039,7 +1057,7 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       // side of such an instruction when admitting that exceptional edge.
       State Handler = After;
       if (!IsCall) {
-        merge(Handler, *States[Index]);
+        merge(Handler, Before);
         clobberCallState(Handler);
       }
       if (!Rules.empty()) {
@@ -1054,7 +1072,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
           discardInactiveStack(Handler);
         }
       }
-      Queue((*Pads)[Index], Handler);
+      Queue(((*Pad)->LandingPadVA - Start) / neverd::aarch64::kInsnSize,
+            Handler);
     }
     if (I.Id == AARCH64_INS_B || I.Id == AARCH64_INS_CBZ ||
         I.Id == AARCH64_INS_CBNZ || I.Id == AARCH64_INS_TBZ ||
@@ -1094,7 +1113,7 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       const auto R = reg(Ops.front().reg);
       if (!R)
         return fail(kCode);
-      const Value &Destination = States[Index]->Registers[*R];
+      const Value &Destination = Before.Registers[*R];
       if (const auto Target = Destination.CodeAddress) {
         if (*Target >= Start && *Target - Start < Size) {
           if (!QueueLocal(*Target))
@@ -1113,6 +1132,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
           return fail(IsEpilogue ? kTailReentry : kCode);
         CheckSourceRows = true;
         if (!Reentries) {
+          if (Sparse)
+            return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
           Reentries.emplace();
           for (size_t Next = 0; Next < Count; ++Next) {
             switch (classicReentry(Rules, *Source,
@@ -1150,16 +1171,35 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       Queue(Index + 1, After);
     }
   }
+  // At an unreachable word only a declared CFI transition can change the
+  // row. End every reached run explicitly so a gap never inherits its LR.
+  llvm::SmallVector<size_t> Boundaries;
+  if (Sparse) {
+    for (const auto &[Index, S] : SparseStates) {
+      Boundaries.push_back(Index);
+      if (Index + 1 < Count)
+        Boundaries.push_back(Index + 1);
+    }
+    for (const auto &[Offset, Rule] : Rules)
+      if (Offset < Size)
+        Boundaries.push_back(Offset / neverd::aarch64::kInsnSize);
+    llvm::sort(Boundaries);
+    Boundaries.erase(std::unique(Boundaries.begin(), Boundaries.end()),
+                     Boundaries.end());
+  }
   std::vector<AArch64RecoveredUnwindRow> Result;
-  for (size_t I = 0; I < Count; ++I) {
+  const size_t RowCount = Sparse ? Boundaries.size() : Count;
+  for (size_t N = 0; N < RowCount; ++N) {
+    const auto I = Sparse ? Boundaries[N] : N;
+    const State *At = StateAt(I);
     const auto Offset = I * neverd::aarch64::kInsnSize;
     const FrameRow *Declared =
         Rules.empty() ? nullptr : &std::prev(Rules.upper_bound(Offset))->second;
     FrameRow Rule;
     std::optional<AArch64ReturnAddressState> Signing;
     std::optional<AArch64LiveSigningModifier> Live;
-    if (States[I]) {
-      const auto &S = *States[I];
+    if (At) {
+      const auto &S = *At;
       Rule = instructionFrameRow(
           S, Declared, Function.Compact ? &*Function.Compact : nullptr);
       Signing = savedReturn(S, Rule);
@@ -1175,10 +1215,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
     } else if (Declared) {
       Rule = *Declared;
     }
-    const auto SP =
-        States[I] ? States[I]->Registers[kSP].StackOffset : std::nullopt;
-    const auto FP =
-        States[I] ? States[I]->Registers[kFP].StackOffset : std::nullopt;
+    const auto SP = At ? At->Registers[kSP].StackOffset : std::nullopt;
+    const auto FP = At ? At->Registers[kFP].StackOffset : std::nullopt;
     if (!Result.empty() && Result.back().StackOffset == SP &&
         Result.back().FramePointerOffset == FP &&
         Result.back().CFARegister == Rule.CFARegister &&
@@ -1253,6 +1291,44 @@ bool isTransparentCallSetup(const DecodedInsn &I,
 }
 
 } // namespace
+
+bool sameDarwinAArch64UnwindScope(const BinaryImage &Image,
+                                  const ExceptionFunction &Function,
+                                  llvm::ArrayRef<va_t> PCs) {
+  if (PCs.empty() || !llvm::all_of(PCs, [&](va_t PC) {
+        return Function.CodeRange.contains(PC);
+      }))
+    return false;
+  if (Function.Itanium) {
+    const auto &Sites = Function.Itanium->CallSites;
+    const auto Scope = [&](va_t PC) {
+      return llvm::find_if(Sites, [&](const auto &Site) {
+        return Site.GuardedRange.contains(PC);
+      });
+    };
+    const auto First = Scope(PCs.front());
+    if (!llvm::all_of(PCs.drop_front(),
+                      [&](va_t PC) { return Scope(PC) == First; }))
+      return false;
+  }
+  if (!Function.Dwarf)
+    return Function.Compact && !Function.Compact->ReturnAddressSigningOffset;
+  const auto &FDE = *Function.Dwarf;
+  const auto *CIE = Image.ExceptionMetadata.findCIE(FDE.CIESectionOffset);
+  if (!CIE || FDE.InitialLocation != Function.CodeRange.Begin)
+    return false;
+  auto Rules =
+      frameRows(*CIE, FDE, kMaxInstructions, Function.Itanium.has_value());
+  if (!Rules) {
+    llvm::consumeError(Rules.takeError());
+    return false;
+  }
+  const auto At = [&](va_t PC) -> const FrameRow & {
+    return std::prev(Rules->upper_bound(PC - FDE.InitialLocation))->second;
+  };
+  return llvm::all_of(PCs.drop_front(),
+                      [&](va_t PC) { return At(PC) == At(PCs.front()); });
+}
 
 llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
 recoverDarwinAArch64Unwind(const BinaryImage &Image,

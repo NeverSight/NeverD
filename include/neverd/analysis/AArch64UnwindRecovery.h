@@ -70,6 +70,12 @@ struct AArch64UnwindRecoveryLimits {
   size_t MaxStackCells = aarch64_unwind::kMaxStackCells;
 };
 
+/// Whether a relocated instruction may inherit the same declared CFA,
+/// saved-register rules and language exception scope at each of these PCs.
+bool sameDarwinAArch64UnwindScope(const BinaryImage &Image,
+                                  const ExceptionFunction &Function,
+                                  llvm::ArrayRef<va_t> PCs);
+
 /// Rows start at exact instruction boundaries and extend to the next row or
 /// frame end. Unknown joins and unreachable instructions remain Unknown.
 /// A DWARF row with a proven CFA retains its declared register locations.

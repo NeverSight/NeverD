@@ -24,6 +24,10 @@ namespace neverd {
 namespace {
 using namespace aarch64_unwind;
 constexpr auto Word = aarch64::kInsnSize;
+#define MACHO_SIGNING_ISLAND_LAYOUT(First, Return, Fallthrough)                \
+  constexpr unsigned FirstIslandWord = First, ReturnIslandWords = Return,      \
+                     FallthroughIslandWords = Fallthrough;
+#include "MachORegisterResults.def"
 
 std::optional<unsigned> gpr(aarch64_reg R) {
   if (R >= AARCH64_REG_X0 && R <= AARCH64_REG_X28)
@@ -162,8 +166,6 @@ routeSigningEdges(const LowFunc &CFG,
     if (Edge == Paths.IncomingSigners.end() || Edge->second == InvalidVA)
       return std::nullopt;
     const va_t Signer = Edge->second;
-    if (!machOPCRelativeAuthentication(Operation.Id, PC, Signer))
-      return std::nullopt;
     auto It = llvm::find_if(
         Auth.Routes, [Signer](const auto &R) { return R.Signer == Signer; });
     if (It == Auth.Routes.end()) {
@@ -401,6 +403,76 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
     if (!Local)
       Result.Consumers.try_emplace(PC, Replacement);
   }
+  // Numeric ADRs can widen at installation. Include the space available to
+  // every local expansion before choosing a backwards immediate at its limit.
+  // The linked-image verifier checks the exact displacement independently.
+  if (Result.Dispatches.empty())
+    return Result;
+  const auto *Frame = Image.ExceptionMetadata.findFunction(CFG.Entry);
+  size_t Growth = 0;
+  for (size_t Offset = 0; Offset < Count * Word; Offset += Word) {
+    const auto Bits = readLE<uint32_t>(Source.Bytes.data() + Offset);
+    Growth += (Bits & aarch64::kADRP_Mask) == aarch64::kADR_Op ||
+              aarch64::isPointerLiteralLoad(Bits);
+  }
+  for (const auto &[Block, PC] : Consumers) {
+    if (auto It = Result.Dispatches.find(PC); It != Result.Dispatches.end()) {
+      const auto &Auth = It->second;
+      const auto BodyWords =
+          Auth.Returns ? ReturnIslandWords : FallthroughIslandWords;
+      Growth += Auth.insertedWords() + Auth.Routes.size() * (1 + BodyWords);
+    } else {
+      // A register setup and an ADRP/ADD restoring the caller's address.
+      Growth += MachOSigningConsumer{PC, 0, true}.insertedWords();
+    }
+  }
+  for (const auto &[Block, PC] : Consumers) {
+    auto It = Result.Dispatches.find(PC);
+    if (It == Result.Dispatches.end())
+      continue;
+    auto &Auth = It->second;
+    const auto Op = Code.at(PC).Signing->Id;
+    for (auto [Index, Route] : llvm::enumerate(Auth.Routes)) {
+      const auto At = PC + Index * Auth.routeWords() * Word;
+      if (Route.Signer <= At &&
+          machOPCRelativeAuthentication(Op, At + Growth * Word, Route.Signer))
+        continue;
+      llvm::SmallVector<va_t, 4> PCs{Route.Signer, Route.Signer + Word, PC};
+      if (!Auth.Returns)
+        PCs.push_back(PC + Word);
+      if (!Frame || !sameDarwinAArch64UnwindScope(Image, *Frame, PCs)) {
+        if (machOPCRelativeAuthentication(Op, At, Route.Signer))
+          continue;
+        Result.Unresolved = true;
+        return Result;
+      }
+      auto &Islands = Result.Islands[Route.Signer];
+      // The original PAC falls through a single branch over these copies.
+      unsigned Offset = FirstIslandWord;
+      if (!Islands.empty()) {
+        const auto &Last = Islands.back();
+        const auto &Previous = Result.Dispatches.at(Last.Consumer);
+        Offset =
+            Previous.Routes[Last.Route].IslandWord +
+            (Previous.Returns ? ReturnIslandWords : FallthroughIslandWords);
+      }
+      const auto Encoding = machOPCRelativeAuthentication(Op, Offset * Word, 0);
+      if (!Encoding) {
+        Result.Unresolved = true;
+        return Result;
+      }
+      Route.IslandWord = Offset;
+      Route.IslandWords =
+          unsigned(Islands.empty()) +
+          (Auth.Returns ? ReturnIslandWords : FallthroughIslandWords);
+      Islands.push_back({PC, unsigned(Index), *Encoding});
+    }
+  }
+  for (auto &[Origin, Address] : Result.Addresses)
+    if (Address.Authentication &&
+        !Address.Authentication->Consumer.Routes.empty())
+      Address.Authentication->Consumer =
+          Result.Dispatches.at(Address.Authentication->Consumer.Instruction);
   return Result;
 }
 

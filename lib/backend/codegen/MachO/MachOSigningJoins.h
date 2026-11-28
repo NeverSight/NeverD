@@ -20,6 +20,12 @@
 namespace neverd {
 struct LowFunc;
 
+struct MachOSigningIsland {
+  va_t Consumer;
+  unsigned Route;
+  uint32_t Encoding;
+};
+
 /// Each origin supplies the signing PC on its own incoming paths to AUT.
 struct MachOSigningJoins {
   bool Unresolved = false;
@@ -28,6 +34,7 @@ struct MachOSigningJoins {
   // Only explicit incoming branches need a non-default label.
   llvm::DenseMap<va_t, std::pair<va_t, unsigned>> BranchRoutes{};
   llvm::DenseMap<va_t, MachOSigningConsumer> Dispatches{};
+  llvm::DenseMap<va_t, llvm::SmallVector<MachOSigningIsland, 1>> Islands{};
   llvm::SmallDenseSet<va_t, 2> SigningPCs{};
   llvm::SmallDenseSet<uint32_t, 2> RetainedSigningWords{};
 };

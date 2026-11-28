@@ -308,6 +308,45 @@ TEST(AArch64ImplicitUnwind,
   EXPECT_EQ(Live.State->Kind, Kind::Unsigned);
 }
 
+TEST(AArch64ImplicitUnwind, SparseFramesChargeOnlyReachableInstructions) {
+  Frame F{ExplicitSignA, BranchToSharedAuth, Nop, Nop, Ret};
+  const AArch64UnwindRecoveryLimits Limits{.MaxInstructions = 3};
+  EXPECT_EQ(F.at(2, Limits).Status, Status::Unknown);
+  EXPECT_EQ(F.at(3, Limits).Status, Status::Unknown);
+  const auto Signed = F.at(4, Limits);
+  ASSERT_TRUE(Signed.State);
+  EXPECT_EQ(Signed.State->SigningPC, 0u);
+  EXPECT_EQ(F.at(4, {.MaxInstructions = 2}).Status, Status::ResourceLimit);
+
+  constexpr auto Word = sizeof(uint32_t);
+  F.saveRow(3);
+  auto Sparse = recoverDarwinAArch64Unwind(F.Image, F.Function, Limits);
+  ASSERT_TRUE(bool(Sparse)) << llvm::toString(Sparse.takeError());
+  EXPECT_EQ(aarch64UnwindRowAt(*Sparse, 2 * Word).CFAOffset, 0);
+  EXPECT_EQ(aarch64UnwindRowAt(*Sparse, 3 * Word).CFAOffset,
+            2 * kRegisterBytes);
+}
+
+TEST(AArch64ImplicitUnwind,
+     RelocatedAuthenticationSharesFrameAndLanguageScope) {
+  constexpr auto Word = sizeof(uint32_t);
+  Frame F{Nop, Nop, Nop, Nop, Ret};
+  const auto Same = [&](va_t First, va_t Second) {
+    return sameDarwinAArch64UnwindScope(F.Image, F.Function,
+                                        {First * Word, Second * Word});
+  };
+  EXPECT_TRUE(Same(0, 4));
+  EXPECT_FALSE(Same(0, 5));
+  F.saveRow(3);
+  EXPECT_TRUE(Same(0, 2));
+  EXPECT_FALSE(Same(2, 3));
+  F.addHandler(0, 2, 4);
+  EXPECT_TRUE(Same(0, 1));
+  EXPECT_FALSE(Same(1, 2));
+  F.addHandler(2, 3, 4);
+  EXPECT_FALSE(Same(1, 2));
+}
+
 TEST(AArch64ImplicitUnwind, SavesSurviveCallsButNotOverlappingWrites) {
   Frame F{SignB, Push, Call, Pop, AuthB, Ret};
   F.saveRow(2);

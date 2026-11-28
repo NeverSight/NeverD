@@ -2781,6 +2781,20 @@ language scope agree with the authenticator. The final image check resolves
 each direct target, decodes each authentication against the installed signer
 and compares the duplicated prefix with the source instructions.
 
+For a direct edge whose signer lies ahead of the authenticator or beyond its
+backwards immediate, the publisher places the original IA/IB authentication
+near the installed signing instruction. Ordinary execution branches over this
+copy after signing. The incoming edge selects it at the join. An AUT branches
+back to its continuation with an unsigned LR. An authenticated return remains
+a single instruction. Neither path consumes a GPR or a stack slot. The source
+address returned or stored by the program still denotes the original signing
+word. Placement requires matching frame rules and language exception scope.
+An ambiguous incoming edge or an incompatible scope blocks publication.
+
+Instruction-based unwind recovery budgets the reachable words of a large
+sparse frame. A gap after an unconditional branch has unknown signing state
+until a proven incoming edge establishes it again.
+
 A compact saved-register frame can use a PC-relative authenticated return
 without materializing the signing address as data. The publisher keeps its
 compact unwind recipe. When the function does reference a signing address in
