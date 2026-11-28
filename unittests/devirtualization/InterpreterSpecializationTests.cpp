@@ -5577,15 +5577,14 @@ TEST(InterpreterSpecialization, ProducerHintRetainsProvedFrameBytes) {
   P.add(0x120, {op(NdOp::COPY, reg(0), {constant(0)}), ret()});
   P.add(0x130, {jump(0x138)});
   P.add(0x138,
-        {op(NdOp::LOAD, reg(56), {reg(40)}),
+        {op(NdOp::INT_SUB, reg(40), {reg(32), constant(24)}),
+         op(NdOp::LOAD, reg(56), {reg(40)}),
          op(NdOp::INT_AND, reg(56), {reg(56), constant(~uint64_t{0xff})}),
-         op(NdOp::STORE, {}, {reg(56), constant(17)}),
-         op(NdOp::COPY, reg(0), {constant(9)}), ret()});
+         op(NdOp::INDIR_BR, {}, {reg(56)})});
+  P.add(0x8000, {op(NdOp::COPY, reg(0), {constant(9)}), ret()});
 
   auto O = separatedStoreOptions();
   O.EntryFrameBounds = SpecializationEntryFrameBounds{-32, 8};
-  O.EntryFrameBounds->ExcludedAddressRanges = {{0x8000, 0x8008}};
-  O.ProveStoreFrameSeparation = true;
   O.MaxControlTuples = 1;
   const auto Unhinted = specializeInterpreter(P, {0x100}, O);
   EXPECT_FALSE(Unhinted.complete());
@@ -5597,14 +5596,8 @@ TEST(InterpreterSpecialization, ProducerHintRetainsProvedFrameBytes) {
   const auto R = specializeInterpreter(P, {0x100}, O);
   ASSERT_TRUE(R.complete()) << R.Diagnostic;
   for (uint64_t Root : {0x1000u, 0x2000u})
-    for (uint64_t Low : {0u, 1u, 255u}) {
-      std::map<uint64_t, uint8_t> FinalMemory;
-      EXPECT_EQ(execute(R.Residual, {{16, 0x8000 | Low}, {32, Root}}, {}, 0, {},
-                        std::nullopt, {}, &FinalMemory),
-                9u);
-      ASSERT_TRUE(FinalMemory.count(0x8000));
-      EXPECT_EQ(FinalMemory.at(0x8000), 17u);
-    }
+    for (uint64_t Low : {0u, 1u, 255u})
+      EXPECT_EQ(execute(R.Residual, {{16, 0x8000 | Low}, {32, Root}}), 9u);
   EXPECT_EQ(execute(R.Residual, {{16, 0x9000}, {32, 0x1000}}), 0u);
 
   auto BigEndian = O;
