@@ -55,26 +55,29 @@ public:
              llvm::StringRef LinkComment) {
     if (!Emitted) {
       // C23 changed f() to f(void). Pre-C23 Clang permits the open list on
-      // an overloadable declaration; the explicit assembler label keeps the
-      // binary symbol, including where a header already holds its C name.
+      // an overloadable declaration. The always-enabled overload breaks
+      // the zero-argument tie with a visible C prototype for the same symbol.
       // GCC 13+ can form the C23 function type in an unevaluated operand
       // even in C11 mode, with strict prototype checking enabled.
       OS << R"(/* External Win64 integer calls with no recorded parameter types. */
 #if defined(__cplusplus) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L)
 #define __NEVERD_WIN64_OPEN(result, name) extern result name(...)
 #elif defined(__clang__)
-#define __NEVERD_WIN64_OPEN(result, name) extern result name(...) __attribute__((overloadable))
+#define __NEVERD_WIN64_OPEN(result, name) extern result name(...) __attribute__((overloadable, enable_if(1, "")))
 #elif defined(__GNUC__) && __GNUC__ >= 13
 #define __NEVERD_WIN64_OPEN(result, name) __extension__ extern __typeof__(*(result (*)(...))0) name
 #else
 #define __NEVERD_WIN64_OPEN(result, name) extern result name()
 #endif
+#define __NEVERD_WIN64_STR_INNER(x) #x
+#define __NEVERD_WIN64_STR(x) __NEVERD_WIN64_STR_INNER(x)
 )";
       Emitted = true;
     }
     OS << "__NEVERD_WIN64_OPEN(" << Result << ", " << Name << ")";
     if (LinkLabel.empty())
-      OS << " __asm__(\"" << Name << "\")";
+      OS << " __asm__(__NEVERD_WIN64_STR(__USER_LABEL_PREFIX__) \"" << Name
+         << "\")";
     else
       OS << LinkLabel;
     if (NoReturn)
@@ -84,7 +87,9 @@ public:
 
   void finish(llvm::raw_ostream &OS) const {
     if (Emitted)
-      OS << "#undef __NEVERD_WIN64_OPEN\n";
+      OS << "#undef __NEVERD_WIN64_STR\n"
+            "#undef __NEVERD_WIN64_STR_INNER\n"
+            "#undef __NEVERD_WIN64_OPEN\n";
   }
 
 private:
