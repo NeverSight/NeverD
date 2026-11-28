@@ -24,21 +24,38 @@
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSignalSpy>
+#include <QSplitter>
+#include <QStringView>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextBlock>
+#include <QTextCursor>
+#include <QTextDocument>
 
 namespace {
 QByteArray readFile(const QString &Path) {
   QFile File(Path);
   return File.open(QIODevice::ReadOnly) ? File.readAll() : QByteArray{};
 }
-QJsonObject cli(const QString &File, QStringList Options,
-                int ExpectedExit = 0) {
+QByteArray fixtureBytes(const QString &Manifest, QStringView Id) {
+  const auto Fixtures = QJsonDocument::fromJson(readFile(Manifest))
+                            .object()["fixtures"]
+                            .toArray();
+  for (auto V : Fixtures) {
+    const auto Fixture = V.toObject();
+    if (Fixture["id"].toString() == Id)
+      return QByteArray::fromBase64(Fixture["bytes"].toString().toLatin1());
+  }
+  return {};
+}
+QJsonObject cli(const QString &File, QStringList Options, int ExpectedExit = 0,
+                int Release = 17) {
   QProcess P;
   P.start(TEST_JVM_CLI,
-          QStringList{"java", File, "--json", "--release=17"} + Options);
+          QStringList{"java", File, "--json",
+                      QStringLiteral("--release=%1").arg(Release)} +
+              Options);
   if (!P.waitForFinished(20000) || P.exitCode() != ExpectedExit)
     return {};
   return QJsonDocument::fromJson(P.readAllStandardOutput()).object();
@@ -50,14 +67,7 @@ private slots:
   void physicalSelectionAndViews() {
     QTemporaryDir Temp;
     QVERIFY(Temp.isValid());
-    auto Fixtures = QJsonDocument::fromJson(readFile(TEST_JVM_MANIFEST))
-                        .object()["fixtures"]
-                        .toArray();
-    QByteArray Jar;
-    for (auto V : Fixtures)
-      if (V.toObject()["id"] == "multi")
-        Jar =
-            QByteArray::fromBase64(V.toObject()["bytes"].toString().toLatin1());
+    const auto Jar = fixtureBytes(TEST_JVM_MANIFEST, u"multi");
     QVERIFY(!Jar.isEmpty());
     const QString JarName = QStringLiteral("جمع-源码.jar");
     QString Path = Temp.filePath(JarName);
@@ -125,6 +135,9 @@ private slots:
     QCOMPARE(F["status"].toString(), "reconstructed_source");
     QCOMPARE(Tabs->currentWidget(), Source);
     QCOMPARE(Source->toPlainText(), F["source"].toString());
+    QVERIFY(Source->document()->defaultFont().styleStrategy() &
+            QFont::PreferNoShaping);
+    QVERIFY(Mappings->font().styleStrategy() & QFont::PreferNoShaping);
     QCOMPARE(BytecodeChanges.count(), 0);
     bool VisibleDuringLoad = true;
     const auto Loaded =
@@ -154,25 +167,38 @@ private slots:
     QVERIFY(Evidence->document()->defaultFont().styleStrategy() &
             QFont::PreferNoShaping);
     Tabs->setCurrentWidget(Source);
+    const auto Instructions = F["instructions"].toArray();
+    QCOMPARE(Mappings->count(), Instructions.size());
     bool Found = false;
     for (int I = 0; I < Mappings->count(); ++I) {
-      auto Lines = Mappings->item(I)->data(Qt::UserRole).toList();
-      if (Lines.empty())
+      const auto Instruction = Instructions.at(I).toObject();
+      QCOMPARE(Mappings->item(I)->text(),
+               QStringLiteral("%1   0x%2   %3")
+                   .arg(Instruction["pc"].toInt())
+                   .arg(Instruction["offset"].toInteger(), 0, 16)
+                   .arg(Instruction["opcode"].toString()));
+      const auto Spans = Instruction["source_spans"].toArray();
+      if (Spans.isEmpty())
         continue;
       Mappings->setCurrentRow(I);
-      QCOMPARE(Source->textCursor().blockNumber() + 1, Lines.front().toInt());
+      QCOMPARE(Source->textCursor().blockNumber() + 1,
+               Spans.first().toObject()["line"].toInt());
       Found = true;
-      break;
     }
     QVERIFY(Found);
     Source->setFocus();
     QTRY_VERIFY(Source->hasFocus());
-    auto Map = F["source_map"].toArray().first().toObject();
-    int Line = Map["line"].toInt();
     Source->moveCursor(QTextCursor::Start);
-    Source->setTextCursor(
-        QTextCursor(Source->document()->findBlockByNumber(Line - 1)));
-    QCOMPARE(Mappings->selectedItems().size(), Map["pcs"].toArray().size());
+    for (auto V : F["source_map"].toArray()) {
+      const auto Map = V.toObject();
+      const int Line = Map["line"].toInt();
+      Source->setTextCursor(
+          QTextCursor(Source->document()->findBlockByNumber(Line - 1)));
+      const auto PCs = Map["pcs"].toArray();
+      for (int I = 0; I < Mappings->count(); ++I)
+        QCOMPARE(Mappings->item(I)->isSelected(),
+                 PCs.contains(Instructions.at(I).toObject()["pc"]));
+    }
     Methods->setCurrentIndex(0);
     Run->click();
     QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
@@ -213,19 +239,128 @@ private slots:
     Copy->click();
     QVERIFY(QApplication::clipboard()->text().contains(JarName));
   }
+  void sourceShapingFollowsSelectedText() {
+    QTemporaryDir Temp;
+    QVERIFY(Temp.isValid());
+    neverd::gui::JVMRecoveryDialog Dialog(TEST_JVM_WORKER);
+    Dialog.show();
+    auto *Input = Dialog.findChild<QLineEdit *>("jvmPath");
+    auto *Run = Dialog.findChild<QPushButton *>("jvmAnalyze");
+    auto *Source = Dialog.findChild<QPlainTextEdit *>("jvmSource");
+    auto *Copy = Dialog.findChild<QPushButton *>("jvmCopy");
+    QVERIFY(Input && Run && Source && Copy);
+    const auto ASCII = QStringLiteral("class Sample { int count; }\n");
+    const auto Unicode =
+        QStringLiteral("class Sample { String اسم = \"漢字\"; }\n");
+    QFile File(Temp.filePath("Sample.java"));
+    Input->setText(File.fileName());
+    for (const auto &Text : {ASCII, Unicode, ASCII}) {
+      QVERIFY(File.open(QIODevice::WriteOnly | QIODevice::Truncate));
+      const auto Bytes = Text.toUtf8();
+      QCOMPARE(File.write(Bytes), Bytes.size());
+      File.close();
+      QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
+      Run->click();
+      QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
+      QCOMPARE(Source->toPlainText(), Text);
+      if (Text == Unicode)
+        QCOMPARE(Source->document()->defaultFont().styleStrategy(),
+                 Source->font().styleStrategy());
+      else
+        QVERIFY(Source->document()->defaultFont().styleStrategy() &
+                QFont::PreferNoShaping);
+      Copy->click();
+      QCOMPARE(QApplication::clipboard()->text(), Text);
+    }
+  }
+  void tabPaneTracksSizeChanges() {
+    neverd::gui::JVMRecoveryDialog Dialog(TEST_JVM_WORKER);
+    Dialog.show();
+    auto *Tabs = Dialog.findChild<QTabWidget *>();
+    auto *Split = Dialog.findChild<QSplitter *>();
+    auto *Source = Dialog.findChild<QPlainTextEdit *>("jvmSource");
+    auto *IR = Dialog.findChild<QPlainTextEdit *>("jvmIR");
+    QVERIFY(Tabs && Split && Source && IR);
+    Tabs->setCurrentWidget(Source);
+    const QSize Minimum = Dialog.minimumSizeHint();
+    const int Width = Minimum.width() + Tabs->width();
+    Source->setMinimumWidth(Width);
+    QTRY_VERIFY(Dialog.minimumSizeHint().width() >= Width);
+    Tabs->setCurrentWidget(IR);
+    QVERIFY(Dialog.minimumSizeHint().width() >= Width);
+    Tabs->setCurrentWidget(Source);
+    Source->setMinimumWidth(0);
+    QTRY_COMPARE(Dialog.minimumSizeHint(), Minimum);
+
+    Split->setSizes({Split->width() / 3, Split->width()});
+    const auto Sizes = Split->sizes();
+    const auto PageSize = Source->size();
+    Tabs->setCurrentWidget(IR);
+    QCOMPARE(Split->sizes(), Sizes);
+    QCOMPARE(IR->size(), PageSize);
+  }
+  void methodChangesReplaceDetailTextAndResetSelection() {
+    QTemporaryDir Temp;
+    QVERIFY(Temp.isValid());
+    const auto Manifest =
+        QFileInfo(TEST_JVM_MANIFEST).absolutePath() + "/classes.json";
+    const auto Data = fixtureBytes(Manifest, u"record");
+    QVERIFY(!Data.isEmpty());
+    QFile File(Temp.filePath("Point.class"));
+    QVERIFY(File.open(QIODevice::WriteOnly));
+    QCOMPARE(File.write(Data), Data.size());
+    File.close();
+
+    neverd::gui::JVMRecoveryDialog Dialog(TEST_JVM_WORKER);
+    Dialog.show();
+    auto *Input = Dialog.findChild<QLineEdit *>("jvmPath");
+    auto *Release = Dialog.findChild<QComboBox *>("jvmRelease");
+    auto *Run = Dialog.findChild<QPushButton *>("jvmAnalyze");
+    auto *Results = Dialog.findChild<QComboBox *>("jvmResults");
+    auto *Tabs = Dialog.findChild<QTabWidget *>();
+    auto *Bytecode = Dialog.findChild<QPlainTextEdit *>("jvmBytecode");
+    auto *IR = Dialog.findChild<QPlainTextEdit *>("jvmIR");
+    auto *Evidence = Dialog.findChild<QPlainTextEdit *>("jvmEvidence");
+    QVERIFY(Input && Release && Run && Results && Tabs && Bytecode && IR &&
+            Evidence);
+    Input->setText(File.fileName());
+    Release->setCurrentIndex(Release->findData(21));
+    QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
+    Run->click();
+    QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
+
+    auto Check = [&](QPlainTextEdit *View, const QJsonDocument &Expected) {
+      Tabs->setCurrentWidget(View);
+      QCOMPARE(View->toPlainText().toUtf8(), Expected.toJson());
+      QCOMPARE(View->textCursor().position(), 0);
+      QVERIFY(!View->textCursor().hasSelection());
+      QCOMPARE(View->verticalScrollBar()->value(),
+               View->verticalScrollBar()->minimum());
+      QVERIFY(!View->document()->isModified());
+      QVERIFY(!View->document()->isUndoAvailable());
+      View->moveCursor(QTextCursor::End, QTextCursor::KeepAnchor);
+      QVERIFY(View->textCursor().hasSelection());
+    };
+    for (const QString &Key : {QStringLiteral("x()I"), QStringLiteral("y()J"),
+                               QStringLiteral("x()I")}) {
+      const int Row = Results->findText(Key, Qt::MatchEndsWith);
+      QVERIFY(Row >= 0);
+      auto Report = cli(File.fileName(), {"--method=" + Key}, 0, 21);
+      QCOMPARE(Report["functions"].toArray().size(), 1);
+      auto F = Report["functions"].toArray().first().toObject();
+      Results->setCurrentIndex(Row);
+      Check(Bytecode, QJsonDocument(F.take("instructions").toArray()));
+      Check(IR, QJsonDocument(F.take("ir").toObject()));
+      F.remove("source");
+      Check(Evidence, QJsonDocument(F));
+    }
+  }
   void incompleteMethodShowsMappedBytecodeAndDiagnostics() {
     QTemporaryDir Temp;
     QVERIFY(Temp.isValid());
     auto ClassesFile =
         QFileInfo(TEST_JVM_MANIFEST).absolutePath() + "/classes.json";
-    auto Fixtures = QJsonDocument::fromJson(readFile(ClassesFile))
-                        .object()["fixtures"]
-                        .toArray();
-    QByteArray Data;
-    for (auto V : Fixtures)
-      if (V.toObject()["id"] == "lambda-generics")
-        Data =
-            QByteArray::fromBase64(V.toObject()["bytes"].toString().toLatin1());
+    const auto Data = fixtureBytes(ClassesFile, u"lambda-generics");
     QVERIFY(!Data.isEmpty());
     auto Path = Temp.filePath("Features.class");
     QFile File(Path);

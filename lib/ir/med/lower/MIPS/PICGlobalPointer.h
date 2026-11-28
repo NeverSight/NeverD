@@ -9,6 +9,8 @@
 
 #include "neverd/ir/low/LowIR.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
+
 #include <optional>
 
 namespace neverd {
@@ -16,8 +18,9 @@ namespace neverd {
 struct BinaryImage;
 
 /// Bind the completed entry-relative GP calculation in a linked PIC function.
-std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
-                                                   const BinaryImage &Image);
+std::optional<LowFunc> projectMIPSPICGlobalPointer(
+    const LowFunc &Function, const BinaryImage &Image,
+    llvm::function_ref<bool(va_t)> StaticSlot = nullptr);
 
 } // namespace neverd
 

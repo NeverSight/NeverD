@@ -31,6 +31,12 @@ struct MachOLiftedSource {
 std::optional<MachOLiftedSource> machOLiftedSource(const BinaryImage &Image,
                                                    va_t Start, va_t NextEntry);
 
+/// Data-in-code records inside a single instruction-storage owner. A valid
+/// frame starts in code and encloses each record in full. Control-flow
+/// recovery must still check every reached instruction against these records.
+std::optional<llvm::ArrayRef<MachODataInCodeRange>>
+machOFrameDataInCode(const BinaryImage &Image, va_t Start, uint64_t Size);
+
 /// Original function which owns an aligned interior address as storage.
 /// After publication the old entry may forward while its bytes remain mapped.
 std::optional<va_t> machOInteriorAddressOwner(const BinaryImage &Image,

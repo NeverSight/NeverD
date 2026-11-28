@@ -816,6 +816,14 @@ void X86Lifter::lift(const cs_insn *Insn, std::vector<LowOp> &Ops,
            PreservedState);
 }
 
+void X86Lifter::liftWithUndefinedTransfer(
+    const cs_insn *Insn, std::vector<LowOp> &Ops,
+    llvm::ArrayRef<RelocatedAddressOperand> Relocs,
+    llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
+    LowUndefinedTransfer &Transfer) {
+  liftImpl(Insn, Ops, Relocs, ScalarRelocs, false, nullptr, nullptr, &Transfer);
+}
+
 bool X86Lifter::liftX64MemoryCall(
     const cs_insn *Insn, std::vector<LowOp> &Ops,
     LowInstructionUndefinedEffects *UndefinedEffects,
@@ -859,7 +867,10 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
                          llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
                          bool LoadMemoryCallTarget,
                          LowInstructionUndefinedEffects *UndefinedEffects,
-                         LowInstructionPreservedState *PreservedState) {
+                         LowInstructionPreservedState *PreservedState,
+                         LowUndefinedTransfer *Transfer) {
+  if (Transfer)
+    *Transfer = {};
   if (PreservedState)
     *PreservedState = {};
   if (UndefinedEffects) {
@@ -913,7 +924,7 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   // handler may already have computed an address or emitted a partial result.
   llvm::scope_exit Rollback([&] { Ops.resize(S.OpsStart); });
   LowInstructionUndefinedEffects EffectsDraft;
-  S.UndefinedEffects = UndefinedEffects ? &EffectsDraft : nullptr;
+  S.UndefinedEffects = (UndefinedEffects || Transfer) ? &EffectsDraft : nullptr;
   S.LoadMemoryCallTarget = LoadMemoryCallTarget;
   S.AddressSize = X86.addr_size != 0
                       ? static_cast<uint16_t>(X86.addr_size)
@@ -1266,10 +1277,11 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
         llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart));
   }
 
-  if (UndefinedEffects) {
+  if (UndefinedEffects || Transfer) {
     EffectsDraft.OpCount = Ops.size() - S.OpsStart;
-    EffectsDraft.OperationDigest = lowUndefinedOperationDigest(
-        llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart));
+    if (UndefinedEffects)
+      EffectsDraft.OperationDigest = lowUndefinedOperationDigest(
+          llvm::ArrayRef<LowOp>(Ops).drop_front(S.OpsStart));
     const bool Logic = Id == X86_INS_AND || Id == X86_INS_OR ||
                        Id == X86_INS_XOR || Id == X86_INS_TEST;
     const bool HasLogicEffect =
@@ -1361,7 +1373,13 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
     }
     if (EffectsDraft.Coverage != LowUndefinedCoverage::Complete)
       EffectsDraft.Effects.clear();
-    *UndefinedEffects = std::move(EffectsDraft);
+    if (Transfer) {
+      Transfer->Complete =
+          EffectsDraft.Coverage == LowUndefinedCoverage::Complete;
+      Transfer->Effects = std::move(EffectsDraft.Effects);
+    } else {
+      *UndefinedEffects = std::move(EffectsDraft);
+    }
   }
   if (PreservedState)
     *PreservedState = std::move(PreservedDraft);

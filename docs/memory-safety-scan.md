@@ -10,6 +10,42 @@ neverd scan program --analyzer=hunt --max-paths=32
 
 In the desktop workbench, open the binary and select **Options → Analysis → Memory Safety Scan**. Choose the analyzers and click **Scan**. The status line for each analyzer shows its coverage. Select a finding to inspect its scope, evidence and source. The worker uses the open project's image and symbol choices, with the default safety catalog and budgets. The CLI and workbench produce the same report with the same inputs and settings.
 
+## Data pointers
+
+`neverd scan binary --data-ptr` writes a `neverd.data-ptr-scan` v1 JSON
+report to stdout or `-o file`. The native loader selects the ISA, ABI,
+pointer width and byte order. PE/COFF and ELF use `.data`. Mach-O uses
+`__data`.
+
+* `code_references` counts distinct instructions with a recovered read, write
+  or address reference into `.data`. An instruction that both reads and
+  writes the same object counts once. The native reference decoder visits the
+  session's functions after native function discovery. Symbols and recoverable
+  addresses affect coverage.
+  `incomplete_functions` counts visited functions with an incomplete decode or
+  an unlifted instruction. Their recovered references still contribute.
+* `data_pointers` counts full-width, file-backed slots in `.data` whose
+  relocation resolves inside a readable, non-executable data section.
+  Separate slots can point to the same object. Stripping relocations can
+  reduce this count even when the stored bytes stay identical.
+
+The regression inspects Windows x64 and ARM64 PE, Linux x64, ARM64,
+MIPS, RISC-V and PowerPC ELF, Android and FreeBSD ARM64 ELF, macOS x64
+and ARM64 Mach-O, and iOS ARM64 Mach-O. Linked ELF controls cover MIPS
+o32, n32 and n64 in both byte orders, RV32 and RV64 with soft- and
+double-float ABIs, and big- and little-endian PowerPC32 and PowerPC64
+ELFv1/ELFv2. The ELFv1 control uses GNU PowerPC64 ld.
+
+Code references require a recoverable address in a discovered function.
+Loads through mutable pointer tables can leave the final address unknown,
+including GOT-based accesses in MIPS and PowerPC PIC code. A stripped image
+can also lose function boundaries. Consult `functions_scanned` alongside
+the counts. For MIPS, RISC-V and PowerPC, scan linked ELF images.
+
+Success returns 0. A missing data section, a canceled scan or an incompatible
+memory-safety option returns 1. SDK callers can use
+`neverd_session_data_ptr_scan_json` or Python's `Session.scan_data_pointers()`.
+
 ## Reading a report
 
 The top-level `schema` is `neverd.memory-safety-scan` and `schema_version` is `1`. The report records the image format and architecture, an aggregate verdict, two analyzer summaries and a list of grouped findings. [JSON Schema](memory-safety-scan-v1.schema.json).
@@ -51,7 +87,7 @@ The regression runs against linked binaries on every test host. To rebuild them,
 
 A call to `malloc` can leave its pointer in the ABI return register even in a `void` function. A matching declaration lets the scan distinguish that leak from a function that transfers ownership to its caller. On x64 and ARM64 PE, the scan checks the PDB identity, the procedure's code contribution and the CodeView return type. For an external Mach-O dSYM, the image and companion must have matching architecture and build UUID. A map alone supplies names. With an unresolved return contract, the scan reports `UNKNOWN` for this pattern.
 
-MIPS n32 carries a 32-bit allocator result in the 64-bit `v0` register. Audit uses that ABI rule when checking for a non-null allocation and follows the pointer into a matching release argument. A separate requirement applies when a function saves its return address on the stack. If the lift cannot establish that an external call preserves that saved link, the report marks coverage incomplete and includes the return-target diagnostic. This occurs in GNU n32 binaries that forward one external call's result to the next.
+MIPS n32 carries a 32-bit allocator result in the 64-bit `v0` register. Audit uses that ABI rule when checking for a non-null allocation and follows the pointer into a matching release argument. For a GNU n32 caller that saves its return address on the stack, Audit can prove that the result of a versioned glibc `malloc` is disjoint from that private frame and is passed to the matching `free`, including in a call delay slot. The proof checks the primary GOT entries, their required provider and version, the uses of the saved link, and writes and calls in the scanned image. The modeled bindings are `malloc@GLIBC_2.0` and `free@GLIBC_2.0` from `libc.so.6`. An unresolved binding, possible external write or unproven return address leaves coverage incomplete. The ownership fixtures can be rebuilt with `unittests/safety/fixtures/elf-profiles/build_ownership.py` and Debian's GNU n32 cross tools.
 
 ## Limits and evidence
 

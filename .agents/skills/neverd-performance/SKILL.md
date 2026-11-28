@@ -179,8 +179,13 @@ executed on each path before updating assembly expectations.
      Compare direct loading with the sum of validation and loading. Check the
      full command's P95 before changing startup. [SDK load probe](../../../tools/neverd-bench/sigprof/README.md#isolate-first-sdk-load-on-macos)
    - For warm launches, classify host load independently of launch times and
-     interleave A/B pairs with an identical-binary A/A control. Use the same
-     slow launches to attribute time before, inside, and after `main`.
+     interleave A/B pairs with an identical-binary A/A control on its own two
+     inodes. This keeps both primary SDKs equally exposed. Attribute time before,
+     inside and after `main` on the same slow launches.
+     If the tail precedes `main`, use `--entry-counters` to bound CPU time,
+     runnable wait and the remaining interval on those launches. Check page-ins
+     and bytes read alongside an independent SDK load probe. Segment mapping,
+     signature validation and initializers occupy different parts of loading.
      [Warm launch measurement](../../../tools/neverd-bench/sigprof/README.md#locate-a-warm-macos-launch-tail)
 2. **Same-base A/B.** Build baseline and candidate from the same `origin/dev`
    commit. Use Release, the same compiler, the same dependency snapshot

@@ -872,7 +872,7 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
   std::ofstream(Source) << kJoinedSigningBody;
   const char *Export = std::getenv(kJoinedModelExport);
   unsigned Published = 0, Refused = 0, ModelCases = 0, VerifiedRows = 0,
-           ResolvedPCs = 0;
+           ResolvedPCs = 0, VerifiedIslands = 0;
   std::string Calls, Bodies;
   constexpr auto Word = aarch64::kInsnSize;
   enum Use { Common, Distinct, Local, Returns, Refuse };
@@ -880,21 +880,39 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
     const char *Flag;
     Use Behavior;
   };
-  constexpr Case Cases[] = {
-      {kJoinCommon, Common},           {kJoinDistinct, Distinct},
-      {kJoinCopyPage, Distinct},       {kJoinLocal, Local},
-      {kJoinReturn, Returns},          {kJoinScratch, Distinct},
-      {kJoinPressureStore, Distinct},  {kJoinPressureReturn, Returns},
-      {kJoinPressurePrefix, Distinct}, {kJoinPressureConflict, Refuse},
-      {kJoinPressureScope, Refuse},    {kJoinUnknown, Refuse},
-      {kJoinCrossed, Refuse},          {kJoinSwapped, Refuse},
-      {kJoinOverwrite, Refuse},        {kJoinClobber, Refuse},
-      {kJoinWrongKey, Refuse}};
+  constexpr Case Cases[] = {{kJoinForwardStore, Distinct},
+                            {kJoinForwardReturn, Returns},
+                            {kJoinFarStore, Distinct},
+                            {kJoinFarReturn, Returns},
+                            {kJoinLimitStore, Distinct},
+                            {kJoinForwardScope, Refuse},
+                            {kJoinForwardConflict, Refuse},
+                            {kJoinCommon, Common},
+                            {kJoinDistinct, Distinct},
+                            {kJoinCopyPage, Distinct},
+                            {kJoinLocal, Local},
+                            {kJoinReturn, Returns},
+                            {kJoinScratch, Distinct},
+                            {kJoinPressureStore, Distinct},
+                            {kJoinPressureReturn, Returns},
+                            {kJoinPressurePrefix, Distinct},
+                            {kJoinPressureConflict, Refuse},
+                            {kJoinPressureScope, Refuse},
+                            {kJoinUnknown, Refuse},
+                            {kJoinCrossed, Refuse},
+                            {kJoinSwapped, Refuse},
+                            {kJoinOverwrite, Refuse},
+                            {kJoinClobber, Refuse},
+                            {kJoinWrongKey, Refuse}};
   for (bool KeyB : {false, true})
     for (auto [Flag, Behavior] : Cases) {
-      const bool Pressure = Flag == kJoinPressureStore ||
-                            Flag == kJoinPressureReturn ||
-                            Flag == kJoinPressurePrefix;
+      const bool Forward =
+          Flag == kJoinForwardStore || Flag == kJoinForwardReturn;
+      const bool Far = Flag == kJoinFarStore || Flag == kJoinFarReturn;
+      const bool Limit = Flag == kJoinLimitStore;
+      const bool Pressure =
+          Forward || Far || Limit || Flag == kJoinPressureStore ||
+          Flag == kJoinPressureReturn || Flag == kJoinPressurePrefix;
       SCOPED_TRACE(Flag);
       SCOPED_TRACE(KeyB);
       std::string Input = (Root / kOriginal).string();
@@ -920,12 +938,18 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
         ASSERT_TRUE(Decode.init(*Image));
         llvm::SmallVector<va_t, 2> Signs;
         llvm::SmallVector<va_t, 2> Auths;
+        llvm::SmallVector<std::pair<va_t, va_t>> Branches;
         const bool Split = Pressure && !Original.empty();
         for (size_t Offset = 0; Offset < Body->Bytes.size(); Offset += Word) {
           DecodedInsn I{};
           ASSERT_EQ(Decode.decodeOne(Body->Bytes.data() + Offset, Word,
                                      Owner + Offset, I),
                     int(Word));
+          if (Split && I.Id == AARCH64_INS_B) {
+            const auto &D = I.Raw->detail->aarch64;
+            if (D.op_count == 1 && D.operands[0].type == AARCH64_OP_IMM)
+              Branches.emplace_back(Owner + Offset, va_t(D.operands[0].imm));
+          }
           if (I.Id == (KeyB ? AARCH64_INS_PACIBSPPC : AARCH64_INS_PACIASPPC))
             Signs.push_back(Owner + Offset);
           if (I.Id == (KeyB ? AARCH64_INS_AUTIBSPPC : AARCH64_INS_AUTIASPPC) ||
@@ -940,8 +964,17 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
         }
         ASSERT_EQ(Auths.size(), Split ? 2u : 1u);
         ASSERT_EQ(Signs.size(), Behavior == Common ? 1u : 2u);
-        if (Original.empty())
+        constexpr auto MaxDistance =
+            kAArch64PAuthLRImmMask * kAArch64PAuthLRScale;
+        if (Original.empty()) {
+          if (Forward)
+            EXPECT_LT(Auths.front(), Signs.front());
+          if (Far)
+            EXPECT_GT(Auths.front() - Signs.front(), MaxDistance);
+          if (Limit)
+            EXPECT_EQ(Auths.front() - Signs.front(), MaxDistance);
           Original = Signs;
+        }
         auto Rows = recoverDarwinAArch64Unwind(*Image, *Frame);
         ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
         for (auto PC : Signs) {
@@ -961,6 +994,35 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
             ASSERT_TRUE(Before.Signing.State->SigningPC);
             const auto Signer = *Before.Signing.State->SigningPC;
             Selected.push_back(Signer);
+            const auto Bits =
+                readLE<uint32_t>(Body->Bytes.data() + (Auth - Owner));
+            const auto Distance =
+                ((Bits >> kAArch64PAuthLRImmShift) & kAArch64PAuthLRImmMask) *
+                kAArch64PAuthLRScale;
+            EXPECT_EQ(Auth - Distance, Signer);
+            if (Forward || ((Far || Limit) && Signer == Signs.front())) {
+              EXPECT_TRUE(llvm::is_contained(
+                  Branches,
+                  std::pair(Signer + Word,
+                            Auth + (Behavior == Returns ? Word : 2 * Word))));
+              const auto Incoming = llvm::find_if(
+                  Branches, [&](auto Edge) { return Edge.second == Auth; });
+              ASSERT_NE(Incoming, Branches.end());
+              const auto &Dispatch =
+                  aarch64UnwindRowAt(*Rows, Incoming->first - Owner);
+              ASSERT_TRUE(Dispatch.Signing.State);
+              EXPECT_EQ(Dispatch.Signing.State->SigningPC, Signer);
+              if (Behavior != Returns) {
+                EXPECT_TRUE(llvm::is_contained(
+                    Branches, std::pair(Auth + Word, Incoming->first + Word)));
+                const auto &Resume =
+                    aarch64UnwindRowAt(*Rows, Incoming->first + Word - Owner);
+                ASSERT_TRUE(Resume.Signing.State);
+                EXPECT_EQ(Resume.Signing.State->Kind,
+                          dwarf_eh::AArch64RASigningKind::Unsigned);
+              }
+              ++VerifiedIslands;
+            }
             const auto Plan =
                 prepareDarwinArm64eSystemCaller(Before, Range, Range.End);
             ASSERT_TRUE(Plan);
@@ -1018,10 +1080,20 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
                                   Owner % branch::A64PageBytes)
                         .str();
           Bodies += llvm::formatv(kSigningModelLabel, ModelCases++).str();
-          for (size_t I = 0; I < Body->Bytes.size(); I += Word)
-            Bodies += llvm::formatv(kSigningModelWord,
-                                    readLE<uint32_t>(Body->Bytes.data() + I))
-                          .str();
+          auto Bytes = Body->Bytes;
+          while (!Bytes.empty()) {
+            const auto Bits = readLE<uint32_t>(Bytes.data());
+            size_t Run = Word;
+            while (Run < Bytes.size() &&
+                   readLE<uint32_t>(Bytes.data() + Run) == Bits)
+              Run += Word;
+            if (Run == Word)
+              Bodies += llvm::formatv(kSigningModelWord, Bits).str();
+            else
+              Bodies += llvm::formatv(kSigningModelFill, Run / Word, Word, Bits)
+                            .str();
+            Bytes = Bytes.drop_front(Run);
+          }
         }
       };
       if (Behavior != Refuse)
@@ -1078,6 +1150,7 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
   RecordProperty(kSigningRows, VerifiedRows);
   RecordProperty(kSigningRefusals, Refused);
   RecordProperty(kJoinedSnapshotCases, ResolvedPCs);
+  RecordProperty(kJoinVerifiedIslands, VerifiedIslands);
   RecordProperty(kSigningModelCases, ModelCases);
 #else
   GTEST_SKIP() << kUnavailable;

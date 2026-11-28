@@ -18,6 +18,7 @@
 #include <QComboBox>
 #include <QFile>
 #include <QFileDialog>
+#include <QFont>
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -27,10 +28,15 @@
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QStringTokenizer>
+#include <QStringView>
 #include <QTabWidget>
 #include <QTextBlock>
+#include <QTextCursor>
+#include <QTextDocument>
 #include <QVBoxLayout>
 #include <algorithm>
 
@@ -56,6 +62,11 @@ QString diagnostics(QJsonObject R) {
   }
   return L.join(QStringLiteral("\n"));
 }
+QFont literalFont(QFont Font) {
+  Font.setStyleStrategy(static_cast<QFont::StyleStrategy>(
+      Font.styleStrategy() | QFont::PreferNoShaping));
+  return Font;
+}
 // Measuring and painting reuse the first screen's glyphs. Keep the cache
 // proportional to the viewport even when a single JSON string is very long.
 void cacheFirstScreen(QPlainTextEdit &View) {
@@ -68,29 +79,60 @@ void cacheFirstScreen(QPlainTextEdit &View) {
     if (Block.length() <= Columns)
       Block.layout()->setCacheEnabled(true);
 }
+// An ASCII JSON line occupies one document block. Replacing the text within
+// changed blocks keeps the layouts of matching bytecode, IR and evidence rows.
+bool updateJSONLines(QPlainTextEdit &View, const QString &Text) {
+  auto *Document = View.document();
+  if (Document->isEmpty() || Text.count(u'\n') + 1 != Document->blockCount())
+    return false;
+
+  QTextCursor Edit(Document);
+  Edit.beginEditBlock();
+  auto Block = Document->begin();
+  for (QStringView Line : QStringView(Text).tokenize(u'\n')) {
+    if (Line != Block.text()) {
+      Edit.setPosition(Block.position());
+      Edit.setPosition(Block.position() + Block.length() - 1,
+                       QTextCursor::KeepAnchor);
+      Edit.insertText(Line.toString());
+    }
+    Block = Block.next();
+  }
+  Edit.endEditBlock();
+  Document->setModified(false);
+  View.setTextCursor(QTextCursor(Document));
+  View.horizontalScrollBar()->setValue(View.horizontalScrollBar()->minimum());
+  View.verticalScrollBar()->setValue(View.verticalScrollBar()->minimum());
+  return true;
+}
+void setCodeText(QPlainTextEdit &View, const QString &Text,
+                 bool IsJSON = false) {
+  // Keep normal shaping for Unicode source, names and diagnostics.
+  QFont TextFont = View.font();
+  const bool ASCII = std::all_of(Text.cbegin(), Text.cend(),
+                                 [](QChar C) { return C.unicode() < 0x80; });
+  if (ASCII)
+    TextFont = literalFont(TextFont);
+  if (View.document()->defaultFont() != TextFont)
+    View.document()->setDefaultFont(TextFont);
+  if (!IsJSON || !ASCII || !updateJSONLines(View, Text))
+    View.setPlainText(Text);
+  cacheFirstScreen(View);
+}
 } // namespace
 
 class JVMRecoveryDialog::DetailView final : public QPlainTextEdit {
 public:
-  explicit DetailView(JVMRecoveryDialog &Dialog) : Dialog(Dialog) {}
+  explicit DetailView(JVMRecoveryDialog &Dialog) : Dialog(Dialog) {
+    setUndoRedoEnabled(false);
+  }
 
   void invalidate() { Dirty = true; }
   void prepare() {
     if (!Dirty)
       return;
     Dirty = false;
-    const QString Text = Dialog.detailText(this);
-    // ASCII JSON can display each character literally. Keep the normal font
-    // shaping for reports containing Unicode names, strings or diagnostics.
-    QFont TextFont = font();
-    if (std::all_of(Text.cbegin(), Text.cend(),
-                    [](QChar C) { return C.unicode() < 0x80; }))
-      TextFont.setStyleStrategy(static_cast<QFont::StyleStrategy>(
-          TextFont.styleStrategy() | QFont::PreferNoShaping));
-    if (document()->defaultFont() != TextFont)
-      document()->setDefaultFont(TextFont);
-    setPlainText(Text);
-    cacheFirstScreen(*this);
+    setCodeText(*this, Dialog.detailText(this), /*IsJSON=*/true);
   }
   void setVisible(bool Visible) override {
     // Showing a plain-text editor lays out its document to size the scrollbars.
@@ -184,8 +226,19 @@ JVMRecoveryDialog::JVMRecoveryDialog(const QString &Worker, QWidget *Parent)
   Evidence = pane(new DetailView(*this), tr("Evidence"), "jvmEvidence");
   Mappings = new QListWidget;
   Mappings->setObjectName("jvmMappings");
+  // Each row contains a decimal PC, a hex offset and an ASCII JVM mnemonic.
+  Mappings->setFont(literalFont(Mappings->font()));
   Mappings->setAccessibleName(tr("Bytecode mappings"));
-  Split->addWidget(Tabs);
+  // The splitter asks for its children's minimum sizes on each page switch.
+  // Let a layout cache the tab widget's size hints between geometry changes.
+  auto *TabPane = new QWidget;
+  TabPane->setSizePolicy(Tabs->sizePolicy());
+  // The inherited window background lets Qt clip ancestor paints at the pane.
+  TabPane->setAutoFillBackground(true);
+  auto *TabLayout = new QVBoxLayout(TabPane);
+  TabLayout->setContentsMargins(0, 0, 0, 0);
+  TabLayout->addWidget(Tabs);
+  Split->addWidget(TabPane);
   Split->addWidget(Mappings);
   Split->setStretchFactor(0, 3);
   Split->setStretchFactor(1, 1);
@@ -389,8 +442,7 @@ void JVMRecoveryDialog::select(bool ChooseTab) {
   for (auto *View : {Bytecode, IR, Evidence})
     View->invalidate();
   QSignalBlocker Guard(Java);
-  Java->setPlainText(F["source"].toString());
-  cacheFirstScreen(*Java);
+  setCodeText(*Java, F["source"].toString());
   const auto Instructions = F["instructions"].toArray();
   Mappings->clear();
   for (auto V : Instructions) {

@@ -1079,6 +1079,16 @@ TEST(FunctionDiscoveryAlignment, DataPointersRejectMisalignedAArch64Entries) {
 
   ASSERT_EQ(Img.Symbols.size(), 1u);
   EXPECT_EQ(Img.Symbols.front().Addr, 0x1008u);
+
+  Img.Format = BinaryFormat::MachO;
+  Img.Symbols.clear();
+  Img.Segments.back().Name = section_names::macho::LinkeditSeg;
+  scanDataFuncPointers(Img);
+  EXPECT_TRUE(Img.Symbols.empty());
+  Img.Segments.back().Name = section_names::macho::DataConstSeg;
+  scanDataFuncPointers(Img);
+  ASSERT_EQ(Img.Symbols.size(), 1u);
+  EXPECT_EQ(Img.Symbols.front().Addr, 0x1008u);
 }
 
 TEST(FunctionDiscoveryAlignment, RawDataPointerCandidatesRemainGuesses) {

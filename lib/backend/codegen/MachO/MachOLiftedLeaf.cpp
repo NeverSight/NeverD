@@ -1092,7 +1092,9 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                                        Auth.routeEntry(Index) *
                                            aarch64::kInsnSize);
         const auto At = Site.signingExpansionSite() - Start;
-        InstalledOffset.Sites.append(Auth.insertedWords(), At);
+        Site.forEachSigningExpansion([&](va_t PC, unsigned Words) {
+          InstalledOffset.Sites.append(Words, PC - Start);
+        });
         if (Auth.RestoreSource)
           InstalledOffset.Restores.emplace_back(At + aarch64::kInsnSize,
                                                 Auth.restoreWords() *
@@ -1263,9 +1265,31 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                   After.slice(At - Prefix, Prefix) !=
                       Source.slice(Offset - Prefix, Prefix))
                 return refuse(kLeafCode);
-              if (machOPCRelativeAuthentication(Operation->Id, Begin + At,
-                                                Sign) !=
-                  readLE<uint32_t>(After.data() + At))
+              const auto BranchTo = [&](va_t From, va_t To) {
+                const auto Offset = From - Owner->second;
+                const int64_t Delta = int64_t(To - From);
+                return rangeInBounds(Offset, Size, Emitted.size()) &&
+                       branch::isA64BranchDisplacement(Delta) &&
+                       readLE<uint32_t>(Emitted.data() + Offset) ==
+                           branch::withA64BranchDisplacement(aarch64::kB_Op,
+                                                             Delta);
+              };
+              const auto Actual = Route.IslandWord
+                                      ? Sign + Route.IslandWord * Size
+                                      : Begin + At;
+              if (Route.IslandWord &&
+                  (!BranchTo(Begin + At, Actual) ||
+                   !BranchTo(Sign + Size,
+                             Owner->second + InstalledOffset(Route.Signer +
+                                                             Size - Start)) ||
+                   (!Auth.Returns &&
+                    !BranchTo(Actual + Size, Begin + At + Size))))
+                return refuse(kDirectTarget);
+              if (!rangeInBounds(Actual - Owner->second, Size,
+                                 Emitted.size()) ||
+                  machOPCRelativeAuthentication(Operation->Id, Actual, Sign) !=
+                      readLE<uint32_t>(Emitted.data() +
+                                       (Actual - Owner->second)))
                 return refuse(kSourceAddressTarget);
               if (!Auth.Returns && Index + 1 != Auth.Routes.size()) {
                 const auto *Bytes = After.data() + At + Size;

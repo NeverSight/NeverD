@@ -6,6 +6,7 @@
 
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/loader/MachO/MachOMetadataPointer.h"
 #include "neverd/object/SectionNames.h"
@@ -898,8 +899,8 @@ ParseResult parseCompactUnwind(const BinaryImage &Img,
       if (Text && TextEnd > Entry.CodeRange.Begin &&
           TextEnd - Text->VA == Text->Size &&
           Entry.CodeRange.Begin % kARM64InstructionBytes == 0 &&
-          Img.isCodeRange(Entry.CodeRange.Begin,
-                          TextEnd - Entry.CodeRange.Begin) &&
+          machOFrameDataInCode(Img, Entry.CodeRange.Begin,
+                               TextEnd - Entry.CodeRange.Begin) &&
           (StartsStubs || !Img.isCodeAddress(TextEnd)))
         Entry.CodeRange.End = TextEnd;
     }

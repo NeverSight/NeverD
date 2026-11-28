@@ -16,6 +16,7 @@
 
 #include "neverd/backend/IntegerMemorySource.h"
 #include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
+#include "neverd/backend/RISCV/RISCVFloatingSource.h"
 #include "neverd/backend/llvm/LLVMSyscallAsm.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -144,6 +145,46 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     auto *Right = Builder.CreateBitCast(getVar(Op.Inputs[2], Builder), Bytes);
     return Builder.CreateBitCast(Builder.CreateAdd(Left, Right),
                                  sizeToType(Op.Output.Size));
+  }
+  if (IC == I::RISCVFloating || IC == I::RISCVFPControl) {
+    const unsigned XLen = getTargetRegInfo(TargetArch).PointerSize;
+    if (!isRISCV(TargetArch) || PortableBody || Op.NumInputs < 2 ||
+        !Op.Inputs[1].isConst())
+      return refuseUnhandled();
+    const uint64_t Selector = Op.Inputs[1].ConstVal;
+    auto Asm = riscv::fpAssembly(IC, Selector, XLen, '$');
+    if (!Asm || Op.NumInputs != 2 + Asm->Count ||
+        Op.Output.Size != riscv::fpBytes(Asm->Result, XLen))
+      return refuseUnhandled();
+    auto Type = [&](riscv::FPValue V) -> llvm::Type * {
+      if (V == riscv::FPValue::S)
+        return Builder.getFloatTy();
+      if (V == riscv::FPValue::D)
+        return Builder.getDoubleTy();
+      return Builder.getIntNTy(8 * riscv::fpBytes(V, XLen));
+    };
+    llvm::SmallVector<llvm::Value *, 3> Args;
+    llvm::SmallVector<llvm::Type *, 3> Types;
+    for (unsigned J = 0; J < Asm->Count; ++J) {
+      const unsigned Bytes = riscv::fpBytes(Asm->Inputs[J], XLen);
+      if (Op.Inputs[2 + J].Size != Bytes)
+        return refuseUnhandled();
+      llvm::Value *V = getVar(Op.Inputs[2 + J], Builder);
+      if (V->getType()->isPointerTy())
+        V = Builder.CreatePtrToInt(V, Builder.getIntNTy(Bytes * 8));
+      Types.push_back(Type(Asm->Inputs[J]));
+      Args.push_back(Builder.CreateBitCast(V, Types.back()));
+    }
+    auto *FT = llvm::FunctionType::get(Type(Asm->Result), Types, false);
+    auto *Call = Builder.CreateCall(
+        llvm::InlineAsm::get(FT, Asm->Text, Asm->Constraints, true), Args);
+    Call->setMetadata(
+        "neverd.riscv.fp",
+        llvm::MDNode::get(
+            *Ctx,
+            {llvm::ConstantAsMetadata::get(Builder.getInt32(unsigned(IC))),
+             llvm::ConstantAsMetadata::get(Builder.getInt32(Selector))}));
+    return Builder.CreateBitCast(Call, Builder.getIntNTy(Op.Output.Size * 8));
   }
   if (const auto *Read = riscv::cycleRead(IC)) {
     const unsigned Bytes = getTargetRegInfo(TargetArch).PointerSize;

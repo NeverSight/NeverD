@@ -2011,6 +2011,11 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
+    "neverd_session_data_ptr_scan_json", "const char *",
+    ["neverd_session_t", "neverd_cancel_probe_fn", "void *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_sanitize_status_name",
     "const char *",
     ["neverd_sanitize_status_t"],

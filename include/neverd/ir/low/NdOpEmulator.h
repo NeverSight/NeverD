@@ -98,6 +98,9 @@ public:
 
   void setRegister(uint64_t RegOff, uint64_t Value);
 
+  /// Seed a concrete hart's floating environment for scalar F/D execution.
+  void setRISCVFCSR(uint8_t Value) { RISCVFCSR = Value; }
+  std::optional<uint8_t> getRISCVFCSR() const { return RISCVFCSR; }
   /// Sample the guest's 64-bit cycle counter once per CSR read. An absent
   /// sample means the counter is unavailable at the current privilege level.
   void setRISCVCycleReader(std::function<std::optional<uint64_t>()> Read) {
@@ -348,6 +351,7 @@ private:
   uint8_t X87PayloadKnown = 0;
   std::vector<uint64_t> CallPreservedRegs;
   std::function<std::optional<uint64_t>()> RISCVCycleReader;
+  std::optional<uint8_t> RISCVFCSR;
 
   uint64_t readOperand(const NdVar &Operand) const;
   bool executeMIPSScalar(const LowOp &Op);
@@ -406,6 +410,7 @@ private:
   bool executeBool(const LowOp &Op);
   bool executeMisc(const LowOp &Op);
   bool executeIntrinsic(const LowOp &Op);
+  bool executeRISCVFloating(const LowOp &Op);
   bool executeX86Crypto(const LowOp &Op);
   bool executeX86FourSource(const LowOp &Op);
   bool executeX86FPArith(const LowOp &Op, bool AlternateAddSubtract = false);

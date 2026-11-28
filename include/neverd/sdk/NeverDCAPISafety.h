@@ -86,6 +86,14 @@ NEVERD_API const char *
 neverd_session_scan_json(neverd_session_t Sess,
                          const neverd_scan_options *Options);
 
+/// Count recovered instructions referring to the image's data section and
+/// relocated pointers stored there that point into non-executable data.
+/// Returns owned neverd.data-ptr-scan v1 JSON. NULL on failure or cancellation
+/// (see the session error). Cancel and Context are borrowed until return.
+NEVERD_API const char *
+neverd_session_data_ptr_scan_json(neverd_session_t Sess,
+                                  neverd_cancel_probe_fn Cancel, void *Context);
+
 #ifdef __cplusplus
 }
 #endif

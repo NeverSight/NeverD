@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, Sequence, TypeVar, cast
 
 from .abi import (
+    CancelProbeCallback,
     EventType,
     UNWIND_FRAME_QUERY,
     VirtualAddress,
@@ -1402,6 +1403,19 @@ class Session:
             or report.get("schema_version") != 1
         ):
             raise NeverDError("invalid memory-safety scan report")
+        return report
+
+    def scan_data_pointers(self) -> Mapping[str, object]:
+        """Count code references and initialized data pointers in the data section."""
+        report = self._json(
+            "neverd_session_data_ptr_scan_json", "data-pointer scan", CancelProbeCallback(), None
+        )
+        if (
+            not isinstance(report, Mapping)
+            or report.get("schema") != "neverd.data-ptr-scan"
+            or report.get("schema_version") != 1
+        ):
+            raise NeverDError("invalid data-pointer scan report")
         return report
 
     def hex_dump(self, address: int, size: int) -> str:

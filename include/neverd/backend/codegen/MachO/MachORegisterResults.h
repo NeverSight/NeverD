@@ -93,6 +93,10 @@ enum class MachOAddressForm { Single, PagePair, Expanded };
 struct MachOSigningRoute {
   va_t Signer;
   llvm::SmallVector<va_t, 1> Branches;
+  /// Word offset of a distant route's authenticator from its installed signer.
+  unsigned IslandWord = 0;
+  /// Added words at the signer, including its shared fallthrough branch once.
+  unsigned IslandWords = 0;
 };
 
 /// An AUT or authenticated return which must consume the installed signing PC.
@@ -141,8 +145,19 @@ struct MachOLiftedSourceAddress {
                                            : Authentication->Instruction;
   }
 
+  template <typename Fn> void forEachSigningExpansion(Fn Visit) const {
+    if (!Authentication)
+      return;
+    if (const auto Words = Authentication->insertedWords())
+      Visit(signingExpansionSite(), Words);
+    for (const auto &Route : Authentication->Routes)
+      if (Route.IslandWords)
+        Visit(Route.Signer, Route.IslandWords);
+  }
+
   bool expandsAuthentication() const {
-    return Authentication && Authentication->insertedWords() != 0;
+    return Authentication &&
+           (Authentication->insertedWords() || !Authentication->Routes.empty());
   }
 };
 
