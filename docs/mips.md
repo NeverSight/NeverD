@@ -377,6 +377,14 @@ replacement section to that size with MIPS16 NOPs. The function symbol
 keeps its shorter size. The original object and final link layout are
 reused, including the original linker's alignment bytes after the function.
 
+The r17 PIC upgrade keeps the original direct C caller and startup objects
+and assembles the replacement from compiler-generated text. It covers 26
+ABI, ISA and byte-order combinations across R2 and R6. For compressed
+in-place replacements, the assembler reserves the original input section
+extent after the new function's size directive. This preserves the PIC
+symbol flags and the linker's alignment bytes outside the original function.
+The section placement uses the replacement at its natural size.
+
 When the original build uses a static library in a partial link, keep the
 result of that `ld.lld -r` step as the manifest object. Rebuild it from the
 same inputs and archive order for the replacement. The CI partial links use
