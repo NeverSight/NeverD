@@ -67,12 +67,14 @@ def verify_ownership(cli, directory, name, temporary):
         assert report["verdict"] == "SAFE" and report["coverage_complete"], (name, report)
         assert audit["scanned"] == 1 and audit["unknown"] == 0 and not report["findings"], name
 
-    for variant, verdicts in (("unreleased", {"UNSAFE"}), ("free-null", {"UNKNOWN", "UNSAFE"})):
-        # A call to free(NULL) cannot discharge the original allocation.
+    for variant in ("unreleased", "free-null"):
         report = scan(variant, "--analyzer=audit")
-        assert report["coverage_complete"] and report["verdict"] in verdicts, (name, report)
-        assert [(f["function"], f["class"]) for f in observations(report, "audit")] == [
-            ("sample", "heap_leak")
+        assert report["coverage_complete"] and report["verdict"] == "UNSAFE", (name, report)
+        audit = report["analyzers"]["audit"]
+        assert audit["scanned"] == 1 and audit["unknown"] == 0, (name, report)
+        assert [(f["function"], f["name"], f["class"], f["verdict"])
+                for f in observations(report, "audit")] == [
+            ("sample", "malloc", "heap_leak", "UNSAFE")
         ], (name, report)
 
     # Publication to a global requires a stronger write-set proof. A change
