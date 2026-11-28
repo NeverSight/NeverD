@@ -37,6 +37,8 @@ to that attempt. Ordinary exports perform no debugger queries.
 The [manifest probe](../../../../scripts/qemu_xbegin_probe.py) stages the
 unresolved instruction in a fresh diskless KVM guest and produces the complete
 request from its first stop. It uses the same debugger capture and V6 validator.
+Use `--x64-xbegin-observation` to reuse either capture file with a new selection
+that includes the observed instruction. The target request owns its dispatch.
 An entry selection can keep automatic RTM checks at other sites. The observed
 site contributes the vector 6 step and has no RTM abort successor of its own.
 

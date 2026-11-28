@@ -3440,7 +3440,8 @@ class RepositoryCapabilityTests(unittest.TestCase):
                       "neverd_devirtualize_machine_source_v11",
                       "neverd_devirtualize_source_v12",
                       "neverd_devirtualize_machine_source_v12",
-                      "neverd_x64_continuation_source_v1"],
+                      "neverd_x64_continuation_source_v1",
+                      "neverd_x64_continuation_source_with_observation_v1"],
                 "python": [],
                 "cli": [
                     "neverd decompile --devirtualize",
@@ -3470,6 +3471,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                     "neverd decompile --vm-no-control-discovery",
                     "neverd decompile --vm-source-abi",
                     "neverd decompile --x64-continuation",
+                    "neverd decompile --x64-xbegin-observation",
                     "neverd decompile --continuation-report",
                 ],
                 "json": [],

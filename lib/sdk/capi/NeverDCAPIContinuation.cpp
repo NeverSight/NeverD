@@ -75,17 +75,30 @@ extern "C" const char *
 neverd_x64_continuation_source_v1(neverd_session_t Sess,
                                   const char *RequestJSON, size_t RequestSize,
                                   int UseLLVM, const char **ManifestJSON) {
+  return neverd_x64_continuation_source_with_observation_v1(
+      Sess, RequestJSON, RequestSize, nullptr, 0, UseLLVM, ManifestJSON);
+}
+
+extern "C" const char *neverd_x64_continuation_source_with_observation_v1(
+    neverd_session_t Sess, const char *RequestJSON, size_t RequestSize,
+    const char *ObservationJSON, size_t ObservationSize, int UseLLVM,
+    const char **ManifestJSON) {
   return exportSource(
       Sess, RequestJSON, RequestSize,
       neverd::limits::pipeline::kX64ContinuationRequestBytes, ManifestJSON,
-      [UseLLVM](auto &Session, llvm::StringRef Text)
+      [=](auto &Session, llvm::StringRef Text)
           -> llvm::Expected<neverd::X64ContinuationExport> {
         if (UseLLVM != 0 && UseLLVM != 1)
           return llvm::createStringError(
               llvm::errc::invalid_argument,
               "x64 continuation requires a valid C route");
-        return neverd::exportX64Continuation(Session.Img, Text, bool(UseLLVM),
-                                             Session.decompileDebug());
+        if ((ObservationJSON == nullptr) != (ObservationSize == 0))
+          return llvm::createStringError(
+              llvm::errc::invalid_argument,
+              "expected a size-delimited XBEGIN observation");
+        return neverd::exportX64ContinuationWithObservation(
+            Session.Img, Text, bool(UseLLVM), Session.decompileDebug(),
+            {ObservationJSON, ObservationSize});
       });
 }
 
