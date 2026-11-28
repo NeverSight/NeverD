@@ -937,7 +937,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
   }
   const auto *Bytes = Image.readVA(Start, Size);
   const auto Data = Image.DataInCode.lower_bound(Start);
-  if (!Bytes || !Image.isCodeRange(Start, Size) ||
+  const auto Embedded = machOFrameDataInCode(Image, Start, Size);
+  if (!Bytes || !Embedded ||
       (Data != Image.DataInCode.end() && *Data - Start < Size))
     return fail(kCode);
   // A linker may coalesce identical compact recipes across several functions.
@@ -1006,7 +1007,10 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
     const size_t End = *Boundary;
     const uint64_t Offset = Index * neverd::aarch64::kInsnSize;
     DecodedInsn I{};
-    if (Decode.decodeOne(Bytes + Offset, Size - Offset, Start + Offset, I) !=
+    if (!machODataInCodeRanges(*Embedded, Start + Offset,
+                               neverd::aarch64::kInsnSize)
+             .empty() ||
+        Decode.decodeOne(Bytes + Offset, Size - Offset, Start + Offset, I) !=
             int(neverd::aarch64::kInsnSize) ||
         !I.Raw || !I.Raw->detail)
       return fail(kCode);

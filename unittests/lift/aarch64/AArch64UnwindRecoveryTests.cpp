@@ -347,6 +347,40 @@ TEST(AArch64ImplicitUnwind,
   EXPECT_FALSE(Same(1, 2));
 }
 
+TEST(AArch64ImplicitUnwind, SkipsDeclaredDataOnlyOnProvenEdges) {
+  constexpr auto Word = sizeof(uint32_t);
+  Frame F{ExplicitSignA, BranchToSharedAuth, ExplicitSignB, ExplicitSignB, Ret};
+  for (size_t Budget : {size_t(3), size_t(5)}) {
+    const AArch64UnwindRecoveryLimits Limits{.MaxInstructions = Budget};
+    for (size_t Inset : {size_t(0), size_t(1)}) {
+      F.Image.MachODataInCode = {
+          {2 * Word + Inset, 4 * Word - Inset, llvm::MachO::DICE_KIND_DATA}};
+      EXPECT_EQ(F.at(2, Limits).Status, Status::Unknown);
+      EXPECT_EQ(F.at(3, Limits).Status, Status::Unknown);
+      const auto Signed = F.at(4, Limits);
+      ASSERT_TRUE(Signed.State);
+      EXPECT_EQ(Signed.State->SigningPC, 0u);
+      auto *Branch = F.Image.Segments.front().Data.data() + Word;
+      for (auto Op : {Skip, Nop}) {
+        writeLE<uint32_t>(Branch, Op);
+        EXPECT_EQ(F.at(4, Limits).Status, Status::Unsupported);
+      }
+      writeLE<uint32_t>(Branch, BranchToSharedAuth);
+    }
+  }
+  Frame Compact{ExplicitSignA, BranchToSharedAuth, ExplicitSignB, ExplicitSignB,
+                Ret};
+  Compact.useCompact(macho_unwind::kARM64ModeFrameless);
+  Compact.Image.MachODataInCode = F.Image.MachODataInCode;
+  auto Rows = recoverDarwinAArch64Unwind(Compact.Image, Compact.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  const auto &Resume = aarch64UnwindRowAt(*Rows, 4 * Word).Signing;
+  ASSERT_TRUE(Resume.State);
+  EXPECT_EQ(Resume.State->SigningPC, 0u);
+  F.addHandler(0, 1, 3);
+  EXPECT_EQ(F.at(4).Status, Status::Unsupported);
+}
+
 TEST(AArch64ImplicitUnwind, SavesSurviveCallsButNotOverlappingWrites) {
   Frame F{SignB, Push, Call, Pop, AuthB, Ret};
   F.saveRow(2);

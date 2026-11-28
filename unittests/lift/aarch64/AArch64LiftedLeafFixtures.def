@@ -912,6 +912,7 @@ A64_LEAF_TEXT(kDataLinker, "-Wl,-ld_classic,-data_in_code_info")
 A64_LEAF_TEXT(kPrefixControl, "prefix-control")
 A64_LEAF_TEXT(kMixedEntry, "-Wl,-e,_leaf_sum")
 A64_LEAF_TEXT(kPrefixRecords, "embedded_records_after_header_growth")
+A64_LEAF_TEXT(kMixedUnwindFrames, "verified_mixed_unwind_frames")
 A64_LEAF_TEXT(kMixedRecords, "published_data_in_code_records")
 A64_LEAF_TEXT(kMixedLeaves, R"asm(
 .text

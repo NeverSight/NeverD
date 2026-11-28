@@ -7,6 +7,7 @@
 #include "AArch64DarwinFixtureDriver.h"
 #include "gtest/gtest.h"
 
+#include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
@@ -1643,6 +1644,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       ExecutionPaths.push_back(NextPath);
     }
     if (Embedded || LiteralWidths) {
+      unsigned MixedUnwindFrames = 0;
       for (const auto &[Generation, Path] : llvm::enumerate(ExecutionPaths)) {
         auto Loaded = Reader->load(Path);
         ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
@@ -1652,6 +1654,22 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
           continue;
         }
         ASSERT_EQ(Records.size(), ExpectedData.size() * (Generation + 1));
+        if (Preamble == kMixedOracle) {
+          ASSERT_FALSE(ExpectedData.empty());
+          const auto Begin = Records[Generation * ExpectedData.size()].Begin;
+          const auto *Frame = Loaded->ExceptionMetadata.findFunction(Begin);
+          ASSERT_NE(Frame, nullptr);
+          auto Rows = recoverDarwinAArch64Unwind(*Loaded, *Frame);
+          ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+          const auto Base = Frame->CodeRange.Begin;
+          EXPECT_FALSE(aarch64UnwindRowAt(*Rows, Begin - Base).Signing.State);
+          const auto &Resume =
+              aarch64UnwindRowAt(*Rows, Records.back().End - Base).Signing;
+          ASSERT_TRUE(Resume.State);
+          EXPECT_EQ(Resume.State->Kind,
+                    dwarf_eh::AArch64RASigningKind::Unsigned);
+          ++MixedUnwindFrames;
+        }
         for (const auto &[I, R] : llvm::enumerate(Records)) {
           const auto &Source = ExpectedData[I % ExpectedData.size()];
           if (const auto It = DefaultStartsByRecord.find(Source.Begin);
@@ -1678,6 +1696,8 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         if (Generation + 1 == ExecutionPaths.size())
           testing::Test::RecordProperty(kMixedRecords, int(Records.size()));
       }
+      if (Preamble == kMixedOracle)
+        testing::Test::RecordProperty(kMixedUnwindFrames, MixedUnwindFrames);
     }
     for (const auto &Path : ExecutionPaths) {
       if (Preamble == kSplitData || Preamble == kSplitSegments) {

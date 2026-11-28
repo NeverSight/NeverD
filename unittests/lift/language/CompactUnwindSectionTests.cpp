@@ -259,9 +259,9 @@ std::vector<uint8_t> buildBigEndianRawRegularInfo() {
 
 TEST(CompactUnwindSection, TerminalLookupByteIsNotAnArm64Instruction) {
   using namespace fixture;
-  enum class Tail { Padding, PartialText, Stubs, OtherCode };
-  for (const auto Kind :
-       {Tail::Padding, Tail::PartialText, Tail::Stubs, Tail::OtherCode}) {
+  enum class Tail { Padding, PartialText, Stubs, OtherCode, Embedded };
+  for (const auto Kind : {Tail::Padding, Tail::PartialText, Tail::Stubs,
+                          Tail::OtherCode, Tail::Embedded}) {
     const bool Partial = Kind == Tail::PartialText;
     auto Img = makeImage(Arch::AArch64);
     Section Text;
@@ -273,6 +273,11 @@ TEST(CompactUnwindSection, TerminalLookupByteIsNotAnArm64Instruction) {
     Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
     Text.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
     Img.Sections.push_back(Text);
+    if (Kind == Tail::Embedded) {
+      const auto Pool = kImageBase + kTerminalCallerStart + sizeof(uint32_t);
+      Img.MachODataInCode.push_back(
+          {Pool, Pool + sizeof(uint32_t), llvm::MachO::DICE_KIND_DATA});
+    }
     if (Kind == Tail::Stubs || Kind == Tail::OtherCode) {
       auto &Next = Img.Sections.emplace_back(Text);
       Next.Name = section_names::macho::Stubs;

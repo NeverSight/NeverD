@@ -2793,7 +2793,11 @@ An ambiguous incoming edge or an incompatible scope blocks publication.
 
 Instruction-based unwind recovery budgets the reachable words of a large
 sparse frame. A gap after an unconditional branch has unknown signing state
-until a proven incoming edge establishes it again.
+until a proven incoming edge establishes it again. A Darwin frame may span a
+declared data-in-code range when every reached instruction stays in code owned
+by the frame. An edge into a literal pool, including a partially overlapping
+instruction, fails the proof. The compact-unwind reader uses the same storage
+proof when the lookup sentinel extends one byte past the instruction section.
 
 A compact saved-register frame can use a PC-relative authenticated return
 without materializing the signing address as data. The publisher keeps its

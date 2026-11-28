@@ -57,6 +57,38 @@ static std::optional<va_t> interiorOwner(const BinaryImage &Image, va_t VA,
   return Owner;
 }
 
+std::optional<llvm::ArrayRef<MachODataInCodeRange>>
+machOFrameDataInCode(const BinaryImage &Image, va_t Start, uint64_t Size) {
+  const auto Embedded =
+      machODataInCodeRanges(Image.MachODataInCode, Start, Size);
+  if (Embedded.empty()) {
+    if (Image.isCodeRange(Start, Size))
+      return Embedded;
+    return std::nullopt;
+  }
+  if (Size > InvalidVA - Start || !Image.isCodeAddress(Start))
+    return std::nullopt;
+  const auto End = Start + Size;
+  const auto *Owner = Image.getSectionFor(Start);
+  if (Image.getSectionFor(End - 1) != Owner ||
+      Image.getSegmentFor(End - 1) != Image.getSegmentFor(Start))
+    return std::nullopt;
+  va_t Begin = Start;
+  const auto CodeThrough = [&](va_t Limit) {
+    return Begin == Limit ||
+           (Begin < Limit && Image.getSectionFor(Begin) == Owner &&
+            Image.isCodeRange(Begin, Limit - Begin));
+  };
+  for (const auto &R : Embedded) {
+    if (R.End > End || !CodeThrough(R.Begin))
+      return std::nullopt;
+    Begin = R.End;
+  }
+  if (!CodeThrough(End))
+    return std::nullopt;
+  return Embedded;
+}
+
 std::optional<va_t> machOInteriorAddressOwner(const BinaryImage &Image,
                                               va_t VA) {
   constexpr auto Word = aarch64::kInsnSize;
