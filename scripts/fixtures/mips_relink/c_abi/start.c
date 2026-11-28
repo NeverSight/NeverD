@@ -1,5 +1,9 @@
 #include "call.h"
 
+#ifdef CHECK_SIZE_LOOP
+const unsigned weights[8] = {3, 5, 7, 11, 13, 17, 19, 23};
+#endif
+
 __attribute__((noreturn)) void finish(int value);
 
 #ifdef CHECK_LARGE_FRAME

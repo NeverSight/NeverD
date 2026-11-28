@@ -23,7 +23,7 @@ ABIS = {
 }
 MODES = ("section", "inplace")
 SAVED_ASSEMBLY_FLAGS = ("-fintegrated-as", "-save-temps=obj")
-PRODUCT_VERSION = 15
+PRODUCT_VERSION = 16
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -362,7 +362,7 @@ def assemble_startup(args, build, profile):
          "-mattr=+noabicalls", "-o", build / "start.o", "-"], source=startup(profile))
 
 
-def build_c_call_objects(args, build, profile, replacement_clang=None, replacement_flags=()):
+def build_c_call_objects(args, build, profile, replacement_clang=None, replacement_flags=(), *, size_loop=False):
     sources = FIXTURES / "c_abi"
     abi = {"o32": "32", "n32": "n32", "n64": "64"}[profile.abi]
     flags = ["--target=" + profile.triple, "-march=" + profile.cpu, "-mabi=" + abi,
@@ -372,6 +372,8 @@ def build_c_call_objects(args, build, profile, replacement_clang=None, replaceme
         flags.append("-mips16" if profile.isa == "mips16" else "-mmicromips")
     if profile.large_frame:
         flags.append("-DCHECK_LARGE_FRAME")
+    if size_loop:
+        flags.append("-DCHECK_SIZE_LOOP")
     if profile.saved_assembly:
         flags.extend(SAVED_ASSEMBLY_FLAGS)
     assemble_startup(args, build, profile)
@@ -693,7 +695,8 @@ def qualify(args):
             build = Path(temp) / name
             build.mkdir()
             if profile.c_call:
-                objects = build_c_call_objects(args, build, profile)
+                size_loop = not profile.large_frame and profile.optimization in ("O2", "Os")
+                objects = build_c_call_objects(args, build, profile, size_loop=size_loop)
             elif profile.linkage:
                 objects = build_linkage_objects(args, build, profile, run)
             else:
