@@ -868,6 +868,8 @@ bool configureAnalysisSession(neverd_session_t Sess);
 int runPlugins(const char *Argv0);
 int runLift(neverd_session_t Sess);
 int runDecompile(neverd_session_t Sess);
+std::optional<uint64_t> resolveDecompileEntry(neverd_session_t Sess,
+                                              const std::string &Name);
 int runContinuation(neverd_session_t Sess);
 int runPatch(neverd_session_t Sess);
 int runRelinkPatch(llvm::StringRef Output);

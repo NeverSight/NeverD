@@ -111,6 +111,20 @@ NEVERD_API const char *neverd_x64_continuation_source_with_observation_v1(
     const char *ObservationJSON, size_t ObservationSize, int UseLLVM,
     const char **ManifestJSON);
 
+/// Select a named C entry using the V6 paged return_stack_events contract.
+/// RequestJSON declares the CPU profile, MXCSR mask and paging width. An
+/// optional entries list must include Entry. Each generated entry accepts the
+/// guest state, the embedding caller's X64PagedExecution and a step budget.
+/// The manifest names the entry and resume functions. Retain the same working
+/// RAM and execution context across stops. CALL, RET and audited tail jumps
+/// return instruction events even when their destination is selected. Guest
+/// faults, backing stops and privilege transitions retain their paged status.
+/// The general continuation exporter accepts return_stack_events for multiple
+/// explicit paged entries. Source and ManifestJSON have the same ownership.
+NEVERD_API const char *neverd_x64_paged_return_entry_source_v1(
+    neverd_session_t Sess, neverd_va_t Entry, const char *RequestJSON,
+    size_t RequestSize, int UseLLVM, const char **ManifestJSON);
+
 /// Export an i386 image's selected protected 16/32-bit original instructions.
 /// RequestJSON declares profile protected-legacy-v1 and instructions containing
 /// address (linear uint32), code_bits (16/32) and size (1..15). The executor's

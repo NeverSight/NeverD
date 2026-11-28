@@ -854,7 +854,8 @@ cl::opt<bool>
 
 cl::opt<std::string> X64Continuation(
     "x64-continuation",
-    cl::desc("Export explicit x64 state C using a declared request JSON"),
+    cl::desc("Export explicit x64 state C from a request JSON; --func selects "
+             "one paged return-stack entry"),
     cl::value_desc("path"), cl::sub(DecompileCmd));
 cl::opt<std::string> X64XbeginObservation(
     "x64-xbegin-observation",

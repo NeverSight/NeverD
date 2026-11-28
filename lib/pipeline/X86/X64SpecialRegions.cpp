@@ -29,6 +29,7 @@
 #include "neverd/pipeline/X64ContinuationExport.h"
 #include "neverd/support/SortedSearch.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Errc.h"
@@ -61,7 +62,7 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const analysis::X64ContinuationSourceOptions &SourceOptions,
     unsigned CalleeDepth, bool FollowDirectJumps, bool NativeRtmAbortRegions,
     const X64RtmAbortSelection &RtmSteps, bool NativeRtmRegions,
-    DebugContext *Debug) {
+    DebugContext *Debug, bool CollectUnprovedJumps) {
   X64SpecialRegionSelection Selection;
   const bool FollowImmediateAborts =
       NativeRtmAbortRegions || RtmSteps.Kind != X64RtmAbortSelection::Off;
@@ -86,7 +87,8 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     return Selection;
   }
   Decoder Decode;
-  if ((CalleeDepth || FollowDirectJumps) && !Decode.init(Image))
+  if ((CalleeDepth || FollowDirectJumps || CollectUnprovedJumps) &&
+      !Decode.init(Image))
     return invalid("selected CFG transfer decoder initialization failed");
   const uint64_t MaxInstructions = SourceOptions.MaxInstructions;
   std::map<unsigned, std::set<va_t>> Frontier;
@@ -153,7 +155,10 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
         PCs.push_back(hex(Address));
         if (Unique.size() > MaxInstructions)
           return invalid("selected CFG instruction budget exceeded");
-        if (Depth < CalleeDepth || FollowDirectJumps) {
+        const bool CheckUnproved =
+            CollectUnprovedJumps &&
+            llvm::is_contained(Audit.UnprovenReturns, Address);
+        if (Depth < CalleeDepth || FollowDirectJumps || CheckUnproved) {
           // Rejected bodies retain audited instruction starts but no LowFunc.
           // Use the decoder's original direct-call classification, never an
           // optimized CALL or a register constant propagated across VMEXIT.
@@ -167,6 +172,10 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
                                        Instruction))
             return invalid("selected transfer decoding failed at " +
                            hex(Address));
+          // The audit can also name a RET or an aliased frame read. Only an
+          // original JMP with this diagnostic needs a separate transfer stop.
+          if (CheckUnproved && Instruction.Id == X86_INS_JMP)
+            Selection.UnprovedJumps.insert(Address);
           if (Depth < CalleeDepth) {
             const va_t Target = Decode.directCallTarget(Instruction);
             if (Target != InvalidVA && !Image.findImportAt(Target) &&

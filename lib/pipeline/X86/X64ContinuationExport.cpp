@@ -90,6 +90,7 @@ struct Request {
   unsigned CalleeDepth = 0;
   bool DirectDispatch = false;
   bool FunctionContext = false;
+  bool ReturnStackEvents = false;
   bool PauseCallSites = false;
   std::vector<X64FunctionCallInterface> FunctionCalls;
 };
@@ -131,6 +132,7 @@ llvm::Expected<Request> readRequest(llvm::json::Value &Binding, va_t ImageBase,
                                               "native_hyperv_hypercall_entry",
                                               "follow_internal_calls",
                                               "function_context",
+                                              kX64ReturnStackEvents,
                                               "function_calls",
                                               "pause_call_sites",
                                               "follow_direct_jumps",
@@ -238,6 +240,7 @@ llvm::Expected<Request> readRequest(llvm::json::Value &Binding, va_t ImageBase,
       {"notify_cr8_writes", &Options.NotifyCr8Writes},
       {"follow_internal_calls", &Result.FollowInternalCalls},
       {"function_context", &Result.FunctionContext},
+      {kX64ReturnStackEvents, &Result.ReturnStackEvents},
       {"pause_call_sites", &Result.PauseCallSites},
       {"follow_direct_jumps", &Result.FollowDirectJumps}};
   if (const auto *Value = Object->get("uiret_restores_uif")) {
@@ -342,6 +345,12 @@ llvm::Expected<Request> readRequest(llvm::json::Value &Binding, va_t ImageBase,
   Result.Entries = Object->get("entries") != nullptr;
   if (Object->get("follow_direct_jumps") && !Result.Entries)
     return invalid("follow_direct_jumps requires entries");
+  if (Result.ReturnStackEvents &&
+      (!Result.Entries || !Options.PagedMemory || Options.ScheduledEvents ||
+       Result.FunctionContext))
+    return invalid("return_stack_events requires paged entries with the "
+                   "instruction exit protocol; function_context and "
+                   "scheduled_events use separate completion protocols");
   if (Result.FunctionContext &&
       (!Result.Entries || !Result.FollowInternalCalls ||
        Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
@@ -701,9 +710,11 @@ exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                                               Debug, {});
 }
 
-llvm::Expected<X64ContinuationExport> exportX64ContinuationWithObservation(
-    const BinaryImage &Image, llvm::StringRef RequestJSON, bool UseLLVM,
-    DebugContext *Debug, llvm::StringRef XbeginObservationJSON) {
+static llvm::Expected<X64ContinuationExport>
+exportContinuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
+                   bool UseLLVM, DebugContext *Debug,
+                   llvm::StringRef XbeginObservationJSON,
+                   std::optional<va_t> ReturnStackEntry) {
   constexpr auto Limit = limits::pipeline::kX64ContinuationRequestBytes;
   if (RequestJSON.empty() || RequestJSON.size() > Limit ||
       XbeginObservationJSON.size() > Limit)
@@ -712,6 +723,14 @@ llvm::Expected<X64ContinuationExport> exportX64ContinuationWithObservation(
   auto Binding = llvm::json::parse(RequestJSON);
   if (!Binding)
     return Binding.takeError();
+  if (ReturnStackEntry) {
+    auto *Object = Binding->getAsObject();
+    if (!Object)
+      return invalid("expected a paged return entry request object");
+    Object->try_emplace("paged_memory", true);
+    Object->try_emplace(kX64ReturnStackEvents, true);
+    Object->try_emplace("entries", llvm::json::Array{hex(*ReturnStackEntry)});
+  }
   auto Request = readRequest(*Binding, Image.Base, XbeginObservationJSON);
   if (!Request)
     return Request.takeError();
@@ -720,17 +739,29 @@ llvm::Expected<X64ContinuationExport> exportX64ContinuationWithObservation(
     return invalid("bound x64 continuation request exceeds the request limit");
   if (Image.Arch != Arch::X64)
     return invalid("x64 continuation source requires an x86-64 image");
+  if (ReturnStackEntry) {
+    if (!Request->ReturnStackEvents ||
+        !llvm::is_contained(Request->Addresses, *ReturnStackEntry))
+      return invalid("the requested return stack entry must be enabled and "
+                     "included in the selected entries");
+    Request->Addresses = {*ReturnStackEntry};
+    (*Binding->getAsObject())["entries"] =
+        llvm::json::Array{hex(*ReturnStackEntry)};
+  }
   llvm::json::Array Regions;
+  std::set<va_t> TransferJumps;
   std::vector<va_t> Addresses = Request->Addresses;
   if (Request->Entries) {
     auto Selection = selectX64SpecialRegions(
         Image, Addresses, Request->Options, Request->CalleeDepth,
         Request->FollowDirectJumps, Request->NativeRtmAbortRegions,
-        Request->RtmSteps, Request->NativeRtmRegions, Debug);
+        Request->RtmSteps, Request->NativeRtmRegions, Debug,
+        Request->ReturnStackEvents);
     if (!Selection)
       return Selection.takeError();
     Addresses = std::move(Selection->Addresses);
     Regions = std::move(Selection->Regions);
+    TransferJumps = std::move(Selection->UnprovedJumps);
   }
   auto Units = buildX64ContinuationSource(Image, Addresses, Request->Options);
   if (!Units)
@@ -991,6 +1022,7 @@ typedef struct neverd_x64_event_v1 {
   }
   llvm::json::Array FunctionCalls;
   llvm::json::Array FunctionCallSites;
+  std::optional<llvm::json::Object> ReturnStackContract;
   const auto FunctionNames =
       x64FunctionContextNames(Request->Options.PagedDebug);
   CallSitePauses.declare(OS);
@@ -1000,7 +1032,11 @@ typedef struct neverd_x64_event_v1 {
                              Request->Options.PagedDebug);
     emitX64PagedDriver(OS, *Units, Request->Options,
                        Request->FollowInternalCalls, Request->FunctionContext,
-                       CallSitePauses);
+                       CallSitePauses,
+                       Request->ReturnStackEvents ? &TransferJumps : nullptr);
+    if (Request->ReturnStackEvents)
+      ReturnStackContract =
+          emitX64ReturnStackEntries(OS, Request->Addresses, TransferJumps);
   } else {
     if (Request->FunctionContext)
       emitX64FunctionContext(OS, Version, Request->Addresses);
@@ -1050,7 +1086,8 @@ typedef struct neverd_x64_event_v1 {
       {"profile", Profile},
       {"interface", "explicit-machine-state"},
       {"environment_driver",
-       Request->Options.PagedMemory
+       Request->ReturnStackEvents ? kX64ReturnStackResume
+       : Request->Options.PagedMemory
            ? "neverd_x64_run_paged_v6"
            : "neverd_x64_run_v" + std::to_string(Version)},
       {"event_delivery", Request->Options.EventDelivery},
@@ -1092,7 +1129,9 @@ typedef struct neverd_x64_event_v1 {
              "when active; recursive fault delivery"
            : "explicit full-state callback; separately bounded"},
       {"call_return_policy",
-       Request->FollowInternalCalls ? "follow-selected-targets" : "stop"},
+       Request->FollowInternalCalls && !Request->ReturnStackEvents
+           ? "follow-selected-targets"
+           : "stop"},
       {"coverage",
        "selected instruction regions; external transfers and native or context "
        "boundaries require the environment"},
@@ -1337,6 +1376,8 @@ typedef struct neverd_x64_event_v1 {
                    "environment invocation per pair"}};
   if (Request->NativeRtmRegions)
     Report["native_rtm_environment"] = std::move(Rtm);
+  if (ReturnStackContract)
+    Report[kX64ReturnStackEvents] = std::move(*ReturnStackContract);
   if (Request->FunctionContext)
     Report["function_context"] = llvm::json::Object{
         {"context_type", FunctionNames.Context},
@@ -1521,5 +1562,18 @@ typedef struct neverd_x64_event_v1 {
   llvm::raw_string_ostream(Result.Manifest)
       << llvm::formatv("{0:2}\n", llvm::json::Value(std::move(Report)));
   return Result;
+}
+llvm::Expected<X64ContinuationExport> exportX64ContinuationWithObservation(
+    const BinaryImage &Image, llvm::StringRef RequestJSON, bool UseLLVM,
+    DebugContext *Debug, llvm::StringRef XbeginObservationJSON) {
+  return exportContinuation(Image, RequestJSON, UseLLVM, Debug,
+                            XbeginObservationJSON, std::nullopt);
+}
+
+llvm::Expected<X64ContinuationExport>
+exportX64PagedReturnEntry(const BinaryImage &Image, uint64_t Entry,
+                          llvm::StringRef RequestJSON, bool UseLLVM,
+                          DebugContext *Debug) {
+  return exportContinuation(Image, RequestJSON, UseLLVM, Debug, {}, Entry);
 }
 } // namespace neverd
