@@ -90,7 +90,6 @@ struct Request {
   unsigned CalleeDepth = 0;
   bool DirectDispatch = false;
   bool FunctionContext = false;
-  bool ReturnStackEvents = false;
   bool PauseCallSites = false;
   std::vector<X64FunctionCallInterface> FunctionCalls;
 };
@@ -240,7 +239,7 @@ llvm::Expected<Request> readRequest(llvm::json::Value &Binding, va_t ImageBase,
       {"notify_cr8_writes", &Options.NotifyCr8Writes},
       {"follow_internal_calls", &Result.FollowInternalCalls},
       {"function_context", &Result.FunctionContext},
-      {kX64ReturnStackEvents, &Result.ReturnStackEvents},
+      {kX64ReturnStackEvents, &Options.PagedReturnStackEvents},
       {"pause_call_sites", &Result.PauseCallSites},
       {"follow_direct_jumps", &Result.FollowDirectJumps}};
   if (const auto *Value = Object->get("uiret_restores_uif")) {
@@ -345,7 +344,7 @@ llvm::Expected<Request> readRequest(llvm::json::Value &Binding, va_t ImageBase,
   Result.Entries = Object->get("entries") != nullptr;
   if (Object->get("follow_direct_jumps") && !Result.Entries)
     return invalid("follow_direct_jumps requires entries");
-  if (Result.ReturnStackEvents &&
+  if (Options.PagedReturnStackEvents &&
       (!Result.Entries || !Options.PagedMemory || Options.ScheduledEvents ||
        Result.FunctionContext))
     return invalid("return_stack_events requires paged entries with the "
@@ -740,7 +739,7 @@ exportContinuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
   if (Image.Arch != Arch::X64)
     return invalid("x64 continuation source requires an x86-64 image");
   if (ReturnStackEntry) {
-    if (!Request->ReturnStackEvents ||
+    if (!Request->Options.PagedReturnStackEvents ||
         !llvm::is_contained(Request->Addresses, *ReturnStackEntry))
       return invalid("the requested return stack entry must be enabled and "
                      "included in the selected entries");
@@ -756,7 +755,7 @@ exportContinuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
         Image, Addresses, Request->Options, Request->CalleeDepth,
         Request->FollowDirectJumps, Request->NativeRtmAbortRegions,
         Request->RtmSteps, Request->NativeRtmRegions, Debug,
-        Request->ReturnStackEvents);
+        Request->Options.PagedReturnStackEvents);
     if (!Selection)
       return Selection.takeError();
     Addresses = std::move(Selection->Addresses);
@@ -1030,11 +1029,11 @@ typedef struct neverd_x64_event_v1 {
     if (Request->FunctionContext)
       emitX64FunctionContext(OS, Version, Request->Addresses,
                              Request->Options.PagedDebug);
-    emitX64PagedDriver(OS, *Units, Request->Options,
-                       Request->FollowInternalCalls, Request->FunctionContext,
-                       CallSitePauses,
-                       Request->ReturnStackEvents ? &TransferJumps : nullptr);
-    if (Request->ReturnStackEvents)
+    emitX64PagedDriver(
+        OS, *Units, Request->Options, Request->FollowInternalCalls,
+        Request->FunctionContext, CallSitePauses,
+        Request->Options.PagedReturnStackEvents ? &TransferJumps : nullptr);
+    if (Request->Options.PagedReturnStackEvents)
       ReturnStackContract =
           emitX64ReturnStackEntries(OS, Request->Addresses, TransferJumps);
   } else {
@@ -1086,7 +1085,7 @@ typedef struct neverd_x64_event_v1 {
       {"profile", Profile},
       {"interface", "explicit-machine-state"},
       {"environment_driver",
-       Request->ReturnStackEvents ? kX64ReturnStackResume
+       Request->Options.PagedReturnStackEvents ? kX64ReturnStackResume
        : Request->Options.PagedMemory
            ? "neverd_x64_run_paged_v6"
            : "neverd_x64_run_v" + std::to_string(Version)},
@@ -1129,7 +1128,7 @@ typedef struct neverd_x64_event_v1 {
              "when active; recursive fault delivery"
            : "explicit full-state callback; separately bounded"},
       {"call_return_policy",
-       Request->FollowInternalCalls && !Request->ReturnStackEvents
+       Request->FollowInternalCalls && !Request->Options.PagedReturnStackEvents
            ? "follow-selected-targets"
            : "stop"},
       {"coverage",

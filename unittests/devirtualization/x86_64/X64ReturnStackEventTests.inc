@@ -181,3 +181,86 @@ STOP(native,4,0)
     EXPECT_EQ(Count, 9u);
   }
 }
+
+TEST_F(X64ContinuationExportTest, PagedReturnEntryQualifiesRegisterEpilogue) {
+  using namespace neverd::analysis::detail;
+  using K = X64PagedRegisterTransfer;
+  using R = X64PagedRegisterResult;
+  static_assert(x64PagedRegisterResult(K::SysretQ, 0, 3, ~0ULL, 48) ==
+                R::UndefinedOpcode);
+  static_assert(x64PagedRegisterResult(K::SysretQ, 1, 3, 0, 48) ==
+                R::GeneralProtection);
+  static_assert(x64PagedRegisterResult(K::SwapGS, 0, 0, 0, 48) == R::Complete);
+  static_assert(x64PagedRegisterResult(K::SwapGS, 1, 1, 0, 48) ==
+                R::GeneralProtection);
+  static_assert(x64PagedRegisterResult(K::SysretQ, 1, 0, (1ULL << 47) - 1,
+                                       48) == R::Complete);
+  static_assert(x64PagedRegisterResult(K::SysretQ, 1, 0, 1ULL << 47, 48) ==
+                R::Native);
+  static_assert(x64PagedRegisterResult(K::SysretQ, 1, 0, -(1ULL << 47), 48) ==
+                R::Complete);
+  static_assert(x64PagedRegisterResult(K::SysretQ, 1, 0, 1ULL << 47, 57) ==
+                R::Complete);
+  static_assert(x64PagedRegisterResult(K::SysretQ, 1, 0, 1ULL << 56, 57) ==
+                R::Native);
+  load({0x0f, 0x01, 0xf8, 0x48, 0x0f, 0x07}, {{0x1000, 6}});
+  const auto Options = request(R"("entries":[4096],"paged_memory":true)");
+  for (bool LLVM : {false, true}) {
+    const char *Report = nullptr;
+    for (bool Events : {false, true}) {
+      auto Source =
+          Events ? take(neverd_x64_paged_return_entry_source_v1(
+                       Session, 0x1000, Options.data(), Options.size(), LLVM,
+                       &Report))
+                 : take(neverd_x64_continuation_source_v1(
+                       Session, Options.data(), Options.size(), LLVM, &Report));
+      auto Parsed = llvm::json::parse(take(Report));
+      ASSERT_FALSE(Source.empty()) << take(neverd_last_error(Session));
+      ASSERT_TRUE(bool(Parsed));
+      EXPECT_EQ(Parsed->getAsObject()->getInteger("total"), 2);
+      EXPECT_EQ(Parsed->getAsObject()->getInteger("native_requests"),
+                Events ? 0 : 2);
+      if (!Events)
+        continue;
+      // Prove the real generated bodies stage the register transition without
+      // observing the guest stack, including for an arbitrary stack pointer.
+      const auto File = tmpFile("register-return.c");
+      const auto IR = tmpFile("register-return.ll");
+      std::ofstream(File) << Source << R"C(
+int proof_register_transfer(uint64_t rsp, uint64_t gs, uint64_t kernel) {
+    neverd_x64_state_v6 s={0};
+    s.PC=0x1000; s.RFlags=0x246; s.MXCSR=0x1f80;
+    s.CS.Selector=8; s.CS.Attributes=0xa09b;
+    s.SS.Selector=16; s.SS.Attributes=0xc093;
+    s.GSBase=gs; s.KernelGSBase=kernel; s.GPR[4]=rsp;
+    s.STAR=0x20ULL<<48; s.GPR[1]=0x7800; s.GPR[11]=0x246;
+    if (neverd_paged_neverd_step_v6_1000((uint8_t *)&s,0)!=24 ||
+        s.PC!=0x1003 || s.GSBase!=kernel || s.KernelGSBase!=gs) return 1;
+    return neverd_paged_neverd_step_v6_1003((uint8_t *)&s,0)!=24 ||
+        s.PC!=0x7800 || s.RFlags!=0x246 || s.GPR[4]!=rsp ||
+        s.CS.Selector!=0x33 || s.SS.Selector!=0x2b ||
+        s.GSBase!=kernel || s.KernelGSBase!=gs;
+}
+)C";
+      const auto Built =
+          exec(NEVERD_TEST_CLANG,
+               {"-std=c11", "-O2", "-mllvm", "-inline-threshold=10000", "-S",
+                "-emit-llvm", File.string(), "-o", IR.string()});
+      ASSERT_TRUE(Built.ok()) << Built.err;
+      llvm::LLVMContext Context;
+      llvm::SMDiagnostic Diagnostic;
+      const auto Module = llvm::parseIRFile(IR.string(), Diagnostic, Context);
+      ASSERT_NE(Module, nullptr);
+      const auto *F = Module->getFunction("proof_register_transfer");
+      ASSERT_NE(F, nullptr);
+      ASSERT_EQ(F->size(), 1u);
+      const auto *Ret =
+          llvm::dyn_cast<llvm::ReturnInst>(F->front().getTerminator());
+      ASSERT_NE(Ret, nullptr);
+      const auto *Value =
+          llvm::dyn_cast<llvm::ConstantInt>(Ret->getReturnValue());
+      ASSERT_NE(Value, nullptr);
+      EXPECT_TRUE(Value->isZero());
+    }
+  }
+}

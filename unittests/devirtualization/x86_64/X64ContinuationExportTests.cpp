@@ -7,6 +7,7 @@
 /// Execute exported C and verify the real SDK and CLI retain exact boundaries.
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/analysis/arch/x86_64/X64PagedRegisterTransfer.h"
 #include "../../HostCompiler.h"
 #include "../../HostCpu.h"
 #include "../../lift/NeverDLiftFixture.h"
