@@ -5082,6 +5082,29 @@ if(LLD_EXEC)
   list(APPEND ELF_EXECUTABLES ${frame_argument_obj}
        ${frame_argument_callers_obj} ${frame_argument_exe})
 
+  # An AArch64 executable whose FDEs give each function exception metadata:
+  # a machine-outlined sequence reads its caller's frame through x29.
+  set(outlined_frame_a64_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_outlined_caller_frame_a64.s")
+  set(outlined_frame_a64_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_outlined_caller_frame_a64_exe.o")
+  set(outlined_frame_a64_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_outlined_caller_frame_a64.exe")
+  add_custom_command(
+    OUTPUT ${outlined_frame_a64_obj}
+    COMMAND ${CLANG_EXEC} -target aarch64-linux-gnu -c
+            ${outlined_frame_a64_src} -o ${outlined_frame_a64_obj}
+    DEPENDS ${outlined_frame_a64_src}
+    COMMENT "Assembling AArch64 outlined caller-frame fixture")
+  add_custom_command(
+    OUTPUT ${outlined_frame_a64_exe}
+    COMMAND ${LLD_EXEC} -static -e ocf_caller -o ${outlined_frame_a64_exe}
+            ${outlined_frame_a64_obj}
+    DEPENDS ${outlined_frame_a64_obj}
+    COMMENT "Linking AArch64 outlined caller-frame fixture")
+  list(APPEND ELF_EXECUTABLES ${outlined_frame_a64_obj}
+       ${outlined_frame_a64_exe})
+
   # Two static executables whose build ID authenticates their DWARF: one
   # built with line tables only, which records no signature, and one built
   # with -g, which records every one, `void dfs_none(void)` included.

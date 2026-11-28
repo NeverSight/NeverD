@@ -13104,7 +13104,14 @@ Its root is the entry stack pointer, a temporary no statement assigns, or a
 callee-saved register: a register the convention does not preserve holds an
 argument or what the caller left there, never the frame (`[r9+8]` in Go code
 named the slot of another argument), while an EH funclet's EBP, R11 or X19 may
-hold its parent's frame.
+hold its parent's frame. Where the EH runtime calls no funclets (the
+Itanium, compact unwind, ARM EHABI and Go models of `ExceptionModel`), a
+frame pointer that a function reads without setting it is the parent's only
+inside an EH clause body printed in its parent. Anywhere else it is the
+caller's: a machine-outlined sequence or a cold part split from its
+function reads its caller's memory through it, and that read fails closed
+instead of naming a slot of its own (`ldur w0, [x29, #-0xa8]` read a
+`var_mA8` that nothing assigned).
 Failed proofs retain ordinary address expressions instead of inventing frame
 members, and each query observes the current aliases and frame layout.
 Typed pointer offsets and frame overlays also reject unrepresentable signed

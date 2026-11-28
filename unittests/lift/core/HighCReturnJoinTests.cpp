@@ -458,6 +458,23 @@ TEST(HighCReturnJoin, EntryVectorAndPAuthModifierAreTheRegister) {
   EXPECT_EQ(Address.find("mov %0, x16"), std::string::npos) << Address;
 }
 
+// A machine-outlined sequence sets up no frame, so x29 is still its
+// caller's frame pointer and `ldur w0, [x29, #-8]` reads the caller's slot.
+// Its FDE gives it exception metadata, which makes that slot no local of its
+// own that nothing assigns: the read fails closed on the incoming register.
+TEST(HighCReturnJoin, AnOutlinedSequenceReadsItsCallersFrame) {
+  if (!std::filesystem::exists(std::filesystem::path(TEST_OBJ_DIR) /
+                               "test_outlined_caller_frame_a64.exe"))
+    GTEST_SKIP() << "ld.lld did not link test_outlined_caller_frame_a64.exe";
+  const std::string Source = decompileFixtureFunction(
+      "test_outlined_caller_frame_a64.exe", "ocf_outlined");
+  const std::string Text = definitionBody(Source, "ocf_outlined");
+  ASSERT_FALSE(Text.empty()) << Source;
+  EXPECT_EQ(Text.find("var_m8"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("incoming register has no definition"), std::string::npos)
+      << Text;
+}
+
 // A deferred value prints as itself where its availability flag is the
 // constant 1 on every path to that observation. The other arm, a join, and
 // a loop header reached again after the flag is cleared stay traps.

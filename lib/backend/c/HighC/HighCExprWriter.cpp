@@ -8022,6 +8022,19 @@ HighCWriter::frameDisplacement(const HighExpr &E, bool RequireKnownRoot) const {
       if (CurrentFunc->ExceptionMetadata && Cur->Var.Kind == MedVar::Reg &&
           Cur->Var.RenameTag < 0 &&
           Cur->Var.RegOff == getTargetRegInfo(Opts.TheArch).FramePointer) {
+        // An EH clause body printed inside its parent, or a funclet a
+        // Windows EH runtime enters with its parent's frame pointer, reads
+        // the parent's slots through it.  Where the runtime calls no
+        // funclets (the Itanium, compact unwind, ARM EHABI and Go models), a
+        // function that reads a frame pointer it never set holds its
+        // caller's (a machine-outlined sequence, a cold part split from its
+        // function): what it reads through it is the caller's memory, which
+        // no slot of its own holds.
+        const ExceptionModel Model =
+            getExceptionEncodingModel(CurrentFunc->ExceptionMetadata->Encoding);
+        if (!InEHClauseBody && Model != ExceptionModel::WindowsTable &&
+            Model != ExceptionModel::WindowsRegistration)
+          return std::nullopt;
         const int64_t Slot =
             static_cast<int64_t>(getTargetRegInfo(Opts.TheArch).PointerSize);
         // The x86 registration frame is restored explicitly by shared MedIR.

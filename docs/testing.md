@@ -8998,6 +8998,14 @@ bionic's ptrace request an int.
 `CSymbolNames.ACallToTheFirstOfSameNamedDefinitionsTakesItsPrototype` gives a
 call to the first of two same-named definitions only that definition's
 parameters.
+`CDisplayFrameRecord.TheEntryFramePointerIsTheParentsOnlyInFunclets` names
+no own slot through a frame pointer the function never set unless its EH
+model calls funclets (the Windows x64 unwind data does; DWARF, compact
+unwind, ARM EHABI and Go do not).
+`HighCReturnJoin.AnOutlinedSequenceReadsItsCallersFrame` decompiles
+`test_outlined_caller_frame_a64.exe`, whose `ocf_outlined` sets up no frame
+and reads `[x29, #-8]`: the read fails closed on the incoming register
+instead of naming a local `var_m8` that nothing assigns.
 `X86_64_DebugParams.CallsPassTheFrameAddressTheirArgumentHolds` decompiles
 `test_debug_frame_argument.exe`, whose callers set the first argument to the
 address of their buffer on both paths to one call: each call to a callee whose

@@ -19,6 +19,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/loader/ExceptionEncoding.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Support/FileSystem.h"
@@ -507,7 +508,10 @@ TEST(CDisplayFrameRecord, AliasAndParentFrameRebasesCannotOverflow) {
 TEST(CDisplayFrameRecord,
      DisplayFrameNeighborsDoNotOverflowOrAuthorizeStorage) {
   FrameDisplacementCase C;
+  // A Windows x64 funclet is entered with its parent's frame pointer, whose
+  // display neighbors this walk names.
   C.Function.ExceptionMetadata.emplace();
+  C.Function.ExceptionMetadata->Encoding = ExceptionEncoding::X64UnwindV1;
   MedVar FP = C.Stack->Var;
   FP.RegOff = getTargetRegInfo(Arch::X64).FramePointer;
   const auto Root = HighExpr::makeVar(FP, C.Stack->Type);
@@ -519,6 +523,29 @@ TEST(CDisplayFrameRecord,
     EXPECT_EQ(C.Writer.frameDisplacement(*Address), Offset);
     EXPECT_FALSE(C.Writer.certifiedFrameStorageDisplacement(*Address));
   }
+}
+
+// Only an EH runtime that calls funclets enters code with its parent's frame
+// pointer.  Where the table lands in the function itself (DWARF, compact
+// unwind, ARM EHABI) or Go calls no handler, a function that reads a frame
+// pointer it never set holds its caller's, and no slot of its own is there.
+TEST(CDisplayFrameRecord, TheEntryFramePointerIsTheParentsOnlyInFunclets) {
+  FrameDisplacementCase C;
+  MedVar FP = C.Stack->Var;
+  FP.RegOff = getTargetRegInfo(Arch::X64).FramePointer;
+  const auto Address =
+      C.step(NdOp::INT_SUB, HighExpr::makeVar(FP, C.Stack->Type), 8);
+  C.Writer.FrameSlots[-8].Name = "slot";
+  C.Function.ExceptionMetadata.emplace();
+  for (ExceptionEncoding Encoding :
+       {ExceptionEncoding::DwarfFDE, ExceptionEncoding::CompactUnwind,
+        ExceptionEncoding::ARMEHABIGeneric, ExceptionEncoding::GoFuncTable}) {
+    C.Function.ExceptionMetadata->Encoding = Encoding;
+    EXPECT_FALSE(C.Writer.frameDisplacement(*Address))
+        << getExceptionEncodingName(Encoding);
+  }
+  C.Function.ExceptionMetadata->Encoding = ExceptionEncoding::X64UnwindV1;
+  EXPECT_EQ(C.Writer.frameDisplacement(*Address), -8);
 }
 
 TEST(CDisplayFrameRecord, OffsetWalkStopsAtTheExistingBound) {
