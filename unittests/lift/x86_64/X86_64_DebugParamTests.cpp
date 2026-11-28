@@ -132,3 +132,27 @@ TEST_F(X86_64_DebugParams, LLVMCNamesArgumentsWhereTheConventionPassesThem) {
             std::string::npos)
       << Source;
 }
+
+// Both paths to each call in test_debug_frame_argument_callers.s set the
+// first argument to the address of the caller's buffer, so the argument
+// register is that frame address and no assignment of its own forwards it
+// into the call.  The callees' -g DWARF declares their parameters.  The call
+// passes the address as every other use of it prints it, as an integer to
+// dfa_sum's `long` and as a pointer to dfa_first's `const char *`, not a
+// local nothing assigns.
+TEST_F(X86_64_DebugParams, CallsPassTheFrameAddressTheirArgumentHolds) {
+  const fs::path Exe = fs::path(TEST_OBJ_DIR) / "test_debug_frame_argument.exe";
+  if (!fs::exists(Exe))
+    GTEST_SKIP() << "ld.lld did not link " << Exe.string();
+  const auto CFile = tmpFile("debug_frame_argument.c");
+  const auto R =
+      exec(ndBin(), {"decompile", "-o", CFile.string(), Exe.string()});
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  std::ifstream Ifs(CFile);
+  const std::string Source((std::istreambuf_iterator<char>(Ifs)),
+                           std::istreambuf_iterator<char>());
+  for (const char *Expected : {"dfa_sum((uintptr_t)&stack_storage.var_m18, ",
+                               "dfa_first((int8_t*)&stack_storage.var_m18, "})
+    EXPECT_NE(Source.find(Expected), std::string::npos) << Expected << "\n"
+                                                        << Source;
+}

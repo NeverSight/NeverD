@@ -5048,6 +5048,40 @@ if(LLD_EXEC)
   list(APPEND ELF_EXECUTABLES ${fixed_const_index_x64_obj}
                               ${fixed_const_index_x64_exe})
 
+  # A static executable whose build ID authenticates the -g DWARF of two
+  # callees, called with the address of their caller's buffer merged from
+  # two paths into the argument register.
+  set(frame_argument_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_debug_frame_argument.c")
+  set(frame_argument_callers_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_debug_frame_argument_callers.s")
+  set(frame_argument_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_debug_frame_argument_exe.o")
+  set(frame_argument_callers_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_debug_frame_argument_callers.o")
+  set(frame_argument_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_debug_frame_argument.exe")
+  add_custom_command(
+    OUTPUT ${frame_argument_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -O1 -fno-pic -g -c
+            ${frame_argument_src} -o ${frame_argument_obj}
+    DEPENDS ${frame_argument_src}
+    COMMENT "Compiling x86-64 debug frame argument callees")
+  add_custom_command(
+    OUTPUT ${frame_argument_callers_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -c
+            ${frame_argument_callers_src} -o ${frame_argument_callers_obj}
+    DEPENDS ${frame_argument_callers_src}
+    COMMENT "Assembling x86-64 debug frame argument callers")
+  add_custom_command(
+    OUTPUT ${frame_argument_exe}
+    COMMAND ${LLD_EXEC} --build-id -static -e _start -o ${frame_argument_exe}
+            ${frame_argument_callers_obj} ${frame_argument_obj}
+    DEPENDS ${frame_argument_obj} ${frame_argument_callers_obj}
+    COMMENT "Linking x86-64 debug frame argument fixture")
+  list(APPEND ELF_EXECUTABLES ${frame_argument_obj}
+       ${frame_argument_callers_obj} ${frame_argument_exe})
+
   # Functions that never return, and callers whose compiler knew it, linked
   # and stripped.
   set(noreturn_calls_x64_src

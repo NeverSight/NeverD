@@ -746,6 +746,16 @@ public:
   bool isCallerFrameEntry(const HighExpr &E) const;
   std::string unknownVarUse(const HighExpr &E, const std::string &Name,
                             const std::string &RawName);
+  /// What variable \p E prints as where it names a place instead of a value
+  /// of its own: a catch object its handler reaches, the frame an EH funclet
+  /// or a registration handler is given, the stack pointer the function was
+  /// entered with, or an address in the frame storage (a frame alias, whose
+  /// assignments print nothing, or a storage slot). None where it prints as
+  /// itself. Every printer of a variable asks this before it prints a name.
+  std::optional<std::string> placeVarText(const HighExpr &E, int ParentPrec);
+  /// The address of the named frame slot variable \p E holds, where the
+  /// function uses that slot as memory; none otherwise.
+  std::optional<std::string> frameSlotVarText(const HighExpr &E);
   /// Pointer-sized Load chain used as a callee: `*(void **)p` / `**(void
   /// ***)p`. A loaded vtable slot `Load(Load(obj)+imm)` is
   /// `*(void **)((uintptr_t)(*(void **)(obj)) + imm)`, not integer soup.

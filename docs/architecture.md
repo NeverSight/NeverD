@@ -13103,7 +13103,11 @@ Addresses print as the member holding them: `(uintptr_t)&stack_storage.var_m48`,
 `(CStringT*)&stack_storage.var_m48` for a pointer parameter, or
 `&stack_storage.var_m48[8]` inside an array. Frame aliases print the address
 they hold at each use, so a frame pointer joined across a try's normal and
-exceptional edges is one address and never a variable. A 16-byte integer that
+exceptional edges is one address and never a variable. So does every other
+printer of a variable, a call argument typed by its callee's declaration and
+the object of a virtual call included: each asks `placeVarText` and
+`frameSlotVarText` what the variable names before it prints its name, as
+`exprStr` does. A 16-byte integer that
 no member may hold at its alignment is one copy of its bytes:
 `__builtin_memset(&stack_storage.var_m50, 0, 16)`, or a `__builtin_memcpy` from
 a fresh carrier of its exact width. A member keeps the slot's name from before
