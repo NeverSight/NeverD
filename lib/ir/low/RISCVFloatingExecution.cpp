@@ -51,11 +51,29 @@ APFloat widened(APFloat X) {
 // for a fused product with a tiny addend.
 template <typename WideResult>
 Answer rounded(const APFloat &Value, APFloat::opStatus Status,
-               WideResult Wide) {
+               APFloat::roundingMode Mode, WideResult Wide) {
   unsigned Flags = accrued(Status);
-  if (Status == APFloat::opInexact && Value.isLargest() &&
-      ilogb(Wide()) > APFloat::semanticsMaxExponent(Value.getSemantics()))
-    Flags |= OF;
+  const auto &Sem = Value.getSemantics();
+  if (Status == APFloat::opInexact) {
+    if (Value.isLargest() &&
+        ilogb(Wide(APFloat::rmTowardZero)) > APFloat::semanticsMaxExponent(Sem))
+      Flags |= OF;
+    if (Value.isSmallestNormalized()) {
+      // Tininess after rounding uses target precision with an unbounded
+      // exponent. Scale the boundary to one so its lower neighbor is normal.
+      // At their midpoint both nearest modes choose one. Truncating the wide
+      // intermediate preserves which side of that midpoint selects one.
+      const bool Nearest = Mode == APFloat::rmNearestTiesToEven ||
+                           Mode == APFloat::rmNearestTiesToAway;
+      APFloat X =
+          scalbn(Wide(Nearest ? APFloat::rmTowardZero : Mode),
+                 -APFloat::semanticsMinExponent(Sem), APFloat::rmTowardZero);
+      bool Loses = false;
+      X.convert(Sem, Mode, &Loses);
+      if (ilogb(X) < 0)
+        Flags |= UF;
+    }
+  }
   return {canonical(Value), Flags};
 }
 
@@ -139,7 +157,8 @@ Answer evaluate(const FPForm &F, llvm::ArrayRef<uint64_t> In, unsigned RM) {
   if (F.Operation == Op::Convert) {
     bool Loses = false;
     const auto S = A.convert(semantics(F.Result), Mode, &Loses);
-    return rounded(A, S, [&] { return Value(0); });
+    return rounded(A, S, Mode,
+                   [&](APFloat::roundingMode) { return widened(Value(0)); });
   }
   if (F.Operation == Op::ToW || F.Operation == Op::ToWU ||
       F.Operation == Op::ToL || F.Operation == Op::ToLU) {
@@ -160,9 +179,9 @@ Answer evaluate(const FPForm &F, llvm::ArrayRef<uint64_t> In, unsigned RM) {
   APFloat B = Value(1);
   const auto Binary = [&](auto Calculate) {
     const auto Status = (A.*Calculate)(B, Mode);
-    return rounded(A, Status, [&] {
+    return rounded(A, Status, Mode, [&](APFloat::roundingMode Rounding) {
       APFloat X = widened(Value(0));
-      (X.*Calculate)(widened(B), APFloat::rmTowardZero);
+      (X.*Calculate)(widened(B), Rounding);
       return X;
     });
   };
@@ -192,9 +211,9 @@ Answer evaluate(const FPForm &F, llvm::ArrayRef<uint64_t> In, unsigned RM) {
       return X.fusedMultiplyAdd(Y, Z, Rounding);
     };
     const auto Status = Fused(A, B, C, Mode);
-    auto Result = rounded(A, Status, [&] {
+    auto Result = rounded(A, Status, Mode, [&](APFloat::roundingMode Rounding) {
       APFloat X = widened(Value(0));
-      Fused(X, widened(B), widened(C), APFloat::rmTowardZero);
+      Fused(X, widened(B), widened(C), Rounding);
       return X;
     });
     Result.Flags |= Extra;

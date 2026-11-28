@@ -1024,9 +1024,23 @@ TEST(RISCVProfile, RoundedResultsAccrueFlagsAndObserveAliasedCSRFields) {
     ASSERT_TRUE(Run(FMA));
     EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff7f7fffff));
     EXPECT_EQ(Emu.getRISCVFCSR(), 0x25);
+    Emu.setRISCVFCSR(0);
+    Emu.setRegister(fpr(11), UINT64_C(0xffffffff00800000));
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff3f7fffff));
+    ASSERT_TRUE(Run(RR(8, 12, 0)));
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff00800000));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 3); // tiny at full precision, rounded normal
+    Emu.setRISCVFCSR(0);
+    Emu.setRegister(fpr(11), UINT64_C(0xffffffff00000001));
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff00000001));
+    Emu.setRegister(fpr(13), UINT64_C(0xffffffff00800000));
+    ASSERT_TRUE(
+        Run(FMA | 8)); // fnmsub.s: min normal minus min subnormal squared
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff00800000));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 1); // non-tiny at full precision
     Emu.setRegister(integerreg::gpr(10), UINT32_MAX);
     ASSERT_TRUE(Run(CSR(3, 10, 1, 10))); // csrrw a0,fcsr,a0
-    EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)), 0x25u);
+    EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)), 1u);
     EXPECT_EQ(Emu.getRISCVFCSR(), 0xff);
     EXPECT_FALSE(Run(RR(1, 12, 7))); // reserved dynamic frm
     EXPECT_FALSE(riscv::decodeFloating(RR(1, 12, 5), 4, Image.RISCV));
