@@ -574,6 +574,65 @@ class ModelScan(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertEqual(list(self.root.glob(".neverd-*.tmp")), [])
 
+    def test_interrupted_comparison_retains_processed_ranges(self):
+        if not SDK:
+            self.skipTest("C SDK unavailable")
+        source = self.root / "current.safetensors"
+        base = self.root / "baseline.safetensors"
+        size = 4 << 20
+        data = safetensors([("large", "U8", [size], bytes(size))])
+        source.write_bytes(data)
+        base.write_bytes(data)
+        lib = ctypes.CDLL(SDK)
+        stop_type = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
+        fn = lib.neverd_model_scan_json_v1
+        fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, stop_type, ctypes.c_void_p]
+        fn.restype = ctypes.c_void_p
+        lib.neverd_free_string.argtypes = [ctypes.c_void_p]
+
+        def inspect(action):
+            calls = 0
+
+            def probe(_):
+                nonlocal calls
+                calls += 1
+                return action(calls)
+
+            result = fn(
+                os.fsencode(source),
+                json.dumps({"baseline": str(base)}).encode(),
+                stop_type(probe),
+                None,
+            )
+            self.assertTrue(result)
+            try:
+                return json.loads(ctypes.string_at(result)), calls
+            finally:
+                lib.neverd_free_string(result)
+
+        full, total_calls = inspect(lambda _: 0)
+        self.assertEqual(full["comparison"]["bytes_compared_per_side"], size)
+        halfway = total_calls - 32
+        stopped, _ = inspect(lambda n: int(n >= halfway))
+        self.assertEqual(stopped["status"], "cancelled")
+        c = stopped["comparison"]
+        self.assertTrue(c["interrupted"])
+        done = c["bytes_compared_per_side"]
+        self.assertGreater(done, 0)
+        self.assertLess(done, size)
+        self.assertEqual(c["tensor_rows"][0]["bytes_processed_per_side"], done)
+        self.assertEqual(c["candidate_known_bytes_skipped"], size - done)
+
+        def mutate(n):
+            if n == halfway:
+                with source.open("ab") as f:
+                    f.write(b"fixture mutation")
+            return 0
+
+        invalid, _ = inspect(mutate)
+        self.assertEqual(invalid["status"], "failed")
+        self.assertNotIn("comparison", invalid)
+
     def test_mapping_sampling_tolerances_and_adapter_shapes(self):
         dirs = [self.root / "candidate", self.root / "baseline"]
         for d, n, values in zip(

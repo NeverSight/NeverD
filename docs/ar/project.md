@@ -1,6 +1,6 @@
 **اللغات**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](project.md)
 
-<!-- i18n-source: 89c89cb7f9c817b94939d8599f741411e1c7d629bb1230fc1ae52fcd67c9f191 -->
+<!-- i18n-source: ae0ba2221cdac5580beb4673b67f230ca77880a10bd1d4392b3d33c32a70d976 -->
 
 <div align="center" dir="rtl">
 
@@ -341,7 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | الدوال المكتشفة |
 | `disasm` | تفكيك (`--func` اسم أو hex) |
 | `sym-explore` | استكشاف محدود لمسارات LowIR الأصلية (`--func`؛ خرج JSON) |
-| `scan --gguf` | [فحص مجلدات النماذج المحلية ونطاقات الموترات والقوالب وإخراج JSON](../model-scan.md) |
+| `scan --gguf` | [فحص النماذج المحلية ومقارنة الموترات والتحقق من ملف GGUF أُعيد بناؤه بشكل منفصل](../model-scan.md) |
 | `scan` | [فحص عمر الكائنات والتهيئة والحدود وسلاسل التنسيق (JSON)](../memory-safety-scan.md) |
 | `hex` | تفريغ hex عند عنوان |
 | `cfg` / `callgraph` | CFG / رسم استدعاء (JSON؛ DOT/SVG اختياري) |

@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 89c89cb7f9c817b94939d8599f741411e1c7d629bb1230fc1ae52fcd67c9f191 -->
+<!-- i18n-source: ae0ba2221cdac5580beb4673b67f230ca77880a10bd1d4392b3d33c32a70d976 -->
 
 <div align="center">
 
@@ -341,7 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 發現的函式 |
 | `disasm` | 反組譯（`--func` 名稱或十六進位） |
 | `sym-explore` | 有界原生 LowIR 路徑探索（`--func`；JSON 輸出） |
-| `scan --gguf` | [檢查本機模型目錄、張量範圍和範本，輸出 JSON](../model-scan.md) |
+| `scan --gguf` | [檢查本機模型、比較張量並驗證另存的 GGUF 重建檔](../model-scan.md) |
 | `scan` | [檢查物件生命週期、初始化、存取邊界與格式字串，輸出 JSON](../memory-safety-scan.md) |
 | `hex` | 依位址十六進位傾印 |
 | `cfg` / `callgraph` | CFG / 呼叫圖（JSON；可選 DOT/SVG） |

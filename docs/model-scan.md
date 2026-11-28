@@ -70,7 +70,7 @@ Sampling uses deterministic prefixes aligned to complete storage units. Sample r
 ## Checkpoints, loaders and provenance
 
 - ZIP checkpoint scanning validates local records and the central directory, then decodes only admitted pickle members with size, work, expansion-ratio and CRC checks. Stored and raw-deflate members are supported. Unselected weight members retain coordinates and skipped-payload coverage. The seekable profile accepts an uncommented ZIP32 directory and a consistent classic-size ZIP64 trailer. Wide entries, alternate names and unsupported encodings produce diagnostics.
-- The pickle reader inventories protocol 0–5 instruction framing. Object-construction instructions, global references, persistent IDs and external-buffer references carry opcode and byte coordinates. Archive coordinates distinguish stored bytes from decoded member offsets. Truncated streams and unknown instructions stop the affected inspection. The scanner never interprets the pickle stack or invokes a loader.
+- The pickle reader inventories protocol 0–5 instruction framing. Object-construction instructions, global references, persistent IDs and external-buffer references carry opcode and byte coordinates. Archive coordinates distinguish stored bytes from decoded member offsets. Truncated streams and unknown instructions stop the affected inspection. Findings describe the encoded instructions and their operands.
 - The dependency view records configuration fields, local and missing loader references, remote references, and declared requirements. Exact pins and filename hints retain different evidence. Python scanning reports import tokens and specific loader call spellings, with comments and literal strings skipped. Source aliases, dynamic values and custom operator implementations require further review.
 - Native PE, ELF and Mach-O components expose header evidence. Double-click a recognized native artifact to open the workbench’s static analysis. Engine filenames identify research inputs. Model-card and configuration claims, license content and available signature files appear under provenance. A signature with no verification result is labeled `present-unverified`. Remote references and unparsed dependency expressions are represented by digests.
 
@@ -88,8 +88,10 @@ The Release CLI on an Apple M4 Max produced these results with the default budge
 
 | Input | Tensors | File bytes | Reader bytes | Weight bytes read | Peak RSS |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Two MLX packages, 3 and 6 Safetensors shards | 2,180 + 2,180 | 45,556,230,966 | 1,030,006 | 0 | 21.0 MiB |
-| StarCoder2 3B, GGUF v3 | 483 | 1,709,888,576 | 1,757,993 | 0 | 18.5 MiB |
+| Two MLX packages, 3 and 6 Safetensors shards | 2,180 + 2,180 | 45,609,655,218 | 1,030,090 | 0 | 21.1 MiB |
+| StarCoder2 3B, GGUF v3 | 483 | 1,709,888,576 | 1,757,993 | 0 | 18.4 MiB |
+
+Rebuilding the 1,709,888,576-byte GGUF with `keep` reproduced its complete SHA-256. An independent reader checked all 483 output directory entries and Python hashlib verified every input and output tensor digest. Peak RSS for the rebuilding CLI was 20.8 MiB.
 
 Separate readers checked every tensor name, shape, storage type, absolute offset and length, together with the Safetensors shard mapping and both 8,952-byte template hashes. On the GGUF, a separate `--scale-bytes=65536` run checked 3,640 complete Q4_0 blocks (65,520 bytes) and reported prefix sampling. Comparing the two MLX variants found incompatible quantization declarations and recorded zero bytes compared. [GGUF cross-check implementation, v0.28.4](https://github.com/gpustack/gguf-parser-go/tree/v0.28.4).
 
