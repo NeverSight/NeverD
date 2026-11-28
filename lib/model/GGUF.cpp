@@ -402,6 +402,18 @@ void readGGUF(Package &P, const std::string &Name, GGUFLayout *Layout) {
               ? "default"
               : Key.substr(
                     std::string_view("tokenizer.chat_template.").size()));
+    if (Key == "general.license" || Key == "general.author" ||
+        Key == "general.organization" || Key == "general.version" ||
+        Key == "general.quantized_by" || Key.starts_with("general.source.") ||
+        Key.starts_with("general.base_model.")) {
+      P.Provenance.push_back({{"source", Name},
+                              {"field", Key},
+                              {"offset", ValueAt},
+                              {"end", R.position()},
+                              {"encoded_value_sha256", H},
+                              {"verification", "producer-claim"}});
+      P.Fingerprints["provenance/" + Key] = H;
+    }
     if (Key.starts_with("split."))
       Split[Key] = Value;
     if (Key.starts_with("tokenizer.") || Key.starts_with("adapter.") || Arch ||

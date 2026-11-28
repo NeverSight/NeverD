@@ -103,9 +103,10 @@ private slots:
     Run->click();
     auto *Tree = Dialog.findChild<QTreeWidget *>("modelEvidence");
     QTRY_COMPARE_WITH_TIMEOUT(Tree->topLevelItemCount(), 1, 15000);
-    auto Graph = Tree->findItems(G["id"].toString(),
+    auto Graph = Tree->findItems(G["name"].toString(),
                                  Qt::MatchExactly | Qt::MatchRecursive);
     QCOMPARE(Graph.size(), 1);
+    QCOMPARE(Graph[0]->data(0, Qt::UserRole).toJsonObject(), G);
     QCOMPARE(Graph[0]->childCount(), 0);
     Tree->setCurrentItem(Graph[0]);
     Graph[0]->setExpanded(true);

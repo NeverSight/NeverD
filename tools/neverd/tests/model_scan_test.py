@@ -682,6 +682,9 @@ class ModelScan(unittest.TestCase):
             '{"auto_map":{"A":"loader.Inert","B":"missing.Class"},"license":"MIT"}'
         )
         (folder / "requirements.txt").write_text("fixture-package==1.2.3\n")
+        nested = folder / "local"
+        nested.mkdir()
+        (nested / "ops.py").write_text("# static fixture")
         (folder / "release.sig").write_bytes(b"dummy")
         p = self.scan(folder, code=1)["packages"][0]
         self.assertEqual(
@@ -691,6 +694,7 @@ class ModelScan(unittest.TestCase):
             {e["resolution"] for e in p["dependencies"]},
             {"local", "missing-local", "declared-module", "declared-exact-version"},
         )
+        self.assertIn("local/ops.py", {a["id"] for a in p["artifacts"]})
         self.assertIn(
             "present-unverified", {e["verification"] for e in p["provenance"]}
         )
@@ -836,6 +840,24 @@ class ModelScan(unittest.TestCase):
         tensors[-1] = ("blk.4.attn_output.weight", [1, 1], 0, 96, bytes(4))
         self.file.write_bytes(gguf(tensors))
         self.assertEqual(self.scan()["packages"][0]["inferred_projection_layouts"], [])
+
+    def test_large_onnx_graph_pages_hold_stable_producer_coordinates(self):
+        path = self.root / "many.onnx"
+        nodes = [
+            field(1, field(4, "Identity") + field(1, f"v{i}") + field(2, f"v{i + 1}"))
+            for i in range(4096)
+        ]
+        path.write_bytes(field(1, 9) + field(7, field(2, "root") + b"".join(nodes)))
+        report = self.scan(path, "--model-offset=4090", "--model-limit=4")
+        self.assertEqual(
+            report, self.scan(path, "--model-offset=4090", "--model-limit=4")
+        )
+        g = report["packages"][0]["graphs"][0]
+        self.assertEqual(g["node_count"], 4096)
+        self.assertEqual(len(g["nodes"]), 4)
+        edge = g["nodes"][0]["input_edges"][0]
+        self.assertEqual(edge["node"], "graph/node4089")
+        self.assertEqual(path.read_bytes()[edge["offset"] : edge["end"]], b"v4090")
 
     def test_structure_evidence_and_filtered_graph_pages(self):
         model = self.root / "g.onnx"

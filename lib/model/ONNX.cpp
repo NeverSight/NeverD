@@ -764,6 +764,8 @@ void readONNX(Package &P, const std::string &Name) {
   Reader.resolveCaptures();
   if (!IR || !Graph)
     throw Error("missing ONNX IR version or graph");
+  P.Fingerprints["onnx/ir_version"] = digest(std::to_string(IR));
+  P.Fingerprints["onnx/opsets"] = digest(Ops.dump());
   if (IR > 14)
     P.gap(Name, "unqualified ONNX IR version", {{"version", IR}});
   P.Artifacts.push_back(

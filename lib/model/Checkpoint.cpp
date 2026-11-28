@@ -12,6 +12,7 @@
 #include "neverd/web/Error.h"
 #include "neverd/web/SeekableZip.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Endian.h"
 
@@ -82,7 +83,18 @@ Json inspectPickle(Package &P, const std::string &Source, std::string_view Data,
       throw Error("unterminated pickle operand");
     return take(N + 1).substr(0, N);
   };
-  bool Complete = false;
+  bool SawStop = false, Complete = false;
+  const auto Before = P.Findings.size(), FindingCount = P.FindingCount,
+             ReviewCount = P.ReviewCount;
+  // Protocol 0/1 has no magic. A prefix of an unidentified binary can spell
+  // instructions by chance. Commit evidence only from an identified stream.
+  llvm::scope_exit Qualify([&] {
+    if (SawStop || (Protocol && *Protocol <= 5))
+      return;
+    P.Findings.erase(P.Findings.begin() + Before, P.Findings.end());
+    P.FindingCount = FindingCount;
+    P.ReviewCount = ReviewCount;
+  });
   Json Location = {
       {"member", Member},
       {"coordinate_space", Member.empty() ? "file" : "decoded-member"}};
@@ -111,6 +123,7 @@ Json inspectPickle(Package &P, const std::string &Source, std::string_view Data,
         break;
       }
       case '.':
+        SawStop = true;
         if (Pos != Data.size())
           throw Error("bytes after pickle STOP are uninspected");
         Complete = true;

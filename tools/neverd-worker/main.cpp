@@ -175,8 +175,12 @@ Engine::Reply scanModel(bool Rebuild, const Json &Input,
       neverd_free_string);
   if (!Report)
     throw Error("engine_error", "Model scan returned no report");
-  if (Input.value("serialized_report", false))
-    return {Json{{"report_json", Report.get()}}, {}};
+  if (Input.value("serialized_report", false)) {
+    Json Payload = {{"report_json", Report.get()}};
+    if (Cancelled.load())
+      Payload["status"] = parseJson(Report.get()).at("status");
+    return {std::move(Payload), {}};
+  }
   return {parseJson(Report.get()), {}};
 }
 auto jvmRecovery() {

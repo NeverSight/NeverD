@@ -19,6 +19,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <atomic>
+#include <filesystem>
 
 namespace neverd::cli {
 using namespace llvm;
@@ -97,6 +98,23 @@ int runModelScan() {
     WithColor::error() << "GGUF reconstruction requires a new file and "
                           "explicit template policy options\n";
     return 1;
+  }
+  if (Rebuild && !OutputFile.empty() && OutputFile != "-") {
+    auto resolve = [](const std::string &Name, std::error_code &EC) {
+      auto Path =
+          std::filesystem::path(std::u8string(Name.begin(), Name.end()));
+      return std::filesystem::weakly_canonical(
+          std::filesystem::absolute(Path, EC), EC);
+    };
+    std::error_code ModelError, ReportError;
+    auto ReportPath = resolve(OutputFile, ReportError);
+    auto NewModel = resolve(RebuildGGUF, ModelError);
+    if (ModelError || ReportError || NewModel == ReportPath ||
+        sys::fs::exists(OutputFile)) {
+      WithColor::error()
+          << "model and report destinations must be distinct new files\n";
+      return 1;
+    }
   }
   json::Object Options;
   if (ModelOptions.getNumOccurrences())
