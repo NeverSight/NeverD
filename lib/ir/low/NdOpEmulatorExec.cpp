@@ -2668,6 +2668,19 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
 bool NdOpEmulator::executeCopy(const LowOp &Op) {
   if (Op.NumInputs < 1)
     return false;
+  const NdVar &Source = Op.Inputs[0];
+  // An ordinary scalar register lookup proves availability and returns the
+  // truncated value. Exact byte views and partially known values need the
+  // byte-level checks below.
+  if ((Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ZEXT) &&
+      Op.NumInputs == 1 && Source.Size <= sizeof(uint64_t) &&
+      Op.Output.Size <= sizeof(uint64_t) && WideRegisters.empty() &&
+      UnknownBits.empty()) {
+    if (auto Value = findScalarOperand(Source)) {
+      writeOutput(Op.Output, *Value);
+      return true;
+    }
+  }
   if (Op.Opcode == NdOp::SUBBYTES) {
     if (Op.NumInputs != 2 ||
         !knownOperandBytes(Op.Inputs[1], 0, Op.Inputs[1].Size) ||
