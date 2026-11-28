@@ -264,7 +264,9 @@ cl::SubCommand DashboardCmd("dashboard", "Show binary overview dashboard");
 cl::SubCommand SigsCmd("sigs", "Apply FLIRT signatures to binary");
 cl::SubCommand SymbolicCmd("sym-explore",
                            "Explore bounded symbolic paths through a function");
-cl::SubCommand ScanCmd("scan", "Scan native memory safety or data references");
+cl::SubCommand ScanCmd(
+    "scan",
+    "Scan native memory safety, data references or local model artifacts");
 cl::SubCommand
     ConcolicCmd("concolic",
                 "Generate replay-verified LowIR conditional-branch seeds");
@@ -1408,6 +1410,30 @@ cl::opt<bool> SymbolicExpressions(
 //===----------------------------------------------------------------------===//
 // Memory-safety scan options
 //===----------------------------------------------------------------------===//
+
+cl::opt<bool> ModelGGUF(
+    "gguf", cl::desc("Inspect local GGUF models, model packages and templates"),
+    cl::sub(ScanCmd));
+cl::opt<std::string> ModelBaseline(
+    "baseline", cl::desc("Compare against an explicitly selected local model"),
+    cl::sub(ScanCmd));
+cl::opt<uint64_t> ModelGap("gap-bytes",
+                           cl::desc("Byte budget for unreferenced GGUF ranges"),
+                           cl::sub(ScanCmd));
+cl::opt<uint64_t> ModelScales(
+    "scale-bytes",
+    cl::desc("Inspect supported quantization blocks up to this byte budget"),
+    cl::sub(ScanCmd));
+cl::opt<uint64_t>
+    ModelCompare("compare-bytes",
+                 cl::desc("Total weight bytes to read across both inputs"),
+                 cl::sub(ScanCmd));
+cl::opt<uint64_t> ModelOffset("model-offset",
+                              cl::desc("First tensor or graph node to report"),
+                              cl::sub(ScanCmd));
+cl::opt<unsigned> ModelLimit("model-limit",
+                             cl::desc("Maximum rows per model view"),
+                             cl::sub(ScanCmd));
 
 cl::opt<bool>
     ScanDataPtr("data-ptr",

@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Model Security Scan...</source>
+        <translation>Model Security Scan...</translation>
+    </message>
+    <message>
+        <source>Inspect local model files and package templates</source>
+        <translation>Inspect local model files and package templates</translation>
+    </message>
+    <message>
         <source>Inspect JVM classes and JARs…</source>
         <translation>Inspect JVM classes and JARs…</translation>
     </message>
@@ -11588,6 +11596,157 @@ Your previous graph is still available.</translation>
     <message>
         <source>Save native component to a new file</source>
         <translation>Save native component to a new file</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ModelScanDialog</name>
+    <message>
+        <source>Inferred projection layouts</source>
+        <translation>Inferred projection layouts</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>Off</translation>
+    </message>
+    <message>
+        <source>&amp;Quantization sample (KiB)</source>
+        <translation>&amp;Quantization sample (KiB)</translation>
+    </message>
+    <message>
+        <source>Model Security Scan</source>
+        <translation>Model Security Scan</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Folder…</translation>
+    </message>
+    <message>
+        <source>File…</source>
+        <translation>File…</translation>
+    </message>
+    <message>
+        <source>Select model package</source>
+        <translation>Select model package</translation>
+    </message>
+    <message>
+        <source>Select model file</source>
+        <translation>Select model file</translation>
+    </message>
+    <message>
+        <source>&amp;Model</source>
+        <translation>&amp;Model</translation>
+    </message>
+    <message>
+        <source>&amp;Baseline (optional)</source>
+        <translation>&amp;Baseline (optional)</translation>
+    </message>
+    <message>
+        <source>Scan</source>
+        <translation>Scan</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>Cancel scan</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Starting analysis worker…</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Evidence</translation>
+    </message>
+    <message>
+        <source>Status or type</source>
+        <translation>Status or type</translation>
+    </message>
+    <message>
+        <source>Selected evidence</source>
+        <translation>Selected evidence</translation>
+    </message>
+    <message>
+        <source>Previous page</source>
+        <translation>Previous page</translation>
+    </message>
+    <message>
+        <source>Next page</source>
+        <translation>Next page</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Export report…</translation>
+    </message>
+    <message>
+        <source>Save report to a new file</source>
+        <translation>Save report to a new file</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>Analysis worker stopped.</translation>
+    </message>
+    <message>
+        <source>Reading model artifacts…</source>
+        <translation>Reading model artifacts…</translation>
+    </message>
+    <message>
+        <source>Model scanning is unavailable in this worker.</source>
+        <translation>Model scanning is unavailable in this worker.</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Cancelled</translation>
+    </message>
+    <message>
+        <source>%1 tensors</source>
+        <translation>%1 tensors</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>Findings</translation>
+    </message>
+    <message>
+        <source>Coverage gaps</source>
+        <translation>Coverage gaps</translation>
+    </message>
+    <message>
+        <source>Artifacts</source>
+        <translation>Artifacts</translation>
+    </message>
+    <message>
+        <source>Templates</source>
+        <translation>Templates</translation>
+    </message>
+    <message>
+        <source>Tensors</source>
+        <translation>Tensors</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>Metadata</translation>
+    </message>
+    <message>
+        <source>Exported graphs</source>
+        <translation>Exported graphs</translation>
+    </message>
+    <message>
+        <source>Layers inferred from names</source>
+        <translation>Layers inferred from names</translation>
+    </message>
+    <message>
+        <source>Baseline comparison</source>
+        <translation>Baseline comparison</translation>
+    </message>
+    <message>
+        <source>Tensor comparison</source>
+        <translation>Tensor comparison</translation>
+    </message>
+    <message>
+        <source>Component changes</source>
+        <translation>Component changes</translation>
     </message>
 </context>
 </TS>

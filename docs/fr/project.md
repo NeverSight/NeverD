@@ -1,6 +1,6 @@
 **Langues**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 65a3c241a8b8275f8f2afcf61c262f54c2db5a0fd1e46824c63a903708fc981b -->
+<!-- i18n-source: 89c89cb7f9c817b94939d8599f741411e1c7d629bb1230fc1ae52fcd67c9f191 -->
 
 <div align="center">
 
@@ -342,6 +342,7 @@ Répétez l’option pour les autres entrées ambiguës, avec `:arm` si nécessa
 | `funcs` | Fonctions découvertes |
 | `disasm` | Désassemblage (`--func` nom ou hex) |
 | `sym-explore` | Exploration bornée des chemins LowIR natifs (`--func` ; sortie JSON) |
+| `scan --gguf` | [Inspecter les répertoires de modèles locaux, les plages des tenseurs et les gabarits (JSON)](../model-scan.md) |
 | `scan` | [Vérifie la durée de vie des objets, l’initialisation, les bornes et les chaînes de format (JSON)](../memory-safety-scan.md) |
 | `hex` | Dump hexadécimal à une adresse |
 | `cfg` / `callgraph` | CFG / graphe d’appels (JSON ; DOT/SVG optionnel) |

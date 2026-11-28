@@ -1,6 +1,6 @@
 **语言**: [English](../../README.md) | [简体中文](project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 65a3c241a8b8275f8f2afcf61c262f54c2db5a0fd1e46824c63a903708fc981b -->
+<!-- i18n-source: 89c89cb7f9c817b94939d8599f741411e1c7d629bb1230fc1ae52fcd67c9f191 -->
 
 <div align="center">
 
@@ -341,6 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 发现的函数 |
 | `disasm` | 反汇编（`--func` 名称或十六进制） |
 | `sym-explore` | 有界原生 LowIR 路径探索（`--func`；JSON 输出） |
+| `scan --gguf` | [检查本地模型目录、张量范围和模板，输出 JSON](../model-scan.md) |
 | `scan` | [检查对象生命周期、初始化、访问边界和格式字符串，输出 JSON](../memory-safety-scan.md) |
 | `hex` | 按地址十六进制转储 |
 | `cfg` / `callgraph` | CFG / 调用图（JSON；可选 DOT/SVG） |

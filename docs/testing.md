@@ -19043,6 +19043,8 @@ patch-full binaries; use `check-neverd` for the complete aggregate.
 
 ## Incremental CTest workflow
 
+`NeverDModelScanCLI` exercises GGUF layouts, large sparse files, MLX-style shard indexes, tokenizer and adapter comparison, nested ONNX graphs, CLI option isolation, C ABI cancellation and worker report parity. `NeverDGuiModelScan` checks the displayed evidence against the actual CLI using the worker process.
+
 `NeverDDebugCallReceiverTests` checks call-scoped debug receiver binding on
 32-bit ARM, AArch64 and x64, including partial writes, changed arguments,
 custom register order, changed native occurrences and conflicting declarations.

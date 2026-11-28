@@ -87,6 +87,8 @@ static int realMain(int Argc, char *Argv[]) {
   // works from one binary at a path: plugins needs no input at all, diff takes
   // its own -a/-b operands, simplify's input is an expression, and optimize-ir
   // reads textual LLVM IR.
+  if (ScanCmd && modelScanRequested())
+    return runModelScan();
   if (PluginsCmd)
     return runPlugins(Argv[0]);
   if (JavaCmd)

@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Model Security Scan...</source>
+        <translation>فحص أمان النموذج...</translation>
+    </message>
+    <message>
+        <source>Inspect local model files and package templates</source>
+        <translation>فحص ملفات النماذج المحلية والقوالب المرفقة</translation>
+    </message>
+    <message>
         <source>Inspect JVM classes and JARs…</source>
         <translation>فحص أصناف JVM وملفات JAR…</translation>
     </message>
@@ -11732,6 +11740,157 @@ Your previous graph is still available.</source>
     <message>
         <source>Save native component to a new file</source>
         <translation>حفظ المكوّن الأصلي في ملف جديد</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ModelScanDialog</name>
+    <message>
+        <source>Inferred projection layouts</source>
+        <translation>بنى الإسقاط المستنتجة</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>متوقف</translation>
+    </message>
+    <message>
+        <source>&amp;Quantization sample (KiB)</source>
+        <translation>عينة ال&amp;تكميم (KiB)</translation>
+    </message>
+    <message>
+        <source>Model Security Scan</source>
+        <translation>فحص أمان النموذج</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>مجلد…</translation>
+    </message>
+    <message>
+        <source>File…</source>
+        <translation>ملف…</translation>
+    </message>
+    <message>
+        <source>Select model package</source>
+        <translation>اختر حزمة النموذج</translation>
+    </message>
+    <message>
+        <source>Select model file</source>
+        <translation>اختر ملف النموذج</translation>
+    </message>
+    <message>
+        <source>&amp;Model</source>
+        <translation>ال&amp;نموذج</translation>
+    </message>
+    <message>
+        <source>&amp;Baseline (optional)</source>
+        <translation>ال&amp;مرجع (اختياري)</translation>
+    </message>
+    <message>
+        <source>Scan</source>
+        <translation>فحص</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>إلغاء الفحص</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>جارٍ بدء عملية التحليل…</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>الأدلة</translation>
+    </message>
+    <message>
+        <source>Status or type</source>
+        <translation>الحالة أو النوع</translation>
+    </message>
+    <message>
+        <source>Selected evidence</source>
+        <translation>الدليل المحدد</translation>
+    </message>
+    <message>
+        <source>Previous page</source>
+        <translation>الصفحة السابقة</translation>
+    </message>
+    <message>
+        <source>Next page</source>
+        <translation>الصفحة التالية</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>تصدير التقرير…</translation>
+    </message>
+    <message>
+        <source>Save report to a new file</source>
+        <translation>حفظ التقرير في ملف جديد</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>توقفت عملية التحليل.</translation>
+    </message>
+    <message>
+        <source>Reading model artifacts…</source>
+        <translation>جارٍ قراءة ملفات النموذج…</translation>
+    </message>
+    <message>
+        <source>Model scanning is unavailable in this worker.</source>
+        <translation>لا تدعم عملية التحليل هذه فحص النماذج.</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>أُلغي</translation>
+    </message>
+    <message>
+        <source>%1 tensors</source>
+        <translation>عدد الموترات %1</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>النتائج</translation>
+    </message>
+    <message>
+        <source>Coverage gaps</source>
+        <translation>النطاقات غير المفحوصة</translation>
+    </message>
+    <message>
+        <source>Artifacts</source>
+        <translation>ملفات النموذج</translation>
+    </message>
+    <message>
+        <source>Templates</source>
+        <translation>القوالب</translation>
+    </message>
+    <message>
+        <source>Tensors</source>
+        <translation>الموترات</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>البيانات الوصفية</translation>
+    </message>
+    <message>
+        <source>Exported graphs</source>
+        <translation>الرسوم البيانية المصدّرة</translation>
+    </message>
+    <message>
+        <source>Layers inferred from names</source>
+        <translation>الطبقات المستنتجة من الأسماء</translation>
+    </message>
+    <message>
+        <source>Baseline comparison</source>
+        <translation>المقارنة بالمرجع</translation>
+    </message>
+    <message>
+        <source>Tensor comparison</source>
+        <translation>مقارنة الموترات</translation>
+    </message>
+    <message>
+        <source>Component changes</source>
+        <translation>تغييرات المكونات</translation>
     </message>
 </context>
 </TS>

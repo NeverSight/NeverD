@@ -2975,6 +2975,63 @@
       }
     },
     {
+      "id": "model.offline-artifact-scan",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "model",
+      "targets": [
+        "Local GGUF v2/v3, Safetensors packages, templates and ONNX graph inventory"
+      ],
+      "docs": [
+        "docs/model-scan.md"
+      ],
+      "limitations": [
+        "Explicit local opt-in. Quantization sampling and baseline reads have independent budgets. The report covers static evidence and identifies uninspected areas."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDModelArtifactTests",
+          "source": "unittests/model/ModelArtifactTests.cpp",
+          "filter": "ModelArtifact.MutationDuringInventoryInvalidatesReport",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDModelArtifactTests",
+          "source": "unittests/model/ModelArtifactTests.cpp",
+          "filter": "ModelArtifact.RejectsInvalidOptionsBeforeOpeningInput",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_model_scan_json_v1"
+        ],
+        "python": [],
+        "cli": [
+          "neverd scan --gguf",
+          "neverd scan --baseline",
+          "neverd scan --gap-bytes",
+          "neverd scan --scale-bytes",
+          "neverd scan --compare-bytes",
+          "neverd scan --model-offset",
+          "neverd scan --model-limit"
+        ],
+        "json": [
+          "neverd_model_scan_json_v1"
+        ]
+      }
+    },
+    {
       "id": "safety.native-memory-scan",
       "kind": "analysis",
       "status": "experimental",

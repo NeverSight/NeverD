@@ -35,6 +35,7 @@
 #include "LocalTypesView.h"
 #include "MapPromptDialog.h"
 #include "MicrosoftSymbols.h"
+#include "ModelScanDialog.h"
 #include "ModelessDialog.h"
 #include "NavigationBand.h"
 #include "OutputWindow.h"
@@ -2592,6 +2593,11 @@ void MainWindow::connectActions() {
   on(ActionId::OptionsPlugins, [this] {
     showModelessDialog(new PluginManagerDialog(session_.pluginServices(), this),
                        this);
+  });
+  on(ActionId::OptionsModelScan, [this] {
+    auto *dialog = new ModelScanDialog(session_.workerPath(), this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->show();
   });
   on(ActionId::OptionsMemorySafetyScan, [this] {
     auto *dialog = new SafetyScanDialog(session_.queries(), commandView());

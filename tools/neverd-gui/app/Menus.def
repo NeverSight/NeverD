@@ -254,6 +254,7 @@ NEVERD_MENU(Analysis, Options, QT_TRANSLATE_NOOP("Menus", "&Analysis"))
 NEVERD_MENU_ICON(Analysis, "analyze")
 NEVERD_MENU_ITEM(Analysis, OptionsAnalyze)
 NEVERD_MENU_ITEM(Analysis, OptionsMemorySafetyScan)
+NEVERD_MENU_ITEM(Analysis, OptionsModelScan)
 NEVERD_MENU_ITEM(Analysis, OptionsCancel)
 NEVERD_MENU_ITEM(Analysis, OptionsRestartWorker)
 

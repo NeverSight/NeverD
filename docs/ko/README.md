@@ -1,6 +1,6 @@
 **언어**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
+<!-- i18n-source: 5a80af8799dc800d65c3ba227cdb578e8edce910f296be92b37bf16083b2a22f -->
 
 [← NeverD 프로젝트](project.md)
 
@@ -18,6 +18,7 @@
 | [기여 가이드](CONTRIBUTING.md) | 개발 환경, 빌드 프로필, 워크플로, 스타일, PR 요구 사항 |
 | [아키텍처](architecture.md) | IR 경로, 구성 요소 경계, strict lifting, 지원 깊이, 수정 위치 |
 | [소스 및 네이티브 오브젝트 패치](source-patching.md) | 컴파일러 선택, 네이티브 오브젝트, 바인딩, 예외, 출력 및 검증 프로파일 |
+| [오프라인 모델 보안 검사(영문)](../model-scan.md) | GGUF, 분할 Safetensors, 동봉된 템플릿, ONNX 구조 및 로컬 기준 모델 비교 |
 | [오프라인 Web 분석 (영문)](../web-analysis.md) | C++ 산출물·소스·바인딩·맵 검사, 메타데이터 정책, SDK 및 현재 검증 범위 |
 | [JavaScript 기본 재작성 (영문)](../web-source-rewrite-profile.md) | 명시적 패스, 지역 치환 검사, 정확한 역변환 및 검증 기록에 연결된 로컬 내보내기 |
 | [Bun 독립 실행 파일 프로필 (영문)](../web-bun-profile.md) | x64/ARM64 ELF, 단일 아키텍처 Mach-O 및 PE의 한정된 추출 범위, 원본 범위와 고정 테스트 자료의 출처 |
