@@ -20,6 +20,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QProcess>
 #include <QPushButton>
 #include <QScrollBar>
@@ -336,13 +337,14 @@ private slots:
       QVERIFY(!View->textCursor().hasSelection());
       QCOMPARE(View->verticalScrollBar()->value(),
                View->verticalScrollBar()->minimum());
+      QCOMPARE(View->horizontalScrollBar()->value(),
+               View->horizontalScrollBar()->minimum());
       QVERIFY(!View->document()->isModified());
       QVERIFY(!View->document()->isUndoAvailable());
       View->moveCursor(QTextCursor::End, QTextCursor::KeepAnchor);
       QVERIFY(View->textCursor().hasSelection());
     };
-    for (const QString &Key : {QStringLiteral("x()I"), QStringLiteral("y()J"),
-                               QStringLiteral("x()I")}) {
+    auto Select = [&](const QString &Key) {
       const int Row = Results->findText(Key, Qt::MatchEndsWith);
       QVERIFY(Row >= 0);
       auto Report = cli(File.fileName(), {"--method=" + Key}, 0, 21);
@@ -353,7 +355,18 @@ private slots:
       Check(IR, QJsonDocument(F.take("ir").toObject()));
       F.remove("source");
       Check(Evidence, QJsonDocument(F));
-    }
+    };
+    Select(QStringLiteral("x()I"));
+    QPointer<QTextDocument> Accessor = IR->document();
+    Select(QStringLiteral("<init>(IJ)V"));
+    QPointer<QTextDocument> Constructor = IR->document();
+    QVERIFY(Constructor != Accessor);
+    Select(QStringLiteral("y()J"));
+    QCOMPARE(IR->document(), Accessor.data());
+    Select(QStringLiteral("x()I"));
+    QVERIFY(Constructor);
+    Input->clear();
+    QVERIFY(Constructor.isNull());
   }
   void incompleteMethodShowsMappedBytecodeAndDiagnostics() {
     QTemporaryDir Temp;

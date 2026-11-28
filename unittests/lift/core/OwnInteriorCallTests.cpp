@@ -25,6 +25,7 @@
 #include "neverd/pipeline/X64ContinuationExport.h"
 
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/FileSystem.h"
@@ -1421,6 +1422,10 @@ TEST(OwnInteriorCall, IndirectTailMustRestoreTheParentsStack) {
   for (const auto &P : {Win64, SysV64, Darwin64, I386})
     for (uint8_t Restore : {0, 32, 40}) {
       const bool Restored = Restore == 32;
+      // x86-64 makes the jump a tail call only once its frame is gone
+      // (restoredX64IndirectTailFrames); otherwise it stays a branch with no
+      // proved target, and the source traps where it runs.
+      const bool Branch = !Restored && P.TheArch == Arch::X64;
       SCOPED_TRACE(::testing::Message()
                    << int(P.TheArch) << '/' << int(P.Format) << '/'
                    << int(Restore));
@@ -1438,16 +1443,26 @@ TEST(OwnInteriorCall, IndirectTailMustRestoreTheParentsStack) {
       // The CALL + RETURN used to represent this JMP must not lose that fact.
       const va_t Tail = P.Entry + Code.size();
       Code.insert(Code.end(), {0xff, 0xe1}); // jmp ecx/rcx
+      const std::vector<uint8_t> Bytes = Code;
       auto Img = makeImage(std::move(Code), P);
       Decoder Dec;
       ASSERT_TRUE(Dec.init(Img));
       CFGBuilder Builder;
       const auto Low = Builder.build(Img, Dec, P.Entry, "tail_frame");
-      EXPECT_EQ(Low.hasCompleteLiftCoverage(), Restored);
-      EXPECT_EQ(Low.UnprovenReturnAddresses,
-                Restored ? std::vector<va_t>{} : std::vector<va_t>{Tail});
-      if (!Restored)
+      EXPECT_EQ(Low.hasCompleteLiftCoverage(), Restored || Branch);
+      EXPECT_EQ(Low.UnprovenReturnAddresses, Restored || Branch
+                                                 ? std::vector<va_t>{}
+                                                 : std::vector<va_t>{Tail});
+      if (Branch) {
+        const Lifted L = lift(Bytes, P);
+        EXPECT_TRUE(L.UnprovenReturns.empty());
+        EXPECT_NE(L.Source.find("indirect targets not proved at 0x" +
+                                llvm::utohexstr(Tail)),
+                  std::string::npos)
+            << L.Source;
+      } else if (!Restored) {
         expectSourceRefused(Img);
+      }
     }
 }
 

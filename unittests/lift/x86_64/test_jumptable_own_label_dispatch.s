@@ -17,7 +17,10 @@
 # and jumps back into the dispatch, which then reads either table: once that
 # code is decoded, the dispatch is withdrawn.  jt_own_writable reads its
 # table from writable memory, which the program may change, and stays
-# unresolved.
+# unresolved.  Both labels of jt_own_join lead to code that, on one path,
+# stores %r15, which its prologue saved and no path wrote, as gimli's
+# FileEntry::clone stores an unused payload: the jump must take one of its
+# labels, so the read is the program's own and both labels are kept.
 
   .text
   .globl jt_own_enum
@@ -143,6 +146,33 @@ jt_own_writable:
   retq
   .size jt_own_writable, .-jt_own_writable
 
+  .globl jt_own_join
+  .type jt_own_join, @function
+  .p2align 4
+jt_own_join:
+  pushq %r15
+  movq (%rsi), %rax
+  leaq .Loj_table(%rip), %rcx
+  movslq (%rcx,%rax,4), %rdx
+  addq %rcx, %rdx
+  jmpq *%rdx
+.Loj_word:
+  movq 8(%rsi), %rax
+  jmp .Loj_join
+.Loj_byte:
+  movzbl 8(%rsi), %eax
+.Loj_join:
+  movq %rax, (%rdi)
+  movq 16(%rsi), %rcx
+  cmpq $-1, %rcx
+  je .Loj_none
+  movq %rcx, %r15
+.Loj_none:
+  movq %r15, 8(%rdi)
+  popq %r15
+  retq
+  .size jt_own_join, .-jt_own_join
+
   .section .rodata
   .p2align 2
 .Loe_table:
@@ -175,6 +205,10 @@ jt_own_writable:
 .Los_two:
   .long .Los_ret-.Los_two
   .long .Los_ret-.Los_two
+  .long 0
+.Loj_table:
+  .long .Loj_word-.Loj_table
+  .long .Loj_byte-.Loj_table
   .long 0
 
   .data

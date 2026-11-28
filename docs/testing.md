@@ -1624,12 +1624,17 @@ LOAD of the slot with the labels' offsets from the table. A label that reads
 `%rbx` before any path to the jump wrote it is left out, a slot that names an
 address inside an instruction ends the table, a table address loaded into
 `%r12` before a loop is found at its dispatch, a dispatch that one of its
-labels re-enters with another table's address is withdrawn, and a table in
-`.data` gives no labels. `x64swx_enumbyte0`, `3` and `5` in `NeverDSwitchXformTests` run the
+labels re-enters with another table's address is withdrawn, a table in
+`.data` gives no labels, and a dispatch whose every label stores the `%r15`
+its prologue saved on some path keeps both labels. `x64swx_enumbyte0`, `3` and `5` in `NeverDSwitchXformTests` run the
 same shape from C, an unreachable default on a byte argument, through the lift,
 recompile and emulation and compare the results; `x64swx_enumload` runs eight
 such switches in a row on bytes read back from the stack, whose domains run out
 of evidence.
+`JTE_X86_64.AWin64OwnLabelDispatchKeepsRsiAndRdi` builds the same shape as a
+Win64 object: a label that reads `%rsi` before any write is left out, since
+Win64 keeps `%rsi`, and a table address loaded into `%rsi` before a call still
+gives the jump after the call its two labels.
 `JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
 whose first state is a constant: scalar recovery first takes its dispatch as a
 direct branch and withdraws that guess when the cases loop back, and the

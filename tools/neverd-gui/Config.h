@@ -168,6 +168,12 @@ inline constexpr int kHexViewMargin = 6;
 /// The colors IDA's Lock highlight offers, one word each.
 inline constexpr int kHighlightLockColors = 8;
 
+// tools/neverd-gui/app/JVMRecoveryDialog.cpp
+/// Total UTF-16 units in each detail pane's inactive documents. 64 Ki units
+/// cover the recurring short-method layouts while larger reports stay
+/// transient.
+inline constexpr int kJVMDetailInactiveCharacters = 64 * 1024;
+
 // tools/neverd-gui/app/JumpDialog.cpp
 /// The dialog's first size: the matches beside a preview of where Enter goes.
 inline constexpr int kJumpDialogWidth = 980;

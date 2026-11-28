@@ -26,6 +26,8 @@
 #include "neverd/support/AArch64Literal.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
+
 #include <algorithm>
 #include <cstring>
 #include <functional>
@@ -409,14 +411,14 @@ std::optional<TableReadKey> tableReadStorage(const NdVar &Value) {
 class TableReadState {
   using K = TableReadValue::Kind;
   std::map<TableReadKey, std::pair<TableReadValue, uint16_t>> Values;
-  llvm::ArrayRef<uint64_t> Preserved;
+  llvm::function_ref<bool(uint64_t)> Preserved;
 
   static bool isConstant(const std::optional<TableReadValue> &Value) {
     return Value && Value->K == K::Constant;
   }
 
 public:
-  explicit TableReadState(llvm::ArrayRef<uint64_t> Preserved)
+  explicit TableReadState(llvm::function_ref<bool(uint64_t)> Preserved)
       : Preserved(Preserved) {}
 
   /// Start with \p Constants in the whole registers they name.
@@ -452,8 +454,7 @@ public:
   void step(const LowOp &Op) {
     if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
       for (auto It = Values.begin(); It != Values.end();)
-        if (It->first.first && std::find(Preserved.begin(), Preserved.end(),
-                                         It->first.second) != Preserved.end())
+        if (It->first.first && Preserved(It->first.second))
           ++It;
         else
           It = Values.erase(It);
@@ -559,7 +560,7 @@ public:
 std::optional<TableReadValue>
 tableReadTarget(const LowFunc &Func, const std::vector<size_t> &Chain,
                 const std::map<uint64_t, uint64_t> &Entry,
-                llvm::ArrayRef<uint64_t> Preserved) {
+                llvm::function_ref<bool(uint64_t)> Preserved) {
   TableReadState State(Preserved);
   State.seed(Entry);
   for (size_t Index : Chain) {
@@ -582,7 +583,8 @@ tableReadTarget(const LowFunc &Func, const std::vector<size_t> &Chain,
 /// the address of a table hoisted out of a loop.  A block also entered
 /// another way, as \p Root says, starts with none.
 std::vector<std::map<uint64_t, uint64_t>>
-blockEntryConstants(const LowFunc &Func, llvm::ArrayRef<uint64_t> Preserved,
+blockEntryConstants(const LowFunc &Func,
+                    llvm::function_ref<bool(uint64_t)> Preserved,
                     const std::function<bool(const LowBlock &)> &Root) {
   const size_t Count = Func.Blocks.size();
   std::vector<std::map<uint64_t, uint64_t>> Entry(Count);
@@ -679,8 +681,14 @@ bool CFGBuilder::recoverOwnLabelTableBranches(const BinaryImage &Img,
     return &*Starts;
   };
 
-  const llvm::ArrayRef<uint64_t> Preserved =
-      getTargetRegInfo(Img.Arch).CalleeSaveRegs;
+  // The registers a call leaves as they were, under the calling convention
+  // the image's code follows: Win64 also keeps %rsi and %rdi.
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+  const BinaryFormat Format = Img.abiFormat();
+  auto IsPreserved = [&](uint64_t Register) {
+    return TRI.isCallPreserved(Register, sizeof(uint64_t), Format);
+  };
+  const llvm::function_ref<bool(uint64_t)> Preserved = IsPreserved;
   // A block entered another way than from its predecessors starts with no
   // known register.
   auto Root = [&](const LowBlock &Block) {
@@ -904,7 +912,16 @@ void CFGBuilder::dispatchUnprovedBranchesByValue(const BinaryImage &Img,
   // every path to the jump.  A jump to a label left out traps, as every jump
   // of this kind did before.
   const auto &TRI = getTargetRegInfo(Img.Arch);
-  const llvm::ArrayRef<uint64_t> Kept = TRI.CalleeSaveRegs;
+  std::vector<uint64_t> Kept(TRI.CalleeSaveRegs.begin(),
+                             TRI.CalleeSaveRegs.end());
+  // Win64 also keeps %rsi and %rdi.
+  if (Img.Arch == Arch::X64 && Img.abiFormat() == BinaryFormat::COFF)
+    for (const TargetRegisterRange &Range :
+         TRI.callPreservedRanges(BinaryFormat::COFF))
+      if (Range.Bytes >= TRI.PointerSize && Range.Offset != TRI.StackPointer &&
+          !TRI.isVectorReg(Range.Offset) &&
+          std::find(Kept.begin(), Kept.end(), Range.Offset) == Kept.end())
+        Kept.push_back(Range.Offset);
   if (Kept.size() > 64) {
     WithdrawTableJumps();
     return;
@@ -1066,6 +1083,23 @@ void CFGBuilder::dispatchUnprovedBranchesByValue(const BinaryImage &Img,
       }
     }
   };
+  // A table jump goes to one of its labels whenever control reaches it.  So
+  // when every label reads a kept register no path to the jump wrote, those
+  // reads are the program's own and tell no label from another, as an unused
+  // payload stored from a register the prologue saved: the jump keeps its
+  // whole table, and the function's table jumps stop testing what it read.
+  uint64_t Own = 0;
+  auto Missing = [&](size_t J, size_t L) {
+    const uint64_t Miss = Needed[LabelBlocks[L]] & ~Written[JumpBlocks[J]];
+    return J < UnprovedJumps ? Miss : Miss & ~Own;
+  };
+  auto TakeTable = [&](size_t J) {
+    for (size_t L = 0; L < Labels.size(); ++L)
+      if (Allowed[J][L]) {
+        Own |= Missing(J, L);
+        Edges[J][L] = true;
+      }
+  };
   // Decide the jumps in the order control reaches them, each with the edges
   // decided before it.
   for (bool Progress = true; Progress;) {
@@ -1074,27 +1108,40 @@ void CFGBuilder::dispatchUnprovedBranchesByValue(const BinaryImage &Img,
     for (size_t J = 0; J < Jumps.size(); ++J) {
       if (Decided[J] || !Reached[JumpBlocks[J]])
         continue;
-      for (size_t L = 0; L < Labels.size(); ++L)
-        Edges[J][L] = Allowed[J][L] &&
-                      (Needed[LabelBlocks[L]] & ~Written[JumpBlocks[J]]) == 0;
+      bool AnyEdge = false;
+      for (size_t L = 0; L < Labels.size(); ++L) {
+        Edges[J][L] = Allowed[J][L] && Missing(J, L) == 0;
+        AnyEdge = AnyEdge || Edges[J][L];
+      }
+      if (!AnyEdge && J >= UnprovedJumps)
+        TakeTable(J);
       Decided[J] = true;
       Progress = true;
       break;
     }
   }
   // An edge decided early can fail once later ones exist: drop it.  Each
-  // removal only makes the remaining ones easier to keep.
+  // removal only makes the remaining ones easier to keep.  A table jump that
+  // would keep none takes its table as above, which only adds to Own.
   for (bool Removed = true; Removed;) {
     Removed = false;
     Solve();
-    for (size_t J = 0; J < Jumps.size(); ++J)
-      for (size_t L = 0; L < Labels.size(); ++L)
-        if (Edges[J][L] &&
-            (!Reached[JumpBlocks[J]] ||
-             (Needed[LabelBlocks[L]] & ~Written[JumpBlocks[J]]) != 0)) {
-          Edges[J][L] = false;
-          Removed = true;
+    for (size_t J = 0; J < Jumps.size(); ++J) {
+      bool Had = false, Has = false;
+      for (size_t L = 0; L < Labels.size(); ++L) {
+        if (!Edges[J][L])
+          continue;
+        Had = true;
+        if (Reached[JumpBlocks[J]] && Missing(J, L) == 0) {
+          Has = true;
+          continue;
         }
+        Edges[J][L] = false;
+        Removed = true;
+      }
+      if (Had && !Has && Reached[JumpBlocks[J]] && J >= UnprovedJumps)
+        TakeTable(J);
+    }
   }
 
   bool Changed = false;
