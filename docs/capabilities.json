@@ -285,6 +285,7 @@
           "neverd_version_number",
           "neverd_visit_metadata_items",
           "neverd_warm_functions_json",
+          "neverd_warm_initial_view_json",
           "neverd_xrefs_from_json",
           "neverd_xrefs_scan",
           "neverd_xrefs_to_json"
@@ -1739,6 +1740,7 @@
           "neverd_user_facts_analysis_reads_json",
           "neverd_user_reads_renamed_json",
           "neverd_warm_functions_json",
+          "neverd_warm_initial_view_json",
           "neverd_xrefs_from_json",
           "neverd_xrefs_to_json"
         ]
