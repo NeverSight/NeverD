@@ -502,9 +502,13 @@ readImmutableCodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
   return std::vector<uint8_t>(Bytes, Bytes + Size);
 }
 
-std::optional<uint64_t> readImmutableImageScalar(const BinaryImage &Image,
-                                                 va_t Address, uint32_t Size,
-                                                 size_t *RemainingWork) {
+namespace {
+/// The scalar readers' common body. KeepAddresses returns a pointer-width
+/// value that may be an image address instead of refusing it.
+std::optional<uint64_t> readImmutableScalar(const BinaryImage &Image,
+                                            va_t Address, uint32_t Size,
+                                            size_t *RemainingWork,
+                                            bool KeepAddresses) {
   if (!Size || Size > sizeof(uint64_t) || !supportsImmutableImageReads(Image))
     return std::nullopt;
   if (RemainingWork) {
@@ -565,10 +569,25 @@ std::optional<uint64_t> readImmutableImageScalar(const BinaryImage &Image,
   uint64_t Bits = 0;
   for (unsigned I = 0; I < Size; ++I)
     Bits |= uint64_t{(*Bytes)[I]} << (I * 8);
-  if (Size == Image.getPointerSize() &&
+  if (!KeepAddresses && Size == Image.getPointerSize() &&
       Image.isPotentiallyRelocatableAddress(Bits))
     return std::nullopt;
   return Bits;
+}
+} // namespace
+
+std::optional<uint64_t> readImmutableImageScalar(const BinaryImage &Image,
+                                                 va_t Address, uint32_t Size,
+                                                 size_t *RemainingWork) {
+  return readImmutableScalar(Image, Address, Size, RemainingWork,
+                             /*KeepAddresses=*/false);
+}
+
+std::optional<uint64_t> readImmutableBranchScalar(const BinaryImage &Image,
+                                                  va_t Address, uint32_t Size,
+                                                  size_t *RemainingWork) {
+  return readImmutableScalar(Image, Address, Size, RemainingWork,
+                             Image.LoadsAtLinkAddress);
 }
 
 std::optional<uint32_t> readMIPS16LiteralWord(const BinaryImage &Image,

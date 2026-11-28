@@ -5025,6 +5025,29 @@ if(LLD_EXEC)
   list(APPEND ELF_EXECUTABLES ${scalar_retracted_x64_obj}
                               ${scalar_retracted_x64_so})
 
+  # A constant index into an absolute table, linked as a static executable
+  # that runs at its link address, so the table holds plain addresses.
+  set(fixed_const_index_x64_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_jumptable_fixed_constant_index.s")
+  set(fixed_const_index_x64_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_fixed_constant_index.o")
+  set(fixed_const_index_x64_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_fixed_constant_index.exe")
+  add_custom_command(
+    OUTPUT ${fixed_const_index_x64_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -c
+            ${fixed_const_index_x64_src} -o ${fixed_const_index_x64_obj}
+    DEPENDS ${fixed_const_index_x64_src}
+    COMMENT "Compiling x86-64 fixed-image constant-index fixture")
+  add_custom_command(
+    OUTPUT ${fixed_const_index_x64_exe}
+    COMMAND ${LLD_EXEC} -static -e _start -o ${fixed_const_index_x64_exe}
+            ${fixed_const_index_x64_obj}
+    DEPENDS ${fixed_const_index_x64_obj}
+    COMMENT "Linking x86-64 fixed-image constant-index fixture")
+  list(APPEND ELF_EXECUTABLES ${fixed_const_index_x64_obj}
+                              ${fixed_const_index_x64_exe})
+
   # Functions that never return, and callers whose compiler knew it, linked
   # and stripped.
   set(noreturn_calls_x64_src

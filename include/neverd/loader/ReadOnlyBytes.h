@@ -59,6 +59,16 @@ std::optional<uint64_t>
 readImmutableImageScalar(const BinaryImage &Image, va_t Address, uint32_t Size,
                          size_t *RemainingWork = nullptr);
 
+/// readImmutableImageScalar() for a reader that only follows the value to the
+/// code it names, as exact branch recovery does. An image that runs at its
+/// link address (BinaryImage::LoadsAtLinkAddress) holds every address it
+/// stores unchanged, so there a full pointer-width value that may be an image
+/// address is returned too. The consumer must still prove the final target;
+/// the value never becomes a number that a rebuilt image would have to keep.
+std::optional<uint64_t>
+readImmutableBranchScalar(const BinaryImage &Image, va_t Address, uint32_t Size,
+                          size_t *RemainingWork = nullptr);
+
 /// Prove unique, complete file-backed instruction storage. Code may be
 /// writable, execute-only or contain fixups; this establishes neither
 /// immutability nor a callable identity, ABI or instruction semantics.

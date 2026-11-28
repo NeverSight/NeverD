@@ -561,6 +561,28 @@ TEST(ImmutableScalar, IndirectFunctionSlotsHoldWhatTheResolverReturns) {
   EXPECT_EQ(readImmutableImageScalar(Image, TextVA + 0x48, 1), 0xccu);
 }
 
+TEST(ImmutableScalar, AFixedImageKeepsTheAddressesItStoresForBranches) {
+  // An image that runs at its link address holds every address it stores, so
+  // a reader that only follows a branch target may take one. A reader that
+  // keeps the number, and any image a loader may move, may not.
+  auto Image = codeImage();
+  Image.BaseRelocations.clear();
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Segments.front().Flags = SegmentFlags::Readable;
+  Image.Sections.front().Flags = Image.Segments.front().Flags;
+  writeLE<uint64_t>(Image.Segments.front().Data.data() + 0x40, TextVA);
+  EXPECT_FALSE(readImmutableImageScalar(Image, TextVA + 0x40, 8));
+  EXPECT_FALSE(readImmutableBranchScalar(Image, TextVA + 0x40, 8));
+  Image.LoadsAtLinkAddress = true;
+  EXPECT_FALSE(readImmutableImageScalar(Image, TextVA + 0x40, 8));
+  EXPECT_EQ(readImmutableBranchScalar(Image, TextVA + 0x40, 8), TextVA);
+  EXPECT_EQ(readImmutableBranchScalar(Image, TextVA + 0x44, 4), 0u);
+  Image.IndirectFunctionSlots.insert(TextVA + 0x40);
+  EXPECT_FALSE(readImmutableBranchScalar(Image, TextVA + 0x40, 8));
+}
+
 TEST(ImmutableScalar, BudgetChargesTheInventoryBeforeARead) {
   auto Image = codeImage();
   Image.BaseRelocations.clear();
