@@ -292,7 +292,49 @@ and the mixed-mode executor. RDTSC and RDTSCP raise #UD on SGX1 and #GP(0)
 at CPL3 on SGX2 with CR4.TSD set. When admitted they use the existing
 code64 body and its time source. [Intel SDM, enclave instruction behavior](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
 
+### EGETKEY256 and EREPORT2
+
+Bind SGX256 to execute ENCLU leaves 11 and 10. EGETKEY256 accepts a 512-byte
+KEYREQUEST and a 32-byte-aligned destination. Successful requests use the
+platform's 256-bit key derivation and write exactly 32 bytes. The report and
+provisioning key names return 256 with ZF set. CPUID enumerates SHA-384
+measurements independently of SGX256.
+
+EREPORT2 reads 64 bytes of report data from RBX and checks the 1024-byte-aligned
+destination at RCX. A nonzero subtype in the full RDX returns 33. Subtype zero
+builds the 512-byte TEEINFO, hashes it with SHA-384 and submits the report
+prefix to the bound processor for HMAC-SHA256. An overlapping input is read
+before the output is written.
+
+The ISE operation writes 768 bytes and authenticates 192. The structure table
+describes the last 256 bytes as zero. The same publication says that another
+enclave can verify the report, and the verifying instruction authenticates
+224 bytes. `Report2Write` selects the observed store size. `Report2MACCoverage`
+selects the 192-byte operation or the 224-byte interoperable form. A successful
+store requires both choices. Test vectors constructed with a published HMAC
+key exercise issuance and verification on the same software processor.
+[Intel ISE 319433-063, sections 7.5.5 and 7.6](https://cdrdv2-public.intel.com/932753/319433-063-architecture-instruction-set-extensions-programming-reference.pdf)
+
+### EVERIFYREPORT2
+
+CPUID.(12H,0):EAX[7] enumerates leaf 8. It reads a 256-byte REPORTMACSTRUCT
+from private EPC and authenticates the first 224 bytes with the processor's
+report MAC key. A version mismatch returns 32 before any MAC check. A MAC
+mismatch returns 28. The guest report remains read-only throughout.
+
+Bind the verification profile for the processor being represented. SDM 093
+specifies page alignment and an exact match with the current CPUSVN. The
+earlier TDX CPU specification 343754-002 specifies 256-byte alignment, checks
+the TDX report type and reserved fields, and asks whether the CPU supports the
+reported SVN. Both documents describe status flags in the operation and list
+the affected flags as “None”. The software model can bind either flag outcome.
+When the two outcomes differ, an unknown binding stops at the original
+instruction with the incoming RAX and flags intact.
+[Intel SDM 332831-093, EVERIFYREPORT2](https://cdrdv2-public.intel.com/929362/332831-093-sdm-vol-3d.pdf) · [Intel TDX CPU 343754-002, section 3.1](https://cdrdv2-public.intel.com/733582/intel-tdx-cpu-architectural-specification.pdf)
+
+[Report authentication vectors, original CPU observations and runner receipts](evidence/x86-sgx-256bit-2026-11-28.json)
+
 The software profile starts with initialized EPC pages. Supervisor enclave
-construction and paging, the report-v2 and 256-bit key leaves, CET and XSTATE
-components beyond AVX remain open. All designated hosts reported zero usable
-EPC sections, so native SGX qualification is still outstanding.
+construction and paging, CET and XSTATE beyond AVX remain open. The designated
+hosts reported zero usable EPC sections. Native enclave qualification and the
+processor-specific report bindings remain open.

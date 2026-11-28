@@ -12,25 +12,25 @@
 #ifndef NEVERD_WEB_PACKAGES_SHA512_H
 #define NEVERD_WEB_PACKAGES_SHA512_H
 
-#include <array>
-#include <cstdint>
-#include <string>
-#include <string_view>
+#include "neverd/support/SHA512.h"
+#include "neverd/web/Error.h"
+#include "neverd/web/Limits.h"
 
 namespace neverd::web {
 class SHA512 {
-  std::array<uint64_t, 8> State;
-  std::array<uint8_t, 128> Pending{};
+  ::neverd::SHA512 Hash;
   uint64_t Bytes = 0;
-  size_t Used = 0;
-  bool Use384;
-  void block(const uint8_t *Data);
 
 public:
-  explicit SHA512(bool Use384 = false);
-  void update(std::string_view Data);
-  /// Return raw digest bytes without consuming the stream.
-  std::string result() const;
+  explicit SHA512(bool Use384 = false) : Hash(Use384) {}
+  void update(std::string_view Data) {
+    if (Data.size() > Limits::HardInputBytes - Bytes)
+      throw Error("integrity_byte_budget_exceeded");
+    Hash.update(Data);
+    Bytes += Data.size();
+  }
+  std::string result() const { return Hash.result(); }
 };
 } // namespace neverd::web
+
 #endif // NEVERD_WEB_PACKAGES_SHA512_H

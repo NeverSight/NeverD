@@ -32,8 +32,8 @@ KVM vCPUs on EPYC 7763 and EPYC 9V74 processors. Each runner executed twelve
 x64 guest images. With the upper half of RAX zero, the original
 `67 0F 01 D8` and the HighC and LLVM-to-C outputs at O0/O2 all returned.
 The four generated guests completed 200 register and xstate contexts per
-runner. With a nonzero upper half, all six images per runner raised vector 13
-with error code zero at `67 0F 01 D8`. Each exception frame records the full
+runner. With `0xfedcba98` in the upper half, all six images per runner raised
+vector 13 with error code zero at `67 0F 01 D8`. Each exception frame records the full
 faulting RAX and instruction bytes.
 
 The generated faults occurred inside LLVM's native
@@ -73,6 +73,15 @@ EPYC 7763 and an EPYC 9V45. On each CPU all six zero-high-half cases returned,
 and all six nonzero-high-half cases raised #GP(0) at the four-byte instruction.
 Each generated fault mapped back to the original step at `0x1010`.
 [EPYC 7763 hosted rebuild](https://github.com/gmh5225/test_mac_intel/actions/runs/46144197510) · [EPYC 9V45 hosted rebuild](https://github.com/gmh5225/test_mac_intel/actions/runs/46144437596)
+
+The workflow exported HighC and LLVM-to-C from NeverD `d3f236e236`. x64 NeverC
+`6d63a76bd6` and the LLVM r17 backend rebuilt all eight generated images.
+On an EPYC 7763 all six cases with a zero upper half returned at RIP+4 with
+VMCB exit code `0x81`. All six cases with `0xfedcba98` in the upper half raised
+#GP(0) at `67 0f 01 d8`. Both outcomes preserved RAX. Each generated fault PC
+mapped to input step `0x1010`. An independent local rebuild matched all eight
+objects, symbol ELFs and guest images.
+[Hardware execution and guest rebuild](https://github.com/gmh5225/test_mac_intel/actions/runs/46164846857) · [Per-image fault PCs and hashes](evidence/x86-sgx-256bit-2026-11-28.json)
 
 Local Hex-Rays analysis of the retained HighC O2 symbol ELF reproduced the
 RCX counterexample at `ida_vmrun_rcx_result`. It returned the constant

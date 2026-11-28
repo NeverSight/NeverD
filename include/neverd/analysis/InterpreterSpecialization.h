@@ -57,6 +57,17 @@ struct SpecializationControlPartitionHint {
   }
 };
 
+/// Candidate values for one physical indirect transfer. The solver must
+/// prove that every reachable target is in this set before it can replace
+/// finite-value enumeration. An incomplete proposal uses the ordinary proof
+/// path; no observed value becomes an execution premise.
+struct SpecializationControlTargetHint {
+  SpecializationCursor Cursor;
+  std::vector<uint64_t> Targets;
+
+  bool operator==(const SpecializationControlTargetHint &) const = default;
+};
+
 /// Provider certificate for the omitted physical effects of a native near
 /// CALL/RETURN. The instruction uses the configured eight-byte frame register
 /// as its stack pointer. CALL pushes its exact fallthrough address. Internal
@@ -121,9 +132,11 @@ enum class SpecializationX64CallProfile : uint8_t {
   /// invocation. This is a caller-owned callee contract, not a fact inferred
   /// from an import name or a concrete run.
   ConditionalNormalReturnResultObjectV3,
-  /// V3 plus caller-declared absolute ranges missed by every nonnull result
-  /// object. This is an explicit callee-effect premise, not inferred from an
-  /// allocator name, image layout, or observed address.
+  /// A bounded nullable result object with caller-declared absolute ranges
+  /// missed by every nonnull result object. Earlier preserved frame spans may
+  /// be empty; the current-frame suffix above the outgoing arguments remains
+  /// preserved. The exclusion is an explicit callee-effect premise, not
+  /// inferred from an allocator name, image layout, or observed address.
   ConditionalNormalReturnResultObjectExcludedV4,
   /// V2 plus declared caller-frame output spans. The named argument registers
   /// must hold exact pointers into the declared entry frame at each physical
@@ -164,8 +177,9 @@ struct SpecializationX64ReturningCall {
   va_t Address = InvalidVA;
   SpecializationX64CallProfile Profile = SpecializationX64CallProfile::None;
   uint64_t OutgoingBytes = 0;
-  /// Versions 2 through 4. Sorted, disjoint, nonempty entry-frame-relative
-  /// spans.
+  /// Versions 2 through 5. Sorted, disjoint, nonempty entry-frame-relative
+  /// spans. Version 4 may omit earlier spans while retaining the caller-frame
+  /// suffix above the outgoing arguments.
   /// Only bytes materialized immediately before the call are retained.
   std::vector<SpecializationCallPreservedFrameRange> PreservedFrameRanges;
   /// Version 4 only. Sorted, disjoint absolute ranges missed by the complete
@@ -657,6 +671,10 @@ struct SpecializationOptions {
   /// word projection and joins. This does not enlarge ordinary indirect
   /// dispatch or admit an unproved return address.
   std::optional<uint32_t> MaxNativeReturnTargets;
+  /// Optional candidate target sets at physical indirect transfers. A fresh
+  /// solver proof checks coverage under each current path; candidate values
+  /// do not authorize edges on their own.
+  std::vector<SpecializationControlTargetHint> ControlTargetHints;
 
   uint32_t nativeReturnTargetLimit() const {
     return MaxNativeReturnTargets.value_or(MaxIndirectTargets);
@@ -785,6 +803,9 @@ struct SpecializationResult {
   uint32_t NodeEvaluations = 0;
   uint32_t Contexts = 0;
   uint64_t SolverQueries = 0;
+  /// Successful per-path coverage proofs for candidate indirect target sets.
+  /// Counts proofs, not unique sites; it grants no source ABI certificate.
+  uint64_t ProvenControlTargetHints = 0;
   uint32_t RelationalWidenings = 0;
   uint32_t DiscoveredControlFields = 0;
   uint32_t DiscoveredContextFields = 0;

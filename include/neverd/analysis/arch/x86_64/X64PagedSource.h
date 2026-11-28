@@ -30,6 +30,9 @@ enum class X64PagedExit : uint64_t {
   DeviceUnavailable = 22,
   /// Resume the retained event before executing another instruction.
   EventBudgetExhausted = 23,
+  /// Internal only. The register-only epilogue is staged; the paged executor
+  /// must qualify the original CPL and controls before committing any state.
+  RegisterTransfer = 24,
 };
 
 /// Progress of the last runtime operation, independent of its final status.

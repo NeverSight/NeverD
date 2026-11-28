@@ -78,6 +78,35 @@ TEST_F(NdOpEmulatorTest,
   }
 }
 
+TEST_F(NdOpEmulatorTest, ScalarCopiesRespectSourceAndDestinationViews) {
+  for (bool Strict : {false, true})
+    for (NdOp Opcode : {NdOp::COPY, NdOp::INT_ZEXT}) {
+      NdOpEmulator Emu(Img);
+      Emu.setStrictMode(Strict);
+      LowOp Op = makeCopy(8, 0);
+      Op.Opcode = Opcode;
+      const auto Src = Op.Inputs[0].Offset, Dst = Op.Output.Offset;
+      Emu.setRegister(Dst, UINT64_MAX);
+      ASSERT_TRUE(Emu.step(Op));
+      EXPECT_FALSE(Emu.getRegister(Dst));
+
+      Emu.setRegister(Src, 0x123480);
+      Op.Inputs[0].Size = 1;
+      ASSERT_TRUE(Emu.step(Op));
+      EXPECT_EQ(Emu.getRegister(Dst), 0x80u);
+
+      Op.Output.Size = 1;
+      Emu.setRegister(Dst, 0xabcd);
+      ASSERT_TRUE(Emu.step(Op));
+      EXPECT_EQ(Emu.getRegister(Dst), 0xab80u);
+
+      Emu.setRegisterBytes(Src, {0x80});
+      Op.Inputs[0].Size = Op.Output.Size = 2;
+      ASSERT_TRUE(Emu.step(Op));
+      EXPECT_FALSE(Emu.getRegister(Dst));
+    }
+}
+
 TEST_F(NdOpEmulatorTest, PureScalarOpsCheckAddressSpaceBeforeWriting) {
   for (const bool Strict : {false, true}) {
     for (LowOp Op : {makeCopy(8, 0), makeArith(NdOp::INT_ADD, 8, 0, 5)}) {

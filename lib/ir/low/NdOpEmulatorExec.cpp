@@ -66,13 +66,14 @@ llvm::APInt shiftInteger(NdOp Opcode, const llvm::APInt &Value,
 // LOAD and STORE convert target byte order at the memory boundary. Byte zero
 // of a wide LowIR register is always the least significant byte.
 template <typename T>
-void addVMXLanes(llvm::MutableArrayRef<uint8_t> Left,
-                 llvm::ArrayRef<uint8_t> Right) {
+void applyVMXLanes(llvm::MutableArrayRef<uint8_t> Left,
+                   llvm::ArrayRef<uint8_t> Right, ppc::VMXOperation Operation) {
   using namespace llvm::support::endian;
   for (unsigned I = 0; I != ppc::VectorBytes; I += sizeof(T)) {
     T A = read<T, llvm::endianness::little>(Left.data() + I);
     T B = read<T, llvm::endianness::little>(Right.data() + I);
-    write<T, llvm::endianness::little>(Left.data() + I, A + B);
+    write<T, llvm::endianness::little>(
+        Left.data() + I, Operation == ppc::VMXOperation::Sub ? A - B : A + B);
   }
 }
 
@@ -703,7 +704,7 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
     return false;
   if (Id == Intrinsic::RISCVFloating || Id == Intrinsic::RISCVFPControl)
     return executeRISCVFloating(Op);
-  if (unsigned LaneBytes = ppc::vmxAddLaneBytes(Id)) {
+  if (auto Form = ppc::vmxBinaryForm(Id)) {
     if (!isPowerPC(Img.Arch) || Op.NumInputs != 3 ||
         Op.Inputs[0].Size != sizeof(Intrinsic) ||
         Op.Inputs[0].Offset >= unsigned(Intrinsic::_Count) ||
@@ -717,18 +718,18 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
       return false;
     auto Bytes = readOperandBytes(Op.Inputs[1]);
     const auto Right = readOperandBytes(Op.Inputs[2]);
-    switch (LaneBytes) {
+    switch (Form->LaneBytes) {
     case sizeof(uint8_t):
-      addVMXLanes<uint8_t>(Bytes, Right);
+      applyVMXLanes<uint8_t>(Bytes, Right, Form->Operation);
       break;
     case sizeof(uint16_t):
-      addVMXLanes<uint16_t>(Bytes, Right);
+      applyVMXLanes<uint16_t>(Bytes, Right, Form->Operation);
       break;
     case sizeof(uint32_t):
-      addVMXLanes<uint32_t>(Bytes, Right);
+      applyVMXLanes<uint32_t>(Bytes, Right, Form->Operation);
       break;
     default:
-      llvm_unreachable("invalid VMX add lane size");
+      llvm_unreachable("invalid VMX lane width");
     }
     writeOutputBytes(Op.Output, Bytes);
     return true;
@@ -2667,6 +2668,19 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
 bool NdOpEmulator::executeCopy(const LowOp &Op) {
   if (Op.NumInputs < 1)
     return false;
+  const NdVar &Source = Op.Inputs[0];
+  // An ordinary scalar register lookup proves availability and returns the
+  // truncated value. Exact byte views and partially known values need the
+  // byte-level checks below.
+  if ((Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ZEXT) &&
+      Op.NumInputs == 1 && Source.Size <= sizeof(uint64_t) &&
+      Op.Output.Size <= sizeof(uint64_t) && WideRegisters.empty() &&
+      UnknownBits.empty()) {
+    if (auto Value = findScalarOperand(Source)) {
+      writeOutput(Op.Output, *Value);
+      return true;
+    }
+  }
   if (Op.Opcode == NdOp::SUBBYTES) {
     if (Op.NumInputs != 2 ||
         !knownOperandBytes(Op.Inputs[1], 0, Op.Inputs[1].Size) ||

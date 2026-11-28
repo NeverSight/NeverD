@@ -11,6 +11,7 @@
 
 #include "X64FunctionCallSites.h"
 #include "X64FunctionContext.h"
+#include "X64ReturnStackEvents.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
@@ -24,7 +25,8 @@ inline void emitX64PagedDriver(
     llvm::raw_ostream &OS,
     llvm::ArrayRef<analysis::X64ContinuationInstructionSource> Units,
     const analysis::X64ContinuationSourceOptions &Options, bool FollowCalls,
-    bool FunctionContext, const X64FunctionCallSitePauses &CallSitePauses) {
+    bool FunctionContext, const X64FunctionCallSitePauses &CallSitePauses,
+    const std::set<va_t> *TransferJumps) {
   const auto Names = x64FunctionContextNames(Options.PagedDebug);
   OS << R"C(
 /* Link the NeverD paged execution bridge. Context points to X64PagedExecution.
@@ -91,12 +93,17 @@ extern uint64_t neverd_x64_paged_debug_validate_v2(
          << "_paged_debug_step(state, context, 0);\n}\n";
   }
   OS << "\nuint64_t "
-     << (FunctionContext ? Names.PagedDriver : "neverd_x64_run_paged_v6")
+     << (TransferJumps     ? kX64ReturnStackResume
+         : FunctionContext ? Names.PagedDriver
+                           : "neverd_x64_run_paged_v6")
      << "(neverd_x64_state_v6 *state, uint8_t *context,\n"
         "                                uint64_t *budget";
   if (FunctionContext)
     OS << ", " << Names.Context << " *function";
   OS << ") {\n";
+  if (TransferJumps)
+    OS << "    if (!state || !context || !budget) return "
+       << uint64_t(analysis::X64ContinuationExitV1::InvalidState) << ";\n";
   if (FunctionContext)
     emitX64FunctionContextGuard(OS, Options.PagedDebug);
   OS << "    uint64_t last = 8;\n"
@@ -117,9 +124,14 @@ extern uint64_t neverd_x64_paged_debug_validate_v2(
       emitX64FunctionContextStep(OS, Unit, "            ", true, "context", {},
                                  Options.PagedDebug ? "0" : "");
       OS << "            break;\n";
-    } else
-      OS << "status = " << Unit.Function.Name
-         << "_paged_step(state, context); break;\n";
+    } else {
+      OS << "status = " << Unit.Function.Name << "_paged_step(state, context);";
+      if (TransferJumps && TransferJumps->contains(Unit.Address))
+        OS << " if (status == "
+           << uint64_t(analysis::X64ContinuationExitV1::Jump)
+           << ") goto transfer_exit;";
+      OS << " break;\n";
+    }
   }
   OS << R"C(
         default: return last == 2 ? 2 : 8;
@@ -130,7 +142,7 @@ extern uint64_t neverd_x64_paged_debug_validate_v2(
      << "        --*budget;\n";
   OS << "        if (status == "
      << uint64_t(analysis::X64PagedExit::RepeatContinue) << ") status = 0;\n";
-  if (FollowCalls) {
+  if (FollowCalls && !TransferJumps) {
     OS << "        if (status == 1 || status == 3) {\n"
           "            switch (state->PC) {\n";
     for (const auto &Unit : Units)
@@ -140,7 +152,14 @@ extern uint64_t neverd_x64_paged_debug_validate_v2(
           "        }\n";
   }
   OS << "        if (status != 0 && status != 2) return status;\n"
-        "        last = status;\n    }\n    return 9;\n}\n";
+        "        last = status;\n    }\n    return 9;\n";
+  if (TransferJumps && !TransferJumps->empty())
+    OS << "transfer_exit:\n"
+       << "    if (neverd_x64_paged_progress_v1(context) & "
+       << analysis::kX64PagedInstructionAttempted << ") --*budget;\n"
+       << "    return " << uint64_t(analysis::X64ContinuationExitV1::Jump)
+       << ";\n";
+  OS << "}\n";
   if (FunctionContext)
     OS << R"C(
 uint64_t neverd_x64_run_paged_v6(neverd_x64_state_v6 *state, uint8_t *context,

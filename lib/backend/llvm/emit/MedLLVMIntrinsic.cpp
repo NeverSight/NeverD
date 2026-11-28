@@ -130,7 +130,7 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
         " n_in=" + std::to_string(Op.NumInputs) +
         " target=" + std::to_string(static_cast<unsigned>(TargetArch)));
   };
-  if (unsigned LaneBytes = ppc::vmxAddLaneBytes(IC)) {
+  if (auto Form = ppc::vmxBinaryForm(IC)) {
     if (!isPowerPC(TargetArch) || Op.NumInputs != 3 ||
         Op.Output.Size != ppc::VectorBytes ||
         Op.Inputs[1].Size != ppc::VectorBytes ||
@@ -139,12 +139,15 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     if (!PortableBody)
       Builder.GetInsertBlock()->getParent()->addFnAttr("target-features",
                                                        ppc::VMXFeature);
+    const unsigned LaneBytes = Form->LaneBytes;
     auto *Lanes = llvm::FixedVectorType::get(Builder.getIntNTy(8 * LaneBytes),
                                              ppc::VectorBytes / LaneBytes);
     auto *Left = Builder.CreateBitCast(getVar(Op.Inputs[1], Builder), Lanes);
     auto *Right = Builder.CreateBitCast(getVar(Op.Inputs[2], Builder), Lanes);
-    return Builder.CreateBitCast(Builder.CreateAdd(Left, Right),
-                                 sizeToType(Op.Output.Size));
+    auto *Result = Form->Operation == ppc::VMXOperation::Sub
+                       ? Builder.CreateSub(Left, Right)
+                       : Builder.CreateAdd(Left, Right);
+    return Builder.CreateBitCast(Result, sizeToType(Op.Output.Size));
   }
   if (IC == I::RISCVFloating || IC == I::RISCVFPControl) {
     const unsigned XLen = getTargetRegInfo(TargetArch).PointerSize;

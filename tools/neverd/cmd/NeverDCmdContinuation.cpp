@@ -64,7 +64,8 @@ int runContinuation(neverd_session_t Sess) {
   }
   if (Request.empty() || (Legacy && X64Continuation.getNumOccurrences()) ||
       (Legacy && LlvmRoute.getNumOccurrences()) || ContinuationReport.empty() ||
-      OutputLanguage != NEVERD_OUTPUT_C || !ExportFunc.empty() || NoOpt ||
+      OutputLanguage != NEVERD_OUTPUT_C ||
+      (!ExportFunc.empty() && (Legacy || HasObservation)) || NoOpt ||
       Devirtualize || DecompileCallees || StackFrameInfo ||
       StackFrameFile.getNumOccurrences() ||
       SourceSymbolic.getNumOccurrences() ||
@@ -77,8 +78,8 @@ int runContinuation(neverd_session_t Sess) {
            "JSON and "
            "--continuation-report; "
            "use C output (--llvm is only valid for --x64-continuation), "
-           "without ordinary function, "
-           "frame, devirtualization or source-optimization options\n";
+           "--func selects an x64 paged return-stack entry; omit frame, "
+           "devirtualization and source-optimization options\n";
     return 1;
   }
   const auto SameFile = [](llvm::StringRef A, llvm::StringRef B) {
@@ -122,13 +123,25 @@ int runContinuation(neverd_session_t Sess) {
     Observation = std::move(*Saved);
   }
   const char *Manifest = nullptr;
-  const char *Source =
-      Legacy ? neverd_x86_legacy_source_v1(Sess, Text->data(), Text->size(),
-                                           &Manifest)
-             : neverd_x64_continuation_source_with_observation_v1(
-                   Sess, Text->data(), Text->size(),
-                   HasObservation ? Observation.data() : nullptr,
-                   Observation.size(), LlvmRoute, &Manifest);
+  const char *Source;
+  if (!ExportFunc.empty()) {
+    const auto Entry = resolveDecompileEntry(Sess, ExportFunc.getValue());
+    if (!Entry) {
+      llvm::WithColor::error()
+          << "function not found: " << ExportFunc.getValue() << "\n";
+      return 1;
+    }
+    Source = neverd_x64_paged_return_entry_source_v1(
+        Sess, *Entry, Text->data(), Text->size(), LlvmRoute, &Manifest);
+  } else if (Legacy) {
+    Source = neverd_x86_legacy_source_v1(Sess, Text->data(), Text->size(),
+                                         &Manifest);
+  } else {
+    Source = neverd_x64_continuation_source_with_observation_v1(
+        Sess, Text->data(), Text->size(),
+        HasObservation ? Observation.data() : nullptr, Observation.size(),
+        LlvmRoute, &Manifest);
+  }
   auto Free = llvm::scope_exit([&] {
     neverd_free_string(Source);
     neverd_free_string(Manifest);

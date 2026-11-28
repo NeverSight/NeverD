@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check all Zbb forms and PowerPC byte-reversed transfers and trailing-zero counts after each ELF projection."""
+"""Execute RISC-V bit operations and PowerPC byte-reversed transfers and counts after each ELF projection."""
 
 import argparse
 from pathlib import Path
@@ -31,25 +31,41 @@ def trailing(x, bits):
     return (x & -x).bit_length() - 1 if x else bits
 
 
-def riscv_oracle(bits):
+def zbb_results(x, y, bits):
+    xb = x.to_bytes(bits // 8, "little")
+    sx, sy = signed(x, bits), signed(y, bits)
+    result = [x & ~y, x | ~y, ~(x ^ y), min(sx, sy), min(x, y), max(sx, sy),
+              max(x, y), rotate(x, y, bits), rotate(x, -y, bits), rotate(x, 1, bits),
+              bits - x.bit_length(), trailing(x, bits), x.bit_count(),
+              signed(x, 8), signed(x, 16), x & 0xffff,
+              int.from_bytes(bytes(255 if b else 0 for b in xb), "little"),
+              int.from_bytes(xb, "big")]
+    if bits == 64:
+        word = x & 0xffffffff
+        result.extend([signed(rotate(word, n, 32), 32) for n in (y, -y, 1)])
+        result.extend([32 - word.bit_length(), trailing(word, 32), word.bit_count()])
+    return result
+
+
+def pack_results(x, y, bits):
+    half = bits // 2
+    mask = (1 << half) - 1
+    packed = (x & mask) | ((y & mask) << half)
+    result = [packed, (y & mask) | ((x & mask) << half),
+              (x & 255) | ((y & 255) << 8), x & mask, (y & 255) << 8]
+    if bits == 64:
+        result.extend((signed((x & 0xffff) | ((y & 0xffff) << 16), 32), x & 0xffff))
+    return result
+
+
+def riscv_oracle(bits, operation):
     mask = (1 << bits) - 1
     values = (0, mask, 0x80000000, 0x0080000100ff007f & mask,
               0x0123456789abcdef & mask, 1 << (bits - 1), 0xff80)
     cases = []
     for x in values:
-        for y in (0, 1, 31, 32, 63, 64, mask, x):
-            xb = x.to_bytes(bits // 8, "little")
-            sx, sy = signed(x, bits), signed(y, bits)
-            result = [x & ~y, x | ~y, ~(x ^ y), min(sx, sy), min(x, y), max(sx, sy),
-                      max(x, y), rotate(x, y, bits), rotate(x, -y, bits), rotate(x, 1, bits),
-                      bits - x.bit_length(), trailing(x, bits), x.bit_count(),
-                      signed(x, 8), signed(x, 16), x & 0xffff,
-                      int.from_bytes(bytes(255 if b else 0 for b in xb), "little"),
-                      int.from_bytes(xb, "big")]
-            if bits == 64:
-                word = x & 0xffffffff
-                result.extend([signed(rotate(word, n, 32), 32) for n in (y, -y, 1)])
-                result.extend([32 - word.bit_length(), trailing(word, 32), word.bit_count()])
+        for y in (0, 1, 31, 32, 63, 64, 0x8000, mask, x):
+            result = operation(x, y, bits)
             cases.append(f"{{{x:#x}UL,{y:#x}UL,{{{words(v & mask for v in result)}}}}}")
     count = len(result)
     return f"""
@@ -114,7 +130,7 @@ int check(void) {{
 """
 
 
-def execute(args, profile, path):
+def execute(args, profile, path, riscv_extension):
     if profile in ("powerpc", "powerpcle"):
         # The 64-bit model executes ISA 3.0 word instructions with MSR.SF clear.
         cpu, symbols = machine(path, profile, power8=True)
@@ -126,21 +142,26 @@ def execute(args, profile, path):
             raise RuntimeError(f"{profile} {path.name}: check returned {status} or timed out")
     else:
         qemu = profile.replace("powerpc", "ppc")
-        cpu = "power10" if "ppc64" in qemu else "rv" + profile[-2:] + ",zbb=true"
+        cpu = "power10" if "ppc64" in qemu else "rv" + profile[-2:] + f",{riscv_extension}=true"
         subprocess.run([args.qemu_dir / ("qemu-" + qemu), "-cpu", cpu, path], check=True)
 
 
-def check(args, work, profile, ppc64_abi="elfv2"):
+def check(args, work, profile, ppc64_abi="elfv2", riscv_extension="zbb", double_abi=False):
     rv = profile.startswith("riscv")
     bits = 64 if "64" in profile else 32
     descriptors = not rv and bits == 64 and ppc64_abi == "elfv1"
     abi = ["-mabi=elfv1", "-fPIC"] if descriptors else []
-    flags = [f"-march=rv{bits}i_zbb"] if rv else abi
-    source = HERE / ("riscv-zbb.S" if rv else "powerpc-byte-reversed.S")
+    rv_base = f"rv{bits}ifd" if double_abi else f"rv{bits}i"
+    if double_abi:
+        abi = ["-mabi=ilp32d" if bits == 32 else "-mabi=lp64d"]
+    flags = [f"-march={rv_base}_{riscv_extension}", *abi] if rv else abi
+    fixture = "riscv-pack.S" if riscv_extension == "zbkb" else "riscv-zbb.S"
+    source = HERE / (fixture if rv else "powerpc-byte-reversed.S")
     oracle = work / "check.c"
-    oracle.write_text(riscv_oracle(bits) if rv else ppc_oracle(bits, profile.endswith("le")))
-    # Keep the caller's ABI independent; base I also enforces the source's IALIGN=32.
-    caller_flags = compiler_flags(profile) + ([f"-march=rv{bits}i"] if rv else abi)
+    operation = pack_results if riscv_extension == "zbkb" else zbb_results
+    oracle.write_text(riscv_oracle(bits, operation) if rv else ppc_oracle(bits, profile.endswith("le")))
+    # Compile the oracle without the tested extension and retain four-byte IALIGN.
+    caller_flags = compiler_flags(profile) + ([f"-march={rv_base}", *abi] if rv else abi)
     sources = [oracle]
     if rv or bits == 64:
         sources.append(HERE / "extended-scalar-start.S")
@@ -154,8 +175,11 @@ def check(args, work, profile, ppc64_abi="elfv2"):
     compile_elf(args, work, profile, source, original, "eval", extra_flags=flags)
     native = work / "native.elf"
     compile_elf(args, work, profile, source, native, entry, callees=objects, extra_flags=flags)
-    execute(args, profile, native)
-    print(f"{profile} original passed", flush=True)
+    execute(args, profile, native, riscv_extension)
+    label = f"{profile} {riscv_extension}" if rv else profile
+    if double_abi:
+        label += " ILP32D" if bits == 32 else " LP64D"
+    print(f"{label} original passed", flush=True)
     placement = image_base_option(args.ld)
     with original.open("rb") as stream:
         elf = ELFFile(stream)
@@ -177,8 +201,8 @@ def check(args, work, profile, ppc64_abi="elfv2"):
                        any(s["p_vaddr"] <= addr < s["p_vaddr"] + s["p_memsz"] for addr in old_entries)
                        for s in ELFFile(stream).iter_segments()):
                     raise AssertionError("original entry is still mapped")
-            execute(args, profile, rebuilt)
-            print(f"{profile} {route} {opt} passed", flush=True)
+            execute(args, profile, rebuilt, riscv_extension)
+            print(f"{label} {route} {opt} passed", flush=True)
 
 
 def main():
@@ -194,6 +218,9 @@ def main():
             work = Path(temp) / profile
             work.mkdir()
             check(args, work, profile, args.ppc64_abi)
+            if profile.startswith("riscv"):
+                for double_abi in (False, True):
+                    check(args, work, profile, riscv_extension="zbkb", double_abi=double_abi)
 
 
 if __name__ == "__main__":

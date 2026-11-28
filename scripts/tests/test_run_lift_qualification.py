@@ -1,5 +1,9 @@
 import copy
 import json
+from pathlib import Path
+import sys
+import tempfile
+from unittest.mock import patch
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -46,6 +50,26 @@ class LiftQualificationTests(unittest.TestCase):
             bad["tests"][0]["current_name"] = invalid
             with self.assertRaises(ValueError):
                 qualification.identities(bad)
+
+    def test_failed_preflight_replaces_stale_success_before_execution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            for name in ("qualification.json", "results.xml", "verification.json"):
+                (output / name).write_text("old success")
+            args = ["qualify", "--binary", str(output / "tests"),
+                    "--neverd", str(output / "neverd"), "--output", tmp]
+            with patch.object(sys, "argv", args), patch.object(qualification.platform, "system",
+                                                              return_value="Other"):
+                with self.assertRaisesRegex(ValueError, "native Linux"):
+                    qualification.main()
+            self.assertFalse((output / "qualification.json").exists())
+            self.assertFalse((output / "results.xml").exists())
+            report = json.loads((output / "verification.json").read_text())
+            self.assertEqual(report["first_blocker"]["path"], ["host"])
+            self.assertIn("native Linux", report["first_blocker"]["missing_evidence"])
+            self.assertEqual(report["stages"][-1]["state"], "not_run")
+            self.assertIsNone(report["record_comparison"])
+            self.assertEqual(report["caller_loop"], "unknown")
 
     def test_accepts_complete_individual_passes(self):
         self.assertEqual(qualification.audit(self.xml, self.names, 0)["passed"], 2)

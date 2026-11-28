@@ -35,6 +35,7 @@ enum class X86SgxPageType : uint8_t {
 };
 
 struct X86SgxPage {
+  static constexpr unsigned Size = 4096;
   uint64_t Physical = 0;
   uint64_t Linear = 0;
   uint64_t OwnerSECS = 0;
@@ -44,12 +45,31 @@ struct X86SgxPage {
   bool Blocked = false;
   bool Pending = false;
   bool Modified = false;
-  std::array<uint8_t, 4096> Bytes{};
+  std::array<uint8_t, Size> Bytes{};
   /// EPCM.PR from a permission restriction. Tracking is the page's imported
   /// epoch observation for EACCEPT in this serialized processor model.
   bool PermissionRestricted = false;
   std::optional<bool> TrackingComplete{};
 };
+
+/// Intel ISE 319433-063 gives a 768-byte EREPORT2 store in its operation
+/// and a zero reserved tail in its 1024-byte layout. Bind the processor's
+/// observed write footprint before publishing a successful report.
+enum class X86SgxReport2Write { Payload768, ZeroReservedTail };
+
+/// ISE 319433-063 uses 192 bytes in EREPORT2's operation and documents
+/// interoperability with EVERIFYREPORT2, which authenticates 224 bytes.
+enum class X86SgxReport2MACCoverage { Operation192, Verifiable224 };
+
+/// SDM 093 specifies a page-aligned operand and the current CPUSVN. The
+/// earlier TDX CPU specification 343754-002 accepts 256-byte alignment and
+/// validates the report header and supported CPUSVN. CPUID reports neither
+/// distinction.
+enum class X86SgxVerifyReport2Profile { Unbound, SDM093, TDX002 };
+
+/// SDM 093's EVERIFYREPORT2 operation writes status flags, while its Flags
+/// Affected entry preserves them. Bind the observable choice for this CPU.
+enum class X86SgxVerifyReport2Flags { SetStatus, Preserve };
 
 /// CPUID.(12H,1):EAX[10] selects the AEX notification attribute.
 /// CPUID.(12H,0):EAX[11] separately selects ENCLU[EDECCSSA].
@@ -62,12 +82,21 @@ struct X86SgxFeatures {
   bool KeySeparationAndSharing = false;
   /// CPUID.(12H,0):EAX[1]. Dynamic page operations on the imported EPCM.
   bool SGX2 = false;
+  /// CPUID.(12H,0):EAX[12] and CPUID.(12H,1):EAX[11], respectively.
+  bool SGX256 = false;
+  bool SHA384Measurements = false;
+  std::optional<X86SgxReport2Write> Report2Write{};
+  std::optional<X86SgxReport2MACCoverage> Report2MACCoverage{};
+  /// CPUID.(12H,0):EAX[7]. An empty value means this CPU lacks the leaf.
+  std::optional<X86SgxVerifyReport2Profile> VerifyReport2{};
+  std::optional<X86SgxVerifyReport2Flags> VerifyReport2Flags{};
 
   static constexpr uint64_t Provision = 1u << 4, InitToken = 1u << 5,
-                            KSS = 1u << 7, Notify = 1u << 10;
+                            KSS = 1u << 7, Notify = 1u << 10, SHA384 = 1u << 11;
   uint64_t allowedAttributes() const {
     return 7 | (ProvisionKey ? Provision : 0) | (InitTokenKey ? InitToken : 0) |
-           (KeySeparationAndSharing ? KSS : 0) | (AEXNotify ? Notify : 0);
+           (KeySeparationAndSharing ? KSS : 0) | (AEXNotify ? Notify : 0) |
+           (SHA384Measurements ? SHA384 : 0);
   }
 };
 

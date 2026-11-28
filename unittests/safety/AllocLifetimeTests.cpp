@@ -2522,6 +2522,170 @@ TEST(AllocLifetime, DirectReadUsesEntireLocalByteRange) {
   }
 }
 
+TEST(AllocLifetime, IndexedReadRequiresAllPossibleBytesWithinTheWrite) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const MedVar Base = mkReg(0x38, 0), Index = mkReg(0x30, 0);
+  auto check = [&](const char *Case, NdOp Direction, int Bias, NdOp Bound,
+                   MedVar Mask, unsigned ReadBytes, bool Expected) {
+    SCOPED_TRACE(Case);
+    FB B("lookup", 0x100);
+    const int Block = B.block();
+    B.op(Block, NdOp::STORE, MedVar{}, {Base, MedVar::makeConst(7, 4)});
+    B.op(Block, NdOp::INT_ADD, temp(20), {Base, MedVar::makeConst(Bias, 8)});
+    B.op(Block, Bound, temp(21, Mask.Size),
+         {mkReg(Index.RegOff, 0, Mask.Size), Mask});
+    B.op(Block, NdOp::INT_ZEXT, temp(22), {temp(21, Mask.Size)});
+    B.op(Block, Direction, temp(23), {temp(20), temp(22)});
+    B.op(Block, NdOp::LOAD, temp(24, ReadBytes), {temp(23)}, 0x108);
+    B.op(Block, NdOp::INT_ZEXT, temp(25), {temp(24, ReadBytes)});
+    B.ret(Block, {temp(25)});
+    DirectReadInitialization Reads;
+    audit({B.F}, &Img, true, true, nullptr, &Reads);
+    EXPECT_EQ(Reads.BoundedIndexStore, Expected ? 1u : 0u);
+    EXPECT_EQ(Reads.Indexed.ReturnedValue, Expected ? 1u : 0u);
+    EXPECT_EQ(Reads.Indexed.WriteUnknown, Expected ? 0u : 1u);
+    EXPECT_EQ(Reads.Indexed.OutputUnknown, 0u);
+  };
+  const auto Mask = MedVar::makeConst(3, 8);
+  check("bounded byte", NdOp::INT_ADD, 0, NdOp::INT_AND, Mask, 1, true);
+  check("last word crosses store", NdOp::INT_ADD, 0, NdOp::INT_AND, Mask, 2,
+        false);
+  check("backward", NdOp::INT_SUB, 3, NdOp::INT_AND, Mask, 1, true);
+  check("before begin", NdOp::INT_SUB, 2, NdOp::INT_AND, Mask, 1, false);
+  check("negative index", NdOp::INT_ADD, 4, NdOp::INT_OR,
+        MedVar::makeConst(-4, 8), 1, true);
+  check("negative word was zero extended", NdOp::INT_ADD, 4, NdOp::INT_OR,
+        MedVar::makeConst(-4, 4), 1, false);
+  check("address-valued mask", NdOp::INT_ADD, 0, NdOp::INT_AND,
+        MedVar::makeConst(3, 8, ConstantAddressProvenance::DataAddress), 1,
+        false);
+}
+
+TEST(AllocLifetime, IndexedAddressSurvivesWidthChangesOnlyAsAnUnknown) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const auto Base = mkReg(0x38, 0);
+  FB B("narrow_address", 0x100);
+  const int Block = B.block();
+  B.op(Block, NdOp::STORE, MedVar{}, {Base, MedVar::makeConst(7, 4)});
+  B.op(Block, NdOp::INT_AND, temp(10),
+       {mkReg(0x30, 0), MedVar::makeConst(3, 8)});
+  B.op(Block, NdOp::INT_ADD, temp(11), {Base, temp(10)});
+  B.op(Block, NdOp::SUBBYTES, temp(12, 4), {temp(11), MedVar::makeConst(0, 4)});
+  B.op(Block, NdOp::INT_SEXT, temp(13), {temp(12, 4)});
+  B.op(Block, NdOp::LOAD, temp(14, 1), {temp(13)}, 0x108);
+  B.ret(Block, {temp(14, 1)});
+  DirectReadInitialization Reads;
+  audit({B.F}, &Img, true, true, nullptr, &Reads);
+  EXPECT_EQ(Reads.Indexed.WriteUnknown, 1u);
+  EXPECT_EQ(Reads.Indexed.ReturnedValue, 0u);
+  EXPECT_EQ(Reads.BoundedIndexStore, 0u);
+}
+
+TEST(AllocLifetime, IndexedWriteRequiresAnUninterruptedMatchingAddress) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  for (unsigned Case = 0; Case < 4; ++Case) {
+    SCOPED_TRACE(Case);
+    FB B("read_field", 0x100);
+    const int Entry = B.block();
+    MedVar Base = mkReg(0x38, 0);
+    B.op(Entry, NdOp::STORE, MedVar{}, {Base, MedVar::makeConst(7, 4)});
+    int Block = Entry;
+    if (Case == 0)
+      B.call(Entry, "callback", temp(25), {});
+    if (Case == 1)
+      B.op(Entry, NdOp::STORE, MedVar{}, {mkReg(0x10, 0), temp(26, 1)});
+    if (Case == 2) {
+      Block = B.block();
+      B.succ(Entry, Block);
+    }
+    if (Case == 3)
+      Base.RegOff += 8; // Same id/version, different physical register view.
+    B.op(Block, NdOp::INT_AND, temp(10),
+         {mkReg(0x30, 0), MedVar::makeConst(3, 8)});
+    B.op(Block, NdOp::INT_ADD, temp(11), {Base, temp(10)});
+    B.op(Block, NdOp::LOAD, temp(12, 1), {temp(11)}, 0x108);
+    B.ret(Block, {temp(12, 1)});
+    DirectReadInitialization Reads;
+    audit({B.F}, &Img, true, true, nullptr, &Reads);
+    EXPECT_EQ(Reads.Indexed.WriteUnknown, 1u);
+    EXPECT_EQ(Reads.Indexed.ReturnedValue, 0u);
+    EXPECT_EQ(Reads.BoundedIndexStore, 0u);
+  }
+}
+
+TEST(AllocLifetime, IndexedOutputDistinguishesFinalValueAndUncertainty) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  enum class Result {
+    Returned,
+    Stored,
+    Replaced,
+    Partial,
+    IndexedDestination,
+    Conflict,
+    OtherPointer,
+    Barrier,
+    Constant
+  };
+  for (auto Case :
+       {Result::Returned, Result::Stored, Result::Replaced, Result::Partial,
+        Result::OtherPointer, Result::IndexedDestination, Result::Conflict,
+        Result::Barrier, Result::Constant}) {
+    SCOPED_TRACE(static_cast<int>(Case));
+    FB B("select_word", 0x100);
+    const int Block = B.block();
+    const auto Base = mkReg(0x38, 0);
+    auto Output = mkReg(0x10, 0);
+    B.op(Block, NdOp::STORE, MedVar{}, {Base, MedVar::makeConst(7, 8)});
+    B.op(Block, NdOp::INT_AND, temp(10),
+         {mkReg(0x30, 0), MedVar::makeConst(3, 8)});
+    B.op(Block, NdOp::INT_ADD, temp(11), {Base, temp(10)});
+    B.op(Block, NdOp::LOAD, temp(12, 2), {temp(11)}, 0x108);
+    if (Case == Result::IndexedDestination) {
+      B.op(Block, NdOp::INT_ZEXT, temp(16), {temp(12, 2)});
+      B.op(Block, NdOp::INT_ADD, temp(17), {Output, temp(16)});
+      Output = temp(17);
+    }
+    MedVar Ret = Output;
+    if (Case == Result::Returned || Case == Result::Conflict) {
+      B.op(Block, NdOp::INT_ZEXT, temp(13), {temp(12, 2)});
+      Ret = temp(13);
+    } else if (Case == Result::Constant) {
+      Ret = MedVar::makeConst(7, 4);
+    } else {
+      B.op(Block, NdOp::STORE, MedVar{}, {Output, temp(12, 2)});
+      if (Case == Result::Replaced || Case == Result::Partial ||
+          Case == Result::IndexedDestination)
+        B.op(Block, NdOp::STORE, MedVar{},
+             {Output, MedVar::makeConst(1, Case == Result::Partial ? 1 : 2)});
+      if (Case == Result::OtherPointer)
+        Ret = Base;
+      if (Case == Result::Barrier)
+        B.call(Block, "callback", temp(18), {});
+    }
+    B.ret(Block, {Ret});
+    TypedFunctionDebug Debug(B.F.Entry, B.F.Name, {}, NdType::makeVoid());
+    if (Case == Result::Conflict)
+      B.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsValue;
+    DirectReadInitialization Reads;
+    audit({B.F}, &Img, true, true, Case == Result::Conflict ? &Debug : nullptr,
+          &Reads);
+    EXPECT_EQ(Reads.BoundedIndexStore, 1u);
+    EXPECT_EQ(Reads.Indexed.ReturnedValue, unsigned(Case == Result::Returned));
+    EXPECT_EQ(Reads.Indexed.ReturnedStorage, unsigned(Case == Result::Stored));
+    EXPECT_EQ(Reads.Indexed.NoOutput,
+              unsigned(Case == Result::Replaced || Case == Result::Constant));
+    EXPECT_EQ(Reads.Indexed.OutputUnknown,
+              unsigned(Case == Result::Partial ||
+                       Case == Result::OtherPointer ||
+                       Case == Result::IndexedDestination ||
+                       Case == Result::Conflict || Case == Result::Barrier));
+  }
+}
+
 TEST(AllocLifetime, NarrowStackLoadAddressFailsClosed) {
   BinaryImage Img;
   Img.Arch = Arch::X64;

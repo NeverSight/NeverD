@@ -98,6 +98,9 @@ struct X86ModeExecutionOptions {
   unsigned PagingAddressBits = 0;
   std::optional<X86ModeUndefinedState> Undefined;
   bool EFERSystemCall = false;
+  /// Whether this CPU counts a retired RSM as a taken branch under TF+BTF.
+  /// Ordinary single stepping and an RSM that shuts down do not use this.
+  std::optional<bool> RsmCountsAsBranch{};
 };
 
 /// The full address and mode jointly identify an original instruction.

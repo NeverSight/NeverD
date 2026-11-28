@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: bdf1863ae51c38581385a81c597f9712cac005863a64c13ab77261330134280c -->
+<!-- i18n-source: f4cad4fb2911551a33587204eba278c27e3ac69d51bda87dfc2badd260be7b55 -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ CLI, 통합, AI 에이전트는 **순수 C API**로 동일한 엔진 **`libnever
 
 | 대상 | 검증된 ELF 프로필 |
 |---|---|
-| RISC-V | 리틀 엔디언 RV32 (ILP32, ILP32D) 및 RV64 (LP64, LP64D). ELF 정보에 따라 M, A, 정수 C 또는 개별 Zmmul, Zaamo, Zalrsc, Zca 확장을 선택합니다. ELF ISA 속성에 따라 Zba 1.0, Zbb 1.0, Zbs 1.0 및 Zicond 1.0도 활성화됩니다. Zicntr 2.0은 `rdcycle`, `rdtime`, `rdinstret`를 지원하며 RV32에서는 각 카운터의 상위 32비트도 읽을 수 있습니다. |
-| PowerPC | 빅 엔디언 및 리틀 엔디언 PPC32 System V와 PPC64 ELFv1/ELFv2. PPC32는 secure PLT와 기존 BSS-PLT를 통한 모듈 간 호출을 지원합니다. 두 PPC64 ABI 모두 PLT를 통한 모듈 간 호출과 TOC 전환을 지원합니다. ELFv1은 함수 디스크립터를 사용하고 ELFv2는 전역 및 지역 진입점을 지원합니다. 검증된 스칼라 연산에는 부호 있는 나눗셈과 부호 없는 나눗셈, 곱의 상위 워드를 반환하는 곱셈, 오버플로를 표시하는 곱셈이 포함되며, 이 연산들이 CR0와 XER에 미치는 영향도 검증했습니다. PPC64는 접두사가 있는 POWER10 정수 덧셈, 로드, 스토어 명령도 지원합니다. VMX의 `vaddubm`, `vadduhm`, `vadduwm`은 각각 8, 16, 32비트 부호 없는 요소를 더하고 각 요소의 너비를 넘는 비트는 버립니다. |
+| RISC-V | 리틀 엔디언 RV32 (ILP32, ILP32D) 및 RV64 (LP64, LP64D). ELF 정보에 따라 M, A, 정수 C 또는 개별 Zmmul, Zaamo, Zalrsc, Zca 확장을 선택합니다. ELF ISA 속성에 따라 Zba 1.0, Zbb 1.0, Zbs 1.0 및 Zicond 1.0도 활성화됩니다. Zicntr 2.0은 `rdcycle`, `rdtime`, `rdinstret`를 지원하며 RV32에서는 각 카운터의 상위 32비트도 읽을 수 있습니다. Zbkb 1.0은 `pack`과 `packh`를 지원하며 RV64에서는 `packw`도 지원합니다. |
+| PowerPC | 빅 엔디언 및 리틀 엔디언 PPC32 System V와 PPC64 ELFv1/ELFv2. PPC32는 secure PLT와 기존 BSS-PLT를 통한 모듈 간 호출을 지원합니다. 두 PPC64 ABI 모두 PLT를 통한 모듈 간 호출과 TOC 전환을 지원합니다. ELFv1은 함수 디스크립터를 사용하고 ELFv2는 전역 및 지역 진입점을 지원합니다. 검증된 스칼라 연산에는 부호 있는 나눗셈과 부호 없는 나눗셈, 곱의 상위 워드를 반환하는 곱셈, 오버플로를 표시하는 곱셈이 포함되며, 이 연산들이 CR0와 XER에 미치는 영향도 검증했습니다. PPC64는 접두사가 있는 POWER10 정수 덧셈, 로드, 스토어 명령도 지원합니다. VMX의 `vaddubm`, `vadduhm`, `vadduwm`은 각각 8, 16, 32비트 부호 없는 요소를 더하고 각 요소의 너비를 넘는 비트는 버립니다. 같은 요소 너비의 모듈러 뺄셈 명령은 `vsububm`, `vsubuhm`, `vsubuwm`입니다. |
 
 이 프로필의 네이티브 코드 재작성은 향후 과제입니다. [RISC-V 및 PowerPC 지원 범위(영문)](../riscv-powerpc.md)
 

@@ -356,7 +356,11 @@ assembles the public report body and commits the prepared store. The platform
 supplies the processor-specific key derivation and local report MAC. The same
 EPC bank owns the contents, permissions and tracking result of each SGX2 page.
 EACCEPTCOPY publishes a page and its access rights together after both operands
-have been checked. [Software SGX1](x86-sgx-transfer.md#software-sgx1-enclave-execution) · [SGX2 page operations](x86-sgx-transfer.md#sgx2-dynamic-enclave-pages)
+have been checked. For EREPORT2 the executor assembles the report and submits its
+authentication prefix to the platform. EVERIFYREPORT2 checks the CPU security
+version before authenticating the 224-byte prefix. EGETKEY256 requests a distinct
+32-byte key derivation.
+[Wide keys and reports](x86-sgx-transfer.md#egetkey256-and-ereport2) · [Software SGX1](x86-sgx-transfer.md#software-sgx1-enclave-execution) · [SGX2 page operations](x86-sgx-transfer.md#sgx2-dynamic-enclave-pages)
 
 Faultable IRET and RETF reuse the same continuation
 return and descriptor templates through that concrete evaluator. Their bound
@@ -18988,6 +18992,17 @@ singletons under the same reachable predicate. A complete masked domain is
 omitted as an unconstrained factor only after the shared bit-origin proof
 establishes independence from the predicate and all other columns. Marginal
 domains alone never authorize a Cartesian-product assumption.
+
+`SpecializationControlTargetHint` supplies sorted candidate values at one
+physical indirect transfer, including a native return. It is a precision
+request, not a control-flow or environment declaration. When structural
+targets are unavailable, the core proves under the current path that no
+target lies outside the candidates before trying their guarded edges. An
+incomplete or inconclusive candidate set falls back to ordinary finite-value
+enumeration; an exhausted proof or an unproved edge cannot publish a partial
+graph. Hint sites, values, symbolic construction and solver work have separate
+bounds. `ProvenControlTargetHints` counts successful path-specific coverage
+proofs, not distinct sites or source-level certificates.
 
 The temporary visited-node index uses a dense map. Serialization still follows the ordered traversal, so table growth and hash order do not change the key, variable renaming, or budget charges.
 

@@ -3,6 +3,7 @@
 
 import argparse
 import copy
+import operator
 from pathlib import Path
 import subprocess
 import tempfile
@@ -16,8 +17,12 @@ from roundtrip import DATA, PROFILES, RETURN, STACK, compile_elf, compiler_flags
 
 
 COUNTERS = ("rdcycle", "rdtime", "rdinstret")
-VMX_TYPES = {"vaddubm": ("unsigned char", 1), "vadduhm": ("unsigned short", 2),
-             "vadduwm": ("unsigned int", 4)}
+VMX_TYPES = {
+    "vaddubm": ("unsigned char", 1, "+"), "vadduhm": ("unsigned short", 2, "+"),
+    "vadduwm": ("unsigned int", 4, "+"),
+    "vsububm": ("unsigned char", 1, "-"), "vsubuhm": ("unsigned short", 2, "-"),
+    "vsubuwm": ("unsigned int", 4, "-"),
+}
 
 
 def reference_words(clang, work, profile):
@@ -42,13 +47,13 @@ def reference_words(clang, work, profile):
     return {name: int.from_bytes(data[i * 4:i * 4 + 4], order) for i, name in enumerate(names)}
 
 
-def vector_cases(lane_bytes, order, mixed):
+def vector_cases(lane_bytes, order, mixed, op):
     if lane_bytes == 1:
         # 257 permutes all 65,536 input pairs across the sixteen lanes.
         for block in range(0, 1 << 16, 16):
             pairs = [((block + lane) * 257) & 0xffff for lane in range(16)]
             left, right = bytes(p >> 8 for p in pairs), bytes(p & 255 for p in pairs)
-            yield left + right, bytes((x + y) & 255 for x, y in zip(left, right))
+            yield left + right, bytes(op(x, y) & 255 for x, y in zip(left, right))
         return
 
     bits = 8 * lane_bytes
@@ -65,7 +70,7 @@ def vector_cases(lane_bytes, order, mixed):
         batch = [pairs[(block + i) % len(pairs)] for i in range(lanes)]
         left = pack(x for x, _ in batch)
         right = pack(y for _, y in batch)
-        total = pack((x + y) & mask for x, y in batch)
+        total = pack(op(x, y) & mask for x, y in batch)
         if mixed:
             # The intermediate is eight halfwords. Reinterpret its bytes as
             # four words before the second add, using the guest's memory order.
@@ -77,7 +82,7 @@ def vector_cases(lane_bytes, order, mixed):
             yield left + right, total
 
 
-def check_vector(binary, profile, lane_bytes, mixed):
+def check_vector(binary, profile, lane_bytes, mixed, op):
     cpu, symbols = machine(binary, profile, power8=True)
     # The 64-bit POWER8 also implements the 32-bit AltiVec ABI with MSR.SF clear.
     msr = cpu.reg_read(ppc_const.UC_PPC_REG_MSR)
@@ -91,7 +96,7 @@ def check_vector(binary, profile, lane_bytes, mixed):
             toc = int.from_bytes(cpu.mem_read(start + 8, 8), order)
             start = int.from_bytes(cpu.mem_read(start, 8), order)
             cpu.reg_write(ppc_const.UC_PPC_REG_2, toc)
-    for block, (inputs, expect) in enumerate(vector_cases(lane_bytes, order, mixed)):
+    for block, (inputs, expect) in enumerate(vector_cases(lane_bytes, order, mixed, op)):
         output = DATA + len(inputs)
         cpu.mem_write(DATA, inputs + bytes(x ^ 255 for x in expect))
         cpu.reg_write(ppc_const.UC_PPC_REG_1, STACK + 2048)
@@ -238,16 +243,17 @@ def check_profile(args, work, profile, name, words, elfv1=False, unused_vector=F
             "  __asm__ volatile (\"ecall\" : : \"r\"(status), \"r\"(exit_nr) : \"memory\");\n"
             "  __builtin_unreachable();\n}\n")
     else:
-        mixed = name == "mixed"
-        scalar, lane_bytes = VMX_TYPES["vadduhm" if mixed else name]
+        mixed = name in ("mixed", "mixed-sub")
+        first = {"mixed": "vadduhm", "mixed-sub": "vsubuhm"}.get(name, name)
+        scalar, lane_bytes, symbol = VMX_TYPES[first]
         types = f"typedef {scalar} Vec __attribute__((vector_size(16)));\n"
-        params, values, expression = "Vec a, Vec b", "in[0], in[1]", "a + b"
+        params, values, expression = "Vec a, Vec b", "in[0], in[1]", f"a {symbol} b"
         if unused_vector:
             params, values = "Vec unused, " + params, "(Vec){0}, " + values
         if mixed:
             types += "typedef unsigned int Words __attribute__((vector_size(16)));\n"
             params, values = params + ", Words c", values + ", (Words)in[2]"
-            expression = "(Vec)((Words)(a + b) + c)"
+            expression = f"(Vec)((Words)({expression}) + c)"
         leaf.write_text(types + f"Vec probe({params}) {{ return {expression}; }}\n")
         caller.write_text(types + f"extern Vec probe({params});\n"
                           f"void check(const Vec *in, Vec *out) {{ *out = probe({values}); }}\n")
@@ -261,7 +267,7 @@ def check_profile(args, work, profile, name, words, elfv1=False, unused_vector=F
             subprocess.run([args.qemu_dir / qemu if args.qemu_dir else qemu, binary],
                            check=True, timeout=30)
         else:
-            check_vector(binary, profile, lane_bytes, mixed)
+            check_vector(binary, profile, lane_bytes, mixed, operator.add if symbol == "+" else operator.sub)
 
     original = work / "original.elf"
     linked = work / "linked.elf"
@@ -277,7 +283,7 @@ def check_profile(args, work, profile, name, words, elfv1=False, unused_vector=F
             text = elf.get_section_by_name(".text").data()
             order = "little" if elf.little_endian else "big"
             encodings = {int.from_bytes(text[i:i+4], order) & 0xfc0007ff for i in range(0, len(text), 4)}
-            for mnemonic in (("vadduhm", "vadduwm") if mixed else (name,)):
+            for mnemonic in ((first, "vadduwm") if mixed else (name,)):
                 if words[mnemonic] not in encodings:
                     raise RuntimeError(f"{target}: compiler fixture contains no {mnemonic}")
     execute(linked)
@@ -331,7 +337,7 @@ def main():
             else:
                 abis = (False, True) if args.elfv1_ld and profile.startswith("powerpc64") else (False,)
                 for elfv1 in abis:
-                    for name in (*VMX_TYPES, "mixed"):
+                    for name in (*VMX_TYPES, "mixed", "mixed-sub"):
                         check_profile(args, work, profile, name, words, elfv1)
                     check_profile(args, work, profile, "vaddubm", words, elfv1, unused_vector=True)
 

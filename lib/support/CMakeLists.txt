@@ -3,6 +3,7 @@ neverd_add_text_acceleration()
 
 add_neverd_component_library(NeverDDigest
   SHA256.cpp
+  SHA512.cpp
   LLVM_COMPONENTS Support TargetParser
 )
 

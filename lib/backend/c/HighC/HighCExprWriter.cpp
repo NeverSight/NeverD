@@ -2358,19 +2358,21 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   std::string Name = resolvedCallTarget(E);
 
   if (E.IntrinsicId != Intrinsic::None) {
-    if (unsigned LaneBytes = ppc::vmxAddLaneBytes(E.IntrinsicId)) {
+    if (auto Form = ppc::vmxBinaryForm(E.IntrinsicId)) {
       if (!isPowerPC(Opts.TheArch) || E.Operands.size() != 2)
-        throw std::runtime_error("invalid PowerPC vector addition");
+        throw std::runtime_error("invalid PowerPC vector arithmetic");
       static const std::string Bytes = typeToC(ppc::byteVectorType());
-      auto Add = [&](const std::string &Lanes) {
+      auto Binary = [&](const std::string &Lanes) {
+        const char *Operator =
+            Form->Operation == ppc::VMXOperation::Sub ? " - " : " + ";
         return "(__builtin_bit_cast(" + Lanes + ", " + exprStr(*E.Operands[0]) +
-               ") + __builtin_bit_cast(" + Lanes + ", " +
+               ")" + Operator + "__builtin_bit_cast(" + Lanes + ", " +
                exprStr(*E.Operands[1]) + "))";
       };
-      if (LaneBytes == 1)
-        return Add(Bytes);
+      if (Form->LaneBytes == 1)
+        return Binary(Bytes);
       return "__builtin_bit_cast(" + Bytes + ", " +
-             Add(typeToC(ppc::vmxVectorType(LaneBytes))) + ")";
+             Binary(typeToC(ppc::vmxVectorType(Form->LaneBytes))) + ")";
     }
     if (E.IntrinsicId == Intrinsic::RISCVFloating ||
         E.IntrinsicId == Intrinsic::RISCVFPControl) {

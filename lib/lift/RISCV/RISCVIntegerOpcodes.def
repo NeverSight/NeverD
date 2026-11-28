@@ -27,6 +27,12 @@ NEVERD_RISCV_OPCODE(Jal, 0x6f)
 NEVERD_RISCV_OPCODE(System, 0x73)
 NEVERD_RISCV_OPCODE(ExceptRdMask, 0xfffff07f)
 
+// Zbkb 1.0 register packing. PACK on RV32 and PACKW on RV64 also
+// encode Zbb ZEXT.H when rs2 is x0.
+NEVERD_RISCV_OPCODE(Pack, 0x08004033)
+NEVERD_RISCV_OPCODE(PackH, 0x08007033)
+NEVERD_RISCV_OPCODE(PackW, 0x0800403b)
+
 // Zicond 1.0 register forms, excluding rd, rs1 and rs2.
 NEVERD_RISCV_OPCODE(CzeroEqz, 0x0e005033)
 NEVERD_RISCV_OPCODE(CzeroNez, 0x0e007033)

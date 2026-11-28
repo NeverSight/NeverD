@@ -143,9 +143,6 @@ executeX86Rsm(X86ModeState &S, X86PagedMemory &Normal, X86PagedMemory &SMRAM,
     }
     Progress.SaveArea = std::move(B);
   }
-  if (TF && (S.Debug->DebugCTL & kX86BranchTraceFlag))
-    return invalid("software RSM branch single-stepping requires a bound "
-                   "processor behavior");
   auto Next = S;
   auto C = SMRAM.controls();
   restoreX86SmmState(*Progress.SaveArea, Next, C, Normal.features().LongMode);
@@ -189,10 +186,17 @@ executeX86Rsm(X86ModeState &S, X86PagedMemory &Normal, X86PagedMemory &SMRAM,
                                 Next.Debug->DebugCTL, Options.Long.DebugProfile,
                                 C.CR4, Next.Debug->PendingData))
     return invalid("restored debug state exceeds the bound SMM profile");
+  const uint64_t FirmwareDebugCTL = S.Debug->DebugCTL;
+  if (TF && (FirmwareDebugCTL & kX86BranchTraceFlag) &&
+      !Options.RsmCountsAsBranch.has_value())
+    return invalid("software RSM branch single-stepping requires a bound "
+                   "processor behavior");
+  const bool Step = x86InstructionDebugStep(
+      TF, FirmwareDebugCTL, Options.RsmCountsAsBranch.value_or(false));
   llvm::cantFail(Normal.bindControls(C));
   S = std::move(Next);
   R.InstructionCompleted = true;
-  if (TF) {
+  if (Step) {
     x86PublishInstructionDebug(*S.Debug, true);
     R.Exception = X86MemoryException{1, 0, {}};
   }

@@ -19,6 +19,13 @@ breakpoint from a post-commit trap. TPR aliases, device routing, source
 arbitration and complete environment import remain open. The registry inputs
 have the ordinary scalar binding below.
 
+For physical entries whose return stack can change, the V6 paged
+`return_stack_events` interface supplies named C entry points on both routes.
+The producer supplies the current offline state and paged memory once per
+invocation. Each instruction obtains its operands at its original PC. CALL,
+RET, audited unproved jumps and privilege returns expose their distinct exits.
+See [the invocation and resumption contract](../../../../docs/x64-continuation-source.md#paged-entries-with-a-changing-return-stack).
+
 The single-function ordinary C view can take an original V6 pre-CALL state
 directly, including a bounded stack window for offline analysis. Its checked
 64-bit load consumes one observation at the actual operand. The unbound

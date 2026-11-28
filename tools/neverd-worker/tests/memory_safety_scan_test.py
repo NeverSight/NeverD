@@ -42,14 +42,14 @@ class BorrowedSession:
         return handle
 
 
-def sdk_reports(host, path, catalog=None):
+def sdk_reports(host, path, catalog=None, analyzers=("both", "audit", "hunt")):
     handle = host.call("neverd_session_create")
     assert handle
     try:
         session = Session(handle, _native=BorrowedSession(), _host=host)
         session.load(path)
         return {name: session.scan(analyzer=name, sinks=str(catalog) if catalog else None)
-                for name in ("both", "audit", "hunt")}
+                for name in analyzers}
     finally:
         host.call("neverd_session_destroy", handle)
 
@@ -139,6 +139,47 @@ def verify_direct_read_initialization(cli, worker, host, root):
         assert findings == ([] if initialized else [("uninitialized_read", "UNSAFE")])
 
 
+def verify_indexed_output(cli, worker, host, root):
+    # Compiled Win64 routines on an initialized byte array. In the append
+    # case the destination is the returned cursor, four bytes past the base.
+    store = "c7 01 11 22 33 44 "
+    read = "0f b6 04 11 "
+    cases = (
+        ("return", store + "83 e2 03 " + read + "0f b6 c0 c3", "YES", "YES", "returned_value"),
+        ("append", "f7 d2 " + store + "48 8d 41 04 48 83 ca fc 0f b6 54 11 04 88 51 04 c3",
+         "YES", "YES", "returned_storage"),
+        ("replaced", "4c 89 c0 " + store + "83 e2 03 0f b6 0c 11 41 88 08 41 c6 00 07 c3",
+         "YES", "NO", None),
+        ("partial", store + "83 e2 07 " + read + "0f b6 c0 c3", "UNKNOWN", "UNKNOWN", None),
+        ("transformed", store + "83 e2 03 " + read + "0f b6 c0 83 c0 09 c3", "YES", "UNKNOWN", None),
+        ("discarded", store + "83 e2 03 " + read + "b8 01 00 00 00 c3",
+         "UNKNOWN", "UNKNOWN", "unmatched_native"),
+    )
+    for name, code, written, output, evidence in cases:
+        path = root / ("indexed-" + name + ".exe")
+        path.write_bytes(pe(bytes.fromhex(code)))
+        report, _ = cli_report(cli, path, "--analyzer=audit")
+        proof = report["analyzers"]["audit"]["indexed_read_output"]
+        verdict = "UNKNOWN" if "UNKNOWN" in (written, output) else "SAFE"
+        assert report["coverage_complete"] and not report["findings"], report
+        assert proof["verdict"] == report["verdict"] == verdict, report
+        assert proof["reads"] == 1 and proof["written_before_read"][written] == 1, proof
+        assert proof["reaches_output"][output] == 1, proof
+        assert sum(proof["reaches_output"].values()) == sum(proof["written_before_read"].values()) == 1
+        if evidence:
+            assert proof[evidence] == 1, proof
+        if name in ("append", "partial"):
+            assert sdk_reports(host, path, analyzers=("audit",))["audit"] == report
+            combined, _ = cli_report(cli, path)
+            assert combined["verdict"] == verdict and combined["analyzers"]["audit"] == report["analyzers"]["audit"]
+            if worker:
+                with Client(worker) as client:
+                    opened = client.call("open", {"path": str(path), "analysis": False, "warm": False})
+                    assert opened["status"] == "ok", opened
+                    result = client.call("memory_safety_scan", {"analyzer": "audit"}, timeout=90)
+                    assert result["status"] == "ok" and result["payload"] == report, result
+
+
 def verify_cli_options(cli, clean, output):
     run = subprocess.run([cli, "scan", str(clean), "--json", "--analyzer=both", "-o", str(output)],
                          capture_output=True, text=True, timeout=90)
@@ -206,6 +247,7 @@ def main():
             assert row["state"] == "unsupported" and "unsupported instruction at 0x140001002" in row["error"], row
             assert "direct_read_initialization" not in row
         verify_direct_read_initialization(args.cli, args.worker, host, root)
+        verify_indexed_output(args.cli, args.worker, host, root)
         verify_cli_options(args.cli, clean, root / "report.json")
         verify_shared_catalog_scope(args.cli, host, mixed, root / "catalog.json")
 

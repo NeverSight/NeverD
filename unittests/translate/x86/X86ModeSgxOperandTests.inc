@@ -18,6 +18,7 @@ TEST_F(X86ModeSgxThreadTest, KeyAndReportCheckOperandsInArchitecturalOrder) {
     uint8_t Vector;
     uint32_t Error;
     uint64_t FaultAddress;
+    bool FeatureAvailable = true;
   };
   // Input points into the read-only code page. Missing is in ELRANGE and
   // identity mapped by ordinary paging but has no matching EPCM entry.
@@ -33,7 +34,21 @@ TEST_F(X86ModeSgxThreadTest, KeyAndReportCheckOperandsInArchitecturalOrder) {
                         Case{1, Input, Output, 0, 6, 13, 0, 0},
                         Case{1, Input, Output, 0, 78, 13, 0, 0},
                         Case{1, Input, Output, 0, 76, 13, 0, 0},
-                        Case{1, Input, Output, 0, 3, 13, 0, 0}}) {
+                        Case{1, Input, Output, 0, 3, 13, 0, 0},
+                        Case{8, Input, 0, 0, 0, 13, 0, 0},
+                        Case{8, Base - 4096, 0, 0, 0, 13, 0, 0},
+                        Case{8, Missing, 0, 0, 0, 14, 0x8005, Missing},
+                        Case{8, Missing, 0, 0, 0, 13, 0, 0, false},
+                        Case{11, Missing, 1, 0, 0, 14, 0x8005, Missing},
+                        Case{11, Input, Output + 16, 0, 0, 13, 0, 0},
+                        Case{11, Input, Missing, 0, 78, 14, 0x8007, Missing},
+                        Case{11, Input, Output, 0, 78, 13, 0, 0},
+                        Case{10, Missing, 1, 1, 0, 14, 0x8005, Missing},
+                        Case{10, Input + 32, Missing, 1, 0, 13, 0, 0},
+                        Case{10, Input + 64, Output, 1, 0, 13, 0, 0},
+                        Case{10, Input, Missing, 1, 0, 14, 0x8007, Missing},
+                        Case{10, Missing, 1, 1, 0, 13, 0, 0, false},
+                        Case{11, Missing, 1, 0, 0, 13, 0, 0, false}}) {
     SCOPED_TRACE(testing::Message()
                  << C.Leaf << " BX=" << C.BX << " CX=" << C.CX << " DX=" << C.DX
                  << " byte=" << C.InvalidByte);
@@ -44,7 +59,10 @@ TEST_F(X86ModeSgxThreadTest, KeyAndReportCheckOperandsInArchitecturalOrder) {
     if (C.InvalidByte)
       Code.Bytes[0x400 + C.InvalidByte] = 1;
     const auto Outside = Machine;
-    bindThread();
+    X86SgxFeatures Features{.SGX256 = C.FeatureAvailable && C.Leaf >= 10};
+    if (C.FeatureAvailable && C.Leaf == 8)
+      Features.VerifyReport2 = X86SgxVerifyReport2Profile::SDM093;
+    bindThread(Features);
     X86ModeExecution Execution(*Memory, Options);
     uint64_t Budget = 1;
     ASSERT_EQ(
@@ -125,7 +143,8 @@ TEST_F(X86ModeSgxThreadTest,
   }
 }
 
-void X86ModeSgxThreadTest::checkSavedEnclaveOperand(bool Accept) {
+void X86ModeSgxThreadTest::checkSavedEnclaveOperand(unsigned Leaf) {
+  const bool Accept = Leaf == 5;
   startThread();
   privateInstruction(0, Enclu);
   put(0x12000, 0x13007);
@@ -143,13 +162,13 @@ void X86ModeSgxThreadTest::checkSavedEnclaveOperand(bool Accept) {
   Next.TrackingComplete = true;
   llvm::support::endian::write16le(Previous.Bytes.data() + 512,
                                    Accept ? 0x20b : 0xffff);
-  bindThread({.SGX2 = Accept});
+  bindThread({.SGX2 = Accept, .SGX256 = Leaf == 11});
   X86ModeExecution First(*Memory, Options);
   uint64_t Budget = 1;
   ASSERT_EQ(llvm::cantFail(First.run(Machine, Program, Budget)).Completions,
             1u);
   auto &R = Machine.Core.Core.Core.Core.Core.Core;
-  R.GPR[0] = Accept ? 5 : 1;
+  R.GPR[0] = Leaf;
   R.GPR[3] = Previous.Linear + 512;
   R.GPR[1] = Next.Linear;
   Budget = 1;
@@ -158,10 +177,10 @@ void X86ModeSgxThreadTest::checkSavedEnclaveOperand(bool Accept) {
   ASSERT_TRUE(Machine.Pending);
   EXPECT_EQ(Stop.Attempts, 1u);
   EXPECT_EQ(Budget, 0u);
-  // Changing the saved input to 3 would either require the report-key
-  // platform or cause EACCEPT to fault on a different SECINFO type.
+  // Rereading this value would require the sealing-key platform or
+  // cause EACCEPT to fault on the replacement SECINFO.
   ASSERT_EQ(llvm::cantFail(Memory->store({R.GPR[3], MemoryAccessKind::Write, 3},
-                                         std::array<uint8_t, 2>{3, 0}))
+                                         std::array<uint8_t, 2>{4, 0}))
                 .Status,
             X86PageWalkStatus::Completed);
   Stop = llvm::cantFail(First.run(Machine, {}, Budget));
@@ -188,22 +207,26 @@ void X86ModeSgxThreadTest::checkSavedEnclaveOperand(bool Accept) {
 }
 
 TEST_F(X86ModeSgxThreadTest, KeyRequestSurvivesOutputPageTableBackingRepair) {
-  checkSavedEnclaveOperand(false);
+  for (unsigned Leaf : {1u, 11u}) {
+    SCOPED_TRACE(Leaf);
+    checkSavedEnclaveOperand(Leaf);
+  }
 }
 
 TEST_F(X86ModeSgxThreadTest,
        AcceptRetainsSecinfoAcrossRepeatedPageTableRepair) {
-  checkSavedEnclaveOperand(true);
+  checkSavedEnclaveOperand(5);
 }
 
 TEST_F(X86ModeSgxThreadTest,
        ValidKeyAndReportRequirePlatformStateAfterOperandChecks) {
-  for (unsigned Leaf : {0u, 1u}) {
+  for (unsigned Leaf : {0u, 1u, 11u}) {
     startThread();
     privateInstruction(0, Enclu);
-    llvm::support::endian::write16le(Code.Bytes.data() + 512, 3);
+    llvm::support::endian::write16le(Code.Bytes.data() + 512,
+                                     Leaf == 11 ? 4 : 3);
     std::fill_n(Previous.Bytes.begin() + 512, 512, 0x5a);
-    bindThread();
+    bindThread({.SGX256 = Leaf == 11});
     X86ModeExecution Execution(*Memory, Options);
     uint64_t Budget = 1;
     ASSERT_EQ(

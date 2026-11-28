@@ -12,6 +12,7 @@
 
 #include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
 
+#include <span>
 #include <vector>
 
 namespace neverd::analysis::detail {
@@ -47,8 +48,22 @@ public:
                                       uint64_t SavedFlags);
 
 private:
+  static constexpr unsigned Report2Size = 1024, Report2PayloadSize = 768;
+  static llvm::Expected<std::array<uint8_t, Report2Size>>
+  buildReport2(const translate::X86SgxKeyPlatform &Platform,
+               const translate::X86SgxPage &SECS,
+               std::span<const uint8_t, 64> Data,
+               translate::X86SgxReport2MACCoverage Coverage);
+  enum class KeyReportLeaf : uint32_t {
+    Report = 0,
+    Key = 1,
+    VerifyReport2 = 8,
+    Report2 = 10,
+    Key256 = 11
+  };
   static llvm::Expected<X86ModeExecutionResult>
-  keyOrReport(X86ModeState &State, translate::X86PagedMemory &Memory,
+  keyOrReport(KeyReportLeaf Leaf, X86ModeState &State,
+              translate::X86PagedMemory &Memory,
               X86SgxInstructionProgress &Progress, unsigned InstructionSize,
               X86ModeExecutionResult Result);
   static llvm::Expected<X86ModeExecutionResult>

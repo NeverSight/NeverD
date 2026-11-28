@@ -3466,7 +3466,8 @@ class RepositoryCapabilityTests(unittest.TestCase):
                       "neverd_devirtualize_source_v12",
                       "neverd_devirtualize_machine_source_v12",
                       "neverd_x64_continuation_source_v1",
-                      "neverd_x64_continuation_source_with_observation_v1"],
+                      "neverd_x64_continuation_source_with_observation_v1",
+                      "neverd_x64_paged_return_entry_source_v1"],
                 "python": [],
                 "cli": [
                     "neverd decompile --devirtualize",

@@ -29,6 +29,7 @@
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -1046,6 +1047,8 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X86ModeSgxNotificationTests.inc"
 #include "X86ModeSgxOperandTests.inc"
 #include "X86ModeSgxKeyPlatformTests.inc"
+#include "X86ModeSgxWideKeyReportTests.inc"
+#include "X86ModeSgxVerifyReportTests.inc"
 #include "X86ModeSgxDynamicMemoryTests.inc"
 #include "X86ModeSgxTests.inc"
 #include "X86ModeSmmTests.inc"
