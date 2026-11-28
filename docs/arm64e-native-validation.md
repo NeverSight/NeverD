@@ -2939,6 +2939,21 @@ Normal memory. This also exercises unaligned scalar spills on the same memory
 type used for a Darwin thread stack. The linker checks where the guest ends
 against the first stack block.
 
+On the M4 Max, the 110 original images had identical SHA-256 hashes in
+the baseline and candidate runs. Across independent O0 and O2 attempts,
+publication succeeded in all 124 valid cases and was refused in all
+96 invalid cases. The baseline had refused 72 valid attempts and accepted
+24 invalid ones. The separate two-generation regression checked 876
+active-frame snapshots and 1,154 signing rows. The M4 passed 420 Release tests, including
+the additional compact and DWARF language cases. Hosted macOS passed
+367 tests. For each export the Arm FVP executed 324 current bodies
+in 8,352 calls, replayed six archived inventories and verified
+the disabled-feature control for every inventory.
+[Qualification record](evidence/arm64e-combined-signing-carriers-2026-11-28.json) ·
+[Hosted macOS Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46143020794) ·
+[M4 export on Arm FVP](https://github.com/gmh5225/test_mac_intel/actions/runs/46143293586) ·
+[Hosted export on Arm FVP](https://github.com/gmh5225/test_mac_intel/actions/runs/46147038399)
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,
