@@ -5554,13 +5554,41 @@ TEST(CallExitRegisters, OpaqueExitDoesNotInventAStoredValue) {
             ASSERT_TRUE(
                 HighCEmitter().emit(Result.HighFuncs, Output, COptions));
           }
-          const auto Name = Source.find(" produce_exit(");
-          ASSERT_NE(Name, std::string::npos) << Source;
-          const auto Start = Source.rfind('\n', Name) + 1;
-          const auto End = Source.find(';', Name);
-          ASSERT_NE(End, std::string::npos) << Source;
-          const std::string Provider = Source.substr(Start, End - Start) +
-                                       " { ++observed_calls; return 1; }\n";
+          const llvm::StringRef Generated(Source);
+          std::string Provider;
+          if (Generated.contains(", produce_exit) __asm__(")) {
+            // Open declarations carry a linker name, not a C signature for
+            // a definition. Bind the independent oracle to that same name.
+            if (Generated.contains(", produce_exit) __asm__(\"produce_exit\")")) {
+              Provider = R"(
+int64_t neverd_test_producer(void) __asm__("produce_exit");
+)";
+            } else {
+              ASSERT_TRUE(Generated.contains(
+                  ", produce_exit) __asm__(__NEVERD_WIN64_STR("
+                  "__USER_LABEL_PREFIX__) \"produce_exit\")"))
+                  << Source;
+              Provider = R"(
+#define NEVERD_TEST_STRING_INNER(x) #x
+#define NEVERD_TEST_STRING(x) NEVERD_TEST_STRING_INNER(x)
+int64_t neverd_test_producer(void)
+    __asm__(NEVERD_TEST_STRING(__USER_LABEL_PREFIX__) "produce_exit");
+#undef NEVERD_TEST_STRING
+#undef NEVERD_TEST_STRING_INNER
+)";
+            }
+            Provider += R"(
+int64_t neverd_test_producer(void) { ++observed_calls; return 1; }
+)";
+          } else {
+            const auto Name = Source.find(" produce_exit(");
+            ASSERT_NE(Name, std::string::npos) << Source;
+            const auto Start = Source.rfind('\n', Name) + 1;
+            const auto End = Source.find(';', Name);
+            ASSERT_NE(End, std::string::npos) << Source;
+            Provider = Source.substr(Start, End - Start) +
+                       " { ++observed_calls; return 1; }\n";
+          }
           const std::string Guard = R"(
 #include <stdint.h>
 #include <stdlib.h>
