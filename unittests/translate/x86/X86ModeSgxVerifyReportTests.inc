@@ -58,6 +58,25 @@ public:
 };
 } // namespace
 
+TEST_F(X86ModeSgxThreadTest, VerifyReportRejectsUnenumeratedProcessorBindings) {
+  using Coverage = X86SgxReport2MACCoverage;
+  using Profile = X86SgxVerifyReport2Profile;
+  using Flags = X86SgxVerifyReport2Flags;
+  for (auto F :
+       {X86SgxFeatures{.Report2MACCoverage = Coverage::Operation192},
+        X86SgxFeatures{.SGX256 = true,
+                       .Report2MACCoverage = static_cast<Coverage>(255)},
+        X86SgxFeatures{.VerifyReport2 = static_cast<Profile>(255)},
+        X86SgxFeatures{.VerifyReport2Flags = Flags::Preserve},
+        X86SgxFeatures{.VerifyReport2 = Profile::SDM093,
+                       .VerifyReport2Flags = static_cast<Flags>(255)}}) {
+    auto Bank = X86SgxMemory::create({}, {}, F);
+    ASSERT_FALSE(Bank);
+    EXPECT_NE(llvm::toString(Bank.takeError()).find("invalid"),
+              std::string::npos);
+  }
+}
+
 TEST_F(X86ModeSgxThreadTest, VerifyReportConsumesAnIssuedEnclaveReport) {
   using Coverage = X86SgxReport2MACCoverage;
   for (auto C :
