@@ -17,7 +17,7 @@ def linkage_startup(profile, entry, set_thread_pointer=""):
 
 
 def build_linkage_objects(args, build, profile, run):
-    pic = profile.linkage != "small-data"
+    pic = profile.linkage not in ("small-data", "relocation-bounds", "branch-slots")
     soft = profile.soft_float
     n64 = profile.abi == "n64"
     target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}", "-filetype=obj"]
@@ -56,6 +56,37 @@ def build_linkage_objects(args, build, profile, run):
              *(["-mattr=" + ",".join(features)] if features else []),
              *([] if pic else ["-mgpopt"]), "-o", build / name, "-"], source=source)
 
+    if profile.linkage == "branch-slots":
+        compact = profile.release == 6
+        driver = (FIXTURES / "branch_slots.ll").read_text()
+        # With a delay slot, adds of 1 and 4 run even on the taken paths.
+        compile_object("caller.o", driver.replace("ZERO_INCREMENT", "12" if compact else "13")
+                       .replace("ONE_INCREMENT", "3" if compact else "7"), attrs)
+        source = (FIXTURES / "branch_slots.s").read_text()
+        features = attrs + (["+micromips"] if profile.isa == "micromips" else [])
+        for obj, base in (("calc.o", 8), ("updated.o", 31)):
+            run([args.mc, *target, f"-triple={profile.triple}", "-mattr=" + ",".join(features),
+                 f"-defsym=COMPACT={int(compact)}", f"-defsym=BASE={base}",
+                 "-o", build / obj, "-"], source=source)
+        return ["start.o", "caller.o", "calc.o"]
+    if profile.linkage == "relocation-bounds":
+        driver = (FIXTURES / "relocation_bounds.ll").read_text()
+        before, after = ((0x12347fff7fff7fff, 0x12347fff7fff8001) if n64 else (0x12347fff, 0x12348001))
+        compile_object("caller.o", driver.replace("WORD", "i64" if n64 else "i32")
+                       .replace("BEFORE", str(before)).replace("AFTER", str(after)), attrs)
+        source = (FIXTURES / "relocation_bounds.s").read_text()
+        features = attrs + ([] if profile.isa == "classic" else ["+" + profile.isa])
+        variants = (("calc.o", "carry_anchor-1", "gp_low", "gp_high"),
+                    ("updated.o", "carry_anchor+1", "gp_low", "gp_high"),
+                    ("below.o", "carry_anchor+1", "gp_low-1", "gp_high"),
+                    ("above.o", "carry_anchor+1", "gp_low", "gp_high+1"))
+        for obj, value, low, high in variants:
+            run([args.mc, *target, f"-triple={profile.triple}", "-mattr=" + ",".join(features),
+                 f"-defsym=MIPS16={int(profile.isa == 'mips16')}", f"-defsym=N64={int(n64)}",
+                 f"-defsym=R6={int(profile.release == 6)}",
+                 "-o", build / obj, "-"], source=source.replace("CARRY_VALUE", value)
+                 .replace("GP_LOW", low).replace("GP_HIGH", high))
+        return ["start.o", "caller.o", "calc.o"]
     if profile.linkage == "init-arrays":
         compile_object("caller.o", (FIXTURES / "init_arrays.ll").read_text(), attrs)
         calc = (FIXTURES / "init_arrays_calc.ll").read_text()
@@ -178,6 +209,12 @@ def inspect_linkage(image, profile, function, text):
         return
     if profile.linkage == "large-segments":
         verify_large_segments(image, profile, symtab)
+    if profile.linkage == "relocation-bounds":
+        gp, = symtab.get_symbol_by_name("_gp")
+        first, = symtab.get_symbol_by_name("gp_low")
+        last, = symtab.get_symbol_by_name("gp_high")
+        if (first["st_value"] - gp["st_value"], last["st_value"] - gp["st_value"]) != (-32768, 32767):
+            raise ValueError(f"{profile.name}: GP-relative bytes moved off the signed 16-bit endpoints")
     if profile.linkage == "callback-table":
         table, = symtab.get_symbol_by_name("callback_table")
         width = image.elfclass // 8
@@ -314,6 +351,29 @@ def verify_linkage_objects(folder, profile, hashes, digest):
             callee, _ = references(obj, (".text.calc",))
             if (got, "weights") not in callee:
                 raise ValueError(f"{profile.name}: {obj} is missing the weights GOT relocation")
+        return
+    if profile.linkage in ("relocation-bounds", "branch-slots"):
+        if set(hashes) != {"caller.o", "calc.o", "updated.o"}:
+            raise ValueError(f"{profile.name}: expected the indirect caller and both callees")
+        caller, _ = references("caller.o", (".rodata.callback",))
+        pointer = 18 if profile.abi == "n64" else 2  # R_MIPS_64 or R_MIPS_32
+        if caller != {(pointer, "calc")}:
+            raise ValueError(f"{profile.name}: missing function pointer relocation")
+        if profile.linkage == "branch-slots":
+            for obj in ("calc.o", "updated.o"):
+                refs, _ = references(obj, (".text.calc",))
+                if refs:
+                    raise ValueError(f"{profile.name}: unexpected relocation in the local branch body {refs}")
+            return
+        gp, hi, lo = {"classic": (7, 5, 6), "micromips": (136, 134, 135), "mips16": (101, 104, 105)}[profile.isa]
+        kinds = [hi, lo]
+        if profile.abi == "n64":
+            kinds.extend((29, 28) if profile.isa == "classic" else (152, 151))  # HIGHEST, HIGHER
+        expected = {(gp, "gp_low"), (gp, "gp_high")} | {(kind, "carry_anchor") for kind in kinds}
+        for obj in ("calc.o", "updated.o"):
+            actual, _ = references(obj, (".text.calc",))
+            if actual != expected:
+                raise ValueError(f"{profile.name}: unexpected {obj} relocations {actual ^ expected}")
         return
     if set(hashes) != {"caller.o", "calc.o"}:
         raise ValueError(f"{profile.name}: expected both original object files")

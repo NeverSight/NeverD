@@ -25,7 +25,7 @@ MODES = ("section", "inplace")
 SAVED_ASSEMBLY_FLAGS = ("-fintegrated-as", "-save-temps=obj")
 C_CALL_UPGRADES = {"direct": "c-call-upgrade", "saved-replacement": "c-call-upgrade-saved",
                    "pic-saved-replacement": "c-call-upgrade-pic"}
-PRODUCT_VERSION = 17
+PRODUCT_VERSION = 19
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -134,7 +134,7 @@ class Profile:
 
     @property
     def soft_float(self):
-        return self.linkage in ("pic-soft", "far-branches") or self.tls_blocks
+        return self.linkage in ("pic-soft", "far-branches", "relocation-bounds", "branch-slots") or self.tls_blocks
 
     @property
     def name(self):
@@ -232,10 +232,14 @@ def profiles(version=PRODUCT_VERSION):
                 workloads = ("pic-hard", "pic-soft", "small-data", "tls", "tls-ie")
                 if version >= 6:
                     workloads += ("tls-bss", "tls-bss-ie")
+                if version >= 18:
+                    workloads += ("relocation-bounds",)
                 for release in (2, 6):
                     for isa in ("classic", "micromips"):
                         for linkage in workloads:
                             yield Profile(abi, little, isa, release, linkage=linkage)
+                        if version >= 19:
+                            yield Profile(abi, little, isa, release, linkage="branch-slots")
                 if abi == "o32":
                     for linkage in workloads:
                         yield Profile(abi, little, "mips16", linkage=linkage)
@@ -312,7 +316,13 @@ def layout(profile, section, *, split_entry=False):
     calc = (".calc.update ALIGN(0x10000) : { *(.text.calc) } :code" if split_entry else
             ".calc.update ALIGN(0x1000) : { *(.text.calc) }")
     script = LAYOUT
-    if profile.linkage == "init-arrays":
+    if profile.linkage == "relocation-bounds":
+        anchor = "0x12347fff7fff8000" if profile.abi == "n64" else "0x12348000"
+        script = script.replace("  .data :", f"""  .gp_edges : {{ *(.gp.first) . += 65534; *(.gp.last) }}
+  _gp = ADDR(.gp_edges) + 0x8000;
+  carry_anchor = {anchor};
+  .data :""")
+    elif profile.linkage == "init-arrays":
         arrays = []
         for name in ("preinit_array", "init_array", "fini_array"):
             arrays.append(f"  .{name} : {{ __{name}_start = .; KEEP(*(SORT_BY_INIT_PRIORITY(.{name}.*))) "
@@ -713,7 +723,9 @@ def qualify_named_inputs(args, build, out, profile, expected):
 
 
 def save_linkage_objects(build, out, profile):
-    names = ("caller.o", "calc.o", "updated.o") if profile.c_pic else ("caller.o", "calc.o")
+    names = ["caller.o", "calc.o"]
+    if profile.c_pic or profile.linkage in ("relocation-bounds", "branch-slots"):
+        names.append("updated.o")
     hashes = {}
     for name in names:
         shutil.copyfile(build / name, out / name)
@@ -762,7 +774,8 @@ def qualify(args):
             for mode in MODES:
                 patch(mode, out / f"{mode}.elf")
                 if (profile.c_call or profile.entry_alias or profile.dwarf_version
-                        or profile.linkage in ("init-arrays", "large-segments", "callback-table")):
+                        or profile.linkage in ("init-arrays", "large-segments", "callback-table",
+                                               "relocation-bounds", "branch-slots")):
                     reference = build / "reference.elf"
                     script = build / ("section.ld" if mode == "section" else "base.ld")
                     run([args.lld, "-static", "-T", script, "-o", reference,
@@ -770,6 +783,14 @@ def qualify(args):
                     if digest(reference) != digest(out / f"{mode}.elf"):
                         raise ValueError(f"{name}: {mode} output differs from the direct link")
             results[name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
+            if profile.linkage == "relocation-bounds":
+                for obj, offset in (("below.o", -32769), ("above.o", 32768)):
+                    encode(manifest_path, {**manifest, "replacement": obj})
+                    for mode in MODES:
+                        target = out / f"{mode}.elf"
+                        patch(mode, target, error=f"out of range: {offset} is not in [-32768, 32767]")
+                        if digest(target) != results[name][mode]:
+                            raise ValueError(f"{name}: GP offset {offset} changed the {mode} output")
             if profile.linkage or profile.c_pic:
                 object_hashes[name] = save_linkage_objects(build, out, profile)
                 continue
