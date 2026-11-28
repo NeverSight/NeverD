@@ -21180,7 +21180,19 @@ Frame-offset proof keys normalize a top-level 64-bit address sum by removing its
 
 The Objective-C source exporter clears `CEmitterOptions::EmitRecordGuards` and `CEmitterOptions::UseUnalignedPointers` for the complete native unit and individual method units. Exact-width byte copies preserve unaligned memory access while keeping generated macros outside the mobile parser; conditional and mutating directives remain rejected.
 
-The reader also recognizes the exact, complete `ContractionPolicy` and AArch64 raw-call pointer-authentication blocks shared by the C emitters. Either or both may precede declarations; their text remains intact for compilation and does not contribute function definitions. The reader does not evaluate arbitrary conditional directives. Modified, truncated, wrapped or nested blocks, and subsequent macro redefinitions, remain unsupported.
+The full Objective-C report includes native C for the image. If the C writer
+refuses a function definition, this unit records its entry and reason in a
+`neverd.not-decompiled` comment. Each method uses its own ABI, storage and
+dependency evidence. A typed method can therefore be recovered even when its
+raw native definition has an address of unknown extent.
+
+For a declared narrow integer return, source-call lowering follows the low
+bytes backwards from each return through wide register moves and control-flow
+joins. An intervening register definition ends that dependency. Earlier
+full-width values in the same physical register keep their original identity
+in pointer comparisons and calls.
+
+The reader recognizes the exact floating-point contraction policy, fixed-width GCC rotate fallbacks and AArch64 raw-call pointer-authentication blocks defined by the C backend. Each block can precede declarations. The assembler preserves the original text and excludes it from the function count. The reader does not evaluate arbitrary conditional directives. Modified, truncated, wrapped or nested blocks, and subsequent macro redefinitions, remain unsupported.
 
 ## Bounded bulk directory attributes
 
