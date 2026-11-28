@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "InstructionFlow.h"
 #include "JSONText.h"
 #include "SessionImpl.h"
 
@@ -12,12 +13,18 @@
 #include "neverd/safety/SafetyScan.h"
 #include "neverd/sdk/NeverDCAPI.h"
 
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/JSON.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <new>
+#include <optional>
 #include <string>
+#include <vector>
 using namespace neverd;
 using namespace neverd::sdk;
 
@@ -146,8 +153,113 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
                       [&](safety::Track) { return Request.canceled(); }));
 }
 
-void setSafetyBoundaryErrorNoThrow(Session *S,
-                                   llvm::StringRef Message) noexcept {
+// Only full-width, initialized slots known to the loader are pointers.
+// Two slots containing the same address are two distinct initializers.
+uint64_t dataPointerCount(const BinaryImage &Img, const Section &Data) {
+  const uint64_t Backed = std::min(Data.Size, Data.FileSz);
+  const unsigned Width = Img.getPointerSize();
+  uint64_t Count = 0;
+  for (auto It = Img.DataPtrRelocSlots.lower_bound(Data.VA);
+       It != Img.DataPtrRelocSlots.end(); ++It) {
+    const va_t Offset = *It - Data.VA;
+    if (Offset >= Backed || Width > Backed - Offset)
+      break;
+    const auto Target = relocatedPointer(Img, *It);
+    const Section *Dest = Target ? Img.getSectionFor(*Target) : nullptr;
+    if (!Dest || Dest->IsImageHeader || Dest->isExecutable() ||
+        Img.isCodeAddress(*Target))
+      continue;
+    // A one-past pointer may have the same value as the next section's
+    // first byte. Its relocation still belongs to the original section.
+    const auto Owner = Img.DataPtrRelocTargetOwners.find(*It);
+    if (Owner == Img.DataPtrRelocTargetOwners.end() ||
+        Dest->contains(Owner->second))
+      ++Count;
+  }
+  return Count;
+}
+
+const char *runDataPtrScan(Session &S, neverd_cancel_probe_fn Cancel,
+                           void *Context) {
+  S.clearError();
+  if (!S.Loaded) {
+    S.setError("no binary loaded");
+    return nullptr;
+  }
+  const BinaryImage &Img = S.Img;
+  if (!Img.isCOFF() || Img.Arch != Arch::X64) {
+    S.setError("data-ptr scan requires an x64 PE/COFF image");
+    return nullptr;
+  }
+  const Section *Data = Img.getDataSection();
+  if (!Data || !Data->isReadable() || Data->isExecutable()) {
+    S.setError(
+        "data-ptr scan requires a readable, non-executable data section");
+    return nullptr;
+  }
+  if (neverd_session_discover_functions_cancellable(&S, Cancel, Context) < 0 ||
+      !S.synchronizeFunctions())
+    return nullptr;
+
+  // Overlapping function extents and read/modify/write operands can publish
+  // an instruction more than once. Count its original address once.
+  llvm::DenseSet<va_t> Instructions;
+  size_t FunctionsScanned = 0;
+  size_t IncompleteFunctions = 0;
+  for (std::optional<va_t> Cursor = 0; Cursor;) {
+    if (Cancel && Cancel(Context)) {
+      S.setError("data-ptr scan canceled");
+      return nullptr;
+    }
+    const FunctionPage Page =
+        functionPage(S, *Cursor, FunctionPage::MaxFunctionsPerPage);
+    FunctionsScanned += Page.Functions.size();
+    struct FunctionMatches {
+      std::vector<va_t> Addresses;
+      bool Unlifted = false;
+    };
+    std::vector<FunctionMatches> Matches(Page.Functions.size());
+    std::vector<FunctionDecodeStatus> Coverage;
+    const bool Decoded = decodeFunctionReferences(
+        S, Page,
+        [&](size_t Index, va_t Address, llvm::StringRef,
+            const InstructionFlow &Flow, unsigned, InstructionMode) {
+          Matches[Index].Unlifted |= Flow.Kind == UnliftedFlow;
+          if (llvm::any_of(Flow.Refs, [&](const InstructionRef &Ref) {
+                return Data->contains(Ref.To);
+              }))
+            Matches[Index].Addresses.push_back(Address);
+        },
+        &Coverage);
+    if (!Decoded) {
+      S.setError("failed to initialize the native reference decoder");
+      return nullptr;
+    }
+    for (size_t Index = 0; Index < Matches.size(); ++Index) {
+      const auto &Batch = Matches[Index];
+      Instructions.insert(Batch.Addresses.begin(), Batch.Addresses.end());
+      IncompleteFunctions += Coverage[Index].Incomplete || Batch.Unlifted;
+    }
+    Cursor = Page.NextEntry;
+  }
+  const uint64_t Pointers = dataPointerCount(Img, *Data);
+  if (Cancel && Cancel(Context)) {
+    S.setError("data-ptr scan canceled");
+    return nullptr;
+  }
+  return dupStr(jsonToString(
+      llvm::json::Object{{"schema", "neverd.data-ptr-scan"},
+                         {"schema_version", 1},
+                         {"format", Img.getFormatName()},
+                         {"arch", getArchName(Img.Arch)},
+                         {"section", Data->Name},
+                         {"functions_scanned", FunctionsScanned},
+                         {"incomplete_functions", IncompleteFunctions},
+                         {"code_references", Instructions.size()},
+                         {"data_pointers", Pointers}}));
+}
+
+void setScanBoundaryErrorNoThrow(Session *S, llvm::StringRef Message) noexcept {
   if (!S)
     return;
   try {
@@ -166,17 +278,17 @@ const char *internalSafetyErrorReportNoThrow(Session *S,
       Detail += ": ";
       Detail += jsonSafeText(Message);
     }
-    setSafetyBoundaryErrorNoThrow(S, Detail);
+    setScanBoundaryErrorNoThrow(S, Detail);
     const char *Owned = dupStr(Request.error(Detail));
     if (!Owned)
-      setSafetyBoundaryErrorNoThrow(
+      setScanBoundaryErrorNoThrow(
           S, "safety allocation failed while reporting an internal error");
     return Owned;
   } catch (const std::bad_alloc &) {
-    setSafetyBoundaryErrorNoThrow(
+    setScanBoundaryErrorNoThrow(
         S, "safety allocation failed while reporting an internal error");
   } catch (...) {
-    setSafetyBoundaryErrorNoThrow(S, "safety internal error reporting failed");
+    setScanBoundaryErrorNoThrow(S, "safety internal error reporting failed");
   }
   return nullptr;
 }
@@ -221,10 +333,10 @@ neverd_session_scan_json(neverd_session_t Sess,
       S->SafetyBeforeRunForTesting();
     const char *Owned = dupStr(runSafety(S, Options, Request));
     if (!Owned)
-      setSafetyBoundaryErrorNoThrow(S, "safety report allocation failed");
+      setScanBoundaryErrorNoThrow(S, "safety report allocation failed");
     return Owned;
   } catch (const std::bad_alloc &) {
-    setSafetyBoundaryErrorNoThrow(S, "safety analysis allocation failed");
+    setScanBoundaryErrorNoThrow(S, "safety analysis allocation failed");
     return nullptr;
   } catch (const std::exception &Exception) {
     return internalSafetyErrorReportNoThrow(S, Request, Exception.what());
@@ -232,4 +344,22 @@ neverd_session_scan_json(neverd_session_t Sess,
     return internalSafetyErrorReportNoThrow(S, Request,
                                             "non-standard native exception");
   }
+}
+
+extern "C" const char *neverd_session_data_ptr_scan_json(
+    neverd_session_t Sess, neverd_cancel_probe_fn Cancel, void *Context) {
+  Session *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  try {
+    const char *Report = runDataPtrScan(*S, Cancel, Context);
+    if (!Report && S->LastError.empty())
+      setScanBoundaryErrorNoThrow(S, "data-ptr report allocation failed");
+    return Report;
+  } catch (const std::exception &E) {
+    setScanBoundaryErrorNoThrow(S, E.what());
+  } catch (...) {
+    setScanBoundaryErrorNoThrow(S, "unexpected data-ptr scan failure");
+  }
+  return nullptr;
 }

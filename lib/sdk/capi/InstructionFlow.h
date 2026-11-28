@@ -246,13 +246,15 @@ bool decodeFunctionReferences(
 
 /// Session pages reuse the image's no-return, relocation and exception facts.
 /// Selection and discovery change function entries, not these image facts;
-/// clearPipeline retires them on edits and reloads.
+/// clearPipeline retires them on edits and reloads. Status, when requested,
+/// reports the coverage of each function in page order.
 bool decodeFunctionReferences(
     const Session &S, const FunctionPage &Page,
     llvm::function_ref<
         void(size_t Index, va_t Address, llvm::StringRef Instruction,
              const InstructionFlow &Flow, unsigned Size, InstructionMode Mode)>
-        Visit);
+        Visit,
+    std::vector<FunctionDecodeStatus> *Status = nullptr);
 
 /// The width of the reads and writes the instructions of each of \p
 /// Functions state at each address in \p Img: the direct references

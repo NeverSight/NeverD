@@ -10,6 +10,27 @@ neverd scan program --analyzer=hunt --max-paths=32
 
 In the desktop workbench, open the binary and select **Options → Analysis → Memory Safety Scan**. Choose the analyzers and click **Scan**. The status line for each analyzer shows its coverage. Select a finding to inspect its scope, evidence and source. The worker uses the open project's image and symbol choices, with the default safety catalog and budgets. The CLI and workbench produce the same report with the same inputs and settings.
 
+## Data pointers
+
+`neverd scan binary --data-ptr` writes a `neverd.data-ptr-scan` v1 JSON
+report to stdout or `-o file`. This mode accepts x64 PE/COFF images.
+
+* `code_references` counts distinct instructions with a recovered read, write
+  or address reference into `.data`. An instruction that both reads and
+  writes the same object counts once. The native reference decoder visits the
+  session's functions after native function discovery. Symbols and recoverable
+  addresses affect coverage.
+  `incomplete_functions` counts visited functions with an incomplete decode or
+  an unlifted instruction. Their recovered references still contribute.
+* `data_pointers` counts full-width, file-backed slots in `.data` whose
+  relocation resolves inside a readable, non-executable data section.
+  Separate slots can point to the same object. Stripping relocations can
+  reduce this count even when the stored bytes stay identical.
+
+Success returns 0. A missing data section, a canceled scan or an incompatible
+memory-safety option returns 1. SDK callers can use
+`neverd_session_data_ptr_scan_json` or Python's `Session.scan_data_pointers()`.
+
 ## Reading a report
 
 The top-level `schema` is `neverd.memory-safety-scan` and `schema_version` is `1`. The report records the image format and architecture, an aggregate verdict, two analyzer summaries and a list of grouped findings. [JSON Schema](memory-safety-scan-v1.schema.json).
