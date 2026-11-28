@@ -13,13 +13,22 @@
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/Endian.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <cmath>
+#include <cstdint>
+#include <iterator>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 namespace neverd::model {
 namespace {
@@ -54,11 +63,20 @@ constexpr std::array<const char *, 13> Types = {
     "u8",   "i8",     "u16",   "i16", "u32", "i32", "f32",
     "bool", "string", "array", "u64", "i64", "f64"};
 uint64_t align(uint64_t V, uint64_t A) { return sum(V, (A - V % A) % A); }
-uint64_t bits(std::string_view S, bool Big) {
-  uint64_t V = 0;
-  for (size_t I = 0; I < S.size(); ++I)
-    V = (V << 8) | static_cast<unsigned char>(S[Big ? I : S.size() - 1 - I]);
-  return V;
+uint64_t readBits(llvm::StringRef Bytes, bool BigEndian) {
+  auto Order = BigEndian ? llvm::endianness::big : llvm::endianness::little;
+  switch (Bytes.size()) {
+  case 1:
+    return static_cast<uint8_t>(Bytes.front());
+  case 2:
+    return llvm::support::endian::read16(Bytes.data(), Order);
+  case 4:
+    return llvm::support::endian::read32(Bytes.data(), Order);
+  case 8:
+    return llvm::support::endian::read64(Bytes.data(), Order);
+  default:
+    llvm_unreachable("invalid GGUF scalar width");
+  }
 }
 class DirectoryReader {
   File &Input;
@@ -115,7 +133,9 @@ public:
     return Bytes;
   }
 
-  uint64_t readUInt(unsigned Size) { return bits(readBytes(Size), BigEndian); }
+  uint64_t readUInt(unsigned Size) {
+    return readBits(readBytes(Size), BigEndian);
+  }
   llvm::StringRef readString(uint64_t Max) {
     uint64_t N = readUInt(8);
     if (N > Max)
@@ -280,7 +300,7 @@ void scales(Package &P, File &F, const std::string &Name,
     P.B.ScaleLeft -= Data.size();
     for (uint64_t J = 0; J < Count; ++J) {
       std::string_view Row(Data.data() + J * Block, Block);
-      auto ScaleBits = bits(Row.substr(0, 2), Big);
+      auto ScaleBits = readBits(Row.substr(0, 2), Big);
       NegativeZeros += ScaleBits == 0x8000;
       if ((ScaleBits & 0x7fff) != 0)
         continue;
@@ -325,9 +345,9 @@ void readGGUF(Package &P, const std::string &Name) {
   if (R.readBytes(4) != "GGUF")
     throw Error("invalid GGUF magic");
   auto V = R.readBytes(4);
-  uint64_t Version = bits(V, false);
+  uint64_t Version = readBits(V, false);
   if (Version != 2 && Version != 3) {
-    Version = bits(V, true);
+    Version = readBits(V, true);
     R.setBigEndian();
     if (Version != 3)
       throw Error("unsupported GGUF version or byte order");

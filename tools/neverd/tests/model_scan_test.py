@@ -201,6 +201,35 @@ class ModelScan(unittest.TestCase):
                         row["key"],
                     )
 
+    def test_gguf_scalar_widths_and_byte_orders(self):
+        fields = [
+            (0, "B", 0x81),
+            (1, "b", -123),
+            (2, "H", 0xABCD),
+            (3, "h", -12345),
+            (4, "I", 0xABCD8123),
+            (5, "i", -123456789),
+            (6, "f", -1.25),
+            (7, "B", True),
+            (10, "Q", 0xFEDCBA9876543210),
+            (11, "q", -0x123456789ABCDEF),
+            (12, "d", 1.125),
+        ]
+        for order in ("<", ">"):
+            with self.subTest(order=order):
+                data = bytearray(
+                    b"GGUF" + struct.pack(order + "IQQ", 3, 0, len(fields))
+                )
+                expected = {}
+                for kind, fmt, value in fields:
+                    key = f"scalar_{kind}"
+                    data += struct.pack(order + "Q", len(key)) + key.encode()
+                    data += struct.pack(order + "I" + fmt, kind, value)
+                    expected[key] = value
+                self.file.write_bytes(data)
+                rows = self.scan()["packages"][0]["metadata"]
+                self.assertEqual({r["key"]: r["value"] for r in rows}, expected)
+
     def test_verified_ranges_and_optional_sampling(self):
         payload = bytes([0, 0] + list(range(16)))
         self.file.write_bytes(gguf([("w", [32], 2, 0, payload)], endian=">"))
