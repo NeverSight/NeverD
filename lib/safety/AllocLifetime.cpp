@@ -2818,9 +2818,9 @@ private:
       return false;
     const MedVar *Value = detail::storedValue(Store);
     const MedVar *Dest = detail::memoryAddress(Store);
-    if (!Value || !Value->isConst() ||
-        Value->Provenance != ConstantAddressProvenance::Scalar ||
-        Value->Size > sizeof(Value->ConstVal) ||
+    // Address provenance describes how to interpret a constant. Its stored
+    // bytes are defined even when the lifter has not classified their use.
+    if (!Value || !Value->isConst() || Value->Size > sizeof(Value->ConstVal) ||
         Value->Size < Load.Output.Size || !Dest || Dest->Size != Addr.Size)
       return false;
     if (ReadOffset) {
