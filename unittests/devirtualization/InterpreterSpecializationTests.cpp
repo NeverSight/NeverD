@@ -603,6 +603,59 @@ TEST(InterpreterSpecialization, FiniteTargetBudgetAndUnknownArmFailClosed) {
   EXPECT_TRUE(Result.Residual.Blocks.empty());
 }
 
+TEST(InterpreterSpecialization,
+     IndirectTargetCandidatesRequireFreshCompleteCoverageProof) {
+  Provider P;
+  P.add(0x100, {op(NdOp::INT_AND, reg(16), {reg(8), constant(1)}),
+                op(NdOp::INT_LEFT, reg(16), {reg(16), constant(4)}),
+                op(NdOp::INT_ADD, reg(16), {reg(16), constant(0x110)}),
+                op(NdOp::INDIR_BR, {}, {reg(16)})});
+  P.add(0x110, {op(NdOp::COPY, reg(0), {constant(11)}), ret()});
+  P.add(0x120, {op(NdOp::COPY, reg(0), {constant(22)}), ret()});
+
+  SpecializationOptions Options;
+  Options.MaxIndirectTargets = 3;
+  Options.ControlTargetHints = {{{0x100}, {0x110, 0x120, 0x130}}};
+  auto Result = specializeInterpreter(P, {0x100}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  EXPECT_GT(Result.ProvenControlTargetHints, 0u);
+  EXPECT_EQ(execute(Result.Residual, {{8, 0}}), 11u);
+  EXPECT_EQ(execute(Result.Residual, {{8, 1}}), 22u);
+
+  // A missing target must fall back to exhaustive enumeration, retaining
+  // both reachable branches rather than publishing the proposed subset.
+  Options.ControlTargetHints.front().Targets = {0x110};
+  Result = specializeInterpreter(P, {0x100}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  EXPECT_EQ(Result.ProvenControlTargetHints, 0u);
+  EXPECT_EQ(execute(Result.Residual, {{8, 1}}), 22u);
+
+  // A noncanonical extra candidate must not make a valid transfer fail.
+  Options.ControlTargetHints.front().Targets = {0x110, 0x120, InvalidVA};
+  Result = specializeInterpreter(P, {0x100}, Options);
+  ASSERT_TRUE(Result.complete()) << Result.Diagnostic;
+  EXPECT_EQ(Result.ProvenControlTargetHints, 0u);
+  EXPECT_EQ(execute(Result.Residual, {{8, 1}}), 22u);
+
+  Options.ControlTargetHints.front().Targets = {0x110};
+  Options.MaxIndirectTargets = 1;
+  Result = specializeInterpreter(P, {0x100}, Options);
+  EXPECT_FALSE(Result.complete());
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+
+  Options.MaxIndirectTargets = 3;
+  Options.ControlTargetHints.front().Targets = {0x110, 0x120};
+  P.Code.at(0x100).Ops[0].Inputs[1] = reg(24);
+  Result = specializeInterpreter(P, {0x100}, Options);
+  EXPECT_FALSE(Result.complete());
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+
+  Options.ControlTargetHints.front().Targets = {0x120, 0x110};
+  Result = specializeInterpreter(P, {0x100}, Options);
+  EXPECT_EQ(Result.Status, SpecializationStatus::InvalidInput);
+  EXPECT_TRUE(Result.Residual.Blocks.empty());
+}
+
 TEST(InterpreterSpecialization, TemporaryDispatchSnapshotsAreChargedAndScoped) {
   Provider P;
   const auto Target = NdVar::tmp(0, 8);
@@ -5568,6 +5621,21 @@ TEST(InterpreterSpecialization,
     for (unsigned I = 0; I != 8; ++I)
       Actual.Memory[0x1008 + I] = 0xa0 + I;
     ASSERT_TRUE(Actual.run(NativeLimit.Residual)) << Actual.Diagnostic;
+    EXPECT_EQ(Actual.number(reg(0)), Selector ? 11u : 22u);
+  }
+
+  auto HintedReturn = Narrow;
+  HintedReturn.ControlTargetHints = {{{0x220}, {0x101, 0x103}}};
+  const auto ReturnCandidates = specializeInterpreter(P, {0x100}, HintedReturn);
+  ASSERT_TRUE(ReturnCandidates.complete()) << ReturnCandidates.Diagnostic;
+  for (uint64_t Selector : {0u, 1u}) {
+    WideByteOracle Actual(llvm::endianness::little);
+    Actual.word(reg(8, 1), Selector);
+    Actual.word(reg(24), 1);
+    Actual.word(reg(32), 0x1008);
+    for (unsigned I = 0; I != 8; ++I)
+      Actual.Memory[0x1008 + I] = 0xa0 + I;
+    ASSERT_TRUE(Actual.run(ReturnCandidates.Residual)) << Actual.Diagnostic;
     EXPECT_EQ(Actual.number(reg(0)), Selector ? 11u : 22u);
   }
 

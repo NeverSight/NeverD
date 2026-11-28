@@ -18987,6 +18987,17 @@ omitted as an unconstrained factor only after the shared bit-origin proof
 establishes independence from the predicate and all other columns. Marginal
 domains alone never authorize a Cartesian-product assumption.
 
+`SpecializationControlTargetHint` supplies sorted candidate values at one
+physical indirect transfer, including a native return. It is a precision
+request, not a control-flow or environment declaration. When structural
+targets are unavailable, the core proves under the current path that no
+target lies outside the candidates before trying their guarded edges. An
+incomplete or inconclusive candidate set falls back to ordinary finite-value
+enumeration; an exhausted proof or an unproved edge cannot publish a partial
+graph. Hint sites, values, symbolic construction and solver work have separate
+bounds. `ProvenControlTargetHints` counts successful path-specific coverage
+proofs, not distinct sites or source-level certificates.
+
 The temporary visited-node index uses a dense map. Serialization still follows the ordered traversal, so table growth and hash order do not change the key, variable renaming, or budget charges.
 
 MBA simplification keeps exact derivations inside `lib/symbolic/mba`.
