@@ -4,11 +4,11 @@
 
 | ELF machine | Class and byte order | ABI used for integer arguments and returns | Encoding |
 | --- | --- | --- | --- |
-| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbb, Zbs, Zicond, Zicntr cycle, time and instret reads |
-| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbb, Zbs, Zicond, Zicntr cycle, time and instret reads |
+| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbb, Zbs, Zbkb register packing, Zicond, Zicntr cycle, time and instret reads |
+| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbb, Zbs, Zbkb register packing, Zicond, Zicntr cycle, time and instret reads |
 | RISC-V | ELF32 or ELF64, little-endian | ILP32D or LP64D, eight floating argument registers and two floating result registers | Integer profile plus scalar F/D arithmetic, conversions, comparisons, sign injection, register and memory transfers, compressed floating memory forms and floating-point control/status registers |
-| PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset and VMX byte, halfword and word addition |
-| PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Classic scalar, POWER10 prefixed fixed-point forms and VMX byte, halfword and word addition |
+| PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset and VMX byte, halfword and word addition and subtraction |
+| PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Classic scalar, POWER10 prefixed fixed-point forms and VMX byte, halfword and word addition and subtraction |
 
 For RISC-V, the ELF class selects XLEN. The float ABI flag selects the integer or double-float calling convention. A double-float image with an explicit ISA attribute must advertise D. The loader
 reads normalized `Tag_RISCV_arch` attributes for M, A and their integer
@@ -39,6 +39,13 @@ extension, `orc.b` and `rev8`. RV64 word rotates sign-extend bit 31. Word
 counts examine the low 32 bits, and counting the leading or trailing zeros
 of a zero word yields 32. The ELF ISA attribute selects each extension.
 [RISC-V Bit Manipulation specification](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
+
+Zbkb 1.0 enables register packing. `pack` places the low half of the first
+source below the low half of the second. `packh` packs their low bytes in
+the same order and zero-extends the result. RV64 `packw` packs the low
+halfwords and sign-extends bit 31. With a zero second source, RV32 `pack`
+and RV64 `packw` also encode the Zbb instruction `zext.h`.
+[RISC-V scalar cryptography specification](https://docs.riscv.org/reference/isa/v20240411/unpriv/scalar-crypto.html).
 
 Zicond 1.0 adds `czero.eqz` and `czero.nez`. They compare the whole second
 source register with zero. When the named condition holds, the result is
@@ -170,7 +177,8 @@ The scalar encodings and flag definitions follow Books I and II of versions
 2.07b and 3.1c of the ISA. [OpenPOWER ISA](https://openpowerfoundation.org/specifications/isa/).
 
 PowerPC VMX `vaddubm`, `vadduhm` and `vadduwm` add unsigned elements
-of 8, 16 and 32 bits respectively. Each lane wraps at its own width in
+of 8, 16 and 32 bits respectively. `vsububm`, `vsubuhm` and `vsubuwm`
+subtract the second source from the first at those widths. Each lane wraps independently in
 both byte orders. The AltiVec ABI passes vectors in v2 through
 v13 and returns a vector in v2. [AltiVec Programming Environments Manual](https://www.nxp.com/docs/en/reference-manual/ALTIVECPOWERISAPEM.pdf).
 
@@ -179,7 +187,7 @@ v13 and returns a vector in v2. [AltiVec Programming Environments Manual](https:
 | Stage | RISC-V | PowerPC |
 | --- | --- | --- |
 | Identify and load | ELF class, machine, flags and attributes | ELF class, machine, ABI flag and byte order |
-| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences, atomics, base counter reads, scalar F/D operations and floating-point control/status registers | Integer ALU, signed and unsigned word/doubleword division, VMX modulo byte, halfword and word addition, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
+| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences, atomics, register packing, base counter reads, scalar F/D operations and floating-point control/status registers | Integer ALU, signed and unsigned word/doubleword division, VMX modulo byte, halfword and word addition and subtraction, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
 | CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer and double-float ABI argument registers | Direct and conditional branches, CTR loops, conditional direct and indirect calls, CTR jumps and guarded LR returns, integer register arguments |
 | Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset and scalar F/D operations, including RISC-V rounding and FCSR | Same stages in target byte order for the qualified PowerPC subset |
 | Native rewrite | Unsupported | Unsupported |
@@ -352,7 +360,7 @@ python3 unittests/lift/elf-integer/wide_shifts.py \
   --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
 ```
 
-The bit-operation fixture executes all Zbb instructions and the indexed
+The bit-operation fixture executes all Zbb instructions, the Zbkb packing forms and the indexed
 byte-reversed transfers and trailing-zero counts. A separate caller compares each register result and
 each affected or surrounding byte with a Python oracle. It checks the
 original and all three rebuilt projections at two optimization levels on
@@ -386,7 +394,7 @@ The counter and VMX fixture links each rebuilt callee to a separately compiled
 native caller. ILP32, ILP32D, LP64 and LP64D runs bracket each counter read
 with independent guest reads under QEMU. Deterministic samples force an RV32
 rollover and check which counter each instruction observes. PPC32 and PPC64
-callers test all 65,536 byte pairs, carries and wraparound at halfword and
+callers test all 65,536 byte pairs, carries, borrows and wraparound at halfword and
 word boundaries, and a chain that changes element width. They run in both
 byte orders. Pass `--elfv1-ld /path/to/powerpc64-linux-gnu-ld`
 to exercise ELFv1 function descriptors as well.

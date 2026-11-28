@@ -42,7 +42,7 @@ va_t jalrAddress(Arch A, va_t Base, uint32_t Word) {
   return atXLen(A, Base + SignExtend64<12>(Word >> 20)) & ~va_t(1);
 }
 
-std::optional<uint32_t> word(Arch A, RISCVProfile P, const cs_insn &I) {
+std::optional<uint32_t> word(Arch A, const RISCVProfile &P, const cs_insn &I) {
   if (I.size == 4)
     return llvm::support::endian::read32le(I.bytes);
   if (I.size == 2 && P.hasCompressed())
@@ -110,6 +110,30 @@ NdVar mulDiv(State &S, unsigned F, NdVar A, NdVar B) {
   NdOp Op = Rem ? (Signed ? NdOp::INT_SREM : NdOp::INT_REM)
                 : (Signed ? NdOp::INT_SDIV : NdOp::INT_DIV);
   return S.select(Zero, Rem ? A : Ones, S.op(Op, A, Divisor));
+}
+
+bool liftPack(State &S, uint32_t W, unsigned Rd, const NdVar &X,
+              const NdVar &Y) {
+  uint16_t PartBytes;
+  const unsigned Form = W & opcode::RegisterFormMask;
+  switch (Form) {
+  case opcode::Pack:
+    PartBytes = S.Width / 2;
+    break;
+  case opcode::PackH:
+    PartBytes = sizeof(uint8_t);
+    break;
+  case opcode::PackW:
+    PartBytes = sizeof(uint16_t);
+    break;
+  default:
+    return false;
+  }
+  NdVar Low = S.resize(X, PartBytes);
+  NdVar High = S.resize(Y, PartBytes);
+  S.write(Rd, S.op(NdOp::CONCAT, High, Low, 2 * PartBytes),
+          Form == opcode::PackW);
+  return true;
 }
 
 bool basicBitManipulation(State &S, uint32_t W, bool Imm, bool Word,
@@ -202,8 +226,8 @@ bool basicBitManipulation(State &S, uint32_t W, bool Imm, bool Word,
   }
 }
 
-bool bitManipulation(State &S, RISCVProfile P, uint32_t W, bool Imm, bool Word,
-                     unsigned Rd, NdVar X, NdVar Y) {
+bool bitManipulation(State &S, const RISCVProfile &P, uint32_t W, bool Imm,
+                     bool Word, unsigned Rd, NdVar X, NdVar Y) {
   const unsigned IndexMask = S.Width * 8 - 1;
   // RV64 encodes shamt[5] in bit 25. It is an opcode bit on RV32 and
   // in register forms on both targets.
@@ -263,7 +287,7 @@ bool bitManipulation(State &S, RISCVProfile P, uint32_t W, bool Imm, bool Word,
 
 // Floating loads, stores, moves and sign injection transfer the IEEE encoding
 // without changing rounding mode or exception flags. Preserve the payload bits.
-bool floating(State &S, RISCVProfile P, uint32_t W) {
+bool floating(State &S, const RISCVProfile &P, uint32_t W) {
   const unsigned Op = W & opcode::MajorMask, Rd = W >> 7 & 31, F = W >> 12 & 7;
   const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
   const unsigned FLen = P.DoubleFloat ? 8 : 4;
@@ -385,7 +409,7 @@ bool liftCounterRead(State &S, Arch A, uint32_t W, unsigned Rd) {
   return true;
 }
 
-bool liftSystem(State &S, Arch A, RISCVProfile P, uint32_t W) {
+bool liftSystem(State &S, Arch A, const RISCVProfile &P, uint32_t W) {
   const unsigned Rd = W >> 7 & 31, F = W >> 12 & 7, R1 = W >> 15 & 31;
   if (P.SingleFloat && (W >> 20) >= 1 && (W >> 20) <= 3 && (F & 3)) {
     const unsigned Action = R1 == 0 && (F & 3) != 1 ? 0 : F & 3;
@@ -402,7 +426,7 @@ bool liftSystem(State &S, Arch A, RISCVProfile P, uint32_t W) {
 }
 
 // CSR instructions do not need the stack frame used by general integer lifting.
-LLVM_ATTRIBUTE_NOINLINE bool integer(State &S, Arch A, RISCVProfile P,
+LLVM_ATTRIBUTE_NOINLINE bool integer(State &S, Arch A, const RISCVProfile &P,
                                      uint32_t W) {
   const unsigned Op = W & opcode::MajorMask, Rd = W >> 7 & 31, F = W >> 12 & 7;
   const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
@@ -500,6 +524,8 @@ LLVM_ATTRIBUTE_NOINLINE bool integer(State &S, Arch A, RISCVProfile P,
     return false;
   if (F7 && P.Zbb && basicBitManipulation(S, W, Imm, Word, Rd, X, Y))
     return true;
+  if (F7 && P.Zbkb && liftPack(S, W, Rd, X, Y))
+    return true;
   if (F7 && (P.Zba || P.Zbs) && bitManipulation(S, P, W, Imm, Word, Rd, X, Y))
     return true;
   const unsigned Bytes = Word ? 4 : S.Width;
@@ -545,15 +571,15 @@ LLVM_ATTRIBUTE_NOINLINE bool integer(State &S, Arch A, RISCVProfile P,
   return true;
 }
 
-bool liftWord(State &S, Arch A, RISCVProfile P, uint32_t W) {
+bool liftWord(State &S, Arch A, const RISCVProfile &P, uint32_t W) {
   if ((W & opcode::MajorMask) == opcode::System)
     return liftSystem(S, A, P, W);
   return integer(S, A, P, W);
 }
 } // namespace
 
-std::optional<va_t> pcRelativeCall(Arch A, RISCVProfile P, uint32_t Upper,
-                                   const cs_insn &I) {
+std::optional<va_t> pcRelativeCall(Arch A, const RISCVProfile &P,
+                                   uint32_t Upper, const cs_insn &I) {
   if ((Upper & opcode::MajorMask) != opcode::Auipc)
     return std::nullopt;
   const unsigned Base = Upper >> 7 & 31;
@@ -564,7 +590,7 @@ std::optional<va_t> pcRelativeCall(Arch A, RISCVProfile P, uint32_t Upper,
   return jalrAddress(A, auipcAddress(A, Upper, I.address - 4), *W);
 }
 
-IntegerControl control(Arch A, RISCVProfile P, const cs_insn &I) {
+IntegerControl control(Arch A, const RISCVProfile &P, const cs_insn &I) {
   if (auto W = word(A, P, I)) {
     auto Flow = branch(A, *W, I.address);
     if (Flow.Target == InvalidVA || P.hasCompressed() || !(Flow.Target & 3))
@@ -573,7 +599,8 @@ IntegerControl control(Arch A, RISCVProfile P, const cs_insn &I) {
   return {};
 }
 
-void lift(Arch A, RISCVProfile P, const cs_insn &I, std::vector<LowOp> &Ops) {
+void lift(Arch A, const RISCVProfile &P, const cs_insn &I,
+          std::vector<LowOp> &Ops) {
   State S(I.address, I.size, Ops, isRISCV64(A) ? 8 : 4);
   if (auto W = word(A, P, I); W && liftWord(S, A, P, *W)) {
     if (S.OpsStart == Ops.size())

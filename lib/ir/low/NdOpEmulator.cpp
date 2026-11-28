@@ -1233,7 +1233,7 @@ bool NdOpEmulator::stepWithState(
           Id == Intrinsic::EVEXExpandLoad || Id == Intrinsic::AesEnc ||
           Id == Intrinsic::AesEncLast || Id == Intrinsic::AesDec ||
           Id == Intrinsic::AesDecLast || Id == Intrinsic::Pclmulqdq ||
-          isX86AtomicIntrinsic(Id) || ppc::vmxAddLaneBytes(Id) ||
+          isX86AtomicIntrinsic(Id) || ppc::vmxBinaryForm(Id) ||
           Id == Intrinsic::RISCVFloating || Id == Intrinsic::RISCVFPControl)
         return executeIntrinsic(Op);
     }

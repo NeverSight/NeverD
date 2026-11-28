@@ -1145,6 +1145,10 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
       {.Attribute = "_zicntr2p0_zicsr2p0",
        .Features = "+i,+zicntr",
        .Zicntr = true},
+      {.Attribute = "_zbkb1p0", .Features = "+i,+zbkb"},
+      {.Attribute = "_zbb1p0_zbkb1p0",
+       .Features = "+i,+zbb,+zbkb",
+       .Zbb = true},
       {.Attribute = "_zicond1p0", .Features = "+i,+zicond", .Zicond = true},
       {.Attribute = "_c2p0_zicond1p0",
        .Features = "+i,+c,+zicond",
@@ -1226,7 +1230,7 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
     }
     for (const char *Version :
          {"_zmmul1p1", "_zba1p1", "_zbb1p1", "_zbs2p0", "_zicond1p1",
-          "_zicond2p0", "_zicntr2p1", "_zicntr3p0"}) {
+          "_zicond2p0", "_zicntr2p1", "_zicntr3p0", "_zbkb1p1"}) {
       LinkedImage Unsupported(A);
       Unsupported.riscvAttributes(Base + Version);
       auto Bad = ELFLoader().loadBuffer(Unsupported.buffer());

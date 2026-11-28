@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 749147e322e8a470eed4fd2340c63eab4c87d8b3dbea4a7da34578555d5a616d -->
+<!-- i18n-source: ae2762f43b851a8b62d8f0f4ce4a678300a2449aea6d0be2508fabde4aaacc4b -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ Los destinos ELF de enteros experimentales admiten la traducción estricta de in
 
 | Destino | Perfiles ELF verificados |
 |---|---|
-| RISC-V | RV32 (ILP32, ILP32D) y RV64 (LP64, LP64D) en little-endian. La información de ELF selecciona M, A y C de enteros o las extensiones individuales Zmmul, Zaamo, Zalrsc y Zca. El atributo ISA del archivo ELF también habilita Zba 1.0, Zbb 1.0, Zbs 1.0 y Zicond 1.0. Zicntr 2.0 admite `rdcycle`, `rdtime` y `rdinstret`. En RV32 también se pueden leer los 32 bits superiores de cada contador. |
-| PowerPC | PPC32 System V y PPC64 ELFv1/ELFv2 en ambos órdenes de bytes. PPC32 admite llamadas entre módulos a través de la PLT segura y de la BSS-PLT clásica. Ambas ABI de PPC64 admiten llamadas entre módulos a través de la PLT y cambios de TOC. ELFv1 utiliza descriptores de función y ELFv2 admite puntos de entrada globales y locales. Las operaciones escalares verificadas incluyen la división con y sin signo, la multiplicación que devuelve la palabra alta del producto y la multiplicación con indicación de desbordamiento, junto con sus efectos en CR0 y XER. En PPC64 también se admiten las instrucciones con prefijo de POWER10 para sumar, cargar y almacenar enteros. Las instrucciones VMX `vaddubm`, `vadduhm` y `vadduwm` suman elementos sin signo de 8, 16 y 32 bits, respectivamente, y descartan el acarreo de cada elemento. |
+| RISC-V | RV32 (ILP32, ILP32D) y RV64 (LP64, LP64D) en little-endian. La información de ELF selecciona M, A y C de enteros o las extensiones individuales Zmmul, Zaamo, Zalrsc y Zca. El atributo ISA del archivo ELF también habilita Zba 1.0, Zbb 1.0, Zbs 1.0 y Zicond 1.0. Zicntr 2.0 admite `rdcycle`, `rdtime` y `rdinstret`. En RV32 también se pueden leer los 32 bits superiores de cada contador. Zbkb 1.0 habilita `pack`, `packh` y, en RV64, `packw`. |
+| PowerPC | PPC32 System V y PPC64 ELFv1/ELFv2 en ambos órdenes de bytes. PPC32 admite llamadas entre módulos a través de la PLT segura y de la BSS-PLT clásica. Ambas ABI de PPC64 admiten llamadas entre módulos a través de la PLT y cambios de TOC. ELFv1 utiliza descriptores de función y ELFv2 admite puntos de entrada globales y locales. Las operaciones escalares verificadas incluyen la división con y sin signo, la multiplicación que devuelve la palabra alta del producto y la multiplicación con indicación de desbordamiento, junto con sus efectos en CR0 y XER. En PPC64 también se admiten las instrucciones con prefijo de POWER10 para sumar, cargar y almacenar enteros. Las instrucciones VMX `vaddubm`, `vadduhm` y `vadduwm` suman elementos sin signo de 8, 16 y 32 bits, respectivamente, y descartan el acarreo de cada elemento. Las restas modulares correspondientes son `vsububm`, `vsubuhm` y `vsubuwm`. |
 
 La reescritura de código nativo sigue pendiente para estos perfiles. [Cobertura de RISC-V y PowerPC (en inglés)](../riscv-powerpc.md)
 

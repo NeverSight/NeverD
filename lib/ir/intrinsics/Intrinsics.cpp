@@ -70,7 +70,7 @@ struct CNameTable {
 #define NEVERD_RISCV_COUNTER(Id, Value, Word, Kind, High, Name)                \
   C(Intrinsic::Id, "neverd_riscv_" Name);
 #include "neverd/ir/intrinsics/RISCV/RISCVCounter.def"
-#define NEVERD_PPC_VMX(Id, Value, Word, Name, LaneBytes)                       \
+#define NEVERD_PPC_VMX(Id, Value, Word, Name, ...)                             \
   C(Intrinsic::Id, "neverd_ppc_" Name);
 #include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.def"
     C(Intrinsic::RISCVFloating, "neverd_riscv_floating");

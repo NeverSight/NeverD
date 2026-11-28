@@ -22,12 +22,13 @@
 #include <vector>
 
 namespace neverd::riscv {
-IntegerControl control(Arch Target, RISCVProfile Profile, const cs_insn &Insn);
+IntegerControl control(Arch Target, const RISCVProfile &Profile,
+                       const cs_insn &Insn);
 /// Destination on the fallthrough path from the preceding AUIPC to this JALR.
 /// The caller establishes whether that path belongs to a reachable block.
-std::optional<va_t> pcRelativeCall(Arch Target, RISCVProfile Profile,
+std::optional<va_t> pcRelativeCall(Arch Target, const RISCVProfile &Profile,
                                    uint32_t PrecedingWord, const cs_insn &Insn);
-void lift(Arch Target, RISCVProfile Profile, const cs_insn &Insn,
+void lift(Arch Target, const RISCVProfile &Profile, const cs_insn &Insn,
           std::vector<LowOp> &Ops);
 } // namespace neverd::riscv
 #endif // NEVERD_LIFT_RISCV_RISCVLIFTER_H

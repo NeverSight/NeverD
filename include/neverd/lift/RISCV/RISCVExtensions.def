@@ -38,5 +38,7 @@ NEVERD_RISCV_EXTENSION(Zcd, "zcd", 1, 0, P.Zcd && !P.Compressed)
 
 NEVERD_RISCV_EXTENSION(Zicntr, "zicntr", 2, 0, P.Zicntr)
 
+NEVERD_RISCV_EXTENSION(Zbkb, "zbkb", 1, 0, P.Zbkb)
+
 #undef NEVERD_RISCV_BASE
 #undef NEVERD_RISCV_EXTENSION

@@ -19,6 +19,6 @@
 
 namespace neverd::riscv {
 std::optional<uint32_t> expandCompressed(uint16_t Half, bool RV64,
-                                         RISCVProfile Profile);
+                                         const RISCVProfile &Profile);
 }
 #endif // NEVERD_LIB_LIFT_RISCV_RISCVCOMPRESSED_H

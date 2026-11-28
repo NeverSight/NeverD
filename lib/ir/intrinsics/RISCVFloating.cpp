@@ -28,7 +28,7 @@ const FPForm *floatingForm(uint64_t Selector, unsigned XLen) {
 }
 
 std::optional<unsigned> decodeFloating(uint32_t W, unsigned XLen,
-                                       RISCVProfile P) {
+                                       const RISCVProfile &P) {
   using I = FPFormID;
   const unsigned Opcode = W & 127, Fmt = (W >> 25) & 3;
   const unsigned F3 = (W >> 12) & 7, Rs2 = (W >> 20) & 31;
