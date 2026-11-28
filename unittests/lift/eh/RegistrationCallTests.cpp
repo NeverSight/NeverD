@@ -516,6 +516,10 @@ TEST(RegistrationCallABI, RuntimeProviderSetsKeepDistinctContracts) {
   EXPECT_FALSE(isX86CxxExceptionProvider("msvcrt.dll"));
   EXPECT_TRUE(isX86LegacyCRTProvider("MSVCR100.dll"));
   EXPECT_FALSE(isX86MathCleanupProvider("MSVCR100.dll"));
+  EXPECT_TRUE(isX86MathCleanupProvider("MSVCRT.DLL"));
+  EXPECT_FALSE(isUCRTMathProvider("MSVCRT.DLL"));
+  EXPECT_TRUE(isUCRTMathProvider("UCRTBASED.DLL"));
+  EXPECT_TRUE(isUCRTMathProvider("api-ms-win-crt-math-l1-1-0.dll"));
   EXPECT_TRUE(isX86MathCleanupProvider("api-ms-win-crt-math-l1-1-0.dll"));
   EXPECT_FALSE(isX64CRTStdioProvider("api-ms-win-crt-math-l1-1-0.dll"));
   EXPECT_TRUE(isX64CRTStdioProvider("api-ms-win-crt-stdio-l1-1-0.dll"));
@@ -528,8 +532,8 @@ TEST(RegistrationCallABI, RuntimeProviderSetsKeepDistinctContracts) {
        {isX86ControlFPProvider, isX64ControlFPProvider, isX86SEHHandlerProvider,
         isX86SEH4CommonProvider, isX86RegistrationRuntimeProvider,
         isX86ContinuationRuntimeProvider, isX86CxxExceptionProvider,
-        isX86LegacyCRTProvider, isX86MathCleanupProvider, isX64CRTStdioProvider,
-        isRaiseExceptionProvider}) {
+        isX86LegacyCRTProvider, isX86MathCleanupProvider, isUCRTMathProvider,
+        isX64CRTStdioProvider, isRaiseExceptionProvider}) {
     EXPECT_FALSE(Query(""));
     EXPECT_FALSE(Query("application.dll"));
     EXPECT_FALSE(Query("msvcrt.dll.extra"));

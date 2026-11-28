@@ -257,21 +257,29 @@ bool hasBindingPreservingCRTArgument(const BinaryImage &Image,
   const llvm::StringRef Name = Import->Name;
   const bool Stream = Name == "__acrt_iob_func";
   const bool ExitTable = Name == "_initialize_onexit_table";
-  if ((!Stream && !ExitTable && Name != "_set_app_type" &&
+  const bool MathHandler = Name == "__setusermatherr" &&
+                           coff_loader::isUCRTMathProvider(Import->Module);
+  if ((!Stream && !ExitTable && !MathHandler && Name != "_set_app_type" &&
        Name != "_set_fmode" && Name != "_set_new_mode") ||
       !registration_abi::checkedRegistrationImportStackPop(Image, Slot) ||
-      checkedCallSlot(Image, Op, Work, ExitTable) != Slot)
+      checkedCallSlot(Image, Op, Work, ExitTable || MathHandler) != Slot)
     return false;
-  if (ExitTable) {
-    const auto Table = pushedImageAddress(
+  if (ExitTable || MathHandler) {
+    const auto Address = pushedImageAddress(
         Image, precedingInstruction(Block, Op.Addr, Work), Work);
+    if (!Address)
+      return false;
+    if (MathHandler)
+      // UCRT records the supplied function pointer for later math errors.
+      return readImmutablePE32CodeBytes(Image, *Address, 1, {}, Work,
+                                        limits::kMaxRegistrationEHStateWork)
+          .has_value();
     // The UCRT initializer can write the three PE32 pointer fields. It
     // neither allocates entries nor calls any registered function.
-    return Table &&
-           registration_abi::hasResidentRegistrationData(
-               Image, FrameValue::imageAddress(*Table), true, Work) &&
+    return registration_abi::hasResidentRegistrationData(
+               Image, FrameValue::imageAddress(*Address), true, Work) &&
            registration_abi::hasSEHCallbackImageMemory(
-               Image, *Table, 3 * sizeof(uint32_t), true, Work);
+               Image, *Address, 3 * sizeof(uint32_t), true, Work);
   }
   const auto Value = pushedScalarArgument(Image, Block, Op.Addr, !Stream, Work);
   if (!Value)

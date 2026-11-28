@@ -21582,6 +21582,10 @@ relocated address pushed by its caller. The normal return keeps import
 bindings live when all twelve bytes occupy resident, private, writable
 data disjoint from every import slot. Registering a function in that table
 has a separate allocation path.
+The UCRT math-handler installer retains the current import bindings on ordinary
+return when the caller pushes a relocated pointer into immutable image code.
+The CRT stores the callback for a later math error. Dispatch at that later call
+requires its own evidence. [Microsoft CRT math-handler installation](https://learn.microsoft.com/en-us/cpp/c-runtime-library/setusermatherr)
 The Windows CRT startup also installs a top-level filter. Its returning
 `SetUnhandledExceptionFilter` call preserves import bindings when the
 argument is a relocated pointer into immutable code. A later exception

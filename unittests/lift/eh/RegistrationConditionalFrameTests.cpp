@@ -763,6 +763,71 @@ TEST(RegistrationCRTFrame, XCPT4PrintfObtainsTheStandardOutputStream) {
   FAIL() << "missing original standard stream call";
 }
 
+TEST(RegistrationCRTFrame, XCPT4InstallsAnImageMathErrorHandler) {
+  using namespace registration_state;
+  for (bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(*Image));
+    const auto Startup = CFGBuilder().buildIntegerFrameProof(
+        *Image, Dec, 0x406b88, "pre-C initializer");
+    unsigned Calls = 0;
+    for (const auto &Block : Startup.Blocks)
+      for (const auto &Op : Block.Ops) {
+        if (Op.Opcode != NdOp::CALL || Op.Addr != 0x406bed)
+          continue;
+        ++Calls;
+        size_t Work = 0;
+        const auto Slot = checkedCRTCallSlot(*Image, Op, Work);
+        ASSERT_TRUE(Slot);
+        const auto *Import = Image->findImportAt(*Slot);
+        ASSERT_TRUE(Import);
+        ASSERT_EQ(Import->Name, "__setusermatherr");
+        ASSERT_EQ(Import->Module, "api-ms-win-crt-math-l1-1-0.dll");
+        EXPECT_TRUE(
+            hasBindingPreservingCRTArgument(*Image, Block, Op, *Slot, Work));
+        EXPECT_FALSE(registration_abi::preservesRegistrationImportBindings(
+            *Image, *Slot));
+        const auto Refuses = [&](auto Change) {
+          auto Altered = *Image;
+          Change(Altered);
+          EXPECT_FALSE(
+              hasBindingPreservingCRTArgument(Altered, Block, Op, *Slot, Work));
+        };
+        Refuses([&](BinaryImage &Altered) {
+          for (auto &Binding : Altered.Imports)
+            if (Binding.IATAddr == *Slot)
+              Binding.Module = "application.dll";
+        });
+        Refuses([&](BinaryImage &Altered) {
+          for (auto &Binding : Altered.Imports)
+            if (Binding.IATAddr == *Slot)
+              Binding.IsDelayImport = true;
+        });
+        Refuses([](BinaryImage &Altered) {
+          Altered.BaseRelocations.push_back({0x40725e, 3});
+        });
+        for (const va_t Operand : {0x406be9u, 0x407ce0u})
+          Refuses([&](BinaryImage &Altered) {
+            EXPECT_EQ(std::erase_if(Altered.BaseRelocations,
+                                    [&](const auto &Reloc) {
+                                      return Reloc.Address == Operand;
+                                    }),
+                      1u);
+          });
+        LowBlock LaterEntry;
+        for (const auto &Boundary : Block.InstructionBoundaries)
+          if (Boundary.Address >= Op.Addr)
+            LaterEntry.InstructionBoundaries.push_back(Boundary);
+        EXPECT_FALSE(hasBindingPreservingCRTArgument(*Image, LaterEntry, Op,
+                                                     *Slot, Work));
+        EXPECT_LT(Work, limits::kMaxRegistrationEHStateWork);
+      }
+    EXPECT_EQ(Calls, 1u);
+  }
+}
+
 TEST(RegistrationCRTFrame, XCPT4ExitTableInitializationOwnsAllThreeWords) {
   using namespace registration_state;
   for (bool Selected : {false, true}) {
