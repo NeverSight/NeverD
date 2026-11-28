@@ -20,6 +20,4 @@ __attribute__((noinline)) int sample(void) {
   return 1;
 }
 
-int main(void) {
-  return sample();
-}
+int main(void) { return sample(); }
