@@ -902,7 +902,8 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
         }
         S.emit(NdOp::CALL, NdVar::reg(x86reg::RAX, PtrSize), {TargetValue});
       }
-    } else if (!S.LoadMemoryCallTarget && X86.operands[0].type == X86_OP_MEM &&
+    } else if (!S.LoadMemoryControlTarget &&
+               X86.operands[0].type == X86_OP_MEM &&
                X86.operands[0].mem.index == X86_REG_INVALID &&
                LiftState::memoryAddressSpace(X86.operands[0]) ==
                    NdMemoryAddressSpace::Default &&
@@ -979,7 +980,8 @@ bool X86Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     if (X86.operands[0].type == X86_OP_IMM) {
       S.emit(NdOp::BRANCH, {},
              {NdVar::cst(static_cast<uint64_t>(X86.operands[0].imm), 8)});
-    } else if (X86.operands[0].type == X86_OP_MEM &&
+    } else if (!S.LoadMemoryControlTarget &&
+               X86.operands[0].type == X86_OP_MEM &&
                X86.operands[0].mem.index == X86_REG_INVALID &&
                LiftState::memoryAddressSpace(X86.operands[0]) ==
                    NdMemoryAddressSpace::Default &&

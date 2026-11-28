@@ -345,6 +345,13 @@ public:
             "unsupported disabled-CET instruction encoding");
     }
     bool LoadedMemoryCall = false;
+    bool LoadedMemoryJump = false;
+    const bool DeclaredJumpExit = std::any_of(
+        Options.X64MachineExits.begin(), Options.X64MachineExits.end(),
+        [&](const auto &Exit) {
+          return Exit.Address == Cursor.Address &&
+                 Exit.Kind == SpecializationX64MachineExitKind::Jump;
+        });
     try {
       // With shadow stacks explicitly disabled, RDSSP leaves its destination
       // unchanged. This instruction-specific architectural rule must precede
@@ -432,11 +439,26 @@ public:
           LoadedMemoryCall = Decode.liftX64MemoryCallToLow(
               Insn, Result.Ops, &Result.UndefinedEffects,
               PreserveOpaqueState ? &Result.PreservedState : nullptr);
-        if (!LoadedMemoryCall) {
+        if (Options.ExplicitMachineState && Options.X64CetDisabled &&
+            !ContinuationSnapshot && !DeclaredJumpExit &&
+            Insn.Id == X86_INS_JMP)
+          LoadedMemoryJump = Decode.liftX64MemoryJumpToLow(
+              Insn, Result.Ops, &Result.UndefinedEffects,
+              PreserveOpaqueState ? &Result.PreservedState : nullptr);
+        if (!LoadedMemoryCall && !LoadedMemoryJump) {
           Result.UndefinedEffects = {};
           Decode.liftToLow(Insn, Result.Ops, {}, {}, &Result.UndefinedEffects,
                            PreserveOpaqueState ? &Result.PreservedState
                                                : nullptr);
+          if (Options.ExplicitMachineState && Options.X64CetDisabled &&
+              !ContinuationSnapshot && !DeclaredJumpExit &&
+              Insn.Id == X86_INS_JMP && !Result.Ops.empty() &&
+              Result.Ops.back().Opcode == NdOp::INDIR_BR &&
+              Result.Ops.back().NumInputs == 1 &&
+              Result.Ops.back().Inputs[0].isConst())
+            return llvm::createStringError(
+                llvm::errc::not_supported,
+                "constant-slot jump lacks an exact target-load projection");
         }
         if (Options.X64CetDisabled &&
             (Insn.Id == X86_INS_INCSSPD || Insn.Id == X86_INS_INCSSPQ))

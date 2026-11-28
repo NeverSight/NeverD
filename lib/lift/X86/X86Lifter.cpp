@@ -824,19 +824,11 @@ void X86Lifter::liftWithUndefinedTransfer(
   liftImpl(Insn, Ops, Relocs, ScalarRelocs, false, nullptr, nullptr, &Transfer);
 }
 
-bool X86Lifter::liftX64MemoryCall(
-    const cs_insn *Insn, std::vector<LowOp> &Ops,
-    LowInstructionUndefinedEffects *UndefinedEffects,
-    LowInstructionPreservedState *PreservedState) {
-  if (PreservedState)
-    *PreservedState = {};
-  if (UndefinedEffects) {
-    *UndefinedEffects = {};
-    UndefinedEffects->Diagnostic =
-        "instruction has no audited x64 memory-call projection";
-  }
-  if (TargetArch != Arch::X64 || !Insn || !Insn->detail ||
-      Insn->id != X86_INS_CALL || Insn->size > 15)
+namespace {
+
+bool isX64MemoryNearTransfer(const cs_insn *Insn, unsigned Id,
+                             uint8_t ModRMOperation) {
+  if (!Insn || !Insn->detail || Insn->id != Id || Insn->size > 15)
     return false;
   const cs_x86 &X86 = Insn->detail->x86;
   // Capstone can erase ignored prefixes from its normalized detail. Admit an
@@ -851,12 +843,47 @@ bool X86Lifter::liftX64MemoryCall(
   if (Offset + 2 > Insn->size || Insn->bytes[Offset] != 0xff)
     return false;
   const uint8_t ModRM = Insn->bytes[Offset + 1];
-  if ((ModRM & 0x38) != 0x10 || (ModRM & 0xc0) == 0xc0 ||
-      X86.encoding.modrm_offset != Offset + 1 || X86.modrm != ModRM ||
-      X86.rex != Rex || X86.op_count != 1 ||
-      X86.operands[0].type != X86_OP_MEM || X86.operands[0].size != 8 ||
-      X86.operands[0].mem.segment != X86_REG_INVALID ||
-      X86.addr_size != (Address32 ? 4 : 8))
+  return (ModRM & 0x38) == ModRMOperation && (ModRM & 0xc0) != 0xc0 &&
+         X86.encoding.modrm_offset == Offset + 1 && X86.modrm == ModRM &&
+         X86.rex == Rex && X86.op_count == 1 &&
+         X86.operands[0].type == X86_OP_MEM && X86.operands[0].size == 8 &&
+         X86.operands[0].mem.segment == X86_REG_INVALID &&
+         X86.addr_size == (Address32 ? 4 : 8);
+}
+
+} // namespace
+
+bool X86Lifter::liftX64MemoryCall(
+    const cs_insn *Insn, std::vector<LowOp> &Ops,
+    LowInstructionUndefinedEffects *UndefinedEffects,
+    LowInstructionPreservedState *PreservedState) {
+  if (PreservedState)
+    *PreservedState = {};
+  if (UndefinedEffects) {
+    *UndefinedEffects = {};
+    UndefinedEffects->Diagnostic =
+        "instruction has no audited x64 memory-call projection";
+  }
+  if (TargetArch != Arch::X64 ||
+      !isX64MemoryNearTransfer(Insn, X86_INS_CALL, 0x10))
+    return false;
+  liftImpl(Insn, Ops, {}, {}, true, UndefinedEffects, PreservedState);
+  return true;
+}
+
+bool X86Lifter::liftX64MemoryJump(
+    const cs_insn *Insn, std::vector<LowOp> &Ops,
+    LowInstructionUndefinedEffects *UndefinedEffects,
+    LowInstructionPreservedState *PreservedState) {
+  if (PreservedState)
+    *PreservedState = {};
+  if (UndefinedEffects) {
+    *UndefinedEffects = {};
+    UndefinedEffects->Diagnostic =
+        "instruction has no audited x64 memory-jump projection";
+  }
+  if (TargetArch != Arch::X64 ||
+      !isX64MemoryNearTransfer(Insn, X86_INS_JMP, 0x20))
     return false;
   liftImpl(Insn, Ops, {}, {}, true, UndefinedEffects, PreservedState);
   return true;
@@ -865,7 +892,7 @@ bool X86Lifter::liftX64MemoryCall(
 void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
                          llvm::ArrayRef<RelocatedAddressOperand> Relocs,
                          llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
-                         bool LoadMemoryCallTarget,
+                         bool LoadMemoryControlTarget,
                          LowInstructionUndefinedEffects *UndefinedEffects,
                          LowInstructionPreservedState *PreservedState,
                          LowUndefinedTransfer *Transfer) {
@@ -925,7 +952,7 @@ void X86Lifter::liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
   llvm::scope_exit Rollback([&] { Ops.resize(S.OpsStart); });
   LowInstructionUndefinedEffects EffectsDraft;
   S.UndefinedEffects = (UndefinedEffects || Transfer) ? &EffectsDraft : nullptr;
-  S.LoadMemoryCallTarget = LoadMemoryCallTarget;
+  S.LoadMemoryControlTarget = LoadMemoryControlTarget;
   S.AddressSize = X86.addr_size != 0
                       ? static_cast<uint16_t>(X86.addr_size)
                       : static_cast<uint16_t>(TargetArch == Arch::X64 ? 8 : 4);
