@@ -1515,8 +1515,18 @@ private:
   /// Give each indirect jump that kept its branch identity without a proved
   /// target the address-taken labels of this function as successors, to be
   /// selected by the value it jumps to.  Such a jump trapped on every value;
-  /// it now traps on every value that is none of those labels.
+  /// it now traps on every value that is none of those labels.  The labels a
+  /// jump got from the table it reads (recoverOwnLabelTableBranches) are
+  /// checked the same way.
   void dispatchUnprovedBranchesByValue(const BinaryImage &Img, LowFunc &Func);
+  /// Give an indirect jump left without a proved target, whose destination
+  /// is read from a read-only table of this function's own code, the code
+  /// the table's leading slots name as successors selected by the value it
+  /// jumps to.  Nothing bounds the jump's index, so no index domain is
+  /// claimed: the jump still traps on every value that is none of them.
+  /// Returns whether a jump gained successors.
+  bool recoverOwnLabelTableBranches(const BinaryImage &Img, Decoder &Dec,
+                                    LowFunc &Func);
 
   /// Make the block beginning at Func.Entry block 0 and remap every CFG edge
   /// through the same stable permutation.  Block byte ranges are still built
@@ -3382,6 +3392,16 @@ private:
   /// They remain opaque INDIR_BR terminators: treating the now-unprovable
   /// guest dispatch as a function-pointer tail call would change semantics.
   std::set<va_t> LostValidatedJumpTableBranches;
+  /// The table each jump recoverOwnLabelTableBranches dispatched by value
+  /// reads: its address, whose 32-bit slots hold each label as its offset
+  /// from that address, and the read of the slot the dispatch compares.  The
+  /// table's address is no address of the lifted program, so neither is the
+  /// jump's value; the slot is the same number in both.
+  struct OwnLabelTableRead {
+    va_t Base = 0;
+    JumpTableSelectorUseRef Slot;
+  };
+  std::map<va_t, OwnLabelTableRead> OwnLabelTableReads;
   bool PreservePotentialJumpTableBranches = false;
 };
 

@@ -18,6 +18,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
@@ -80,7 +81,7 @@ IntegerControl branch(Arch A, uint32_t W, va_t PC) {
 struct State : IntegerLiftState {
   using IntegerLiftState::IntegerLiftState;
   NdVar read(unsigned Rs) { return Rs ? reg(Rs) : imm(0); }
-  void write(unsigned Rd, NdVar V, bool Signed = false) {
+  void write(unsigned Rd, const NdVar &V, bool Signed = false) {
     if (Rd)
       emit(NdOp::COPY, reg(Rd), {resize(V, Width, Signed)});
   }
@@ -331,6 +332,23 @@ bool floating(State &S, RISCVProfile P, uint32_t W) {
   return true;
 }
 
+bool liftCycleRead(State &S, Arch A, uint32_t W, unsigned Rd) {
+  Intrinsic Id;
+  switch (W & opcode::ExceptRdMask) {
+#define NEVERD_RISCV_CYCLE(Name, Value, Word, High, Text)                      \
+  case Word:                                                                   \
+    Id = Intrinsic::Name;                                                      \
+    break;
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+  default:
+    return false;
+  }
+  if (!cycleRead(Id)->admits(A))
+    return false;
+  S.emitIntrinsic(Id, Rd ? S.reg(Rd) : S.makeTemp(S.Width), {});
+  return true;
+}
+
 bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
   const unsigned Op = W & 127, Rd = W >> 7 & 31, F = W >> 12 & 7;
   const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
@@ -420,8 +438,9 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
 
   const bool Imm = Op == opcode::OpImm || Op == opcode::OpImm32;
   const bool Word = Op == opcode::OpImm32 || Op == opcode::Op32;
-  if ((!Imm && Op != opcode::Op && Op != opcode::Op32) ||
-      (Word && S.Width != 8))
+  if (!Imm && Op != opcode::Op && Op != opcode::Op32)
+    return Op == opcode::System && P.Zicntr && liftCycleRead(S, A, W, Rd);
+  if (Word && S.Width != 8)
     return false;
   if (F7 && P.Zbb && basicBitManipulation(S, W, Imm, Word, Rd, X, Y))
     return true;

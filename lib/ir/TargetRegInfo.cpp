@@ -12,6 +12,7 @@
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/lift/IntegerRegisters.h"
+#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -341,6 +342,8 @@ bool TargetRegInfo::isCallPreserved(uint64_t RegOff, uint16_t Size) const {
     return Size <= 8 &&
            (Index == 8 || Index == 9 || (Index >= 18 && Index <= 27));
   }
+  if (isPowerPC(TheArch) && isVectorReg(RegOff))
+    return Size <= ppc::VectorBytes && RegOff >= ppc::vr(ppc::FirstSavedVector);
   if (isMIPS(TheArch) && isVectorReg(RegOff)) {
     const unsigned Index = (RegOff - VecRegBase) / VecRegStride;
     return Size <= 8 &&

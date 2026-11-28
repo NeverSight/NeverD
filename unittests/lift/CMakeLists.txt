@@ -3570,6 +3570,8 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_reload_cursor.s
   x86_64/test_jumptable_flags_carry.s
   x86_64/test_jumptable_lane_carry.s
+  x86_64/test_jumptable_walked_extend.s
+  x86_64/test_jumptable_own_label_dispatch.s
   x86_64/test_jumptable_scale_after_extend.s
   x86_64/test_jumptable_alias_share.s
   x86_64/test_jumptable_guard_session.s

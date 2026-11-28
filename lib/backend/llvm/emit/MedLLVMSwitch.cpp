@@ -133,7 +133,21 @@ bool MedLLVMEmitter::emitValueDispatch(const MedBlock &Blk, const MedOp &BrOp,
       dispatchTargetBlocks(*CurMedFunc, Blk, JT->Targets, BBMap);
   if (CaseBlocks.empty())
     return false;
-  llvm::Value *Target = getVar(BrOp.Inputs[0], Builder);
+  // A dispatch on another value than the jump's, such as the slot of a
+  // relative table, compares the value its selector occurrence bound to.
+  MedVar Selector = BrOp.Inputs[0];
+  if (JT->SelectorUseRefs.size() == 1 &&
+      JT->SelectorUseRefs.front().ExpectedOpcode != NdOp::INDIR_BR) {
+    const auto Plan =
+        CurMedFunc->SwitchSelectorPlans.find({JT->InsnAddr, Blk.Id});
+    if (Plan == CurMedFunc->SwitchSelectorPlans.end() ||
+        Plan->second.PlanKind != MedSwitchSelectorPlan::Kind::Direct ||
+        Plan->second.Selector.Size == 0 || Plan->second.Selector.isConst() ||
+        Plan->second.Selector.Size != Plan->second.ResultSize)
+      return false;
+    Selector = Plan->second.Selector;
+  }
+  llvm::Value *Target = getVar(Selector, Builder);
   if (!Target || !Target->getType()->isIntegerTy())
     return false;
   auto *Ty = llvm::cast<llvm::IntegerType>(Target->getType());
@@ -155,9 +169,13 @@ bool MedLLVMEmitter::emitValueDispatch(const MedBlock &Blk, const MedOp &BrOp,
   // Tell this switch from one over a recovered table's index.
   SW->setMetadata("neverd.value-dispatch", llvm::MDNode::get(*Ctx, {}));
   std::set<uint64_t> Seen;
-  for (size_t K = 0; K < CaseBlocks.size(); ++K)
-    if (Seen.insert(JT->Targets[K]).second)
-      SW->addCase(llvm::ConstantInt::get(Ty, JT->Targets[K]), CaseBlocks[K]);
+  for (size_t K = 0; K < CaseBlocks.size(); ++K) {
+    const llvm::APInt Label =
+        llvm::APInt(64, static_cast<uint64_t>(JT->CaseLabels[K]))
+            .zextOrTrunc(Ty->getBitWidth());
+    if (Seen.insert(Label.getZExtValue()).second)
+      SW->addCase(llvm::ConstantInt::get(*Ctx, Label), CaseBlocks[K]);
+  }
   return true;
 }
 

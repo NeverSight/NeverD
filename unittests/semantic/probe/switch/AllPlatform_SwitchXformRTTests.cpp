@@ -152,6 +152,53 @@ static std::vector<RoundTripTC> makeSwXformTC(const char *prefix, const char *T,
      "  return ("+t+")(unsigned long)acc; }\n",
      {0x424242ULL}, "SwXform", Opt},
   };
+  // Unreachable-default switch on a byte nothing bounds, as Rust compiles a
+  // `match` on an enum's discriminant: clang drops the range check, and the
+  // byte allows 256 values where the table holds six.  The jump dispatches by
+  // value on the labels the table's leading slots name, comparing the slot;
+  // each argument selects a different case.
+  if (p == "x64swx")
+    for (const unsigned Case : {0u, 3u, 5u}) {
+      const std::string Name = p + "_enumbyte" + std::to_string(Case);
+      Cases.push_back(
+          {Name,
+           t+" "+Name+"("+t+" a){\n"
+           "  unsigned acc=((unsigned)a>>8)|1u;\n"
+           "  switch((unsigned char)a){\n"
+           "  case 0: acc=acc*3u+1u; break;\n"
+           "  case 1: acc^=acc>>7; break;\n"
+           "  case 2: acc=(acc<<5)|(acc>>27); break;\n"
+           "  case 3: acc-=0x61C88647u; break;\n"
+           "  case 4: acc=~acc+5u; break;\n"
+           "  case 5: acc+=acc<<3; break;\n"
+           "  default: __builtin_unreachable();\n"
+           "  }\n"
+           "  return ("+t+")(unsigned long)acc; }\n",
+           {0x5A5A00ULL | Case}, "SwXform", Opt});
+    }
+  // The same on bytes stored to the stack and read back: the resolver runs
+  // out of evidence for each reloaded byte's domain, and every dispatch goes
+  // by value.
+  if (p == "x64swx")
+    Cases.push_back(
+        {p+"_enumload",
+         t+" "+p+"_enumload("+t+" a){\n"
+         "  volatile unsigned char kind[8];\n"
+         "  unsigned acc=(unsigned)a|1u;\n"
+         "  for(unsigned i=0;i<8;i++) kind[i]=(unsigned char)((acc>>(i*3u))%6u);\n"
+         "  for(unsigned i=0;i<8;i++){\n"
+         "    switch(kind[i]){\n"
+         "    case 0: acc=acc*3u+1u; break;\n"
+         "    case 1: acc^=acc>>7; break;\n"
+         "    case 2: acc=(acc<<5)|(acc>>27); break;\n"
+         "    case 3: acc-=0x61C88647u; break;\n"
+         "    case 4: acc=~acc+i; break;\n"
+         "    case 5: acc+=acc<<3; break;\n"
+         "    default: __builtin_unreachable();\n"
+         "    }\n"
+         "  }\n"
+         "  return ("+t+")(unsigned long)acc; }\n",
+         {0x5A5A5AULL}, "SwXform", Opt});
   if (p == "armswx" && Opt == 2)
     for (RoundTripTC &TC : Cases)
       if (TC.Name == "armswx_twoswitch")

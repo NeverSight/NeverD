@@ -2175,6 +2175,8 @@ alias_done:
     return TRI.isSubRegOf(A.Offset, A.Size, B.Offset, B.Size) ||
            TRI.isSubRegOf(B.Offset, B.Size, A.Offset, A.Size);
   };
+  // The proof's roots, read once if a structural walk needs them.
+  std::optional<std::set<va_t>> WalkRoots;
   auto structuralRegisterIndex = [&](const NdVar &Compared, va_t CompareAddr,
                                      int CompareSeq,
                                      va_t GuardBranchAddr) -> bool {
@@ -2294,6 +2296,60 @@ alias_done:
           LaneExtend = &Op;
           LaneExtendGuarded = Insn.IsInstructionGuard;
         }
+      }
+      // The lane's writer can precede the compare's block: bash loads a
+      // field with `movl 0x18(%rbx), %eax`, branches away on a test of it,
+      // and compares %eax in the block the test falls into. Follow the chain
+      // of blocks each entered only by falling through from the one before,
+      // as the guard walk does; the span below still excludes calls. A block
+      // also entered another way, as a function entry or a root of the proof
+      // (a relocated label, a landing pad), would skip the extension there,
+      // and nothing all-path checks a structural leaf, so the walk stops.
+      va_t Scan = *CompareBlock;
+      for (uint32_t Hop = 0;
+           !LaneExtend && Hop < limits::kMaxJumpTableGuardFlagSearchBlocks;
+           ++Hop) {
+        if ((CurrentFuncRange && Scan == CurrentFuncRange->first) ||
+            isKnownFunctionEntry(Scan))
+          break;
+        if (!WalkRoots)
+          WalkRoots = jumpTableProofRoots(Info);
+        if (WalkRoots->count(Scan))
+          break;
+        const auto Entering = blocksEntering(Scan);
+        if (!Entering || Entering->size() != 1 || *Entering->begin() >= Scan)
+          break;
+        const va_t Pred = *Entering->begin();
+        const InsnRecord *Last = nullptr;
+        const LowOp *Writer = nullptr;
+        bool WriterGuarded = false;
+        for (auto It = Insns.lower_bound(Pred);
+             It != Insns.end() && It->first < Scan; ++It) {
+          if (!consumeCandidateEvidence())
+            return false;
+          const auto Here = blockContaining(It->first);
+          if (!Here || *Here != Pred)
+            break;
+          Last = &It->second;
+          for (const LowOp &Op : It->second.Ops) {
+            if (!consumeCandidateEvidence())
+              return false;
+            if (overlapsCompared(Op.Output)) {
+              Writer = &Op;
+              WriterGuarded = It->second.IsInstructionGuard;
+            }
+          }
+        }
+        if (!Last)
+          break;
+        const auto Entry = entersBlock(*Last, Scan);
+        if (!Entry || !Entry->Falls || Entry->Named)
+          break;
+        if (Writer) {
+          LaneExtend = Writer;
+          LaneExtendGuarded = WriterGuarded;
+        }
+        Scan = Pred;
       }
       const bool ExtendsLane =
           LaneExtend && !LaneExtendGuarded &&
@@ -4267,6 +4323,9 @@ alias_done:
     GuardExprPtr Expr;
     bool TableCondition = false;
     uint16_t IndexWidth = 0;
+    /// The guard compares the index lane itself (GuardSyntaxNode::
+    /// ContainsStructuralIndex).
+    bool Structural = false;
   };
   std::vector<MaterializedGuard> MaterializedGuards;
   if (!consumeGuardBuildWork(GuardRoots.size()))
@@ -4368,7 +4427,8 @@ alias_done:
         }
         return failIncomplete();
       }
-      MaterializedGuards.push_back({std::move(Expr), TableCondition, *Width});
+      MaterializedGuards.push_back({std::move(Expr), TableCondition, *Width,
+                                    Root && Root->ContainsStructuralIndex});
     }
   }
 
@@ -4389,7 +4449,26 @@ alias_done:
       break;
     }
   }
-  if (!HasCanonicalGuard && !MaterializedGuards.empty())
+  // A compare of the index lane itself, whose zero-extension into the index
+  // the structural proof established, is written over the index as directly
+  // as a full-width guard. When it is the only such compare, its view wins
+  // over full-width expressions of the index: bash tests `(%eax - 4) & ~4`
+  // on the full register before `cmp $0x13, %eax`, and keeping only that
+  // test left holes and no bound.
+  const bool CanonicalStructural =
+      std::any_of(MaterializedGuards.begin(), MaterializedGuards.end(),
+                  [&](const MaterializedGuard &Guard) {
+                    return Guard.Structural &&
+                           Guard.IndexWidth == Info.IndexValueAtUse.Size;
+                  });
+  const auto NarrowStructural = std::find_if(
+      MaterializedGuards.begin(), MaterializedGuards.end(),
+      [&](const MaterializedGuard &Guard) {
+        return Guard.Structural && Guard.IndexWidth < Info.IndexValueAtUse.Size;
+      });
+  if (!CanonicalStructural && NarrowStructural != MaterializedGuards.end())
+    SelectedIndexWidth = NarrowStructural->IndexWidth;
+  else if (!HasCanonicalGuard && !MaterializedGuards.empty())
     SelectedIndexWidth = MaterializedGuards.front().IndexWidth;
   for (MaterializedGuard &Guard : MaterializedGuards) {
     if (!consumeGuardBuildWork())

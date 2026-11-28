@@ -22,6 +22,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSignalSpy>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -58,7 +59,8 @@ private slots:
         Jar =
             QByteArray::fromBase64(V.toObject()["bytes"].toString().toLatin1());
     QVERIFY(!Jar.isEmpty());
-    QString Path = Temp.filePath("multi.jar");
+    const QString JarName = QStringLiteral("جمع-源码.jar");
+    QString Path = Temp.filePath(JarName);
     QFile File(Path);
     QVERIFY(File.open(QIODevice::WriteOnly));
     QCOMPARE(File.write(Jar), Jar.size());
@@ -75,16 +77,22 @@ private slots:
     auto *Source = Dialog.findChild<QPlainTextEdit *>("jvmSource");
     auto *Bytecode = Dialog.findChild<QPlainTextEdit *>("jvmBytecode");
     auto *IR = Dialog.findChild<QPlainTextEdit *>("jvmIR");
+    auto *Evidence = Dialog.findChild<QPlainTextEdit *>("jvmEvidence");
     auto *Mappings = Dialog.findChild<QListWidget *>("jvmMappings");
     auto *Tabs = Dialog.findChild<QTabWidget *>();
     auto *Copy = Dialog.findChild<QPushButton *>("jvmCopy");
     QVERIFY(Input && Release && Classes && Methods && Results && Run &&
-            Inspect && Source && Bytecode && IR && Mappings && Tabs && Copy);
+            Inspect && Source && Bytecode && IR && Evidence && Mappings &&
+            Tabs && Copy);
     Input->setText(Path);
     Release->setCurrentIndex(Release->findData(17));
     QTRY_VERIFY_WITH_TIMEOUT(Inspect->isEnabled(), 15000);
     Inspect->click();
     QTRY_VERIFY_WITH_TIMEOUT(Inspect->isEnabled(), 15000);
+    QCOMPARE(Tabs->currentWidget(), Evidence);
+    QVERIFY(Evidence->toPlainText().contains(JarName));
+    QCOMPARE(Evidence->document()->defaultFont().styleStrategy(),
+             Evidence->font().styleStrategy());
     auto Inventory = cli(Path, {"--inventory"});
     QVERIFY(!Inventory.isEmpty());
     int Variant = -1, Attached = -1;
@@ -118,17 +126,33 @@ private slots:
     QCOMPARE(Tabs->currentWidget(), Source);
     QCOMPARE(Source->toPlainText(), F["source"].toString());
     QCOMPARE(BytecodeChanges.count(), 0);
+    bool VisibleDuringLoad = true;
+    const auto Loaded =
+        connect(Bytecode, &QPlainTextEdit::textChanged, this,
+                [&] { VisibleDuringLoad = Bytecode->isVisible(); });
     Tabs->setCurrentWidget(Bytecode);
+    disconnect(Loaded);
+    QCOMPARE(BytecodeChanges.count(), 1);
+    QVERIFY(!VisibleDuringLoad);
     QCOMPARE(QJsonDocument::fromJson(Bytecode->toPlainText().toUtf8()).array(),
              F["instructions"].toArray());
+    Bytecode->moveCursor(QTextCursor::End);
+    QCOMPARE(Bytecode->textCursor().block(), Bytecode->document()->lastBlock());
+    const int Scroll = Bytecode->verticalScrollBar()->value();
+    QVERIFY(Scroll > 0);
     Tabs->setCurrentWidget(IR);
     QCOMPARE(QJsonDocument::fromJson(IR->toPlainText().toUtf8()).object(),
              F["ir"].toObject());
     BytecodeChanges.clear();
     Tabs->setCurrentWidget(Bytecode);
     QCOMPARE(BytecodeChanges.count(), 0);
+    QCOMPARE(Bytecode->textCursor().block(), Bytecode->document()->lastBlock());
+    QCOMPARE(Bytecode->verticalScrollBar()->value(), Scroll);
     Copy->click();
     QCOMPARE(QApplication::clipboard()->text(), Bytecode->toPlainText());
+    Tabs->setCurrentWidget(Evidence);
+    QVERIFY(Evidence->document()->defaultFont().styleStrategy() &
+            QFont::PreferNoShaping);
     Tabs->setCurrentWidget(Source);
     bool Found = false;
     for (int I = 0; I < Mappings->count(); ++I) {
@@ -181,6 +205,13 @@ private slots:
     QVERIFY(!Copy->isEnabled());
     Tabs->setCurrentWidget(IR);
     QVERIFY(IR->document()->isEmpty());
+    Inspect->click();
+    QTRY_VERIFY_WITH_TIMEOUT(Inspect->isEnabled(), 15000);
+    QCOMPARE(Tabs->currentWidget(), Evidence);
+    QCOMPARE(Evidence->document()->defaultFont().styleStrategy(),
+             Evidence->font().styleStrategy());
+    Copy->click();
+    QVERIFY(QApplication::clipboard()->text().contains(JarName));
   }
   void incompleteMethodShowsMappedBytecodeAndDiagnostics() {
     QTemporaryDir Temp;
