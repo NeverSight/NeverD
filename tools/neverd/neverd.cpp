@@ -160,6 +160,10 @@ static int realMain(int Argc, char *Argv[]) {
     return 1;
   }
 
+  // Manifest relinking validates the ELF and its original link inputs directly.
+  if (PatchCmd && PatchRelink.getNumOccurrences())
+    return runRelinkPatch();
+
   // Protect the complete sidecar read/modify/write transaction, including
   // restoration before the edit. The GUI holds the same project lock.
   std::unique_ptr<ProjectWriteLock> SectionWriter;

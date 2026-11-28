@@ -2293,6 +2293,10 @@ cl::opt<std::string>
 cl::opt<std::string> PatchLinkerPath("linker-path",
                                      cl::desc("ELF LLD driver for --relink"),
                                      cl::init("ld.lld"), cl::sub(PatchCmd));
+cl::opt<std::string> PatchOriginalLinkerPath(
+    "original-linker-path",
+    cl::desc("LLD driver that reproduces the original --relink input"),
+    cl::value_desc("path"), cl::sub(PatchCmd));
 
 cl::opt<std::string>
     PatchFromIR("from-ir", cl::desc("Patch from external LLVM IR file (.ll)"),

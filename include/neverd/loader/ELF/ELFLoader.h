@@ -24,10 +24,16 @@ class ELFLoader : public Loader {
 public:
   llvm::Expected<BinaryImage> load(const std::filesystem::path &Path) override;
   llvm::Expected<BinaryImage> loadBuffer(llvm::MemoryBufferRef Buffer) override;
+  /// Apply the loader's input checks when the caller needs no analysis image.
+  llvm::Error validateBuffer(llvm::MemoryBufferRef Buffer);
   /// Add the load dialog's rows for \p Buffer, whose file magic this
   /// loader reads (LoadCandidate.h), judged as load() judges the file.
   static void identify(llvm::MemoryBufferRef Buffer,
                        std::vector<LoadCandidate> &Rows);
+
+private:
+  llvm::Expected<BinaryImage> readBuffer(llvm::MemoryBufferRef Buffer,
+                                         bool ForAnalysis);
 };
 
 } // namespace neverd

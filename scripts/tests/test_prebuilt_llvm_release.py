@@ -195,11 +195,16 @@ message(STATUS "MIGRATED_TAG=${{NEVERD_LLVM_PREBUILT_TAG}}")
             "neverd-llvm-v23.0.0-r9",
             "neverd-llvm-v23.0.0-r10",
             "neverd-llvm-v23.0.0-r11",
+            "neverd-llvm-v23.0.0-r12",
+            "neverd-llvm-v23.0.0-r13",
+            "neverd-llvm-v23.0.0-r14",
+            "neverd-llvm-v23.0.0-r15",
+            "neverd-llvm-v23.0.0-r16",
         ):
             with self.subTest(tag=tag):
                 self.assertEqual(
                     self.configured_tag_after_migration(tag),
-                    "neverd-llvm-v23.0.0-r12",
+                    "neverd-llvm-v23.0.0-r17",
                 )
 
     def test_explicit_digest_preserves_the_selected_legacy_tag(self):
@@ -216,6 +221,11 @@ message(STATUS "MIGRATED_TAG=${{NEVERD_LLVM_PREBUILT_TAG}}")
             "neverd-llvm-v23.0.0-r9",
             "neverd-llvm-v23.0.0-r10",
             "neverd-llvm-v23.0.0-r11",
+            "neverd-llvm-v23.0.0-r12",
+            "neverd-llvm-v23.0.0-r13",
+            "neverd-llvm-v23.0.0-r14",
+            "neverd-llvm-v23.0.0-r15",
+            "neverd-llvm-v23.0.0-r16",
         ):
             with self.subTest(tag=tag):
                 self.assertEqual(
@@ -708,10 +718,10 @@ class PrebuiltLlvmDocumentationTests(unittest.TestCase):
             source = readme.read_text(encoding="utf-8")
             with self.subTest(readme=readme.name):
                 self.assertIn(
-                    "-f release_tag=neverd-llvm-v23.0.0-r13", source
+                    "-f release_tag=neverd-llvm-v23.0.0-r17", source
                 )
                 self.assertIn(
-                    "-DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r12", source
+                    "-DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r17", source
                 )
                 self.assertIn("NEVERD_LLVM_PREBUILT_SHA256", source)
                 self.assertIn("-f overwrite_existing_assets=false", source)
@@ -736,14 +746,14 @@ class PrebuiltLlvmDocumentationTests(unittest.TestCase):
             "macOS arm64",
             "Linux x86_64",
             "Windows x64",
-            "neverd-llvm-v23.0.0-r12",
-            "neverd-llvm-v23.0.0-r13",
+            "neverd-llvm-v23.0.0-r17",
+            "neverd-llvm-v23.0.0-r17",
             "cmake/NeverDLLVMPrebuilt.cmake",
             "scripts/audit_prebuilt_llvm_release.py",
             "Run the `Prebuilt LLVM Audit` workflow manually",
             "sccache",
             "GitHub Actions cache",
-            ".cache/neverd-llvm/neverd-llvm-v23.0.0-r12",
+            ".cache/neverd-llvm/neverd-llvm-v23.0.0-r17",
             "use_prebuilt_llvm",
             "builds the LLVM submodule from source by default",
         ):
@@ -752,7 +762,7 @@ class PrebuiltLlvmDocumentationTests(unittest.TestCase):
 
         self.assertIn("Set `use_prebuilt_llvm` to `true`", source)
         self.assertIn(
-            "-DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r12", source
+            "-DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r17", source
         )
         self.assertNotIn(
             "-DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0\n", source
