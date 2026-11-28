@@ -122,7 +122,8 @@ to local literal pools and compact or extended stack operands. For both
 direct object output and reassembled output, it encodes stack adjustments
 in units of eight bytes and fills executable alignment with a MIPS16 NOP.
 The C calling-convention tests below exercise both paths in both byte orders.
-[LLVM change](https://github.com/NeverSight/llvm-project/pull/26).
+[LLVM change](https://github.com/NeverSight/llvm-project/pull/26) ·
+[Release archives](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r17).
 
 Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
