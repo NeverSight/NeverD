@@ -1466,6 +1466,7 @@ void FuncDetector::scanCallTargets(
 
   const unsigned ThreadsN = workerThreadCount();
   constexpr size_t MinChunk = limits::kMinFuncScanChunk;
+  size_t BytesUntilParallel = MinChunk;
 
   auto AddRange = [&](const Segment *Seg, va_t Start, uint64_t RequestedLen) {
     if (!Seg || !Seg->isExecutable() || Seg->Data.empty() || Start < Seg->VA)
@@ -1477,6 +1478,7 @@ void FuncDetector::scanCallTargets(
         RequestedLen, Seg->Data.size() - static_cast<size_t>(StartOff)));
     if (ScanLen == 0)
       return;
+    BytesUntilParallel -= std::min(BytesUntilParallel, ScanLen);
     if (Img.Arch == Arch::X86 || Img.Arch == Arch::X64) {
       // A long range is swept in pieces on the worker threads and the pieces
       // joined afterwards exactly as one sweep would have gone; see below.
@@ -1556,7 +1558,9 @@ void FuncDetector::scanCallTargets(
     Dec.setText(false);
   }
 
-  if (Chunks.size() <= 1 && PieceJobs.empty()) {
+  // A text section and its sized symbols can describe many tiny ranges.
+  // Sweep each range normally without starting a worker for a short scan.
+  if (PieceJobs.empty() && (Chunks.size() <= 1 || BytesUntilParallel != 0)) {
     for (auto &[Seg, Start, End] : Chunks)
       func_detect_detail::scanSegmentCalls(Img, Dec, Seg, Start, End, Out,
                                            CodeAddresses, Cancellation,
