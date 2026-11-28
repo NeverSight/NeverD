@@ -3104,6 +3104,15 @@ target_include_directories(NeverDPipelineLLVMShardingTests PRIVATE
 )
 
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+if(WIN32 AND NOT CMAKE_CROSSCOMPILING AND NEVERD_HAVE_WINDOWS_EH_CORPUS
+   AND TARGET NeverDSEHRuntimeMemoryTests)
+  add_test(NAME RegistrationCRTFrame.OriginalPE32XCPT4RunsOnWindows
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/scripts/check_windows_xcpt4_original.py"
+      "${NEVERD_BINARY_CORPUS_ROOT}/corpus/windows-eh/msvc/vs2019/x86/native/no-gs/o0/windows-seh-tests/xcpt4-msvc-x86-native-no-gs-o0.exe")
+  set_tests_properties(RegistrationCRTFrame.OriginalPE32XCPT4RunsOnWindows
+    PROPERTIES LABELS NeverDSEHRuntimeMemoryTests TIMEOUT 150)
+endif()
 if(TARGET NeverDX87CapabilitiesPublicTests)
   add_test(NAME X87Capabilities.GeneratedDocumentationMatchesPublicReport
     COMMAND "${Python3_EXECUTABLE}"

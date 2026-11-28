@@ -79,7 +79,10 @@ inline bool isX86FramePreservingIntrinsic(const LowOp &Op, Arch Architecture) {
            (Op.Inputs[1].Offset - x86reg::ST0) % x86reg::FPURegStride == 0 &&
            Op.Inputs[1].Size == x86reg::FPURegSize &&
            Op.Inputs[2] == StatusWord;
-  return Id == Intrinsic::X87Wait && Op.NumInputs == 1 && Op.Output == NdVar();
+  // FNCLEX changes the x87 status word. Both standalone instructions leave
+  // the integer registers and stack untouched on ordinary continuation.
+  return (Id == Intrinsic::X87Wait || Id == Intrinsic::X87Fnclex) &&
+         Op.NumInputs == 1 && Op.Output == NdVar();
 }
 
 /// Reads that cannot change a saved integer PC. Unlike floating arithmetic

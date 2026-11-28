@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <iterator>
 #include <optional>
 #include <vector>
 
@@ -118,7 +119,282 @@ struct ImportImage {
     return Caller;
   }
 };
+
+void checkUCRTCallerCleanup(ImportCase C, const char *API, const char *WrongAPI,
+                            bool PreservesBindings = false) {
+  for (const char *Provider : {API, "UCRTBASE.DLL", "ucrtbased.dll"})
+    for (bool ThroughStub : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << C.Name << ' ' << Provider << ' ' << ThroughStub);
+      ImportImage F(C, ThroughStub, true);
+      auto &Image = F.Image;
+      Image.Imports.front().Module = Provider;
+      const auto Pop = [&] {
+        return registration_abi::checkedRegistrationImportStackPop(
+            Image, ImportImage::IATVA);
+      };
+      ASSERT_EQ(Pop(), 0u);
+      EXPECT_EQ(getCheckedX86CalleeStackPop(Image, ImportImage::TextVA), 0u);
+      const auto Preserves = [&] {
+        return registration_abi::preservesRegistrationImportBindings(
+            Image, ImportImage::IATVA);
+      };
+      EXPECT_EQ(Preserves(), PreservesBindings);
+      Image.Imports.front().IsDelayImport = true;
+      EXPECT_FALSE(Pop());
+      EXPECT_FALSE(Preserves());
+      Image.Imports.front().IsDelayImport = false;
+      Image.Imports.front().Module = WrongAPI;
+      EXPECT_FALSE(Pop());
+      EXPECT_FALSE(Preserves());
+      Image.Imports.front().Module = Provider;
+      Image.ConflictingImportStorageSlots.insert(ImportImage::IATVA);
+      EXPECT_FALSE(Pop());
+      EXPECT_FALSE(Preserves());
+    }
+}
 } // namespace
+
+TEST(RegistrationImportABI, StartupQueriesKeepOnlyBoundClockOutputs) {
+  using registration_abi::checkedRegistrationImportStackPop;
+  for (const char *Name :
+       {"GetCurrentProcessId", "GetCurrentThreadId", "GetSystemTimeAsFileTime",
+        "QueryPerformanceCounter"}) {
+    const bool Clock = llvm::StringRef(Name) == "QueryPerformanceCounter" ||
+                       llvm::StringRef(Name) == "GetSystemTimeAsFileTime";
+    ImportImage F({Name, 0}, false);
+    EXPECT_EQ(checkedRegistrationImportStackPop(F.Image, ImportImage::IATVA),
+              Clock ? 4u : 0u);
+    EXPECT_EQ(registration_abi::preservesRegistrationImportBindings(
+                  F.Image, ImportImage::IATVA),
+              !Clock);
+    F.Image.Imports.front().Module = "application.dll";
+    EXPECT_FALSE(
+        checkedRegistrationImportStackPop(F.Image, ImportImage::IATVA));
+    F.Image.Imports.front().Module = "KERNEL32.dll";
+    F.Image.Imports.front().IsDelayImport = true;
+    EXPECT_FALSE(
+        checkedRegistrationImportStackPop(F.Image, ImportImage::IATVA));
+    if (!Clock)
+      continue;
+    for (bool ThroughStub : {false, true})
+      for (int8_t Displacement : {-4, 0, 8, 12, 16}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Name << '/' << ThroughStub << '/' << int(Displacement));
+        ImportImage Call({Name, 0}, ThroughStub);
+        // Reserve 16 bytes, take &local, push it, call, then release the frame.
+        std::vector<uint8_t> Body = {
+            0x83, 0xec, 16, 0x8d, 0x44, 0x24, uint8_t(Displacement), 0x50};
+        if (ThroughStub) {
+          Body.push_back(0xe8);
+          const size_t Field = Body.size();
+          Body.resize(Field + 4);
+          writeLE<uint32_t>(Body.data() + Field,
+                            ImportImage::StubVA -
+                                (ImportImage::TextVA + Body.size()));
+        } else {
+          Body.insert(Body.end(), {0xff, 0x15, 0, 0x30, 0x40, 0});
+        }
+        Body.insert(Body.end(), {0x83, 0xc4, 16, 0xc3});
+        auto &Code = Call.Image.Segments.front().Data;
+        std::copy(Body.begin(), Body.end(), Code.begin());
+        const auto Contract = RegistrationCallCalleeIndex(Call.Image)
+                                  .stackContract(ImportImage::TextVA);
+        ASSERT_TRUE(Contract);
+        EXPECT_EQ(Contract->StackPopBytes, 0u);
+        EXPECT_EQ(Contract->PreservesImportBindings,
+                  Displacement >= 0 && Displacement + 8 <= 16);
+      }
+  }
+}
+
+TEST(RegistrationImportABI, UCRTStdioReturnsWithCallerCleanup) {
+  // The vfprintf options word occupies two PE32 stack slots.
+  for (const ImportCase C : {ImportCase{"__acrt_iob_func", 1},
+                             ImportCase{"__stdio_common_vfprintf", 6}})
+    checkUCRTCallerCleanup(C, "api-ms-win-crt-stdio-l1-1-0.dll",
+                           "api-ms-win-crt-runtime-l1-1-0.dll");
+}
+
+TEST(RegistrationImportABI, UCRTHeapCallsReturnWithCallerCleanup) {
+  for (const ImportCase C : {ImportCase{"malloc", 1}, ImportCase{"calloc", 2},
+                             ImportCase{"realloc", 2}, ImportCase{"free", 1}})
+    checkUCRTCallerCleanup(C, "api-ms-win-crt-heap-l1-1-0.dll",
+                           "api-ms-win-crt-runtime-l1-1-0.dll");
+}
+
+TEST(RegistrationImportABI, UCRTInitializerWalkersUseTheRuntimeProvider) {
+  for (const ImportCase C :
+       {ImportCase{"_initterm", 2}, ImportCase{"_initterm_e", 2}})
+    checkUCRTCallerCleanup(C, "api-ms-win-crt-runtime-l1-1-0.dll",
+                           "api-ms-win-crt-stdio-l1-1-0.dll");
+}
+
+TEST(RegistrationImportABI, StartupModesReturnWithCallerCleanup) {
+  checkUCRTCallerCleanup({"_set_app_type", 1},
+                         "api-ms-win-crt-runtime-l1-1-0.dll",
+                         "api-ms-win-crt-stdio-l1-1-0.dll");
+  checkUCRTCallerCleanup({"_set_fmode", 1}, "api-ms-win-crt-stdio-l1-1-0.dll",
+                         "api-ms-win-crt-runtime-l1-1-0.dll");
+  checkUCRTCallerCleanup({"_set_new_mode", 1}, "api-ms-win-crt-heap-l1-1-0.dll",
+                         "api-ms-win-crt-runtime-l1-1-0.dll");
+}
+
+TEST(RegistrationImportABI, StartupImportsUseTheirOwnUCRTFamily) {
+  const char *Runtime = "api-ms-win-crt-runtime-l1-1-0.dll";
+  const char *Locale = "api-ms-win-crt-locale-l1-1-0.dll";
+  const char *Math = "api-ms-win-crt-math-l1-1-0.dll";
+  for (ImportCase C :
+       {ImportCase{"_configure_narrow_argv", 1},
+        ImportCase{"_initialize_narrow_environment", 0},
+        ImportCase{"_initialize_onexit_table", 1},
+        ImportCase{"_register_onexit_function", 2},
+        ImportCase{"_crt_atexit", 1}, ImportCase{"_crt_at_quick_exit", 1}})
+    checkUCRTCallerCleanup(C, Runtime, Locale);
+  checkUCRTCallerCleanup({"_configthreadlocale", 1}, Locale, Math);
+  checkUCRTCallerCleanup({"__setusermatherr", 1}, Math, Runtime);
+}
+
+TEST(RegistrationImportABI, PushedWordBoundsOnlyTheCurrentCalleeRead) {
+  enum class Input { Word, ShortPush, NextByte, NextWord, Write, Rebound };
+  for (auto Kind : {Input::Word, Input::ShortPush, Input::NextByte,
+                    Input::NextWord, Input::Write, Input::Rebound}) {
+    SCOPED_TRACE(int(Kind));
+    ImportImage F({"GetCurrentThreadId", 0}, false);
+    auto &Text = F.Image.Segments.front();
+    auto &Code = Text.Data;
+    Code.clear();
+    if (Kind == Input::Rebound)
+      Code.insert(Code.end(), {0xc6, 0x05, 0, 0x30, 0x40, 0, 0});
+    if (Kind == Input::ShortPush)
+      Code.push_back(0x66);
+    Code.insert(Code.end(), {0x6a, 1, 0xe8});
+    const size_t Field = Code.size();
+    Code.resize(Field + 4);
+    writeLE<uint32_t>(Code.data() + Field,
+                      ImportImage::StubVA - (ImportImage::TextVA + Field + 4));
+    Code.insert(Code.end(),
+                {0x83, 0xc4, uint8_t(Kind == Input::ShortPush ? 2 : 4), 0xc3});
+    Code.resize(ImportImage::StubVA - ImportImage::TextVA, 0xcc);
+    // The cdecl callee accesses [esp+disp8], then calls the live IAT slot.
+    uint8_t Disp = Kind == Input::NextByte   ? 5
+                   : Kind == Input::NextWord ? 8
+                                             : 4;
+    Code.insert(Code.end(), {uint8_t(Kind == Input::Write ? 0x89 : 0x8b), 0x44,
+                             0x24, Disp, 0xff, 0x15, 0, 0x30, 0x40, 0, 0xc3});
+    Text.FileSz = Text.Size = Code.size();
+    F.Image.Sections.front().FileSz = F.Image.Sections.front().Size = Text.Size;
+    RegistrationCallCalleeIndex Index(F.Image);
+    const auto Caller = Index.stackContract(ImportImage::TextVA);
+    EXPECT_EQ(bool(Caller), Kind == Input::Word);
+    if (Caller) {
+      EXPECT_EQ(Caller->StackPopBytes, 0u);
+      EXPECT_TRUE(Caller->PreservesImportBindings);
+      EXPECT_EQ(Caller->RequiredImports,
+                (std::vector<va_t>{ImportImage::IATVA}));
+    }
+    EXPECT_FALSE(Index.stackContract(ImportImage::StubVA));
+  }
+}
+
+TEST(RegistrationImportABI, MainArgumentsUseTheirRuntimeAccessors) {
+  for (const char *Name : {"__p___argc", "__p___argv"})
+    checkUCRTCallerCleanup({Name, 0}, "api-ms-win-crt-runtime-l1-1-0.dll",
+                           "api-ms-win-crt-stdio-l1-1-0.dll", true);
+  // Requesting the initial environment can trigger lazy initialization.
+  checkUCRTCallerCleanup({"_get_initial_narrow_environment", 0},
+                         "api-ms-win-crt-runtime-l1-1-0.dll",
+                         "api-ms-win-crt-stdio-l1-1-0.dll");
+}
+
+TEST(RegistrationImportABI, MainArgumentGettersBoundOnlyTheirOwnWord) {
+  struct Case {
+    std::vector<uint8_t> Body;
+    bool ReadsArgumentCell;
+  };
+  const Case Cases[] = {
+      {{0x8b, 0x30}, true},              // MOV ESI,[EAX]
+      {{0xff, 0x30, 0x59}, true},        // PUSH [EAX]; POP ECX
+      {{0x8b, 0x30, 0x8b, 0x08}, true},  // Same cell read twice
+      {{0x89, 0xc1, 0x8b, 0x31}, true},  // Copy of its address
+      {{0x8b, 0x00, 0x8b, 0x30}, false}, // Follow argv itself
+      {{0x8b, 0x30, 0x8b, 0x16}, false}, // Follow the loaded ESI
+      {{0x66, 0x8b, 0x30}, false},       // Partial word
+      {{0x89, 0x30}, false},             // Store to the cell
+      {{0xb0, 1, 0x8b, 0x30}, false},    // Rewritten address
+      {{0x8b, 0x70, 4}, false},          // Adjacent word
+  };
+  for (const char *Name : {"__p___argc", "__p___argv"}) {
+    for (bool ThroughStub : {false, true}) {
+      for (const auto &C : Cases) {
+        SCOPED_TRACE(::testing::Message() << Name << '/' << ThroughStub << '/'
+                                          << ::testing::PrintToString(C.Body));
+        ImportImage F({Name, 0}, ThroughStub);
+        F.Image.Imports.front().Module = "api-ms-win-crt-runtime-l1-1-0.dll";
+        auto &Code = F.Image.Segments.front().Data;
+        // A fresh direct use of the slot after the read needs a live binding.
+        auto Next = std::copy(C.Body.begin(), C.Body.end(),
+                              Code.begin() + (ThroughStub ? 5 : 6));
+        const uint8_t End[] = {0xff, 0x15, 0, 0x30, 0x40, 0, 0x31, 0xc0, 0xc3};
+        std::copy(std::begin(End), std::end(End), Next);
+        const auto Contract =
+            RegistrationCallCalleeIndex(F.Image).stackContract(
+                ImportImage::TextVA);
+        EXPECT_EQ(bool(Contract), C.ReadsArgumentCell);
+        if (Contract) {
+          EXPECT_EQ(Contract->StackPopBytes, 0u);
+          EXPECT_TRUE(Contract->PreservesImportBindings);
+          EXPECT_EQ(Contract->RequiredImports,
+                    (std::vector<va_t>{ImportImage::IATVA}));
+        }
+      }
+    }
+  }
+}
+
+TEST(RegistrationImportABI, StandardStreamGetterPreservesLiveBindings) {
+  struct Case {
+    std::vector<uint8_t> Push;
+    bool Standard;
+  };
+  for (const auto &C : {Case{{0x6a, 0}, true}, Case{{0x6a, 1}, true},
+                        Case{{0x68, 2, 0, 0, 0}, true}, Case{{0x6a, 3}, false},
+                        Case{{0x6a, 0xff}, false},
+                        Case{{0x68, 0, 1, 0, 0}, false}, Case{{0x51}, false}}) {
+    for (const bool ThroughStub : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << int(C.Push.front()) << ' ' << int(C.Push.back()) << ' '
+                   << ThroughStub);
+      ImportImage F({"__acrt_iob_func", 1}, ThroughStub, true);
+      F.Image.Imports.front().Module = "api-ms-win-crt-stdio-l1-1-0.dll";
+      std::vector<uint8_t> Body = C.Push;
+      if (ThroughStub) {
+        Body.push_back(0xe8);
+        const size_t Field = Body.size();
+        Body.resize(Field + 4);
+        writeLE<uint32_t>(Body.data() + Field,
+                          ImportImage::StubVA -
+                              (ImportImage::TextVA + Body.size()));
+      } else {
+        Body.insert(Body.end(), {0xff, 0x15, 0, 0x30, 0x40, 0});
+      }
+      Body.insert(Body.end(), {0x83, 0xc4, 4, 0x31, 0xc0, 0xc3});
+      auto &Text = F.Image.Segments.front().Data;
+      std::fill_n(Text.begin(), ImportImage::StubVA - ImportImage::TextVA,
+                  0xcc);
+      std::copy(Body.begin(), Body.end(), Text.begin());
+      RegistrationCallCalleeIndex Callees(F.Image);
+      const auto Contract = Callees.stackContract(ImportImage::TextVA);
+      ASSERT_TRUE(Contract);
+      EXPECT_EQ(Contract->StackPopBytes, 0u);
+      EXPECT_EQ(Contract->RequiredImports,
+                (std::vector<va_t>{ImportImage::IATVA}));
+      EXPECT_EQ(Contract->PreservesImportBindings, C.Standard);
+      EXPECT_FALSE(registration_abi::preservesRegistrationImportBindings(
+          F.Image, ImportImage::IATVA));
+    }
+  }
+}
 
 TEST(RegistrationImportABI, ControlFPBindsCurrentRuntimeProvider) {
   for (const char *Module : {"msvcrt.dll", "MSVCR100.DLL"})
@@ -324,6 +600,64 @@ TEST(RegistrationImportABI, StartupCleanupRequiresCurrentProviderAndStorage) {
         EXPECT_FALSE(getCheckedX86RegistrationInitializerCalleeABI(
             Image, ImportImage::TextVA));
       }
+}
+
+TEST(RegistrationImportABI, FeatureQueryPreservesItsCurrentBinding) {
+  for (bool ThroughStub : {false, true})
+    for (uint8_t Feature : {10, 23, 255}) {
+      SCOPED_TRACE(::testing::Message() << ThroughStub << ' ' << int(Feature));
+      ImportImage F({"IsProcessorFeaturePresent", 1}, ThroughStub);
+      F.Image.Segments.front().Data[1] = Feature;
+      const va_t Field = (ThroughStub ? ImportImage::StubVA : F.CallVA) + 2;
+      F.Image.BaseRelocations = {{Field, 3}};
+      auto Effect =
+          RegistrationCallCalleeIndex(F.Image).stackContract(F.Image.Entry);
+      ASSERT_TRUE(Effect);
+      EXPECT_EQ(Effect->StackPopBytes, 0u);
+      EXPECT_EQ(Effect->PreservesImportBindings, Feature != 255);
+      EXPECT_FALSE(registration_abi::preservesRegistrationImportBindings(
+          F.Image, ImportImage::IATVA));
+      F.Image.BaseRelocations.clear();
+      Effect =
+          RegistrationCallCalleeIndex(F.Image).stackContract(F.Image.Entry);
+      EXPECT_FALSE(Effect && Effect->PreservesImportBindings);
+    }
+}
+
+TEST(RegistrationImportABI, CPUQueriesDiscardOverwrittenStackCoordinates) {
+  for (const bool Cpuid : {false, true})
+    for (const uint8_t Reg : {0, 1, 2, 3, 6}) {
+      SCOPED_TRACE(::testing::Message() << Cpuid << ' ' << int(Reg));
+      ImportImage F({"GetCurrentThreadId", 0}, false);
+      // Save ESP in a GPR, allocate a word, query the CPU, then restore ESP
+      // from the saved register. CPUID writes EAX/ECX/EDX/EBX; XGETBV writes
+      // EAX/EDX. Both leave ESI intact on ordinary continuation.
+      std::vector<uint8_t> Body = {0x8b, uint8_t(0xc4 | Reg << 3), 0x83, 0xec,
+                                   4};
+      uint8_t Restore = Reg;
+      if (Cpuid) {
+        Body.insert(Body.end(), {0x53, 0x0f, 0xa2});
+        if (Reg == 3) {
+          // Consume the CPU's EBX result before restoring the saved EBX.
+          Body.insert(Body.end(), {0x89, 0xda});
+          Restore = 2;
+        }
+        Body.push_back(0x5b);
+      } else {
+        Body.insert(Body.end(), {0x0f, 0x01, 0xd0});
+      }
+      Body.insert(Body.end(), {0x8b, uint8_t(0xe0 | Restore), 0xc3});
+      std::copy(Body.begin(), Body.end(),
+                F.Image.Segments.front().Data.begin());
+      const auto Effect =
+          RegistrationCallCalleeIndex(F.Image).stackContract(F.Image.Entry);
+      const bool Preserved = Reg == 6 || (!Cpuid && (Reg == 1 || Reg == 3));
+      ASSERT_EQ(bool(Effect), Preserved);
+      if (Effect) {
+        EXPECT_EQ(Effect->StackPopBytes, 0u);
+        EXPECT_FALSE(Effect->PreservesImportBindings);
+      }
+    }
 }
 
 TEST(RegistrationImportABI, StackCleanupCannotAuthorizeDispatchOrObservation) {

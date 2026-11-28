@@ -4,6 +4,21 @@ from scripts.check_windows_xcpt4_source import check_runtime, check_source
 
 
 class XCPT4SourceTests(unittest.TestCase):
+    def test_pe32_requires_the_cases_compiled_for_x86(self):
+        skipped = [29, 58, 61, 87, 89]
+        lines = [f"test{i}...{'skipped' if i in skipped else 'passed'}"
+                 for i in range(1, 91)]
+        output = "\n".join(["Start of exception test", *lines, "End of exception test"])
+        self.assertEqual(check_runtime({"exit_code": 0, "stdout": output}, pe32=True),
+                         {"passed": 85, "skipped": skipped})
+        with self.assertRaises(ValueError):
+            check_runtime({"exit_code": 0, "stdout": output})
+        for changed in (output.replace("test58...skipped", "test58...passed"),
+                        output.replace("test57...passed", "test57...skipped"),
+                        output.replace("test61...skipped\n", "")):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                check_runtime({"exit_code": 0, "stdout": changed}, pe32=True)
+
     def test_runtime_requires_all_results_even_after_a_zero_exit(self):
         output = ("Start of exception test\n"
                   + "".join(f"    test{i}...succeeded\n" for i in range(1, 91))

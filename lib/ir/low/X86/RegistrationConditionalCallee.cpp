@@ -223,7 +223,11 @@ proveBoundSEHCalleeImpl(const BinaryImage &Image, const BinaryImage &CallImage,
   const auto Controls = Index.sehControlContracts(Function);
   if (!Stacks || !Unwinds || !Controls)
     return std::nullopt;
+  SEHPrivateCallProof PrivateCalls(Image, Function);
   SEHJumpRuntime Jumps;
+  Jumps.OpaqueStack = [&](const LowOp &Op, size_t &Work) {
+    return PrivateCalls.opaqueStackPop(Op, Work);
+  };
   bool HasInterlocked = false, HasSleep = false;
   for (const auto &Imported : Image.Imports) {
     const bool Atomic = registration_abi::isCheckedRegistrationInterlockedSlot(
@@ -549,6 +553,9 @@ RegistrationStateAnalysis solveCheckedX86SEHStates(
       };
   SEHPrivateCallProof PrivateCalls(Image, Function);
   SEHJumpRuntime Jumps;
+  Jumps.OpaqueStack = [&](const LowOp &Op, size_t &Work) {
+    return PrivateCalls.opaqueStackPop(Op, Work);
+  };
   if (CheckBoundCalls)
     Jumps.PrivateCall = [&](const LowOp &Op, size_t &Work) {
       return PrivateCalls.preservesFrame(Op, Work);

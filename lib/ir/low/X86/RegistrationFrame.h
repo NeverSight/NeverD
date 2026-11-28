@@ -82,6 +82,9 @@ struct FrameValue {
   /// Cookie ^ Constant when the frame offset is absent. Other arithmetic and
   /// partial-width aliases drop this identity while retaining frame taint.
   bool SecurityCookie = false;
+  /// A partial GPR write can fix AL while the rest of EAX may still carry
+  /// frame provenance. Only a read of the low byte consumes this fact.
+  std::optional<uint8_t> PartialLowByte;
   std::optional<int32_t> CookieFrameOffset;
   uint32_t CookieXOR = 0;
   /// Entry EBP is independent of the realigned runtime establisher. It must
@@ -126,6 +129,12 @@ struct FrameValue {
 
   bool isFrameIndependentScalar() const {
     return !MayBeFrame || FrameOnlyFromSEHScalar;
+  }
+
+  std::optional<uint8_t> numericLowByte() const {
+    if (Constant && !MayBeFrame && !SecurityCookie && !ReturnPC)
+      return static_cast<uint8_t>(*Constant);
+    return PartialLowByte;
   }
 
   static FrameValue taint(bool MayBeFrame, bool SEHScalar = false) {

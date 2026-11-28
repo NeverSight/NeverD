@@ -42,6 +42,10 @@ public:
   void clear();
   bool observe(const LowOp &Op,
                const registration_state::FrameTransfer &Transfer, size_t &Work);
+  /// A complete scalar at the private call SP. Never used for a frame LOAD.
+  std::optional<uint32_t>
+  firstPrivateWord(const registration_state::FrameTransfer &Transfer,
+                   size_t &Work) const;
   bool provesSuccessfulCall(const BinaryImage &Image, const LowOp &Op,
                             const registration_state::FrameState &State,
                             size_t &Work) const;

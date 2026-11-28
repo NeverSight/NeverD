@@ -99,12 +99,18 @@ std::optional<uint64_t> lowScalarConstantResult(
              (Op.Opcode == NdOp::INT_EQUAL || Op.Opcode == NdOp::INT_NOTEQUAL ||
               Op.Opcode == NdOp::INT_LESS || Op.Opcode == NdOp::INT_LESSEQUAL ||
               Op.Opcode == NdOp::INT_SLESS ||
-              Op.Opcode == NdOp::INT_SLESSEQUAL)) {
+              Op.Opcode == NdOp::INT_SLESSEQUAL || Op.Opcode == NdOp::INT_SBOR)) {
     const auto Left = ValueOf(Op.Inputs[0]);
     const auto Right = ValueOf(Op.Inputs[1]);
     if (Left && Right) {
       const auto Width = Op.Inputs[0].Size;
       uint64_t L = *Left & Mask(Width), R = *Right & Mask(Width);
+      if (Op.Opcode == NdOp::INT_SBOR) {
+        bool Overflow;
+        (void)llvm::APInt(Width * 8, L).ssub_ov(llvm::APInt(Width * 8, R),
+                                                Overflow);
+        return Overflow;
+      }
       if (Op.Opcode == NdOp::INT_SLESS || Op.Opcode == NdOp::INT_SLESSEQUAL) {
         // Bias the sign bit instead of converting an out-of-range unsigned
         // value to a host signed integer.
