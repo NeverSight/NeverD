@@ -80,11 +80,14 @@ uint32_t saveExitInfo(uint8_t *GPR, bool ExInfo,
   return 0;
 }
 
-llvm::Expected<bool> walkSgxWrite(X86PagedMemory &M, uint64_t Address,
-                                  X86ModeExecutionResult &Out,
-                                  uint64_t &Physical) {
-  auto Walk = walkX86PageTables(M.physicalMemory(), M.features(), M.controls(),
-                                {Address, MemoryAccessKind::Write, 3});
+} // namespace
+
+llvm::Expected<bool> X86SgxExecution::walkOperand(X86PagedMemory &M,
+                                                  const X86LinearAccess &Access,
+                                                  X86ModeExecutionResult &Out,
+                                                  uint64_t &Physical) {
+  auto Walk =
+      walkX86PageTables(M.physicalMemory(), M.features(), M.controls(), Access);
   if (!Walk)
     return Walk.takeError();
   Out.SelfModifications.insert(Out.SelfModifications.end(),
@@ -97,7 +100,6 @@ llvm::Expected<bool> walkSgxWrite(X86PagedMemory &M, uint64_t Address,
   Physical = Walk->PhysicalAddress;
   return !Out.Exception && !Out.BackingFault;
 }
-} // namespace
 
 llvm::Expected<bool>
 X86SgxExecution::bindFrame(X86PagedMemory &M, const X86SgxEnclave &Enclave,
@@ -119,7 +121,8 @@ X86SgxExecution::bindFrame(X86PagedMemory &M, const X86SgxEnclave &Enclave,
     if (Saved)
       return true;
     uint64_t Physical = 0;
-    auto Ready = walkSgxWrite(M, Address, Out, Physical);
+    auto Ready =
+        walkOperand(M, {Address, MemoryAccessKind::Write, 3}, Out, Physical);
     if (!Ready)
       return Ready.takeError();
     if (!*Ready)
@@ -149,9 +152,9 @@ X86SgxExecution::bindFrame(X86PagedMemory &M, const X86SgxEnclave &Enclave,
   return BindPage(SSA + FrameSize - PageSize + GprOffset, Progress.GprPage);
 }
 
-llvm::Expected<std::optional<uint8_t>>
-X86SgxExecution::instructionException(llvm::ArrayRef<uint8_t> Bytes,
-                                      uint64_t PC, const X86SgxMemory &Memory) {
+llvm::Expected<std::optional<uint8_t>> X86SgxExecution::instructionException(
+    llvm::ArrayRef<uint8_t> Bytes, uint64_t PC, const X86PagedMemory &Pages) {
+  const auto &Memory = *Pages.sgxMemory();
   if (!Memory.Running)
     return invalid("enclave instruction admission requires a running thread");
   // These spans fault during ordinary code64 execution. The paged owner
@@ -192,6 +195,13 @@ X86SgxExecution::instructionException(llvm::ArrayRef<uint8_t> Bytes,
         return uint8_t{6};
     }
   switch (I.Id) {
+  case X86_INS_RDTSC:
+  case X86_INS_RDTSCP:
+    if (!Memory.Features.SGX2)
+      return uint8_t{6};
+    if (Pages.controls().CR4 & 4) // CR4.TSD in a CPL3 enclave.
+      return uint8_t{13};
+    return std::optional<uint8_t>{};
   case X86_INS_CPUID:
   case X86_INS_GETSEC:
   case X86_INS_RDPMC:
@@ -244,6 +254,19 @@ X86SgxExecution::instructionException(llvm::ArrayRef<uint8_t> Bytes,
   }
   default:
     return std::optional<uint8_t>{};
+  }
+}
+
+void X86SgxExecution::retireEnclaveLeaf(X86ModeState &S, unsigned Size,
+                                        X86ModeExecutionResult &Out) {
+  auto &R = modeRegisters(S);
+  R.PC += Size;
+  R.RFlags &= ~uint64_t{0x10000};
+  Out.InstructionCompleted = true;
+  if (x86InstructionDebugStep(R.RFlags & 0x100, S.Debug ? S.Debug->DebugCTL : 0,
+                              false)) {
+    x86PublishInstructionDebug(*S.Debug, true);
+    Out.Exception = X86MemoryException{1, 0, {}};
   }
 }
 
@@ -333,17 +356,12 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
     T.XSavePage = *Progress.Frame.XSavePage;
     T.GprPage = *Progress.Frame.GprPage;
     le::write32le(TCS.Bytes.data() + 24, CSSA - 1);
-    if (x86InstructionDebugStep(R.RFlags & 0x100,
-                                S.Debug ? S.Debug->DebugCTL : 0, false)) {
-      x86PublishInstructionDebug(*S.Debug, true);
-      Out.Exception = X86MemoryException{1, 0, {}};
-    }
-    R.PC += ExpectedBytes.size();
-    R.RFlags &= ~uint64_t(0x10000);
     ++EPC.Generation;
-    Out.InstructionCompleted = true;
+    retireEnclaveLeaf(S, ExpectedBytes.size(), Out);
     return Out;
   }
+  if (Leaf >= 5 && Leaf <= 7 && EPC.Features.SGX2)
+    return dynamicMemory(S, M, Progress, ExpectedBytes.size(), std::move(Out));
   if (Leaf > 4)
     return Fault(13);
   if (Leaf < 2)
@@ -361,7 +379,8 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   if (Progress.TCSPhysical)
     TCSPhysical = *Progress.TCSPhysical;
   else {
-    auto Ready = walkSgxWrite(M, TCSLinear, Out, TCSPhysical);
+    auto Ready = walkOperand(M, {TCSLinear, MemoryAccessKind::Write, 3}, Out,
+                             TCSPhysical);
     if (!Ready)
       return Ready.takeError();
     if (!*Ready)

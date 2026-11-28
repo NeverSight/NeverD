@@ -209,14 +209,7 @@ llvm::Expected<X86ModeExecutionResult> X86SgxExecution::keyOrReport(
     R.GPR[0] = ErrorCode;
     R.RFlags = (R.RFlags & ~uint64_t{0x8d5}) | (ErrorCode ? 0x40 : 0);
   }
-  R.PC += InstructionSize;
-  R.RFlags &= ~uint64_t{0x10000};
-  Out.InstructionCompleted = true;
-  if (x86InstructionDebugStep(R.RFlags & 0x100, S.Debug ? S.Debug->DebugCTL : 0,
-                              false)) {
-    x86PublishInstructionDebug(*S.Debug, true);
-    Out.Exception = X86MemoryException{1, 0, {}};
-  }
+  retireEnclaveLeaf(S, InstructionSize, Out);
   return Out;
 }
 } // namespace neverd::analysis::detail

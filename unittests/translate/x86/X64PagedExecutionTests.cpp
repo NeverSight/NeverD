@@ -1035,7 +1035,8 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 // Accessed-update cases extend the event descriptor fixture above.
 #include "X64PagedEventAccessedTests.inc"
 
-// These cases reuse the debug/watchpoint fixtures above.
+// Later files extend fixtures defined in earlier ones.
+// clang-format off
 #include "X64PagedBranchDebugTests.inc"
 #include "X64PagedDebugFunctionTests.inc"
 #include "X86ModeExecutionTests.inc"
@@ -1045,12 +1046,14 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X86ModeSgxNotificationTests.inc"
 #include "X86ModeSgxOperandTests.inc"
 #include "X86ModeSgxKeyPlatformTests.inc"
+#include "X86ModeSgxDynamicMemoryTests.inc"
 #include "X86ModeSgxTests.inc"
 #include "X86ModeSmmTests.inc"
 #include "X86ModeStartupTests.inc"
 #include "X86ModeDeadlineTests.inc"
 #include "X86ModeSysenterTests.inc"
 #include "X86ModeTransitionTests.inc"
+// clang-format on
 
 // Native comparisons extend the selector fixture above.
 #include "X86ModeSegmentNativeTests.inc"

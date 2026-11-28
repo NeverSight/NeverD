@@ -554,7 +554,7 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
   else if (!Enclu && Memory.sgxMemory() && Memory.sgxMemory()->active() &&
            (!Binding.Body || !Binding.Validate)) {
     auto Denied = detail::X86SgxExecution::instructionException(
-        Binding.Bytes, Binding.Address, *Memory.sgxMemory());
+        Binding.Bytes, Binding.Address, Memory);
     if (!Denied)
       return Denied.takeError();
     EnclaveException = *Denied;
