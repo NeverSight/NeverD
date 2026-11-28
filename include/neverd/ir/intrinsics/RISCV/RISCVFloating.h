@@ -7,10 +7,10 @@
 #ifndef NEVERD_IR_INTRINSICS_RISCV_RISCVFLOATING_H
 #define NEVERD_IR_INTRINSICS_RISCV_RISCVFLOATING_H
 
-#include "neverd/Common.h"
 #include "neverd/lift/RISCV/RISCVProfile.h"
 
 #include <array>
+#include <cstdint>
 #include <optional>
 
 namespace neverd::riscv {

@@ -56,6 +56,34 @@ def verify_frame(cli, image, name):
     return reports
 
 
+def verify_ownership(cli, directory, name, temporary):
+    def scan(variant, *flags):
+        image = directory / "ownership" / (name + "-" + variant)
+        return cli_report(cli, image, *flags)[0]
+
+    for flags in (("--analyzer=audit",), ()):
+        report = scan("released", *flags)
+        audit = report["analyzers"]["audit"]
+        assert report["verdict"] == "SAFE" and report["coverage_complete"], (name, report)
+        assert audit["scanned"] > 0 and audit["unknown"] == 0 and not report["findings"], name
+
+    report = scan("unreleased", "--analyzer=audit")
+    assert report["verdict"] == "UNSAFE" and report["coverage_complete"], (name, report)
+    assert [(f["function"], f["class"]) for f in observations(report, "audit")] == [
+        ("sample", "heap_leak")
+    ], (name, report)
+
+    # Publication to a global requires a stronger write-set proof. A change
+    # in the version provider also removes the known allocation contract.
+    report = scan("unrelated-store", "--analyzer=audit")
+    assert report["verdict"] == "UNKNOWN" and not report["coverage_complete"], (name, report)
+    original = (directory / "ownership" / (name + "-released")).read_bytes()
+    assert original.count(b"libc.so.6\0") == 1, name
+    temporary.write_bytes(original.replace(b"libc.so.6\0", b"libc.so.5\0"))
+    report, _ = cli_report(cli, temporary, "--analyzer=audit")
+    assert report["verdict"] == "UNKNOWN" and not report["coverage_complete"], (name, report)
+
+
 def verify_import(cli, image, name, catalog, arity):
     catalog.write_text(json.dumps({"sinks": [{
         "name": "record_label", "kind": "format", "fmt": 0,
@@ -112,6 +140,8 @@ def main():
                         assert reply["status"] == "ok", (name, reply)
                         reply = worker.call("memory_safety_scan", timeout=90)
                         assert reply["status"] == "ok" and reply["payload"] == reports["both"], name
+            if name in ("mips64n32", "mips64n32el"):
+                verify_ownership(args.cli, args.directory, name, image)
             if not name.endswith("-elfv1"):
                 shutil.copyfile(args.directory / "imports" / name, image)
                 for arity in (1, 7):

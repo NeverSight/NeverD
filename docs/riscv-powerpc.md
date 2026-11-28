@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbb, Zbs, Zicond, Zicntr cycle reads |
 | RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbb, Zbs, Zicond, Zicntr cycle reads |
-| RISC-V | ELF32 or ELF64, little-endian | ILP32D or LP64D, eight floating argument registers and two floating result registers | Integer profile plus F/D loads, stores, register transfers and sign injection, including compressed floating memory forms |
+| RISC-V | ELF32 or ELF64, little-endian | ILP32D or LP64D, eight floating argument registers and two floating result registers | Integer profile plus scalar F/D arithmetic, conversions, comparisons, sign injection, register and memory transfers, compressed floating memory forms and floating-point control/status registers |
 | PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset and VMX byte addition |
 | PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Classic scalar, POWER10 prefixed fixed-point forms and VMX byte addition |
 
@@ -25,6 +25,8 @@ uses the physical instruction length for the link address.
 [RISC-V ELF psABI](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/).
 
 The double-float ABI passes named floating values in `fa0`–`fa7` while integer arguments independently consume `a0`–`a7`. A qualifying one- or two-member record can use both register files. Unnamed variadic arguments follow the integer convention. Single-precision register values are NaN-boxed in the 64-bit floating register file. Loads, stores and raw register moves retain payload bits. Sign injection checks narrow operand boxing. [RISC-V hardware floating-point calling convention](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#_hardware_floating_point_calling_convention).
+
+Scalar F/D arithmetic supports the five standard rounding modes. An instruction with dynamic rounding reads `frm`. Arithmetic, square root, fused multiply-add, conversions and comparisons accrue the applicable exceptions in `fflags`. CSR reads, swaps, bit sets and clears access `fflags`, `frm` and their shared representation in `fcsr`. The concrete emulator takes an explicit initial FCSR. Native RISC-V output executes these operations in the guest's floating-point environment. [RISC-V F extension](https://docs.riscv.org/reference/isa/v20260120/unpriv/f-st-ext.html). [RISC-V D extension](https://docs.riscv.org/reference/isa/v20260120/unpriv/d-st-ext.html).
 
 Zba 1.0 enables the three XLEN-wide shift-and-add forms. On RV64,
 `add.uw`, `sh1add.uw`, `sh2add.uw`, `sh3add.uw` and `slli.uw`
@@ -174,7 +176,7 @@ v13 and returns a vector in v2. [AltiVec Programming Environments Manual](https:
 | Stage | RISC-V | PowerPC |
 | --- | --- | --- |
 | Identify and load | ELF class, machine, flags and attributes | ELF class, machine, ABI flag and byte order |
-| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences, atomics, cycle reads and the floating transfers and sign operations above | Integer ALU, signed and unsigned word/doubleword division, VMX modulo byte addition, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
+| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences, atomics, cycle reads, scalar F/D operations and floating-point control/status registers | Integer ALU, signed and unsigned word/doubleword division, VMX modulo byte addition, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
 | CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer and double-float ABI argument registers | Direct and conditional branches, CTR loops, conditional direct and indirect calls, CTR jumps and guarded LR returns, integer register arguments |
 | Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset | Same stages in target byte order |
 | Native rewrite | Unsupported | Unsupported |
@@ -254,7 +256,7 @@ displacement and boundary rules for a PC-relative linkage stub.
 [Power ISA, Book I](https://openpowerfoundation.org/specifications/isa/).
 
 The strict lifters report unsupported instructions at their original VA.
-Other RISC-V system and CSR instructions, rounded floating arithmetic, V and vendor extensions still
+Other RISC-V system and CSR instructions, V and vendor extensions still
 require lifting support. Additional PowerPC VMX operations, VLE, SPE, VSX,
 other prefixed forms and system instructions also remain outside this profile.
 Relative relocations write the link-time pointer in target byte order.

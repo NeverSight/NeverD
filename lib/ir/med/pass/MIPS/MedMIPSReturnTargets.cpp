@@ -338,7 +338,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   const auto &TRI = getTargetRegInfo(Target);
   std::map<int, MedVar> BlockSP;
   const auto CallSP =
-      HasCalls && QualifiedMemory
+      (HasCalls || PrivateStores) && QualifiedMemory
           ? sourceCallStackPointers(Function, Target, Remaining, BlockSP)
           : std::map<const MedOp *, MedVar>{};
   for (const auto &[Call, SP] : CallSP)
@@ -346,7 +346,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   // One static call can produce and consume different words on a loop edge.
   const bool MayForward =
       (isMIPSN32(Target) || isMIPSN64(Target)) && !NativeCalls.empty();
-  if (MayForward && QualifiedMemory && !HasMergeStores) {
+  if ((MayForward || PrivateStores) && QualifiedMemory && !HasMergeStores) {
     for (const auto &Entry : BlockSP)
       MemoryAddresses.push_back(Entry.second);
     for (const auto &B : Function.Blocks)
@@ -370,16 +370,31 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     *PrivateStores =
         QualifiedMemory && !HasMergeStores &&
         llvm::all_of(Function.Blocks, [&](const MedBlock &B) {
-          return llvm::all_of(B.Ops, [&](const MedOp &Op) {
+          const auto Entry = BlockSP.find(B.Id);
+          std::optional<int64_t> SP =
+              Entry == BlockSP.end() ? std::nullopt : Offset(Entry->second);
+          for (const MedOp &Op : B.Ops) {
+            const auto &Out = Op.Output;
+            const unsigned Width = TRI.addressRegisterBytes();
+            if (Out.Kind == MedVar::Reg && Out.Size &&
+                Out.RegOff < TRI.StackPointer + Width &&
+                Out.RegOff + Out.Size > TRI.StackPointer)
+              SP = Out.RegOff == TRI.StackPointer && Out.Size == Width
+                       ? Offset(Out)
+                       : std::nullopt;
+            if (Op.Opcode == NdOp::INDIR_BR)
+              return false;
             if (Op.Opcode != NdOp::STORE)
-              return Op.Opcode != NdOp::INDIR_BR;
+              continue;
             const auto *Addr = safety::detail::memoryAddress(Op);
             const auto *Value = safety::detail::storedValue(Op);
             const auto At = Addr ? Offset(*Addr) : std::nullopt;
-            return Value && At &&
-                   *At >= -limits::ir::kSourceFrameAnalysisMaxFrame &&
-                   *At < 0 && *At + Value->Size <= 0;
-          });
+            if (!Value || !Value->Size || !SP ||
+                *SP < -limits::ir::kSourceFrameAnalysisMaxFrame || !At ||
+                *At < *SP || *At >= 0 || *At + Value->Size > 0)
+              return false;
+          }
+          return true;
         });
   }
   MedDefSiteIndex Definitions(Function);

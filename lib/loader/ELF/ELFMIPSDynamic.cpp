@@ -55,6 +55,72 @@ collectStaticGOTPointers(BinaryImage &Img,
   }
 }
 
+// Version requirements are linked lists in PT_LOAD, addressed by PT_DYNAMIC.
+// Runtime reconstruction can replace .dynsym and .dynstr's section indices.
+using VersionProviders =
+    std::map<unsigned, std::pair<llvm::StringRef, llvm::StringRef>>;
+
+static llvm::ArrayRef<uint8_t> fileBackedTail(const BinaryImage &Img,
+                                              va_t Addr) {
+  const auto *S = Img.getSegmentFor(Addr);
+  if (!S || Addr - S->VA >= S->FileSz ||
+      !rangeInBounds(S->FileOff, S->FileSz, Img.Raw.size()))
+    return {};
+  const auto Delta = Addr - S->VA;
+  return llvm::ArrayRef<uint8_t>(Img.Raw).slice(S->FileOff + Delta,
+                                                S->FileSz - Delta);
+}
+
+template <class ELFT>
+static bool readVersionProviders(llvm::ArrayRef<uint8_t> Bytes, uint64_t Count,
+                                 llvm::StringRef Strings,
+                                 VersionProviders &Providers) {
+  using namespace llvm::ELF;
+  using Need = typename ELFT::Verneed;
+  using Aux = typename ELFT::Vernaux;
+  uint64_t Pos = 0;
+  if (!Count || Count > Bytes.size() / sizeof(Need))
+    return false;
+  for (uint64_t I = 0; I < Count; ++I) {
+    Need N;
+    if (!rangeInBounds(Pos, sizeof(N), Bytes.size()))
+      return false;
+    std::memcpy(&N, Bytes.data() + Pos, sizeof(N));
+    if (N.vn_version != VER_NEED_CURRENT || !N.vn_cnt ||
+        N.vn_file >= Strings.size() || N.vn_aux < sizeof(N) ||
+        (N.vn_next != 0) != (I + 1 < Count) ||
+        !rangeInBounds(Pos, N.vn_next, Bytes.size()))
+      return false;
+    const uint64_t End = N.vn_next ? Pos + N.vn_next : Bytes.size();
+    if (!rangeInBounds(Pos, N.vn_aux, End))
+      return false;
+    const auto Library = Strings.drop_front(N.vn_file).split('\0').first;
+    uint64_t At = Pos + N.vn_aux;
+    for (unsigned J = 0; J < N.vn_cnt; ++J) {
+      Aux A;
+      if (!rangeInBounds(At, sizeof(A), End))
+        return false;
+      std::memcpy(&A, Bytes.data() + At, sizeof(A));
+      const unsigned Index = A.vna_other & VERSYM_VERSION;
+      if (Index <= VER_NDX_GLOBAL || A.vna_name >= Strings.size() ||
+          (A.vna_next != 0) != (J + 1 < N.vn_cnt) ||
+          (A.vna_next && A.vna_next < sizeof(A)) ||
+          !rangeInBounds(At, A.vna_next, End))
+        return false;
+      const auto Version = Strings.drop_front(A.vna_name).split('\0').first;
+      if (A.vna_hash != llvm::object::hashSysV(Version) ||
+          !Providers
+               .try_emplace(Index, Library,
+                            A.vna_flags ? llvm::StringRef{} : Version)
+               .second)
+        return false;
+      At += A.vna_next;
+    }
+    Pos = End;
+  }
+  return true;
+}
+
 template <typename ELFT>
 llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
                                   llvm::ArrayRef<typename ELFT::Shdr> Sections,
@@ -217,49 +283,25 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
     return Entries.takeError();
   if (Entries->size() != Total->second || Strings.empty())
     return Fail("symbol extent or string table is inconsistent");
-  // Bind a version requirement to this exact dynamic symbol table. Section
-  // names alone do not identify the tables the dynamic linker will use.
-  llvm::ArrayRef<typename ELFT::Versym> Versions;
-  std::map<unsigned, MIPSImageMetadata::ImportVersion> Providers;
+  llvm::ArrayRef<uint8_t> Versions;
+  VersionProviders Providers;
   if (isMIPSN32(Img.Arch) && Img.MIPS && Tags.contains(DT_VERSYM) &&
-      Tags.contains(DT_VERNEED) && Tags.contains(DT_VERNEEDNUM) &&
-      Tags.contains(DT_SYMTAB) && Tags.at(DT_SYMTAB) == Symbols->sh_addr) {
-    for (const auto &Section : Sections) {
-      if (!(Section.sh_flags & SHF_ALLOC))
-        continue;
-      if (Section.sh_type == SHT_GNU_versym &&
-          Section.sh_addr == Tags.at(DT_VERSYM) &&
-          Section.sh_link == size_t(Symbols - Sections.data())) {
-        auto Table =
-            ELF.template getSectionContentsAsArray<typename ELFT::Versym>(
-                Section);
-        if (!Table)
-          return Table.takeError();
-        if (!Versions.empty() || Table->size() != Entries->size())
-          return Fail("has inconsistent symbol version indices");
-        Versions = *Table;
-      }
-      if (Section.sh_type != SHT_GNU_verneed ||
-          Section.sh_addr != Tags.at(DT_VERNEED) ||
-          Section.sh_link != Symbols->sh_link)
-        continue;
-      auto Needs = ELF.getVersionDependencies(Section);
-      if (!Needs)
-        return Needs.takeError();
-      if (Needs->size() != Tags.at(DT_VERNEEDNUM))
-        return Fail("has inconsistent version dependency count");
-      for (const auto &Need : *Needs)
-        for (const auto &Aux : Need.AuxV) {
-          const unsigned Index = Aux.Other & VERSYM_VERSION;
-          if (Index <= VER_NDX_GLOBAL ||
-              !Providers
-                   .try_emplace(
-                       Index,
-                       MIPSImageMetadata::ImportVersion{Need.File, Aux.Name})
-                   .second)
-            return Fail("has ambiguous version dependency indices");
-        }
-    }
+      Tags.contains(DT_VERNEED) && Tags.contains(DT_VERNEEDNUM)) {
+    // The reconstructed dynamic symbol and string tables belong to these tags.
+    const auto *StrTab = getShdr<ELFT>(Sections, Symbols->sh_link);
+    if (!StrTab || !Tags.contains(DT_SYMTAB) ||
+        Tags.at(DT_SYMTAB) != Symbols->sh_addr || !Tags.contains(DT_SYMENT) ||
+        Tags.at(DT_SYMENT) != sizeof(typename ELFT::Sym) ||
+        !Tags.contains(DT_STRTAB) || Tags.at(DT_STRTAB) != StrTab->sh_addr ||
+        !Tags.contains(DT_STRSZ) || Tags.at(DT_STRSZ) != Strings.size())
+      return Fail("has inconsistent versioned symbol tables");
+    auto Indices = fileBackedTail(Img, Tags.at(DT_VERSYM));
+    if (Entries->size() > Indices.size() / sizeof(typename ELFT::Versym) ||
+        !readVersionProviders<ELFT>(fileBackedTail(Img, Tags.at(DT_VERNEED)),
+                                    Tags.at(DT_VERNEEDNUM), Strings, Providers))
+      return Fail("has invalid version requirements");
+    Versions =
+        Indices.take_front(Entries->size() * sizeof(typename ELFT::Versym));
   }
   for (uint64_t I = First->second; I < Total->second; ++I) {
     const auto &Symbol = (*Entries)[I];
@@ -302,9 +344,13 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
     if (!Versions.empty() && Symbol.getType() == STT_FUNC &&
         Symbol.getBinding() == STB_GLOBAL &&
         Symbol.getVisibility() == STV_DEFAULT) {
-      const auto It = Providers.find(Versions[I].vs_index);
-      if (It != Providers.end())
-        Img.MIPS->RequiredImportVersions.emplace(Slot, It->second);
+      typename ELFT::Versym V;
+      std::memcpy(&V, Versions.data() + I * sizeof(V), sizeof(V));
+      const auto It = Providers.find(V.vs_index);
+      if (It != Providers.end() && !It->second.second.empty())
+        Img.MIPS->RequiredImportVersions.emplace(
+            Slot, MIPSImageMetadata::ImportVersion{It->second.first.str(),
+                                                   It->second.second.str()});
     }
     Imported.IATAddr = Slot;
     Img.Imports.push_back(std::move(Imported));
