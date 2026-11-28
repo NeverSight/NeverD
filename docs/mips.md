@@ -322,7 +322,11 @@ weak definition. Both modes reject that executable when given the original
 input order and preserve the previous output. Across the five input sets
 the runner compares all 60 replacements byte for byte with independent
 links, runs the 30 originals and all 60 replacements, and checks the
-function placement in every ELF.
+function placement in every ELF. Twelve more programs keep the original
+r15 C caller and its aggregate and variadic call sites. The current Clang
+compiles the replacement callee. Both placements must match direct links
+and run with the original caller on classic and microMIPS for each ABI and
+byte order. The MIPS16 caller uses the current fork for both translations.
 
 When the original build uses a static library in a partial link, keep the
 result of that `ld.lld -r` step as the manifest object. Rebuild it from the

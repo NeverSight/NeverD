@@ -120,7 +120,7 @@ jobs:
           suffix=
           if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
           mkdir current-tools
-          for tool in llc ld.lld llvm-ar; do
+          for tool in clang llc ld.lld llvm-ar; do
             cp -L "build-tools/bin/$tool$suffix" "current-tools/$tool$suffix"
           done
           for release in r15 r14 r13; do
@@ -131,13 +131,20 @@ jobs:
             esac
             git -C toolchain-src fetch --no-tags --depth 1 origin "$revision"
             git -C toolchain-src checkout --detach "$revision"
-            cmake --build build-tools --parallel 4 --target llc llvm-mc lld
+            tools=(llc llvm-mc lld)
+            if [[ "$release" == r15 ]]; then tools+=(clang); fi
+            cmake --build build-tools --parallel 4 --target "${tools[@]}"
             root="products/from-$release"
             mkdir -p "$root"
             build-tools/bin/ld.lld$suffix --version | tee "$root/linker.txt"
             grep -F "$revision" "$root/linker.txt"
             args=(--neverd "build-check/bin/neverd$suffix" --original-tools build-tools/bin --tools current-tools)
             python scripts/check_mips_elf_relink.py upgrade --root "$root" "${args[@]}"
+            if [[ "$release" == r15 ]]; then
+              build-tools/bin/clang$suffix --version | tee "$root/clang.txt"
+              grep -F "$revision" "$root/clang.txt"
+              python scripts/check_mips_elf_relink.py upgrade --root "$root-c" --c-calls "${args[@]}"
+            fi
             if [[ "$release" == r14 ]]; then
               python scripts/check_mips_elf_relink.py upgrade --root "$root-partial" --partial-link --archive-tool "current-tools/llvm-ar$suffix" "${args[@]}"
               python scripts/check_mips_elf_relink.py upgrade --root "$root-partial-pic" --partial-link=pic --archive-tool "current-tools/llvm-ar$suffix" "${args[@]}"
@@ -173,7 +180,7 @@ jobs:
           for host in Linux macOS Windows; do
             dir="products/relink-$host"
             test "$(cat "$dir/neverd.txt")" = "$(git rev-parse HEAD)"
-            for root in "$dir" "$dir/from-r13" "$dir/from-r14" "$dir/from-r15"; do
+            for root in "$dir" "$dir/from-r13" "$dir/from-r14" "$dir/from-r15" "$dir/from-r15-c"; do
               /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$root"
             done
             /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$dir/from-r14-partial" --partial-link
