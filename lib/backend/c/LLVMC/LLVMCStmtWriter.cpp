@@ -57,7 +57,7 @@
 #include "neverd/backend/MIPS/MIPSScalarFPSource.h"
 #include "neverd/backend/MachineInstructionText.h"
 #include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
-#include "neverd/backend/RISCV/RISCVCycleSource.h"
+#include "neverd/backend/RISCV/RISCVCounterSource.h"
 #include "neverd/backend/RISCV/RISCVFloatingSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -5106,21 +5106,21 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
          << ";\n";
       return true;
     }
-    const riscv::CycleRead *Read = nullptr;
-#define NEVERD_RISCV_CYCLE(Id, Value, Word, High, Text)                        \
+    const riscv::CounterRead *Read = nullptr;
+#define NEVERD_RISCV_COUNTER(Id, Value, Word, Kind, High, Text)                \
   if (IA->getAsmString() == Text " $0")                                        \
-    Read = riscv::cycleRead(Intrinsic::Id);
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+    Read = riscv::counterRead(Intrinsic::Id);
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.def"
     if (Read) {
       if (!Read->admits(Opts.TheArch) || !IA->hasSideEffects() ||
           IA->getConstraintString() != "=r" || !Call.arg_empty() ||
           !Call.getType()->isIntegerTy(
               getTargetRegInfo(Opts.TheArch).PointerSize * 8))
-        throw std::invalid_argument("invalid RISC-V cycle read assembly");
+        throw std::invalid_argument("invalid RISC-V counter read assembly");
       emitIndent(Indent);
       if (!Call.use_empty())
         OS << Name << " = ";
-      OS << riscv::cycleSource(*Read) << ";\n";
+      OS << riscv::counterSource(*Read) << ";\n";
       return true;
     }
   }

@@ -18,7 +18,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/libc/LibCNames.h"
@@ -44,7 +44,7 @@ namespace {
 
 // The falling-through iteration sampled equal high words around the low
 // word. Both return registers carry this sample across the return itself.
-bool returnsRV32CycleCounter(const LowFunc &F, const TargetRegInfo &TRI) {
+bool returnsRV32Counter(const LowFunc &F, const TargetRegInfo &TRI) {
   if (F.Blocks.size() != 2)
     return false;
   const LowBlock &Loop = F.Blocks.front(), &Exit = F.Blocks.back();
@@ -57,15 +57,20 @@ bool returnsRV32CycleCounter(const LowFunc &F, const TargetRegInfo &TRI) {
       }))
     return false;
 
-  auto IsSample = [&](const LowOp &Op, Intrinsic Id) {
-    return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 1 &&
-           Op.Inputs[0].isConst() && Op.Inputs[0].Offset == uint64_t(Id) &&
-           Op.Output.isReg() && Op.Output.Size == TRI.PointerSize;
+  auto Sample = [&](const LowOp &Op) -> const riscv::CounterRead * {
+    if (Op.Opcode != NdOp::INTRINSIC || Op.NumInputs != 1 ||
+        !Op.Inputs[0].isConst() || Op.Inputs[0].Size != sizeof(Intrinsic) ||
+        Op.Inputs[0].Offset >= unsigned(Intrinsic::_Count) ||
+        Op.MemoryOrdering != NdMemoryOrdering::None ||
+        Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        !Op.Output.isReg() || Op.Output.Size != TRI.PointerSize)
+      return nullptr;
+    return riscv::counterRead(static_cast<Intrinsic>(Op.Inputs[0].Offset));
   };
   const LowOp &First = Loop.Ops[0], &Low = Loop.Ops[1], &Last = Loop.Ops[2];
-  if (!IsSample(First, Intrinsic::RISCVRdcycleh) ||
-      !IsSample(Low, Intrinsic::RISCVRdcycle) ||
-      !IsSample(Last, Intrinsic::RISCVRdcycleh) ||
+  const auto *HighRead = Sample(First), *LowRead = Sample(Low);
+  if (!HighRead || !HighRead->HighHalf || !LowRead || LowRead->HighHalf ||
+      HighRead->Kind != LowRead->Kind || Sample(Last) != HighRead ||
       Low.Output.Offset != TRI.IntReturnReg || First.Output == Last.Output ||
       First.Output == Low.Output || Last.Output == Low.Output ||
       (First.Output.Offset != TRI.IntReturnReg2 &&
@@ -501,7 +506,7 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
                Result.LowFuncs[Index].Entry == MF.Entry &&
                ((isRISCV32(Img.Arch) && !MF.SourceTypeHint &&
                  !MF.SourceParametersBound && MF.MultiReturn.empty() &&
-                 returnsRV32CycleCounter(Result.LowFuncs[Index], TRI)) ||
+                 returnsRV32Counter(Result.LowFuncs[Index], TRI)) ||
                 returnsDoubleWordShift(Result.LowFuncs[Index], MF, TRI,
                                        Order))))
             Proven.insert(MF.Entry);
