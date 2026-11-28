@@ -61,7 +61,11 @@ MinGW header declarations when only the PDB names the omitted routine.
 Ordinary and original-state HighC exports use open declarations for direct
 Win64 calls with unknown parameter types when every use passes only integer
 or pointer slots. Both GNU C11 and C23 retain the argument promotions and
-original linker symbols. A focused PE export resolves the two code operands
+original linker symbols. For a plain external C name, the assembler label
+uses the compilation target's C symbol prefix. An explicit binary label
+keeps its exact spelling. The macOS source execution tests cover both a
+separately defined helper and a visible zero-argument prototype in Clang C11.
+A focused PE export resolves the two code operands
 of a verified native dispatch frame from exact PDB publics. The same
 instruction check lets the register analysis use a reached service's
 documented parameters when its public was omitted at load. A direct Win64
