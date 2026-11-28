@@ -1,5 +1,13 @@
 # NeverD Daily Progress
 
+## Current snapshot — 2026-11-28T01:00:21Z
+
+- Reviewed [1b876a4f to e0f1a7d1](https://github.com/NeverSight/NeverD/compare/1b876a4f983d62bf0db2e8ea7020f9792e78d9aa...e0f1a7d18a813746586ca1be34e47799eac382df): 128 commits ahead; the changed-path response hit the 300-path cap. Sampled the x86-64 indirect-tail stack derivation, the installed pinned LLVM header's signed checked add/subtract contract, and the adjacent tail-frame and guarded jump-table fixtures. The latest portability change preserves the known-offset path on success and leaves it unknown on overflow. Windows-specific compilation was not performed here. No new confirmed defect or product fix in this sampled review.
+- Activity: 60 open issues and 14 open PRs (one draft), versus 63 and 10 in the previous snapshot. Since 2026-11-27T00:56:31Z, no newly opened issues, three closures ([JVM #1035](https://github.com/NeverSight/NeverD/issues/1035), [Lua #1023](https://github.com/NeverSight/NeverD/issues/1023), [Python #1022](https://github.com/NeverSight/NeverD/issues/1022)), 37 product PR openings, 33 merges and no unmerged closures in the sampled GitHub search. Excludes documentation-only [#2689](https://github.com/NeverSight/NeverD/pull/2689). [#2670](https://github.com/NeverSight/NeverD/pull/2670) and [#2702](https://github.com/NeverSight/NeverD/pull/2702) remain open; validate their exact dev integration before landing.
+- CI: No workflow was listed for exact dev `e0f1a7d1` at this snapshot. The existing [MIPS relink workflow](https://github.com/NeverSight/NeverD/actions/runs/46068389674) passed on exact PR head `157b2a58`; its Linux, Windows, and macOS producer jobs and guest execution are scoped to relinking. It is not the broad current integration gate. No project build, test, benchmark, repository script execution, or CI dispatch was performed by this static task.
+- Suggested priorities: (1) Verify the signed stack-offset correction on native MSVC using the exact dev source and run the existing x86-64 tail-frame cases. (2) Review #2702 against the latest dev; require the aggregate-return regression and applicable native gates. (3) Continue #2670 qualification with the resolved doc inputs; require exact r15 provenance, full native Release results, and controlled performance comparison.
+
+
 ## Current snapshot — 2026-11-27T00:56:31Z
 
 - Reviewed [a0c68c29 to 1b876a4f](https://github.com/NeverSight/NeverD/compare/a0c68c29481ab81d081a980d0a20dd3478c1b0d4...1b876a4f983d62bf0db2e8ea7020f9792e78d9aa): 139 commits ahead; the changed-path listing reached GitHub's 300-path cap. Selected review covered the x86-64 jump-table alias-account cap, compare-only fallback, and their assembly fixtures. Optional alias queries spend only a bounded share; the compare-only fallback does not turn unanswered per-query results into positive matches. The address-taken block regression checks that a known target list is not promoted to a proved table through a partial predecessor walk. Reported PCRE2 timings accompany different recovery output and are not a controlled speed comparison. This is a sampled review, not a whole-repository audit. No additional defect was established in the reviewed dev code; no product fixes were submitted in this pass.
@@ -2971,3 +2979,8 @@ Bounded static review of the LoongArch dependency change and adjacent call-analy
 ## 2026-11-27 — static review
 
 - 2026-11-27T00:56:31Z: Reviewed bounded guard proof and its x86-64 fixtures; 63 open issues, 10 open PRs. Next: exact-dev guard regression, #2666 return cases, and #2670 qualification. No product source change or active verification in this snapshot.
+
+
+## 2026-11-28 — static review
+
+- 2026-11-28T01:00:21Z: Reviewed x86-64 tail-frame arithmetic and guarded jump-table regressions; 60 open issues and 14 open PRs. Native MSVC and exact PR integration remain priorities. No code change or execution in this static review.
