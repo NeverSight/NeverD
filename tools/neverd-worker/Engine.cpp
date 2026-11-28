@@ -3713,6 +3713,9 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
       !snapshot.contains("open") || !snapshot.contains("state"))
     throw Error("invalid_request",
                 "Analysis restore needs a fresh worker and a snapshot");
+  for (const char *flag : {"prepare_views", "defer_view_preparation"})
+    if (snapshot.contains(flag) && !snapshot.at(flag).is_boolean())
+      throw Error("invalid_request", std::string(flag) + " must be boolean");
   auto options = snapshot.at("open");
   // A replica opens the project's files: an owner's write still on its way
   // gets there first.
