@@ -67,10 +67,10 @@ struct CNameTable {
   C(Intrinsic::Id, "neverd_ppc_" Mnemonic);                                    \
   C(Intrinsic::RecordId, "neverd_ppc_" Mnemonic "_record");
 #include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.def"
-#define NEVERD_RISCV_CYCLE(Id, Value, Word, High, Name)                        \
+#define NEVERD_RISCV_COUNTER(Id, Value, Word, Kind, High, Name)                \
   C(Intrinsic::Id, "neverd_riscv_" Name);
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
-#define NEVERD_PPC_VMX(Id, Value, Word, Name)                                  \
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.def"
+#define NEVERD_PPC_VMX(Id, Value, Word, Name, LaneBytes)                       \
   C(Intrinsic::Id, "neverd_ppc_" Name);
 #include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.def"
     C(Intrinsic::RISCVFloating, "neverd_riscv_floating");
@@ -177,8 +177,8 @@ struct SideEffectTable {
 #define NEVERD_INTEGER_MEMORY_INTRINSIC(Id, Value, Name)                       \
   SIDEEFFECT(Intrinsic::Id);
 #include "neverd/ir/intrinsics/IntegerMemory.def"
-#define NEVERD_RISCV_CYCLE(Id, ...) SIDEEFFECT(Intrinsic::Id);
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+#define NEVERD_RISCV_COUNTER(Id, ...) SIDEEFFECT(Intrinsic::Id);
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.def"
     SIDEEFFECT(Intrinsic::Syscall);
     SIDEEFFECT(Intrinsic::RISCVFloating);
     SIDEEFFECT(Intrinsic::RISCVFPControl);

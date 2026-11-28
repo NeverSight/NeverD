@@ -2608,6 +2608,8 @@ void MainWindow::connectActions() {
   });
   on(ActionId::OptionsModelScan, [this] {
     auto *dialog = new ModelScanDialog(session_.workerPath(), this);
+    connect(dialog, &ModelScanDialog::nativeComponentRequested, this,
+            &MainWindow::openFile);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->show();
   });

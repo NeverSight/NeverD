@@ -14,6 +14,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/debug/DebugContext.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -116,6 +117,102 @@ TEST(X64CallRCX, CapturesTheSameOccurrenceAndCurrentSourceArguments) {
       x64CallRCXShapeIsValid(x64CallRCXMedShape(Truncated, Arch::X64)));
   captureX64CallRCX(F, I, {}, {});
   EXPECT_EQ(F.Blocks[0].Ops.size(), 3u);
+}
+
+TEST(X64CallRCX, PreservesTheX87EnvironmentAcrossTheOriginalCall) {
+  for (const bool Malformed : {false, true}) {
+    auto I = image();
+    auto F = caller();
+    MedVar Handle;
+    Handle.Id = 37;
+    Handle.Size = 8;
+    MedOp Begin;
+    Begin.Opcode = NdOp::INTRINSIC;
+    Begin.NumInputs = 1;
+    Begin.Inputs[0] =
+        MedVar::makeConst(uint64_t(Intrinsic::X87ContextBegin), 2);
+    Begin.Output = Handle;
+    MedOp Export;
+    Export.Opcode = NdOp::INTRINSIC;
+    Export.NumInputs = 2;
+    Export.Inputs[0] =
+        MedVar::makeConst(uint64_t(Intrinsic::X87ContextExport), 2);
+    Export.Inputs[1] = Handle;
+    MedOp Refresh = Export;
+    Refresh.Inputs[0] =
+        MedVar::makeConst(uint64_t(Intrinsic::X87ContextRefresh), 2);
+    if (Malformed)
+      Refresh.Inputs[1].Size = 4;
+    auto &Ops = F.Blocks.front().Ops;
+    Ops.insert(Ops.begin(), {Begin, Export});
+    Ops.insert(Ops.end() - 1, Refresh);
+    F.CallInfos.front().OpIdx = 2;
+    captureX64CallRCX(F, I, {}, {});
+    if (Malformed) {
+      EXPECT_EQ(Ops[2].Opcode, NdOp::CALL);
+      EXPECT_EQ(F.CallClobbers.size(), 1u);
+      continue;
+    }
+    ASSERT_TRUE(F.CallClobbers.empty());
+    ASSERT_EQ(Ops.size(), 6u);
+    EXPECT_EQ(Ops[0].Inputs[0].ConstVal, uint64_t(Intrinsic::X87ContextBegin));
+    EXPECT_EQ(Ops[1].Inputs[1], Handle);
+    EXPECT_EQ(Ops[2].Inputs[0].ConstVal, uint64_t(Intrinsic::X64CallRCX));
+    EXPECT_EQ(Ops[3].Inputs[0], Ops[2].IntrinsicOutputs.front());
+    EXPECT_EQ(Ops[4].Inputs[0].ConstVal,
+              uint64_t(Intrinsic::X87ContextRefresh));
+    EXPECT_EQ(Ops[4].Inputs[1], Handle);
+  }
+}
+
+TEST(X64CallRCX, FocusedHighCLinksOnlyTheExactDebugTarget) {
+  class Names : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t VA) const override {
+      if (VA < 0x2000 || VA >= 0x2010)
+        return std::nullopt;
+      FunctionSym S;
+      S.Addr = 0x2000;
+      S.Size = 16;
+      S.Name = "named_callee";
+      return S;
+    }
+  } Debug;
+  EXPECT_FALSE(Debug.functionName(0x2001));
+  auto I = image();
+  I.Symbols.clear();
+  I.LoadOnlyFunctionEntries.insert(I.Entry);
+  auto E = HighExpr::makeCall("__neverd_win64_call_rcx", 0, {});
+  E->IntrinsicId = Intrinsic::X64CallRCX;
+  E->Type = NdType::makeInt(8, false);
+  E->Operands.push_back(
+      HighExpr::makeConst(0x2000, 8, ConstantAddressProvenance::CodeAddress));
+  for (unsigned J = 1; J < X64CallRCXArguments; ++J)
+    E->Operands.push_back(HighExpr::makeConst(J, 8));
+  MedVar Aux;
+  Aux.Id = 7;
+  Aux.Size = 8;
+  E->IntrinsicOutputs.push_back(Aux);
+  HighFunc F;
+  F.Entry = I.Entry;
+  F.Name = "caller";
+  F.ReturnType = E->Type;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = E;
+  F.Body.push_back(Return);
+  CEmitterOptions Options;
+  Options.TheArch = I.Arch;
+  Options.Format = I.Format;
+  Options.Image = &I;
+  std::string C;
+  llvm::raw_string_ostream OS(C);
+  ASSERT_TRUE(HighCEmitter().emit({F}, OS, Options, &Debug));
+  EXPECT_NE(C.find("neverd_code_named_callee[] __asm__(\"named_callee\")"),
+            std::string::npos)
+      << C;
+  EXPECT_NE(C.find("(uintptr_t)neverd_code_named_callee"), std::string::npos)
+      << C;
 }
 
 TEST(X64CallRCX, MissingRegisterSlotsRequireIndependentUnreadProof) {
@@ -372,7 +469,7 @@ TEST(X64CallRCX, HighCUsesTheSharedAssemblyAndOneEvaluationPerInput) {
   E->IntrinsicOutputs.push_back(Aux);
   unsigned Reads = 0;
   const auto C = renderX64CallRCXExpression(
-      Arch::X64, *E,
+      Arch::X64, *E, true,
       [&](const HighExpr &V) {
         ++Reads;
         return "input_" + std::to_string(V.ConstVal) + "()";
@@ -401,10 +498,21 @@ TEST(X64CallRCX, HighCUsesTheSharedAssemblyAndOneEvaluationPerInput) {
   EXPECT_NE(Full.find("NEVERD_X64_CALL_RCX"), std::string::npos) << Full;
   EXPECT_NE(Full.find("no-avx"), std::string::npos) << Full;
   EXPECT_NE(Full.find("neverd.analysis-only"), std::string::npos) << Full;
+  HighStmt Effect;
+  Effect.Kind = StmtKind::Call;
+  Effect.CallExpr = E;
+  F.Body.front() = std::move(Effect);
+  F.ReturnType = NdType::makeVoid();
+  std::string Discarded;
+  llvm::raw_string_ostream DiscardedOut(Discarded);
+  ASSERT_TRUE(HighCEmitter().emit({F}, DiscardedOut, Options));
+  EXPECT_NE(Discarded.find("callq *%%rax"), std::string::npos);
+  EXPECT_EQ(Discarded.find("__neverd_call_ax; })"), std::string::npos);
   if (const auto *Directory = std::getenv("NEVERD_TEST_X64_CALL_RCX_EXPORT")) {
     const char *Names[] = {"target", "a0", "a1", "a2", "a3"};
     const auto Body = renderX64CallRCXExpression(
-        Arch::X64, *E, [&](const HighExpr &V) { return Names[V.ConstVal]; },
+        Arch::X64, *E, true,
+        [&](const HighExpr &V) { return Names[V.ConstVal]; },
         [](const MedVar &) { return "*out"; },
         [](const MedVar &) { return true; });
     std::error_code Error;
@@ -420,7 +528,7 @@ TEST(X64CallRCX, HighCUsesTheSharedAssemblyAndOneEvaluationPerInput) {
   }
   E->IntrinsicOutputs[0].Size = 4;
   EXPECT_THROW(renderX64CallRCXExpression(
-                   Arch::X64, *E, [](const HighExpr &) { return "0"; },
+                   Arch::X64, *E, true, [](const HighExpr &) { return "0"; },
                    [](const MedVar &) { return "x"; },
                    [](const MedVar &) { return true; }),
                std::invalid_argument);

@@ -34,7 +34,14 @@ bool companion(std::string_view S) {
   return std::find(std::begin(Companions), std::end(Companions), S) !=
          std::end(Companions);
 }
-std::string_view opaqueFormat(std::string_view Name) {
+std::string_view componentFormat(std::string_view Relative) {
+  auto Name = Relative.substr(Relative.find_last_of('/') + 1);
+  if (Name == "requirements.txt" || Name == "pyproject.toml")
+    return "dependency-manifest";
+  if (Name == "README.md" || Name.starts_with("LICENSE") ||
+      Name.ends_with(".sig") || Name.ends_with(".attestation") ||
+      Name.ends_with(".sigstore.json"))
+    return "provenance";
   if (Name.ends_with(".py"))
     return "python-source";
   if (Name.ends_with(".dll") || Name.ends_with(".so") ||
@@ -65,7 +72,7 @@ std::optional<GGUFPart> splitPart(llvm::StringRef Name) {
       Part, Count};
 }
 bool member(std::string_view S) {
-  return companion(S) || checkpoint(S) || !opaqueFormat(S).empty() ||
+  return companion(S) || checkpoint(S) || !componentFormat(S).empty() ||
          S.ends_with(".gguf") || S.ends_with(".safetensors") ||
          S.ends_with(".safetensors.index.json") || S.ends_with(".onnx");
 }
@@ -82,11 +89,41 @@ void list(const fs::path &Root, Names &Files, Names &Dirs, Budget &B) {
   std::sort(Files.begin(), Files.end());
   std::sort(Dirs.begin(), Dirs.end());
 }
+// Descend only into component directories of this model. A nested model has
+// its own artifact root, loader references and evidence identities.
+void nestedComponents(const fs::path &Root, const Names &Dirs, Names &Common,
+                      Budget &B) {
+  std::vector<fs::path> Pending;
+  std::set<fs::path> Visited{Root};
+  for (const auto &D : Dirs)
+    Pending.push_back(utf8Path(D));
+  while (!Pending.empty()) {
+    auto Relative = std::move(Pending.back());
+    Pending.pop_back();
+    auto Path = memberPath(Root, Relative);
+    if (!Visited.insert(Path).second)
+      continue;
+    Names Files, Children;
+    list(Path, Files, Children, B);
+    if (llvm::any_of(Files, [](const auto &N) {
+          return N == "config.json" || N.ends_with(".gguf") ||
+                 N.ends_with(".onnx") || N.ends_with(".safetensors");
+        }))
+      continue;
+    for (const auto &Name : Files)
+      if (!componentFormat(Name).empty() || checkpoint(Name))
+        Common.push_back(pathToUTF8(Relative / utf8Path(Name)));
+    for (const auto &D : Children)
+      Pending.push_back(Relative / utf8Path(D));
+  }
+  llvm::sort(Common);
+}
 Json jsonFile(Package &P, const std::string &Name) {
   File &F = P.file(Name);
   if (F.size() > limits::kJsonBytes)
     throw Error("JSON member exceeds byte limit");
   auto Text = F.header(0, F.size(), P.B);
+  P.Fingerprints["metadata-file/" + Name] = digest(Text);
   return parseObject(Text, P.B);
 }
 void templateValues(Package &P, const std::string &Name, const Json &T) {
@@ -129,6 +166,35 @@ void readCompanion(Package &P, const std::string &Name) {
     else if (Name == "chat_template.json")
       throw Error("companion lacks chat_template field");
     if (Name == "config.json") {
+      auto declarations = [&](const Json &Config, llvm::StringRef Prefix) {
+        for (auto Field :
+             {"model_type", "num_hidden_layers", "tie_word_embeddings"}) {
+          auto It = Config.find(Field);
+          if (It == Config.end())
+            continue;
+          auto Kind = std::string_view(Field) == "num_hidden_layers"
+                          ? "layer_count"
+                      : std::string_view(Field) == "tie_word_embeddings"
+                          ? "weight_tying"
+                          : "architecture";
+          if ((Kind == std::string_view("layer_count") &&
+               !It->is_number_unsigned()) ||
+              (Kind == std::string_view("weight_tying") && !It->is_boolean()) ||
+              (Kind == std::string_view("architecture") && !It->is_string()))
+            throw Error("invalid model structure declaration");
+          if (It->is_string())
+            validName(It->get_ref<const std::string &>());
+          P.Declarations.push_back({{"artifact", Name},
+                                    {"field", (Prefix + Field).str()},
+                                    {"kind", Kind},
+                                    {"value", *It},
+                                    {"evidence_level", "declared"}});
+        }
+      };
+      declarations(J, "");
+      if (auto Text = J.find("text_config");
+          Text != J.end() && Text->is_object())
+        declarations(*Text, "text_config.");
       if (auto A = J.find("model_type"); A != J.end()) {
         auto S = A->get<std::string>();
         validName(S);
@@ -149,6 +215,7 @@ void readCompanion(Package &P, const std::string &Name) {
       else if (auto V = J.find("quantization"); V != J.end())
         P.Fingerprints["quantization"] = digest(V->dump());
     }
+    inspectReferences(P, Name, J);
     if (J.contains("auto_map") && !J["auto_map"].empty())
       P.finding("package.custom-loader", Name, "review", "loader-declaration",
                 "declared",
@@ -166,8 +233,17 @@ void readCompanion(Package &P, const std::string &Name) {
         Declarations["adapter_type"] = J["peft_type"];
       if (J.contains("r") && J["r"].is_number_unsigned())
         Declarations["rank"] = J["r"];
-      if (J.contains("target_modules") && J["target_modules"].is_array())
-        Declarations["target_module_count"] = J["target_modules"].size();
+      if (auto T = J.find("target_modules"); T != J.end() && T->is_array()) {
+        Declarations["target_module_count"] = T->size();
+        size_t Index = 0;
+        for (const auto &Target : *T) {
+          const auto &N = Target.get_ref<const std::string &>();
+          validName(N);
+          if (Index++ >= P.B.Opts.Offset &&
+              Declarations["targets"].size() < P.B.Opts.Limit)
+            Declarations["targets"].push_back(N);
+        }
+      }
       if (J.contains("base_model_name_or_path"))
         Declarations["base_identity_sha256"] =
             digest(J["base_model_name_or_path"].dump());
@@ -177,11 +253,20 @@ void readCompanion(Package &P, const std::string &Name) {
           P.Fingerprints[std::string("adapter/") + K] = digest(J[K].dump());
     }
     P.Fingerprints["config/" + Name] = digest(J.dump());
+    if (!P.B.Opts.Baseline.empty()) {
+      for (auto &[Field, V] : J.items())
+        if (Field != "chat_template" && Field.size() <= limits::kNameBytes)
+          P.Fingerprints["config-field/" + Name + "/" + Field] =
+              digest(V.dump());
+    }
   }
   P.Artifacts.push_back({{"id", Name},
                          {"format", "companion"},
                          {"size", F.size()},
                          {"declarations", std::move(Declarations)}});
+  if (auto It = P.Fingerprints.find("metadata-file/" + Name);
+      It != P.Fingerprints.end())
+    P.Artifacts.back()["file_sha256"] = It->second;
 }
 std::string relativeMember(const Json &V) {
   if (!V.is_string())
@@ -212,9 +297,11 @@ void index(Package &P, const std::string &Name, Mapping &M,
       throw Error("tensor appears in multiple indexes");
     Shards.insert(Shard);
   }
-  P.Artifacts.push_back({{"id", Name},
-                         {"format", "safetensors-index"},
-                         {"mapped_tensors", Map.size()}});
+  P.Artifacts.push_back(
+      {{"id", Name},
+       {"format", "safetensors-index"},
+       {"mapped_tensors", Map.size()},
+       {"file_sha256", P.Fingerprints.at("metadata-file/" + Name)}});
 }
 void protectedRead(Package &P, const std::string &Name, const auto &Fn) {
   try {
@@ -251,20 +338,11 @@ void inspect(Package &P, const Names &Files,
       protectedRead(P, Name, [&] {
         if (Name.ends_with(".onnx"))
           readONNX(P, Name);
-        else if (checkpoint(Name)) {
-          P.Artifacts.push_back({{"id", Name},
-                                 {"format", "uninspected-checkpoint"},
-                                 {"size", P.file(Name).size()}});
-          P.gap(Name, "checkpoint serialization and weights not inspected");
-        } else if (auto Format = opaqueFormat(Name); !Format.empty()) {
-          P.Artifacts.push_back({{"id", Name},
-                                 {"format_hint", Format},
-                                 {"format", "uninspected-component"},
-                                 {"size", P.file(Name).size()}});
-          P.gap(Name,
-                "component identified by filename; contents not inspected",
-                {{"format_hint", Format}});
-        } else
+        else if (checkpoint(Name))
+          inspectCheckpoint(P, Name);
+        else if (auto Format = componentFormat(Name); !Format.empty())
+          inspectComponent(P, Name, Format);
+        else
           readGGUF(P, Name);
       });
   }
@@ -281,26 +359,27 @@ void inspect(Package &P, const Names &Files,
       if (Shards.contains(T.FileId) && !Map.contains(Name))
         P.gap(T.FileId, "unindexed tensor", {{"tensor", Name}});
   }
-  if (!P.B.Opts.Baseline.empty()) {
-    for (auto Name :
-         {"tokenizer.json", "vocab.json", "merges.txt", "tokenizer.model"}) {
-      if (!fs::exists(P.Root / Name))
-        continue;
-      protectedRead(P, Name, [&] {
-        File &F = P.file(Name);
-        SHA256Stream Hash;
+  for (auto Name :
+       {"tokenizer.json", "vocab.json", "merges.txt", "tokenizer.model"}) {
+    if (fs::symlink_status(P.Root / Name).type() == fs::file_type::not_found)
+      continue;
+    protectedRead(P, Name, [&] {
+      File &F = P.file(Name);
+      Json Artifact = {{"id", Name},
+                       {"format", "tokenizer"},
+                       {"size", F.size()},
+                       {"hash_scope", "not requested"}};
+      if (!P.B.Opts.Baseline.empty()) {
         if (F.size() > P.B.HeaderLeft)
           throw Error("tokenizer digest exceeds remaining metadata budget");
-        for (uint64_t At = 0; At < F.size();) {
-          auto Data = F.header(
-              At, std::min<uint64_t>(limits::kChunk, F.size() - At), P.B);
-          Hash.update(llvm::StringRef(Data));
-          At += Data.size();
-        }
-        P.Fingerprints[std::string("tokenizer/") + Name] =
-            llvm::toHex(Hash.final(), true);
-      });
-    }
+        P.B.HeaderLeft -= F.size();
+        auto Hash = hashRange(F, 0, F.size(), P.B);
+        P.Fingerprints[std::string("tokenizer/") + Name] = Hash;
+        Artifact["file_sha256"] = Hash;
+        Artifact["hash_scope"] = "complete file";
+      }
+      P.Artifacts.push_back(std::move(Artifact));
+    });
   }
   if (P.Architectures.size() > 1)
     P.gap(P.Id, "conflicting declared architectures");
@@ -355,9 +434,12 @@ void inspect(Package &P, const Names &Files,
       (Total && Parts.size() != *Total) ||
       (TotalTensors && P.Tensors.size() != *TotalTensors))
     P.gap(P.Id, "missing or inconsistent GGUF split inventory");
-  P.ProjectionLayouts = projectionLayouts(P);
+  inspectStructure(P);
 }
 } // namespace
+bool isNumberedGGUF(llvm::StringRef Name) {
+  return splitPart(Name).has_value();
+}
 std::vector<std::unique_ptr<Package>> readInputs(const fs::path &Input,
                                                  Budget &B) {
   if (Input.empty())
@@ -376,12 +458,12 @@ std::vector<std::unique_ptr<Package>> readInputs(const fs::path &Input,
     }
     Result.push_back(std::move(P));
   };
-  auto directory = [&](const fs::path &R, const std::string &Id,
-                       const Names &F) {
+  auto directory = [&](const fs::path &R, const std::string &Id, const Names &F,
+                       const Names &Dirs) {
     Names Common, Weights;
     std::map<std::string, Names> Models;
     for (const auto &N : F) {
-      if (companion(N) || !opaqueFormat(N).empty())
+      if (companion(N) || !componentFormat(N).empty())
         Common.push_back(N);
       else if (N.ends_with(".gguf")) {
         auto Part = splitPart(N);
@@ -391,6 +473,7 @@ std::vector<std::unique_ptr<Package>> readInputs(const fs::path &Input,
       else
         Weights.push_back(N);
     }
+    nestedComponents(R, Dirs, Common, B);
     if (!Weights.empty() || Models.empty()) {
       Weights.insert(Weights.end(), Common.begin(), Common.end());
       add(R, Id, Weights, {});
@@ -428,14 +511,14 @@ std::vector<std::unique_ptr<Package>> readInputs(const fs::path &Input,
       add(Root, Name, Files, Name);
     }
   } else if (!Files.empty())
-    directory(Root, pathToUTF8(Root.filename()), Files);
+    directory(Root, pathToUTF8(Root.filename()), Files, Dirs);
   else
     for (const auto &Dir : Dirs) {
       auto Child = memberPath(Root, utf8Path(Dir));
       Names F, D;
       list(Child, F, D, B);
       if (!F.empty())
-        directory(Child, Dir, F);
+        directory(Child, Dir, F, D);
     }
   if (Result.empty())
     throw Error(

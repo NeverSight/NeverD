@@ -73,8 +73,8 @@ structured C, LLVM IR and LLVM-derived C for these profiles.
 
 | Target | Qualified ELF profiles |
 |---|---|
-| RISC-V | Little-endian RV32 (ILP32, ILP32D) and RV64 (LP64, LP64D). ELF evidence selects M, A and integer C, or the individual Zmmul, Zaamo, Zalrsc and Zca extensions. The ELF ISA attribute also enables Zba 1.0, Zbb 1.0, Zbs 1.0 and Zicond 1.0. Zicntr 2.0 enables `rdcycle` and, on RV32, `rdcycleh`. |
-| PowerPC | Big- and little-endian PPC32 System V and PPC64 ELFv1/ELFv2. PPC32 supports cross-module calls through secure PLTs and the classic BSS-PLT. Both PPC64 ABIs support cross-module PLT calls and TOC switches. ELFv1 uses function descriptors and ELFv2 supports global and local entries. The scalar subset covers signed and unsigned division, high-word multiplication and overflow-reporting multiplication, including their CR0 and XER effects. PPC64 also lifts POWER10 prefixed integer addition, loads and stores. VMX `vaddubm` adds 16 byte lanes modulo 256. |
+| RISC-V | Little-endian RV32 (ILP32, ILP32D) and RV64 (LP64, LP64D). ELF evidence selects M, A and integer C, or the individual Zmmul, Zaamo, Zalrsc and Zca extensions. The ELF ISA attribute also enables Zba 1.0, Zbb 1.0, Zbs 1.0 and Zicond 1.0. Zicntr 2.0 enables `rdcycle`, `rdtime` and `rdinstret`, plus their high-half reads on RV32. |
+| PowerPC | Big- and little-endian PPC32 System V and PPC64 ELFv1/ELFv2. PPC32 supports cross-module calls through secure PLTs and the classic BSS-PLT. Both PPC64 ABIs support cross-module PLT calls and TOC switches. ELFv1 uses function descriptors and ELFv2 supports global and local entries. The scalar subset covers signed and unsigned division, high-word multiplication and overflow-reporting multiplication, including their CR0 and XER effects. PPC64 also lifts POWER10 prefixed integer addition, loads and stores. VMX `vaddubm`, `vadduhm` and `vadduwm` add unsigned byte, halfword and word lanes with wraparound. |
 
 Native rewriting remains open for these profiles. See [RISC-V and PowerPC coverage](docs/riscv-powerpc.md).
 
@@ -381,7 +381,7 @@ setting as `neverd_session_set_arm_function_mode()`.
 | `funcs` | Discovered functions |
 | `disasm` | Disassemble (`--func` name or hex) |
 | `sym-explore` | Bounded native LowIR path exploration (`--func`; JSON output) |
-| `scan --gguf` | [Inspect local model directories, tensor ranges and templates (JSON)](docs/model-scan.md) |
+| `scan --gguf` | [Inspect local models, compare tensors and verify a separate GGUF rebuild](docs/model-scan.md) |
 | `scan` | [Check object lifetime, initialization, bounds and format strings (JSON)](docs/memory-safety-scan.md) |
 | `hex` | Hex dump at an address |
 | `cfg` / `callgraph` | CFG / call graph (JSON; DOT/SVG optional) |

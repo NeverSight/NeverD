@@ -27,7 +27,8 @@
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.h"
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/low/AArch64WritebackMemory.h"
 #include "neverd/ir/low/LowArchitecturalValue.h"
@@ -290,7 +291,7 @@ bool NdOpEmulator::setX86EnqueueContext(uint8_t CurrentPrivilegeLevel,
   return true;
 }
 
-uint64_t NdOpEmulator::readOperand(const NdVar &Op) const {
+std::optional<uint64_t> NdOpEmulator::findScalarOperand(const NdVar &Op) const {
   auto Truncate = [&](uint64_t Value) {
     if (Op.Size == 0 || Op.Size >= sizeof(Value))
       return Value;
@@ -304,7 +305,30 @@ uint64_t NdOpEmulator::readOperand(const NdVar &Op) const {
     if (It != Registers.end())
       return Truncate(It->second);
   }
-  return 0;
+  return std::nullopt;
+}
+
+uint64_t NdOpEmulator::readOperand(const NdVar &Op) const {
+  return findScalarOperand(Op).value_or(0);
+}
+
+bool NdOpEmulator::readScalarOperands(const LowOp &Op, uint64_t &A,
+                                      uint64_t &B) const {
+  const auto &LHS = Op.Inputs[0], &RHS = Op.Inputs[1];
+  // A scalar lookup proves presence and returns the value in one traversal.
+  // An exact byte view or a partially known register also needs a width and
+  // defined-bits check before strict arithmetic may consume it.
+  if (StrictMode && (!WideRegisters.empty() || !UnknownBits.empty()) &&
+      (!knownOperandBytes(LHS, 0, LHS.Size) ||
+       !knownOperandBytes(RHS, 0, RHS.Size)))
+    return false;
+  const auto Left = findScalarOperand(LHS);
+  const auto Right = findScalarOperand(RHS);
+  if (StrictMode && (!Left || !Right))
+    return false;
+  A = Left.value_or(0);
+  B = Right.value_or(0);
+  return true;
 }
 
 bool NdOpEmulator::availableOperandBytes(const NdVar &Operand, uint64_t Offset,
@@ -416,7 +440,9 @@ void NdOpEmulator::writeOutputBytes(const NdVar &Output,
   if (Output.isReg()) {
     auto Existing = WideRegisters.find(Output.Offset);
     if (Existing != WideRegisters.end() &&
-        Existing->second.size() > Output.Size) {
+        (Existing->second.size() > Output.Size ||
+         (Output.Size > sizeof(uint64_t) &&
+          Existing->second.size() == Output.Size))) {
       std::copy_n(Value.begin(), std::min<size_t>(Output.Size, Value.size()),
                   Existing->second.begin());
       if (Value.size() < Output.Size)
@@ -639,10 +665,29 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
   // Never approximate an invalid address-space tag as ordinary memory.
   if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
     return false;
+  // A pure scalar step with ordinary operands needs no architecture-specific
+  // state. Leave the larger memory and intrinsic stack frame off this path.
+  if (Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+      !MIPSReservationGranule && UnknownBits.empty()) {
+    switch (Op.Opcode) {
+#include "NdOpEmulatorScalarCases.inc"
+    default:
+      break;
+    }
+  }
+  return stepWithState(Op, Following, Alignment, CPAChecks);
+}
+
+bool NdOpEmulator::stepWithState(
+    const LowOp &Op, llvm::ArrayRef<LowOp> Following,
+    OrderedAlignment Alignment,
+    std::optional<AArch64ScalarCPAControl> CPAChecks) {
   if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs && Op.Inputs[0].isConst()) {
-    if (const auto D =
-            ppc::fixedPoint(static_cast<Intrinsic>(Op.Inputs[0].Offset)))
+    const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+    if (const auto D = ppc::fixedPoint(Id))
       return executePowerPCFixedPoint(Op, *D, Following);
+    if (const auto *Read = riscv::counterRead(Id))
+      return executeRISCVCounter(Op, *Read);
   }
   if (MIPSReservationGranule) {
     if (Op.NumInputs > std::size(Op.Inputs))
@@ -1188,9 +1233,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
           Id == Intrinsic::EVEXExpandLoad || Id == Intrinsic::AesEnc ||
           Id == Intrinsic::AesEncLast || Id == Intrinsic::AesDec ||
           Id == Intrinsic::AesDecLast || Id == Intrinsic::Pclmulqdq ||
-          isX86AtomicIntrinsic(Id) || Id == Intrinsic::PPCVaddubm ||
-          riscv::cycleRead(Id) || Id == Intrinsic::RISCVFloating ||
-          Id == Intrinsic::RISCVFPControl)
+          isX86AtomicIntrinsic(Id) || ppc::vmxAddLaneBytes(Id) ||
+          Id == Intrinsic::RISCVFloating || Id == Intrinsic::RISCVFPControl)
         return executeIntrinsic(Op);
     }
     // Opaque intrinsic (SSE/NEON vector op, etc.): it cannot alter control
@@ -1216,32 +1260,10 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
     }
     return !StrictMode;
 
-  case NdOp::COPY:
-  case NdOp::INT_ZEXT:
-  case NdOp::INT_SEXT:
-  case NdOp::SUBBYTES:
-  case NdOp::INT_NEGATE:
-  case NdOp::INT_NEG2:
-  case NdOp::CONCAT:
-    return executeCopy(Op);
+#include "NdOpEmulatorScalarCases.inc"
 
   case NdOp::LOAD:
     return executeLoad(Op);
-
-  case NdOp::INT_ADD:
-  case NdOp::INT_SUB:
-  case NdOp::INT_MULT:
-  case NdOp::INT_DIV:
-  case NdOp::INT_SDIV:
-  case NdOp::INT_REM:
-  case NdOp::INT_SREM:
-  case NdOp::INT_AND:
-  case NdOp::INT_OR:
-  case NdOp::INT_XOR:
-  case NdOp::INT_LEFT:
-  case NdOp::INT_RIGHT:
-  case NdOp::INT_ASHR:
-    return executeArith(Op);
 
   case NdOp::FLOAT_ADD:
   case NdOp::FLOAT_SUB:

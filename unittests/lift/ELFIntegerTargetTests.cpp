@@ -20,6 +20,7 @@
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.h"
 #include "neverd/ir/intrinsics/RISCV/RISCVFloating.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
@@ -296,15 +297,29 @@ void checkLeafReturnWidth(Arch A, llvm::ArrayRef<uint32_t> Words,
   }
 }
 
-TEST(RISCVCycle, RegisterPairRequiresAStableHighWord) {
+TEST(RISCVCounter, RegisterPairRequiresStableHighWordsFromTheSameCounter) {
   using namespace cycle_fixture;
   for (Arch A : {Arch::RISCV32, Arch::RISCV32D}) {
     llvm::StringRef ISA = hasRISCVDoubleABI(A)
                               ? "rv32i2p1_f2p2_d2p2_zicntr2p0_zicsr2p0"
                               : "rv32i2p1_zicntr2p0_zicsr2p0";
-    checkLeafReturnWidth(A, Read64, 8, false, ISA);
-    checkLeafReturnWidth(A, WrongEdge, 4, false, ISA);
-    checkLeafReturnWidth(A, Overwritten, 4, false, ISA);
+    for (const auto &C : Counters) {
+      checkLeafReturnWidth(A, {C.High, C.Low, C.Last, Retry, Return}, 8, false,
+                           ISA);
+      checkLeafReturnWidth(A, {C.High, C.Low, C.Last, Equal, Return}, 4, false,
+                           ISA);
+      checkLeafReturnWidth(A,
+                           {C.High, C.Low, C.Last, Retry, ReplaceHigh, Return},
+                           4, false, ISA);
+      for (const auto &Other : Counters) {
+        if (C.Kind == Other.Kind)
+          continue;
+        checkLeafReturnWidth(A, {C.High, Other.Low, C.Last, Retry, Return}, 4,
+                             false, ISA);
+        checkLeafReturnWidth(A, {C.High, C.Low, Other.Last, Retry, Return}, 4,
+                             false, ISA);
+      }
+    }
   }
 }
 
@@ -1176,9 +1191,11 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
         else
           EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
       };
-      Check(cycle_fixture::Low, C.Zicntr);
-      Check(cycle_fixture::Discard, C.Zicntr);
-      Check(cycle_fixture::High, C.Zicntr && A == Arch::RISCV32);
+      for (const auto &Counter : cycle_fixture::Counters) {
+        Check(Counter.Low, C.Zicntr);
+        Check(Counter.Discard, C.Zicntr);
+        Check(Counter.High, C.Zicntr && isRISCV32(A));
+      }
       for (uint32_t Word : cycle_fixture::Other)
         Check(Word, false);
       Check(zicond_fixture::Eqz, C.Zicond);

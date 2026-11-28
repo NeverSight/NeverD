@@ -115,6 +115,8 @@
   "test_failed": "Oracle did not complete exactly once: {name}",
   "bad_export": "Unexpected object directory: {path}",
   "bad_tests": "Incomplete oracle test inventory: {names}",
+  "first_stack_symbol": "_returnModelFirstStack",
+  "stack_overlap": "Static guest overlaps its first stack block: {path}",
   "bad_map": "Static guest has a non-flat segment map: {path}",
   "bad_version": "Unexpected model version: {version}",
   "bad_inventory": "Incomplete model guest inventory",
@@ -178,12 +180,14 @@
       "profile": "joined-signing-address",
       "test": "AArch64LiftedImage.JoinedSigningModifiersFollowEachIncomingPath",
       "environment": "NEVERD_ARM64E_JOINED_SIGNING_FIXTURES",
-      "inventory": "shared-signing-carriers",
-      "bodies": 138,
+      "define": "-DRETURN_MODEL_JOINED",
+      "inventory": "combined-signing-carriers",
+      "bodies": 324,
       "archived_inventories": {
         "path-proven-modifiers": 36,
         "scratch-free-signing-edges": 54,
-        "distant-joined-signers": 84
+        "distant-joined-signers": 84,
+        "shared-signing-carriers": 138
       }
     }
   },

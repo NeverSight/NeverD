@@ -1,6 +1,6 @@
 **Lingue**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 89c89cb7f9c817b94939d8599f741411e1c7d629bb1230fc1ae52fcd67c9f191 -->
+<!-- i18n-source: 749147e322e8a470eed4fd2340c63eab4c87d8b3dbea4a7da34578555d5a616d -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ I target ELF sperimentali per le istruzioni intere supportano il lifting rigoros
 
 | Target | Profili ELF verificati |
 |---|---|
-| RISC-V | RV32 (ILP32, ILP32D) e RV64 (LP64, LP64D) little-endian. Le informazioni ELF determinano le estensioni M, A e C per gli interi oppure le singole estensioni Zmmul, Zaamo, Zalrsc e Zca. L’attributo ISA del file ELF abilita anche Zba 1.0, Zbb 1.0, Zbs 1.0 e Zicond 1.0. Zicntr 2.0 abilita `rdcycle` e, su RV32, anche `rdcycleh`. |
-| PowerPC | PPC32 System V e PPC64 ELFv1/ELFv2 in entrambi gli ordini dei byte. PPC32 supporta chiamate tra moduli tramite la PLT sicura e la BSS-PLT classica. Entrambe le ABI PPC64 supportano chiamate tra moduli tramite la PLT e cambi di TOC. ELFv1 usa descrittori di funzione ed ELFv2 supporta punti di ingresso globali e locali. Le operazioni scalari verificate comprendono la divisione con e senza segno, la moltiplicazione che restituisce la parola alta del prodotto e la moltiplicazione con segnalazione di overflow, inclusi gli effetti su CR0 e XER. Su PPC64 sono supportate anche le istruzioni con prefisso di POWER10 per sommare, caricare e memorizzare interi. L’istruzione VMX `vaddubm` somma 16 coppie di byte modulo 256. |
+| RISC-V | RV32 (ILP32, ILP32D) e RV64 (LP64, LP64D) little-endian. Le informazioni ELF determinano le estensioni M, A e C per gli interi oppure le singole estensioni Zmmul, Zaamo, Zalrsc e Zca. L’attributo ISA del file ELF abilita anche Zba 1.0, Zbb 1.0, Zbs 1.0 e Zicond 1.0. Zicntr 2.0 supporta `rdcycle`, `rdtime` e `rdinstret`. Su RV32 si possono leggere anche i 32 bit superiori di ogni contatore. |
+| PowerPC | PPC32 System V e PPC64 ELFv1/ELFv2 in entrambi gli ordini dei byte. PPC32 supporta chiamate tra moduli tramite la PLT sicura e la BSS-PLT classica. Entrambe le ABI PPC64 supportano chiamate tra moduli tramite la PLT e cambi di TOC. ELFv1 usa descrittori di funzione ed ELFv2 supporta punti di ingresso globali e locali. Le operazioni scalari verificate comprendono la divisione con e senza segno, la moltiplicazione che restituisce la parola alta del prodotto e la moltiplicazione con segnalazione di overflow, inclusi gli effetti su CR0 e XER. Su PPC64 sono supportate anche le istruzioni con prefisso di POWER10 per sommare, caricare e memorizzare interi. Le istruzioni VMX `vaddubm`, `vadduhm` e `vadduwm` sommano elementi senza segno rispettivamente di 8, 16 e 32 bit, scartando il riporto finale di ciascun elemento. |
 
 La riscrittura del codice nativo resta da implementare per questi profili. [Copertura di RISC-V e PowerPC (in inglese)](../riscv-powerpc.md)
 
@@ -342,7 +342,7 @@ Ripetere l’opzione per altri ingressi ambigui, usando `:arm` quando opportuno.
 | `funcs` | Funzioni scoperte |
 | `disasm` | Disassembla (`--func` nome o hex) |
 | `sym-explore` | Esplorazione limitata dei percorsi LowIR nativi (`--func`; output JSON) |
-| `scan --gguf` | [Ispezionare le directory dei modelli locali, gli intervalli dei tensori e i template (JSON)](../model-scan.md) |
+| `scan --gguf` | [Ispezionare modelli locali, confrontare tensori e verificare un file GGUF ricostruito separatamente](../model-scan.md) |
 | `scan` | [Verifica durata degli oggetti, inizializzazione, limiti e stringhe di formato (JSON)](../memory-safety-scan.md) |
 | `hex` | Hex dump a un indirizzo |
 | `cfg` / `callgraph` | CFG / call graph (JSON; DOT/SVG opzionale) |

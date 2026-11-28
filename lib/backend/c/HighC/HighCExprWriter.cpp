@@ -43,7 +43,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
-#include "neverd/backend/RISCV/RISCVCycleSource.h"
+#include "neverd/backend/RISCV/RISCVCounterSource.h"
 #include "neverd/backend/RISCV/RISCVFloatingSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -2230,7 +2230,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         });
   if (E.IntrinsicId == Intrinsic::X64CallRCX)
     return renderX64CallRCXExpression(
-        Opts.TheArch, E,
+        Opts.TheArch, E, &E != StatementCall,
         [this](const HighExpr &V) { return intrinsicOperandStr(V); },
         [this](const MedVar &V) { return varName(V); },
         [this](const MedVar &V) {
@@ -2358,13 +2358,19 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   std::string Name = resolvedCallTarget(E);
 
   if (E.IntrinsicId != Intrinsic::None) {
-    if (E.IntrinsicId == Intrinsic::PPCVaddubm) {
+    if (unsigned LaneBytes = ppc::vmxAddLaneBytes(E.IntrinsicId)) {
       if (!isPowerPC(Opts.TheArch) || E.Operands.size() != 2)
-        throw std::runtime_error("invalid PowerPC vector byte addition");
+        throw std::runtime_error("invalid PowerPC vector addition");
       static const std::string Bytes = typeToC(ppc::byteVectorType());
-      return "(__builtin_bit_cast(" + Bytes + ", " + exprStr(*E.Operands[0]) +
-             ") + __builtin_bit_cast(" + Bytes + ", " +
-             exprStr(*E.Operands[1]) + "))";
+      auto Add = [&](const std::string &Lanes) {
+        return "(__builtin_bit_cast(" + Lanes + ", " + exprStr(*E.Operands[0]) +
+               ") + __builtin_bit_cast(" + Lanes + ", " +
+               exprStr(*E.Operands[1]) + "))";
+      };
+      if (LaneBytes == 1)
+        return Add(Bytes);
+      return "__builtin_bit_cast(" + Bytes + ", " +
+             Add(typeToC(ppc::vmxVectorType(LaneBytes))) + ")";
     }
     if (E.IntrinsicId == Intrinsic::RISCVFloating ||
         E.IntrinsicId == Intrinsic::RISCVFPControl) {
@@ -2397,10 +2403,10 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
                ", " + Result + ")";
       return Result;
     }
-    if (const auto *Read = riscv::cycleRead(E.IntrinsicId)) {
+    if (const auto *Read = riscv::counterRead(E.IntrinsicId)) {
       if (!Read->admits(Opts.TheArch) || !E.Operands.empty())
-        throw std::runtime_error("invalid RISC-V cycle read");
-      return riscv::cycleSource(*Read);
+        throw std::runtime_error("invalid RISC-V counter read");
+      return riscv::counterSource(*Read);
     }
     if (const auto D = ppc::fixedPoint(E.IntrinsicId)) {
       if (!D->admits(Opts.TheArch) || E.Operands.size() != 2 ||

@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 89c89cb7f9c817b94939d8599f741411e1c7d629bb1230fc1ae52fcd67c9f191 -->
+<!-- i18n-source: 749147e322e8a470eed4fd2340c63eab4c87d8b3dbea4a7da34578555d5a616d -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ CLI, 통합, AI 에이전트는 **순수 C API**로 동일한 엔진 **`libnever
 
 | 대상 | 검증된 ELF 프로필 |
 |---|---|
-| RISC-V | 리틀 엔디언 RV32 (ILP32, ILP32D) 및 RV64 (LP64, LP64D). ELF 정보에 따라 M, A, 정수 C 또는 개별 Zmmul, Zaamo, Zalrsc, Zca 확장을 선택합니다. ELF ISA 속성에 따라 Zba 1.0, Zbb 1.0, Zbs 1.0 및 Zicond 1.0도 활성화됩니다. Zicntr 2.0은 `rdcycle`을 지원하며 RV32에서는 `rdcycleh`도 지원합니다. |
-| PowerPC | 빅 엔디언 및 리틀 엔디언 PPC32 System V와 PPC64 ELFv1/ELFv2. PPC32는 secure PLT와 기존 BSS-PLT를 통한 모듈 간 호출을 지원합니다. 두 PPC64 ABI 모두 PLT를 통한 모듈 간 호출과 TOC 전환을 지원합니다. ELFv1은 함수 디스크립터를 사용하고 ELFv2는 전역 및 지역 진입점을 지원합니다. 검증된 스칼라 연산에는 부호 있는 나눗셈과 부호 없는 나눗셈, 곱의 상위 워드를 반환하는 곱셈, 오버플로를 표시하는 곱셈이 포함되며, 이 연산들이 CR0와 XER에 미치는 영향도 검증했습니다. PPC64는 접두사가 있는 POWER10 정수 덧셈, 로드, 스토어 명령도 지원합니다. VMX의 `vaddubm`은 16개 바이트 쌍을 각각 더해 하위 8비트를 남깁니다. |
+| RISC-V | 리틀 엔디언 RV32 (ILP32, ILP32D) 및 RV64 (LP64, LP64D). ELF 정보에 따라 M, A, 정수 C 또는 개별 Zmmul, Zaamo, Zalrsc, Zca 확장을 선택합니다. ELF ISA 속성에 따라 Zba 1.0, Zbb 1.0, Zbs 1.0 및 Zicond 1.0도 활성화됩니다. Zicntr 2.0은 `rdcycle`, `rdtime`, `rdinstret`를 지원하며 RV32에서는 각 카운터의 상위 32비트도 읽을 수 있습니다. |
+| PowerPC | 빅 엔디언 및 리틀 엔디언 PPC32 System V와 PPC64 ELFv1/ELFv2. PPC32는 secure PLT와 기존 BSS-PLT를 통한 모듈 간 호출을 지원합니다. 두 PPC64 ABI 모두 PLT를 통한 모듈 간 호출과 TOC 전환을 지원합니다. ELFv1은 함수 디스크립터를 사용하고 ELFv2는 전역 및 지역 진입점을 지원합니다. 검증된 스칼라 연산에는 부호 있는 나눗셈과 부호 없는 나눗셈, 곱의 상위 워드를 반환하는 곱셈, 오버플로를 표시하는 곱셈이 포함되며, 이 연산들이 CR0와 XER에 미치는 영향도 검증했습니다. PPC64는 접두사가 있는 POWER10 정수 덧셈, 로드, 스토어 명령도 지원합니다. VMX의 `vaddubm`, `vadduhm`, `vadduwm`은 각각 8, 16, 32비트 부호 없는 요소를 더하고 각 요소의 너비를 넘는 비트는 버립니다. |
 
 이 프로필의 네이티브 코드 재작성은 향후 과제입니다. [RISC-V 및 PowerPC 지원 범위(영문)](../riscv-powerpc.md)
 
@@ -341,7 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 발견된 함수 |
 | `disasm` | 디스어셈블(`--func` 이름 또는 hex) |
 | `sym-explore` | 제한된 네이티브 LowIR 경로 탐색(`--func`, JSON 출력) |
-| `scan --gguf` | [로컬 모델 디렉터리, 텐서 범위, 템플릿 검사(JSON)](../model-scan.md) |
+| `scan --gguf` | [로컬 모델 검사, 텐서 비교 및 별도 파일로 재구성한 GGUF 검증](../model-scan.md) |
 | `scan` | [객체 수명, 초기화, 경계 및 서식 문자열 검사(JSON)](../memory-safety-scan.md) |
 | `hex` | 주소의 hex dump |
 | `cfg` / `callgraph` | CFG / 호출 그래프(JSON; DOT/SVG 선택) |

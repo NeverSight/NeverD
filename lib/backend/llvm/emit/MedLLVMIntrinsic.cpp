@@ -24,11 +24,11 @@
 #include "neverd/ir/X86/X87BCD.h"
 #include "neverd/ir/X86/X87Constant.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/intrinsics/X86/X86DescriptorState.h"
 #include "neverd/ir/intrinsics/X86/X86Sgx.h"
-#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-intrinsic"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
@@ -130,7 +130,7 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
         " n_in=" + std::to_string(Op.NumInputs) +
         " target=" + std::to_string(static_cast<unsigned>(TargetArch)));
   };
-  if (IC == I::PPCVaddubm) {
+  if (unsigned LaneBytes = ppc::vmxAddLaneBytes(IC)) {
     if (!isPowerPC(TargetArch) || Op.NumInputs != 3 ||
         Op.Output.Size != ppc::VectorBytes ||
         Op.Inputs[1].Size != ppc::VectorBytes ||
@@ -139,10 +139,10 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     if (!PortableBody)
       Builder.GetInsertBlock()->getParent()->addFnAttr("target-features",
                                                        ppc::VMXFeature);
-    auto *Bytes =
-        llvm::FixedVectorType::get(Builder.getInt8Ty(), ppc::VectorBytes);
-    auto *Left = Builder.CreateBitCast(getVar(Op.Inputs[1], Builder), Bytes);
-    auto *Right = Builder.CreateBitCast(getVar(Op.Inputs[2], Builder), Bytes);
+    auto *Lanes = llvm::FixedVectorType::get(Builder.getIntNTy(8 * LaneBytes),
+                                             ppc::VectorBytes / LaneBytes);
+    auto *Left = Builder.CreateBitCast(getVar(Op.Inputs[1], Builder), Lanes);
+    auto *Right = Builder.CreateBitCast(getVar(Op.Inputs[2], Builder), Lanes);
     return Builder.CreateBitCast(Builder.CreateAdd(Left, Right),
                                  sizeToType(Op.Output.Size));
   }
@@ -186,7 +186,7 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
              llvm::ConstantAsMetadata::get(Builder.getInt32(Selector))}));
     return Builder.CreateBitCast(Call, Builder.getIntNTy(Op.Output.Size * 8));
   }
-  if (const auto *Read = riscv::cycleRead(IC)) {
+  if (const auto *Read = riscv::counterRead(IC)) {
     const unsigned Bytes = getTargetRegInfo(TargetArch).PointerSize;
     if (!Read->admits(TargetArch) || Op.NumInputs != 1 ||
         Op.Output.Size != Bytes)

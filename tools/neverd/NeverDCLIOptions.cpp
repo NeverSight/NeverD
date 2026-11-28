@@ -1420,6 +1420,15 @@ cl::opt<std::string> ModelBaseline(
 cl::opt<uint64_t> ModelGap("gap-bytes",
                            cl::desc("Byte budget for unreferenced GGUF ranges"),
                            cl::sub(ScanCmd));
+cl::opt<std::string>
+    ModelOptions("model-options",
+                 cl::desc("Advanced local model options as a JSON object"),
+                 cl::value_desc("json"), cl::sub(ScanCmd));
+cl::opt<bool>
+    ModelExternalData("onnx-external-data",
+                      cl::desc("Admit validated local external initializer "
+                               "ranges for model inspection"),
+                      cl::sub(ScanCmd));
 cl::opt<uint64_t> ModelScales(
     "scale-bytes",
     cl::desc("Inspect supported quantization blocks up to this byte budget"),

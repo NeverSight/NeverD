@@ -491,6 +491,22 @@ TEST(AArch64ImplicitUnwind, RegisterModifierNeedsTheSigningPCAndKey) {
   EXPECT_EQ(WrongAddress.at(4).Status, Status::Unknown);
 }
 
+constexpr uint32_t SigningCopies[] = {
+    CopyX11ToX12,
+    AddZeroX11ToX12,
+    SubZeroX11ToX12,
+    ShiftedZeroX11ToX12,
+    OrZeroX11ToX12,
+    XorLeftZeroX11ToX12,
+    AndSelfX11ToX12,
+    ExtendedZeroX11ToX12,
+    ShiftZeroX11ToX12,
+    RotateZeroX11ToX12,
+    RegisterShiftZeroX11ToX12,
+    SelectSameX11ToX12,
+    ExtractLowX11ToX12,
+};
+
 TEST(AArch64ImplicitUnwind, JoinedSigningPCsAuthenticateOnlyMatchingPaths) {
   const auto Result = [](uint32_t RightSign, uint32_t RightAddress,
                          uint32_t Copy, uint32_t Change, uint32_t Auth) {
@@ -508,8 +524,7 @@ TEST(AArch64ImplicitUnwind, JoinedSigningPCsAuthenticateOnlyMatchingPaths) {
     EXPECT_EQ(F.at(JoinedAuthBlock).Status, Status::Unknown);
     return F.at(JoinedAfterAuth);
   };
-  for (auto Copy :
-       {CopyX11ToX12, AddZeroX11ToX12, SubZeroX11ToX12, ShiftedZeroX11ToX12})
+  for (auto Copy : SigningCopies)
     for (auto Identity : {Nop, MoveLRToLR, AddZeroToLR, SubZeroFromLR}) {
       const auto Good = Result(ExplicitSignB, PreviousPCInX11, Copy, Identity,
                                ExplicitAuthBX12);
@@ -533,17 +548,18 @@ TEST(AArch64ImplicitUnwind, JoinedSigningPCsAuthenticateOnlyMatchingPaths) {
   EXPECT_EQ(
       Result(ExplicitSignB, Nop, CopyX11ToX12, Nop, ExplicitAuthBX12).Status,
       Status::Unknown);
-  EXPECT_EQ(Result(ExplicitSignB, PreviousPCInX11, CopyW11ToW12, Nop,
-                   ExplicitAuthBX12)
-                .Status,
-            Status::Unknown);
+  for (auto Copy : {CopyW11ToW12, DifferentSelectX11ToX12, ShiftedSelfX11ToX12,
+                    VariableShiftX11ToX12, DifferentExtractX11ToX12})
+    EXPECT_EQ(
+        Result(ExplicitSignB, PreviousPCInX11, Copy, Nop, ExplicitAuthBX12)
+            .Status,
+        Status::Unknown);
 }
 
 TEST(AArch64ImplicitUnwind, InterruptedModifierSelectsAnIncomingSigner) {
   constexpr auto Word = sizeof(uint32_t);
   for (bool CompactOnly : {false, true})
-    for (auto Copy : {CopyX11ToX12, AddZeroX11ToX12, SubZeroX11ToX12,
-                      ShiftedZeroX11ToX12}) {
+    for (auto Copy : SigningCopies) {
       Frame F{BranchToSecondSigner,
               ExplicitSignB,
               PreviousPCInX11,

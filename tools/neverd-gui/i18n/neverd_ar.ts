@@ -11892,5 +11892,41 @@ Your previous graph is still available.</source>
         <source>Component changes</source>
         <translation>تغييرات المكونات</translation>
     </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>خيارات متقدمة (JSON)</translation>
+    </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>البحث عن موترات أو معاملات</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>نطاق الرسم البياني</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>التصريحات</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>إعادة بناء GGUF…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>حدّد قيمة template_policy في الخيارات المتقدمة إلى keep أو remove أو replace.</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>التبعيات</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>المنشأ</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>مصفوفات المحوّل</translation>
+    </message>
 </context>
 </TS>

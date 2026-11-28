@@ -22,6 +22,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/PEHeaderMapping.h"
+#include "neverd/loader/X86/X64DispatchFrame.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/types/CodeViewCallingConvention.h"
 #include "neverd/types/CodeViewFunctionParameters.h"
@@ -1945,6 +1946,13 @@ PDBDebugContext::loadImpl(const std::filesystem::path &PdbPath,
         for (va_t VA : Image.LoadOnlyFunctionEntries) {
           if (auto Err = Ctx->PImpl->ingestPublicAt(VA, /*Strict=*/true))
             return Err;
+          // A physical bridge links its two code operands from assembly. The
+          // ordinary call-site name resolver never sees either reference.
+          if (const auto Frame = decodeX64DispatchFrame(Image, VA))
+            for (va_t Target : {Frame->Linkage, Frame->Target})
+              if (auto Err =
+                      Ctx->PImpl->ingestPublicAt(Target, /*Strict=*/true))
+                return Err;
           ++Done;
           Progress.report("debug", Done, Wanted, "pdb publics");
         }

@@ -111,7 +111,7 @@ bool isX64CallRCX(Arch A, const llvm::CallInst &Call) {
 }
 
 std::string renderX64CallRCXExpression(
-    Arch A, const HighExpr &E,
+    Arch A, const HighExpr &E, bool ResultLive,
     const std::function<std::string(const HighExpr &)> &Expr,
     const std::function<std::string(const MedVar &)> &Var,
     const std::function<bool(const MedVar &)> &Alive) {
@@ -149,7 +149,9 @@ std::string renderX64CallRCXExpression(
   std::string Text = "({ " + assembly(P, Inputs);
   if (!Result.empty())
     Text += Result + " = " + P + "cx; ";
-  return Text + P + "ax; })";
+  if (ResultLive)
+    Text += P + "ax; ";
+  return Text + "})";
 }
 
 std::optional<std::string>

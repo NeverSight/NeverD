@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 89c89cb7f9c817b94939d8599f741411e1c7d629bb1230fc1ae52fcd67c9f191 -->
+<!-- i18n-source: 749147e322e8a470eed4fd2340c63eab4c87d8b3dbea4a7da34578555d5a616d -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 
 | ターゲット | 検証済みの ELF プロファイル |
 |---|---|
-| RISC-V | リトルエンディアンの RV32（ILP32、ILP32D） と RV64（LP64、LP64D）。ELF の情報に従って M、A、整数 C、または個別の Zmmul、Zaamo、Zalrsc、Zca 拡張を選択します。ELF の ISA 属性に応じて Zba 1.0、Zbb 1.0、Zbs 1.0 と Zicond 1.0 も有効になります。Zicntr 2.0 では `rdcycle` を、RV32 では `rdcycleh` も使用できます。 |
-| PowerPC | ビッグエンディアンおよびリトルエンディアンの PPC32 System V と PPC64 ELFv1/ELFv2。PPC32 は secure PLT と従来の BSS-PLT を介したモジュール間呼び出しに対応しています。両方の PPC64 ABI で、PLT を介したモジュール間呼び出しと TOC の切り替えに対応しています。ELFv1 は関数記述子を使用し、ELFv2 はグローバルエントリとローカルエントリに対応しています。検証済みのスカラー命令には、符号付き・符号なし除算、積の上位ワードを返す乗算、オーバーフローを検出する乗算が含まれ、各命令が CR0 と XER に与える影響も検証しています。PPC64 では POWER10 のプレフィックス付き整数加算、ロード、ストア命令もサポートします。 VMX の `vaddubm` は 16 組のバイトをそれぞれ 256 を法として加算します。 |
+| RISC-V | リトルエンディアンの RV32（ILP32、ILP32D） と RV64（LP64、LP64D）。ELF の情報に従って M、A、整数 C、または個別の Zmmul、Zaamo、Zalrsc、Zca 拡張を選択します。ELF の ISA 属性に応じて Zba 1.0、Zbb 1.0、Zbs 1.0 と Zicond 1.0 も有効になります。Zicntr 2.0 は `rdcycle`、`rdtime`、`rdinstret` に対応し、RV32 では各カウンタの上位 32 ビットも読み出せます。 |
+| PowerPC | ビッグエンディアンおよびリトルエンディアンの PPC32 System V と PPC64 ELFv1/ELFv2。PPC32 は secure PLT と従来の BSS-PLT を介したモジュール間呼び出しに対応しています。両方の PPC64 ABI で、PLT を介したモジュール間呼び出しと TOC の切り替えに対応しています。ELFv1 は関数記述子を使用し、ELFv2 はグローバルエントリとローカルエントリに対応しています。検証済みのスカラー命令には、符号付き・符号なし除算、積の上位ワードを返す乗算、オーバーフローを検出する乗算が含まれ、各命令が CR0 と XER に与える影響も検証しています。PPC64 では POWER10 のプレフィックス付き整数加算、ロード、ストア命令もサポートします。VMX の `vaddubm`、`vadduhm`、`vadduwm` はそれぞれ 8、16、32 ビットの符号なし要素を加算し、各要素の幅で折り返します。 |
 
 これらのプロファイルのネイティブコード書き換えは今後の課題です。 [RISC-V と PowerPC の対応範囲（英語）](../riscv-powerpc.md)
 
@@ -341,7 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 検出された関数 |
 | `disasm` | 逆アセンブル（`--func` 名または hex） |
 | `sym-explore` | ネイティブ LowIR の有界パス探索（`--func`、JSON 出力） |
-| `scan --gguf` | [ローカルモデルのディレクトリ、テンソルの範囲、テンプレートを検査（JSON）](../model-scan.md) |
+| `scan --gguf` | [ローカルモデルの検査、テンソルの比較、別ファイルに再構築した GGUF の検証](../model-scan.md) |
 | `scan` | [オブジェクトの寿命、初期化、境界、書式文字列を検査（JSON）](../memory-safety-scan.md) |
 | `hex` | アドレスの hex dump |
 | `cfg` / `callgraph` | CFG / コールグラフ（JSON；DOT/SVG 任意） |
