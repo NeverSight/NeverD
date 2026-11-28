@@ -115,6 +115,16 @@ recoverDarwinAArch64Unwind(const BinaryImage &Image,
                            const AArch64UnwindRecoveryLimits &Limits,
                            AArch64FrameAccesses *Accesses);
 
+/// Filter the requested signing sites to those where the live LR still holds
+/// the unsigned incoming return address on every reachable path. CFI may name
+/// a different saved copy of the return address.
+llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
+recoverDarwinAArch64Unwind(const BinaryImage &Image,
+                           const ExceptionFunction &Function,
+                           const AArch64UnwindRecoveryLimits &Limits,
+                           AArch64FrameAccesses *Accesses,
+                           llvm::SmallVectorImpl<va_t> *UnsignedLRSites);
+
 /// Effective source rows retained while installing a classic B-key/SP object.
 /// They include remembered-state restores. Epilogues are post-AUT directives.
 struct AArch64ClassicReturnCFI {
