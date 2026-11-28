@@ -109,6 +109,13 @@ generates the MC library's revision header.
 [Fork change](https://github.com/NeverSight/llvm-project/pull/24) ·
 [Assembly workloads and paired samples](https://github.com/gmh5225/test_mac_intel/actions/runs/45904234991).
 
+The r16 fork resolves both widths of MIPS16 constant-pool word loads from
+the word-aligned instruction address. It also emits the SP-relative form
+when Clang takes the address of a local stack object. The C aggregate and
+variadic caller below exercises both encodings in big- and little-endian o32.
+[LLVM change](https://github.com/NeverSight/llvm-project/pull/25) ·
+[Release archives](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r16).
+
 Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
