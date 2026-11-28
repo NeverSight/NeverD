@@ -88,6 +88,7 @@ TEST(MIPSDynamicImports, VersionRequirementsSurviveRemovalOfSectionHeaders) {
 TEST_P(MIPSLoader, MapsLinkedImageAndReadsTargetOrderPointers) {
   ELFBytes File(GetParam());
   ELFLoader Loader;
+  EXPECT_EQ(llvm::toString(Loader.validateBuffer(File.buffer())), "");
   auto Image = Loader.loadBuffer(File.buffer());
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
   EXPECT_EQ(Image->Arch, GetParam());
@@ -125,6 +126,7 @@ TEST(MIPSN32Loader, IdentifiesELF32With64BitGPRsInBothByteOrders) {
     ELFLoader::identify(File.buffer(), Rows);
     ASSERT_EQ(Rows.size(), 1u);
     ASSERT_TRUE(Rows[0].Loadable) << Rows[0].Reason;
+    EXPECT_EQ(llvm::toString(Loader.validateBuffer(File.buffer())), "");
     auto Image = Loader.loadBuffer(File.buffer());
     ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
     const Arch A = Little ? Arch::MIPS64N32EL : Arch::MIPS64N32;
@@ -135,7 +137,39 @@ TEST(MIPSN32Loader, IdentifiesELF32With64BitGPRsInBothByteOrders) {
     File.Bytes[0xe4] = 1;
     auto Invalid = Loader.loadBuffer(File.buffer());
     ASSERT_FALSE(bool(Invalid));
-    llvm::consumeError(Invalid.takeError());
+    EXPECT_EQ(llvm::toString(Loader.validateBuffer(File.buffer())),
+              llvm::toString(Invalid.takeError()));
+  }
+}
+
+TEST(MIPSO32Loader, MIPS64CompatibilityModeRetainsReleaseAndPointerWidth) {
+  using namespace llvm::ELF;
+  ELFLoader Loader;
+  for (bool Little : {false, true}) {
+    for (unsigned Revision : {1u, 2u, 3u, 5u, 6u}) {
+      SCOPED_TRACE(Revision);
+      ELFBytes File(Little ? Arch::MIPS32EL : Arch::MIPS32);
+      const uint32_t ISA = Revision == 1   ? EF_MIPS_ARCH_64
+                           : Revision == 6 ? EF_MIPS_ARCH_64R6
+                                           : EF_MIPS_ARCH_64R2;
+      File.put(36, ISA | EF_MIPS_32BITMODE | EF_MIPS_ABI_O32, 4);
+      File.abiFlags();
+      File.Bytes[0xe2] = 64;
+      File.Bytes[0xe3] = Revision;
+      File.Bytes[0xe4] = File.Bytes[0xe5] = 2;
+      File.Bytes[0xe7] = 6;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      EXPECT_EQ(Image->Arch, Little ? Arch::MIPS64O32EL : Arch::MIPS64O32);
+      EXPECT_EQ(Image->getPointerSize(), 4u);
+      EXPECT_EQ(Image->MIPS->ABI, MIPSABI::O32);
+      EXPECT_EQ(Image->MIPS->ISARevision, Revision);
+      EXPECT_TRUE(Image->MIPS->hasScalarFP64ABI(Image->Arch));
+      File.Bytes[0xe2] = 32;
+      auto Conflict = Loader.loadBuffer(File.buffer());
+      ASSERT_FALSE(bool(Conflict));
+      llvm::consumeError(Conflict.takeError());
+    }
   }
 }
 
@@ -293,25 +327,34 @@ TEST_P(MIPSLoader, GlobalPointerRecordsRequireBoundedPayloadsAndImageScope) {
 TEST(MIPSHistoricalLoader,
      HeaderAndABIRecordsRetainIndependentArchitectureLevel) {
   for (bool Little : {false, true})
-    for (bool N32 : {false, true})
+    for (MIPSABI ABI : {MIPSABI::O32, MIPSABI::N32, MIPSABI::N64})
       for (unsigned Level : {4, 5})
-        for (bool ABI : {false, true}) {
-          ELFBytes File(N32 ? (Little ? Arch::MIPS32EL : Arch::MIPS32)
-                            : (Little ? Arch::MIPS64EL : Arch::MIPS64));
-          File.put(N32 ? 36 : 48, ((Level - 1) << 28) | (N32 ? 0x20 : 0), 4);
-          if (ABI) {
+        for (bool HasABIFlags : {false, true}) {
+          const bool Is64 = ABI == MIPSABI::N64;
+          ELFBytes File(Is64 ? (Little ? Arch::MIPS64EL : Arch::MIPS64)
+                             : (Little ? Arch::MIPS32EL : Arch::MIPS32));
+          const uint32_t ABIFlags = ABI == MIPSABI::O32   ? 0x1100
+                                    : ABI == MIPSABI::N32 ? 0x20
+                                                          : 0;
+          File.put(Is64 ? 48 : 36, ((Level - 1) << 28) | ABIFlags, 4);
+          if (HasABIFlags) {
             File.abiFlags();
             File.Bytes[0xe2] = Level;
             File.Bytes[0xe3] = 0;
             File.Bytes[0xe4] = File.Bytes[0xe5] = 2;
-            File.Bytes[0xe7] = 1;
+            File.Bytes[0xe7] = ABI == MIPSABI::O32 ? 6 : 1;
           }
           ELFLoader Loader;
           auto Image = Loader.loadBuffer(File.buffer());
           ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          EXPECT_EQ(Image->MIPS->ABI, ABI);
+          EXPECT_EQ(Image->getPointerSize(), Is64 ? 8u : 4u);
+          if (ABI == MIPSABI::O32)
+            EXPECT_EQ(Image->Arch,
+                      Little ? Arch::MIPS64O32EL : Arch::MIPS64O32);
           EXPECT_EQ(Image->MIPS->HistoricalISA, Level);
           EXPECT_EQ(Image->MIPS->ISARevision, 0);
-          if (ABI) {
+          if (HasABIFlags) {
             for (unsigned Wrong : {32u, 64u, 9u - Level}) {
               File.Bytes[0xe2] = Wrong;
               auto Bad = Loader.loadBuffer(File.buffer());
@@ -666,8 +709,9 @@ TEST_P(MIPSLoader, GlobalGOTSuffixBindsImportsWithoutPerCellRelocations) {
   File.put(0x180 + 15 * (File.Is64 ? 8 : 4), 3, File.Is64 ? 8 : 4);
   auto Invalid = Loader.loadBuffer(File.buffer());
   ASSERT_FALSE(bool(Invalid));
-  EXPECT_NE(llvm::toString(Invalid.takeError()).find("inconsistent"),
-            std::string::npos);
+  const auto Message = llvm::toString(Invalid.takeError());
+  EXPECT_NE(Message.find("inconsistent"), std::string::npos);
+  EXPECT_EQ(llvm::toString(Loader.validateBuffer(File.buffer())), Message);
 }
 
 TEST_P(MIPSLoader, Packed64RelocationsAreRejectedExplicitly) {
@@ -802,6 +846,7 @@ TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {
     ASSERT_FALSE(bool(Image));
     const std::string Error = llvm::toString(Image.takeError());
     EXPECT_NE(Error.find(Expected.str()), std::string::npos) << Error;
+    EXPECT_EQ(llvm::toString(Loader.validateBuffer(File.buffer())), Error);
     std::vector<LoadCandidate> Rows;
     ELFLoader::identify(File.buffer(), Rows);
     ASSERT_EQ(Rows.size(), 1u);

@@ -421,6 +421,15 @@ llvm::Expected<BinaryImage> ELFLoader::load(const std::filesystem::path &Path) {
 
 llvm::Expected<BinaryImage>
 ELFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
+  return readBuffer(Buffer, /*ForAnalysis=*/true);
+}
+
+llvm::Error ELFLoader::validateBuffer(llvm::MemoryBufferRef Buffer) {
+  return readBuffer(Buffer, /*ForAnalysis=*/false).takeError();
+}
+
+llvm::Expected<BinaryImage> ELFLoader::readBuffer(llvm::MemoryBufferRef Buffer,
+                                                  bool ForAnalysis) {
   BinaryImage Img;
   initializeImage(Buffer, Img, BinaryFormat::ELF, true, Progress);
   Img.ReadsStaticSymbols = ReadsStaticSymbols;
@@ -490,6 +499,11 @@ ELFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
       return std::move(E);
   if (llvm::Error E = verifyARMFunctionModeHints(Img, ARMFunctionModes))
     return std::move(E);
+
+  // All MIPS format and ABI checks are complete. The remaining scans recover
+  // functions and language metadata for consumers of the analysis image.
+  if (!ForAnalysis && isMIPS(Img.Arch))
+    return Img;
 
   // Frame extents are function boundaries the discovery heuristics must not
   // guess inside, as PE .pdata ranges already are when they run.
