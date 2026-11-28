@@ -747,8 +747,8 @@ void AnalysisPool::prefetchSource(quint64 address, bool listedOnly) {
   QJsonObject payload{
       {"address", QStringLiteral("0x") + QString::number(address, 16)},
       {"representation", representation},
-      {"source_options", listedOnly ? SourceDefaults::options(representation)
-                                    : QJsonObject{}},
+      {"source_options",
+       listedOnly ? SourceDefaults::options(representation) : QJsonObject{}},
       {"offset", 0},
       {"limit", 1}};
   if (listedOnly)

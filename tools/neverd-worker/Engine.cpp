@@ -1699,7 +1699,7 @@ void Engine::primeSourcePage(std::uint64_t address) {
   try {
     (void)engineViewPage(address, "source", 0, true, Json::object(), "{}");
   } catch (const Error &) {
-    // A function can have valid analysis even when its source cannot be emitted.
+    // Some functions can be analyzed even when their source cannot be emitted.
   }
 }
 
