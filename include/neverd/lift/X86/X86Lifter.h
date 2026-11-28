@@ -47,6 +47,14 @@ public:
             LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
             LowInstructionPreservedState *PreservedState = nullptr);
 
+  /// Consume the same undefined-output audit during this instruction's
+  /// transfer, without serializing an operation-span identity.
+  void
+  liftWithUndefinedTransfer(const cs_insn *Insn, std::vector<LowOp> &Ops,
+                            llvm::ArrayRef<RelocatedAddressOperand> Relocs,
+                            llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
+                            LowUndefinedTransfer &Transfer);
+
   /// Lift a certified ordinary x64 memory-indirect near CALL with an explicit
   /// target LOAD, including constant IAT/GOT slots. Physical stack effects are
   /// still omitted. Only canonical unsegmented r/m64 forms with optional
@@ -280,7 +288,8 @@ private:
                 llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
                 bool LoadMemoryCallTarget,
                 LowInstructionUndefinedEffects *UndefinedEffects,
-                LowInstructionPreservedState *PreservedState);
+                LowInstructionPreservedState *PreservedState,
+                LowUndefinedTransfer *Transfer = nullptr);
   bool liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftControl(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftAtomic(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);

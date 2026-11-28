@@ -125,7 +125,7 @@ target_include_directories(NeverDExportTableTests PRIVATE
 
 add_neverd_unittest(NeverDLowUndefinedDigestTests
   LowUndefinedDigestTests.cpp
-  LINK_COMPONENTS IRLowValidation
+  LINK_COMPONENTS IRLowValidation IR
 )
 
 add_neverd_unittest(NeverDInstructionRelocationsTests

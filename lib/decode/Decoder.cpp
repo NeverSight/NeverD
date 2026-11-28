@@ -596,6 +596,20 @@ void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
     UndefinedEffects->OpCount = Ops.size() - OpsStart;
 }
 
+void Decoder::liftWithUndefinedTransfer(
+    const DecodedInsn &Insn, std::vector<LowOp> &Ops,
+    llvm::ArrayRef<RelocatedAddressOperand> Relocs,
+    llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
+    LowUndefinedTransfer &Transfer) {
+  if (X86 && !Insn.AArch64Occurrence) {
+    X86->liftWithUndefinedTransfer(Insn.Raw, Ops, Relocs, ScalarRelocs,
+                                   Transfer);
+    return;
+  }
+  Transfer = {};
+  liftToLow(Insn, Ops, Relocs, ScalarRelocs);
+}
+
 void Decoder::fixupDecodedInsn(cs_insn *I) const {
   if (!I)
     return;

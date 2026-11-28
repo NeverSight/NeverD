@@ -150,10 +150,10 @@ public:
   explicit InstructionFlowScratch(
       const libc::NoReturnTargetIndex *NoReturnTargets = nullptr)
       : NoReturnTargets(NoReturnTargets) {}
-  InstructionFlow
-  summarize(const BinaryImage &Img, Decoder &Dec, const DecodedInsn &DI,
-            const TargetRegInfo *StackRegisters = nullptr,
-            LowInstructionUndefinedEffects *Undefined = nullptr);
+  InstructionFlow summarize(const BinaryImage &Img, Decoder &Dec,
+                            const DecodedInsn &DI,
+                            const TargetRegInfo *StackRegisters = nullptr,
+                            LowUndefinedTransfer *Undefined = nullptr);
   /// References needed by the width inventory. Skip x86 scalar forms whose
   /// operands prove that the single instruction cannot access a fixed address.
   llvm::SmallVector<InstructionRef, 2>
@@ -254,7 +254,8 @@ bool decodeFunctionReferences(
         void(size_t Index, va_t Address, llvm::StringRef Instruction,
              const InstructionFlow &Flow, unsigned Size, InstructionMode Mode)>
         Visit,
-    std::vector<FunctionDecodeStatus> *Status = nullptr);
+    std::vector<FunctionDecodeStatus> *Status = nullptr,
+    bool IncludeInstructionText = true);
 
 /// The width of the reads and writes the instructions of each of \p
 /// Functions state at each address in \p Img: the direct references

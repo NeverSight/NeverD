@@ -59,6 +59,14 @@ struct LowUndefinedEffect {
   std::optional<NdVar> When;
 };
 
+/// Effects consumed with the operations from the same lift. A later analysis
+/// that needs to rebind effects to stored operations uses the digest-bearing
+/// LowInstructionUndefinedEffects record.
+struct LowUndefinedTransfer {
+  bool Complete = false;
+  std::vector<LowUndefinedEffect> Effects;
+};
+
 /// Owned by the architecture lifter and returned with the exact operation
 /// sequence it describes. Ordinary LowIR continues to carry its selected
 /// implementation values; this sidecar describes all additional ISA-allowed

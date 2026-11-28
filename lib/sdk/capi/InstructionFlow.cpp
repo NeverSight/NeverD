@@ -489,11 +489,9 @@ InstructionFlow summarizeInstructionFlow(const BinaryImage &Img, Decoder &Dec,
   return Scratch.summarize(Img, Dec, DI, StackRegisters);
 }
 
-InstructionFlow
-InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
-                                  const DecodedInsn &DI,
-                                  const TargetRegInfo *StackRegisters,
-                                  LowInstructionUndefinedEffects *Undefined) {
+InstructionFlow InstructionFlowScratch::summarize(
+    const BinaryImage &Img, Decoder &Dec, const DecodedInsn &DI,
+    const TargetRegInfo *StackRegisters, LowUndefinedTransfer *Undefined) {
   InstructionFlow Flow;
   Ops.clear();
   // Each row is lifted independently of its neighbours.
@@ -534,9 +532,11 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
         llvm::erase_if(Ops,
                        [&](const LowOp &Op) { return Op.Addr != DI.Addr; });
       }
+    } else if (Undefined) {
+      Dec.liftWithUndefinedTransfer(DI, Ops, Relocations.Addresses,
+                                    Relocations.Scalars, *Undefined);
     } else {
-      Dec.liftToLow(DI, Ops, Relocations.Addresses, Relocations.Scalars,
-                    Undefined);
+      Dec.liftToLow(DI, Ops, Relocations.Addresses, Relocations.Scalars);
     }
   } catch (const UnliftedInstruction &) {
     // Nothing is known about what the instruction does, so it states no
@@ -981,7 +981,8 @@ bool decodeFunctionReferences(
     llvm::function_ref<void(size_t, va_t, llvm::StringRef,
                             const InstructionFlow &, unsigned, InstructionMode)>
         Visit,
-    std::vector<FunctionDecodeStatus> *Coverage = nullptr) {
+    std::vector<FunctionDecodeStatus> *Coverage = nullptr,
+    bool IncludeInstructionText = true) {
   struct Instruction {
     va_t Address, Next, CodeReference;
     InstructionMode Mode;
@@ -1025,13 +1026,18 @@ bool decodeFunctionReferences(
       [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
           InstructionFlowScratch &Scratch) {
         auto &S = Sweeps[Index];
-        LowInstructionUndefinedEffects Undefined;
+        LowUndefinedTransfer Undefined;
         const bool X86 = Img.Arch == Arch::X86 || Img.Arch == Arch::X64;
         InstructionFlow Flow = Scratch.summarize(
             Img, Dec, DI, nullptr, X86 && !S.DirectOnly ? &Undefined : nullptr);
-        std::string Text = DI.Raw ? DI.Raw->mnemonic : "";
-        if (DI.Raw && *DI.Raw->op_str)
-          Text += std::string(" ") + DI.Raw->op_str;
+        std::string Text;
+        if (IncludeInstructionText && DI.Raw) {
+          Text = DI.Raw->mnemonic;
+          if (*DI.Raw->op_str) {
+            Text += ' ';
+            Text += DI.Raw->op_str;
+          }
+        }
         const auto Ops = Scratch.operations();
         // ARM IT state and mode-changing flow are not ordinary native edges.
         // An unlifted or unresolved transfer can enter any part of a body;
@@ -1058,7 +1064,7 @@ bool decodeFunctionReferences(
             {DI.Addr, DI.Addr + DI.Size, Dec.pcRelCodeRefTarget(DI),
              Dec.currentMode(), std::move(Text), std::move(Flow), S.Ops.size(),
              Ops.size(), std::move(Undefined.Effects), Fallthrough,
-             !X86 || Undefined.Coverage == LowUndefinedCoverage::Complete});
+             !X86 || Undefined.Complete});
         S.Ops.insert(S.Ops.end(), Ops.begin(), Ops.end());
       },
       {}, Coverage, &NoReturnTargets,
@@ -1196,6 +1202,10 @@ bool decodeFunctionReferences(
           Pending.pop_front();
           auto &Current = Blocks[B];
           Current.Queued = false;
+          // The publication pass reads Incoming. A terminal block has no
+          // successor that needs its outgoing register facts.
+          if (Current.Successors.empty())
+            continue;
           auto Values = Current.Incoming;
           for (size_t I = Current.Begin; I < Current.End; ++I) {
             const auto &N = S.Instructions[I];
@@ -1261,9 +1271,9 @@ bool decodeFunctionReferences(
     llvm::function_ref<void(size_t, va_t, llvm::StringRef,
                             const InstructionFlow &, unsigned, InstructionMode)>
         Visit,
-    std::vector<FunctionDecodeStatus> *Status) {
+    std::vector<FunctionDecodeStatus> *Status, bool IncludeInstructionText) {
   return decodeFunctionReferences(S.Img, Page, S.referenceImageIndex(), Visit,
-                                  Status);
+                                  Status, IncludeInstructionText);
 }
 
 std::optional<DataAccessWidths>
