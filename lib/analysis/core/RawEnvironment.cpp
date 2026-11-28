@@ -303,7 +303,9 @@ llvm::Error validatePreparedRawEnvironment(
       Domain->Declaration.MaxRawEnvironmentResultBytes !=
           Options.MaxRawEnvironmentResultBytes ||
       Domain->Declaration.MaxRawEnvironmentResultRecords !=
-          Options.MaxRawEnvironmentResultRecords)
+          Options.MaxRawEnvironmentResultRecords ||
+      Domain->Declaration.MaxNativeReturnTargets !=
+          Options.MaxNativeReturnTargets)
     return invalid("raw environment differs from its expected budgets");
   auto StoredCost =
       (*Architecture)->validateRawDeclarations(Domain->Declaration);
@@ -411,6 +413,11 @@ void appendRawEnvironmentPolicy(RecoveryDigest &H,
   H.number(O.MaxSymbolicNodes);
   H.number(O.MaxChainedVisitsPerDestination);
   H.number(O.MaxFrameOffsetNormalizationWorkPerProof);
+  // Preserve existing digests when the dedicated return limit is absent.
+  if (O.MaxNativeReturnTargets) {
+    H.text("native-return-target-limit-v1");
+    H.number(*O.MaxNativeReturnTargets);
+  }
 }
 
 std::array<uint64_t, 4>

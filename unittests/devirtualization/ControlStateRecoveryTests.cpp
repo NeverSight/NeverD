@@ -1559,6 +1559,60 @@ TEST(ControlStateRecovery, RegisterPartitionHintsCannotSupplyMissingCases) {
   EXPECT_TRUE(Conflict.Residual.Blocks.empty());
 }
 
+TEST(ControlStateRecovery, FramePartitionHintsKeepUnknownEdgesConservative) {
+  constexpr va_t Fixed = 0x4a0;
+  constexpr va_t Variable = 0x4c0;
+  BankProvider Provider;
+  Provider.add(
+      Entry,
+      {operation(NdOp::INT_ADD, r(SelectorAddressRegister),
+                 {r(FrameRegister), c(static_cast<uint64_t>(SelectorSlot))}),
+       operation(NdOp::COPY, r(ResultRegister), {c(0)}),
+       operation(NdOp::INT_AND, r(ConditionRegister, 1),
+                 {r(InputRegister, 1), c(1, 1)}),
+       operation(NdOp::COND_BR, {}, {c(Fixed), r(ConditionRegister, 1)})},
+      Variable);
+  Provider.add(
+      Fixed, {operation(NdOp::STORE, {}, {r(SelectorAddressRegister), c(1, 1)}),
+              jump(Route)});
+  Provider.add(Variable,
+               {operation(NdOp::STORE, {},
+                          {r(SelectorAddressRegister), r(InputRegister, 1)}),
+                jump(Route)});
+  Provider.add(Route, {operation(NdOp::LOAD, r(ResultRegister, 1),
+                                 {r(SelectorAddressRegister)}),
+                       ret()});
+
+  const auto Baseline =
+      specializeInterpreter(Provider, {Entry}, bankOptions(false, false));
+  ASSERT_TRUE(Baseline.complete()) << Baseline.Diagnostic;
+  auto Options = bankOptions(false, false);
+  Options.ControlFramePartitionHints = {{{Route}, SelectorSlot}};
+  const auto Hinted = specializeInterpreter(Provider, {Entry}, Options);
+  ASSERT_TRUE(Hinted.complete()) << Hinted.Diagnostic;
+  ASSERT_EQ(Hinted.ControlFramePartitionHints,
+            Options.ControlFramePartitionHints);
+  EXPECT_FALSE(Hinted.ControlFramePartitionHintsTruncated);
+  EXPECT_EQ(Hinted.Contexts, Baseline.Contexts + 1);
+  for (uint64_t Input : {0ULL, 1ULL, 2ULL, 3ULL, 254ULL, 255ULL})
+    EXPECT_EQ(run(Hinted.Residual, Input, 0), Input & 1 ? 1 : Input & 0xff);
+
+  Options.ControlFramePartitionHints.front().Cursor = {Entry};
+  const auto Invalid = specializeInterpreter(Provider, {Entry}, Options);
+  EXPECT_EQ(Invalid.Status, SpecializationStatus::InvalidInput);
+  EXPECT_TRUE(Invalid.Residual.Blocks.empty());
+  Options.ControlFramePartitionHints.front().Cursor = {Route};
+  Options.MaxDiscoveryVisits = 0;
+  const auto Limited = specializeInterpreter(Provider, {Entry}, Options);
+  EXPECT_EQ(Limited.Status, SpecializationStatus::BudgetExceeded);
+  EXPECT_TRUE(Limited.Residual.Blocks.empty());
+  Options.MaxDiscoveryVisits = 2;
+  Options.ControlFramePartitionHints.push_back({{Route}, SelectorSlot + 1});
+  const auto Conflict = specializeInterpreter(Provider, {Entry}, Options);
+  EXPECT_EQ(Conflict.Status, SpecializationStatus::InvalidInput);
+  EXPECT_TRUE(Conflict.Residual.Blocks.empty());
+}
+
 TEST(ControlStateRecovery, DiscoveryIgnoresUnrelatedControlRegisterReuse) {
   auto Provider = makeBankProgram(false);
   constexpr va_t BranchEntry = 0x400;

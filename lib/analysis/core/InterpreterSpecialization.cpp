@@ -192,6 +192,8 @@ struct ContextKey {
   // value. Keep distinct cases separate while their guards remain in the
   // residual graph.
   std::optional<uint64_t> RegisterPartition;
+  // A proved entry-frame byte separates only its nominated successor.
+  std::optional<uint64_t> FramePartition;
   // A complete entry-relative pointer is a structural fact, not a numeric
   // constant. Keep its displacement separately so a selected virtual stack
   // cursor can distinguish contexts without fixing the invocation's address.
@@ -207,15 +209,17 @@ struct ContextKey {
 
   bool operator<(const ContextKey &Other) const {
     return std::tie(Cursor.Address, Cursor.Mode, Controls, RegisterPartition,
-                    FrameControls, NativeStackActive, EntryReturnSlotIntact,
-                    StackDisplacement, ReturnSlots, NativeCallReturnCells,
-                    ReturnedObjectSizes, ReturnedObjectNonNull, FrameResidue) <
+                    FramePartition, FrameControls, NativeStackActive,
+                    EntryReturnSlotIntact, StackDisplacement, ReturnSlots,
+                    NativeCallReturnCells, ReturnedObjectSizes,
+                    ReturnedObjectNonNull, FrameResidue) <
            std::tie(Other.Cursor.Address, Other.Cursor.Mode, Other.Controls,
-                    Other.RegisterPartition, Other.FrameControls,
-                    Other.NativeStackActive, Other.EntryReturnSlotIntact,
-                    Other.StackDisplacement, Other.ReturnSlots,
-                    Other.NativeCallReturnCells, Other.ReturnedObjectSizes,
-                    Other.ReturnedObjectNonNull, Other.FrameResidue);
+                    Other.RegisterPartition, Other.FramePartition,
+                    Other.FrameControls, Other.NativeStackActive,
+                    Other.EntryReturnSlotIntact, Other.StackDisplacement,
+                    Other.ReturnSlots, Other.NativeCallReturnCells,
+                    Other.ReturnedObjectSizes, Other.ReturnedObjectNonNull,
+                    Other.FrameResidue);
   }
 };
 
@@ -518,7 +522,8 @@ bool unsafeOriginByte(SymSpace Space, uint64_t Offset,
 }
 
 bool intersect(Projection &Into, const Projection &Incoming,
-               uint32_t TupleLimit, uint32_t &Widenings) {
+               uint32_t TupleLimit, uint32_t NativeReturnTupleLimit,
+               uint32_t &Widenings) {
   bool Changed = intersectMap(Into.Scalars, Incoming.Scalars);
   Changed |= intersectMap(Into.AffineRegisters, Incoming.AffineRegisters);
   for (auto It = Into.FrameRegisterOffsets.begin();
@@ -593,7 +598,12 @@ bool intersect(Projection &Into, const Projection &Incoming,
     std::vector<uint64_t> Joined;
     std::set_union(It->second.begin(), It->second.end(), Found->second.begin(),
                    Found->second.end(), std::back_inserter(Joined));
-    if (Joined.size() > TupleLimit) {
+    const uint32_t Limit =
+        Into.Frame.NativeReturnSlots.count(It->first) &&
+                Incoming.Frame.NativeReturnSlots.count(It->first)
+            ? NativeReturnTupleLimit
+            : TupleLimit;
+    if (Joined.size() > Limit) {
       It = Into.FrameValueDomains.erase(It);
       Changed = true;
       ++Widenings;
@@ -1017,6 +1027,7 @@ struct ControlRefinement {
   // cases. Physical ranges survive control-field renumbering across retries.
   std::map<std::pair<va_t, InstructionMode>, SymRegisterRange>
       RegisterPartitions;
+  std::map<std::pair<va_t, InstructionMode>, int64_t> FramePartitions;
   bool BudgetExceeded = false;
   bool PrecisionFailure = false;
   // Finite dispatch is already a valid abstraction. Walk its optional guard
@@ -2462,8 +2473,10 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
         ++Result.EvaluatedOperations;
         const auto Value =
             State.load(Ctx.mkAdd(Root, Ctx.mkConst(64, Slot)), 8);
-        const auto Domain =
-            enumerate(Ctx, Predicate, {Value}, Options.MaxControlTuples);
+        const uint32_t Limit = Frame.NativeReturnSlots.count(Slot)
+                                   ? Options.nativeReturnWordLimit()
+                                   : Options.MaxControlTuples;
+        const auto Domain = enumerate(Ctx, Predicate, {Value}, Limit);
         if (Failed)
           return false;
         CompleteWord = Domain.Status == FiniteValueStatus::Complete &&
@@ -2520,6 +2533,32 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
         if (Domain.Status == FiniteValueStatus::Complete &&
             Domain.Tuples.size() == 1 && Domain.Tuples.front().size() == 1)
           Out.FrameBytes[Offset] = Domain.Tuples.front().front();
+      }
+    }
+    const auto Partition =
+        Refinement.FramePartitions.find({Successor.Address, Successor.Mode});
+    if (Partition != Refinement.FramePartitions.end()) {
+      const uint64_t Offset = static_cast<uint64_t>(Partition->second);
+      if (!Out.FrameBytes.count(Offset) &&
+          State.hasMaterializedRegionRange(Root, Offset, 1)) {
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "frame partition byte projection budget exhausted");
+        ++Result.EvaluatedOperations;
+        const SymRef Byte =
+            State.loadMaterialized(Ctx.mkAdd(Root, Ctx.mkConst(64, Offset)), 1);
+        if (Byte) {
+          if (const auto Constant = Ctx.asConst(Byte)) {
+            Out.FrameBytes[Offset] = Constant->getZExtValue();
+          } else {
+            const auto Domain = enumerate(Ctx, Predicate, {Byte}, 1);
+            if (Failed)
+              return false;
+            if (Domain.Status == FiniteValueStatus::Complete &&
+                Domain.Tuples.size() == 1 && Domain.Tuples.front().size() == 1)
+              Out.FrameBytes[Offset] = Domain.Tuples.front().front();
+          }
+        }
       }
     }
   }
@@ -3041,6 +3080,11 @@ int Specializer::enqueue(SpecializationCursor Cursor,
       Partition != Refinement.RegisterPartitions.end())
     Key.RegisterPartition =
         constantWord(Incoming.Scalars, Partition->second, Options.ByteOrder);
+  if (const auto Partition =
+          Refinement.FramePartitions.find({Cursor.Address, Cursor.Mode});
+      Partition != Refinement.FramePartitions.end())
+    Key.FramePartition = constantFrameWord(
+        Incoming.FrameBytes, {Partition->second, 1}, Options.ByteOrder);
   Key.NativeStackActive = Incoming.Frame.NativeStackActive;
   Key.EntryReturnSlotIntact = Incoming.Frame.EntryReturnSlotIntact;
   Key.NativeCallReturnCells = Incoming.NativeCallReturnCells;
@@ -3080,6 +3124,7 @@ int Specializer::enqueue(SpecializationCursor Cursor,
          !chargeCallWork(Incoming.Origins.SafeRegisters.size())))
       return -1;
     if (intersect(Old.Incoming, Incoming, Options.MaxControlTuples,
+                  Options.nativeReturnWordLimit(),
                   Result.RelationalWidenings) &&
         !Old.Pending) {
       Old.Pending = true;
@@ -3437,12 +3482,14 @@ bool Specializer::emitTargets(
 
   std::set<uint64_t> Targets;
   const SymRef TargetValue = Exec.branchTarget();
-  const auto Structural =
-      finiteTargets(Ctx, TargetValue, Targets, Options.MaxIndirectTargets);
+  const uint32_t TargetLimit =
+      Instruction.NativeStackControl == SpecializationNativeStackControl::Return
+          ? Options.nativeReturnTargetLimit()
+          : Options.MaxIndirectTargets;
+  const auto Structural = finiteTargets(Ctx, TargetValue, Targets, TargetLimit);
   if (Structural != TargetSetResult::Exact) {
     Targets.clear();
-    auto Domain =
-        enumerate(Ctx, Path, {TargetValue}, Options.MaxIndirectTargets);
+    auto Domain = enumerate(Ctx, Path, {TargetValue}, TargetLimit);
     if (Failed)
       return false;
     if (Domain.Status == FiniteValueStatus::Unknown)
@@ -4090,7 +4137,7 @@ bool Specializer::evaluate(int Id) {
                 ? Ctx.mkConst(64, *KnownUnrootedReturnTarget)
                 : State.load(ReturnAddress, Stack.Size);
         auto Targets = enumerate(Ctx, Exec.pathPredicate(), {ReturnValue},
-                                 Options.MaxIndirectTargets);
+                                 Options.nativeReturnTargetLimit());
         if (Failed)
           return false;
         if (Targets.Status == FiniteValueStatus::Unknown)
@@ -5617,9 +5664,9 @@ bool Specializer::evaluate(int Id) {
         }
       } else {
         bool TrackNativeReturnWithoutPreservation = false;
-        const bool MayTrackNativeReturn =
-            FrameRoot && Original.Opcode == NdOp::STORE &&
-            !Frame.NativeReturnSlots.empty();
+        const bool MayTrackNativeReturn = FrameRoot &&
+                                          Original.Opcode == NdOp::STORE &&
+                                          !Frame.NativeReturnSlots.empty();
         const auto ConditionalAddress =
             MayTrackNativeReturn && !StorePreservation &&
                     Options.ProveStoreReturnSlotSeparation
@@ -6518,6 +6565,7 @@ SpecializationResult Specializer::run() {
       !Options.MaxNodes || !Options.MaxContextsPerAddress ||
       !Options.MaxOperations || !Options.MaxNodeEvaluations ||
       !Options.MaxIndirectTargets || !Options.MaxNativeReturnSlots ||
+      (Options.MaxNativeReturnTargets && !*Options.MaxNativeReturnTargets) ||
       !Options.MaxImmutableReadAddresses || !Options.MaxControlTuples ||
       !Options.MaxControlFields || !Options.MaxSolverQueries ||
       !Options.MaxSolverGates ||
@@ -6889,9 +6937,15 @@ specializeInterpreter(SpecializationProvider &Provider,
           limits::analysis::kMaxControlProducerHints ||
       Options.ControlPartitionHints.size() >
           limits::analysis::kMaxControlPartitionHints ||
+      Options.ControlFramePartitionHints.size() >
+          limits::analysis::kMaxControlPartitionHints -
+              Options.ControlPartitionHints.size() ||
       Options.ControlProducerHints.size() > Options.MaxDiscoveryVisits ||
       Options.ControlPartitionHints.size() >
-          Options.MaxDiscoveryVisits - Options.ControlProducerHints.size()) {
+          Options.MaxDiscoveryVisits - Options.ControlProducerHints.size() ||
+      Options.ControlFramePartitionHints.size() >
+          Options.MaxDiscoveryVisits - Options.ControlProducerHints.size() -
+              Options.ControlPartitionHints.size()) {
     SpecializationResult Limited;
     Limited.Status = SpecializationStatus::BudgetExceeded;
     Limited.Diagnostic = "control precision hint budget exhausted";
@@ -6945,6 +6999,25 @@ specializeInterpreter(SpecializationProvider &Provider,
                      Refinement.ContextRegisters.end(), Same))
       Refinement.ContextRegisters.push_back(Range);
   }
+  for (const auto &Hint : Options.ControlFramePartitionHints) {
+    if (Hint.Cursor.Address == InvalidVA || Hint.Cursor == Entry ||
+        !isSingleInstructionMode(Hint.Cursor.Mode) ||
+        !Options.FrameBaseRegister) {
+      SpecializationResult Invalid;
+      Invalid.Status = SpecializationStatus::InvalidInput;
+      Invalid.Diagnostic = "invalid control frame partition hint";
+      return Invalid;
+    }
+    const auto Point = std::make_pair(Hint.Cursor.Address, Hint.Cursor.Mode);
+    const auto [At, Added] =
+        Refinement.FramePartitions.emplace(Point, Hint.Offset);
+    if (!Added && At->second != Hint.Offset) {
+      SpecializationResult Invalid;
+      Invalid.Status = SpecializationStatus::InvalidInput;
+      Invalid.Diagnostic = "conflicting control frame partition hints";
+      return Invalid;
+    }
+  }
   Effective.ControlRegisters = canonicalControlFields(
       Effective.ControlRegisters, Refinement.Registers,
       Options.ControlRegisters.size(), Refinement.ContextRegisters,
@@ -6957,7 +7030,8 @@ specializeInterpreter(SpecializationProvider &Provider,
     return Limited;
   }
   Refinement.Visits = Options.ControlProducerHints.size() +
-                      Options.ControlPartitionHints.size();
+                      Options.ControlPartitionHints.size() +
+                      Options.ControlFramePartitionHints.size();
   if (Options.EntryFrameAlignment && Options.EntryFrameAlignment->valid())
     Refinement.FrameMask = Options.EntryFrameAlignment->Alignment - 1;
   SpecializationResult Result;
@@ -6986,6 +7060,16 @@ specializeInterpreter(SpecializationProvider &Provider,
         break;
       Result.ControlPartitionHints.push_back(
           {{Point.first, Point.second}, Range});
+    }
+    Result.ControlFramePartitionHintsTruncated =
+        Refinement.FramePartitions.size() >
+        limits::analysis::kMaxControlPartitionHints;
+    for (const auto &[Point, Offset] : Refinement.FramePartitions) {
+      if (Result.ControlFramePartitionHints.size() ==
+          limits::analysis::kMaxControlPartitionHints)
+        break;
+      Result.ControlFramePartitionHints.push_back(
+          {{Point.first, Point.second}, Offset});
     }
     // Refinement can exhaust a shared ledger while replaying an earlier
     // prefix. Keep the last semantic failure as context for that limit,
