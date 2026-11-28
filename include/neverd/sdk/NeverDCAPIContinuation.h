@@ -46,7 +46,8 @@ extern "C" {
 /// hardware consumes the ambient SMI save image. Invalid state returns 5.
 /// This does not emulate SMI entry or supply SMRAM, other MSRs or devices.
 /// native-sgx-v13 extends V4 to 2464 bytes and transports GPR/flags/x87/SIMD
-/// state to canonical ENCLU leaves 2/3/4 at the original executable address.
+/// state to ENCLU leaves 2/3/4 at the original executable address, including
+/// segment, address-size and final REX prefixes.
 /// It requires mxcsr_mask and native CPL3 code64 SGX, XCR0=7, IF=1, IOPL=0,
 /// CET disabled and the documented original enclave/runtime/memory domain.
 /// The terminal jump preserves EENTER's observable next PC; original native

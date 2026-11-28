@@ -268,16 +268,27 @@ TEST_F(X64PagedExecutionBreakpointTest,
     return;
   ASSERT_NO_FATAL_FAILURE(CPU.pinForReturnComparison());
   unsigned Comparisons = 0;
-  for (const auto &Code :
-       {std::vector<uint8_t>{0x0f, 0xaa},
-        std::vector<uint8_t>{0x0f, 0x01, 0xd7}, std::vector<uint8_t>{0xf4}}) {
+  struct Case {
+    std::vector<uint8_t> Bytes;
+    bool Undefined = false;
+  };
+  const Case Cases[] = {{{0x0f, 0xaa}},
+                        {{0xf4}},
+                        {{0x0f, 1, 0xd7}},
+                        {{0x67, 0x0f, 1, 0xd7}},
+                        {{0x65, 0x67, 0x4f, 0x0f, 1, 0xd7}},
+                        {{0x66, 0x0f, 1, 0xd7}, true},
+                        {{0xf0, 0x0f, 1, 0xd7}, true},
+                        {{0xf2, 0x0f, 1, 0xd7}, true},
+                        {{0xf3, 0x0f, 1, 0xd7}, true}};
+  for (const auto &[Code, Undefined] : Cases) {
     for (bool PVI : {false, true})
       for (bool VIP : {false, true})
         for (bool Match : {false, true})
           for (bool Mapped : {false, true}) {
             const bool Conflict = PVI && VIP;
-            if (!Conflict && !Match && Mapped)
-              continue; // The leaf's own behavior is tested by its owner.
+            if (!Conflict && !Match && Mapped && !Undefined)
+              continue; // A valid transfer needs its own bound platform.
             SCOPED_TRACE(testing::Message()
                          << testing::PrintToString(Code) << " pvi=" << PVI
                          << " vip=" << VIP << " match=" << Match
@@ -305,7 +316,7 @@ TEST_F(X64PagedExecutionBreakpointTest,
                 RAM.Memory.front().Bytes, State, Controls.CR0, Code.size(),
                 Native, Handler, true, nullptr, Controls.CR4, true, false));
             ASSERT_TRUE(Handler);
-            const unsigned Vector = Conflict ? 13 : Match ? 1 : 14;
+            const unsigned Vector = Conflict ? 13 : Match ? 1 : Mapped ? 6 : 14;
             ASSERT_EQ(Native.Core.Core.Core.Core.PC, 0x4000u + Vector * 16u);
             Memory = llvm::cantFail(X86PagedMemory::createWithSgx(
                 RAM, Features, Controls,

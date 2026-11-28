@@ -1122,7 +1122,9 @@ typedef struct neverd_x64_event_v1 {
               "no host MPX instruction execution; CET/FRED disabled; "
         : Version == 13
             ? "native CPL3 code64 SGX, XCR0=7, IF=1, IOPL=0, CET disabled; "
-              "canonical ENCLU leaves 2/3/4 only; explicit GPR, flags and "
+              "ENCLU leaves 2/3/4 with optional segment, address-size and "
+              "final "
+              "REX prefixes; explicit GPR, flags and "
               "x87/SSE/AVX transported to immutable original executable "
               "ENCLU; original next-PC and native AEP/continuations retained; "
               "compiler frame abandoned; native EPC/TCS/SSA, FS/GS caches "

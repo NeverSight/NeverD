@@ -9,6 +9,7 @@
 
 #include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
 
+#include "X64EncluEncoding.h"
 #include "X86ModeStartup.h"
 #include "X86ModeState.h"
 #include "X86ModeSystemInstruction.h"
@@ -543,19 +544,21 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
       P->PendingRSM.reset();
     return FinishSystem(std::move(*Got), FaultKind);
   }
-  static constexpr uint8_t Enclu[]{0x0f, 0x01, 0xd7};
+  const auto Enclu = Long64 && Memory.sgxMemory()
+                         ? detail::x64EncluEncoding(Binding.Bytes)
+                         : std::nullopt;
   std::optional<uint8_t> EnclaveException;
-  if (Memory.sgxMemory() && Memory.sgxMemory()->active() &&
-      (!Binding.Body || !Binding.Validate)) {
+  if (Enclu == detail::X64EncluForm::Undefined)
+    EnclaveException = 6;
+  else if (!Enclu && Memory.sgxMemory() && Memory.sgxMemory()->active() &&
+           (!Binding.Body || !Binding.Validate)) {
     auto Denied = detail::X86SgxExecution::instructionException(
         Binding.Bytes, Binding.Address, *Memory.sgxMemory());
     if (!Denied)
       return Denied.takeError();
     EnclaveException = *Denied;
   }
-  if (*Mode == X86ExecutionMode::Long64 && Memory.sgxMemory() &&
-      (EnclaveException ||
-       llvm::ArrayRef(Binding.Bytes) == llvm::ArrayRef(Enclu))) {
+  if (Long64 && Memory.sgxMemory() && (Enclu || EnclaveException)) {
     if (!P->PendingSGX)
       P->PendingSGX.emplace();
     X86EventKind FaultKind = X86EventKind::Fault;

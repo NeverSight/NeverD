@@ -117,6 +117,52 @@ int main(void) {
   }
 }
 
+TEST_F(X64ContinuationExportTest, SgxTransferRetainsPrefixedInstructionSites) {
+  load({0x67, 0x0f, 1, 0xd7, 0x65, 0x67, 0x4f, 0x0f, 1, 0xd7, 0xc3});
+  const char Request[] =
+      R"({"profile":"native-sgx-v13","mxcsr_mask":"0xffff","entries":[4096,4100]})";
+  const char Provider[] = R"C(
+#include <setjmp.h>
+#include <stdint.h>
+#include <stdlib.h>
+static jmp_buf resumed;
+static uint64_t original_site;
+__attribute__((noreturn)) static void capture(const void *context, uint64_t pc) {
+    if (!context) abort();
+    original_site = pc;
+    longjmp(resumed, 1);
+}
+#define __builtin_ia32_enclu_transfer_at_context capture
+)C";
+  const char Harness[] = R"C(
+static uint8_t image[832] __attribute__((aligned(64)));
+static neverd_x64_state_v13 state;
+int main(void) {
+    state.RFlags = 0x202;
+    state.MXCSR = 0x1f80;
+    state.GPR[0] = 0x1234567800000002ull;
+    state.SGX.XState = (uintptr_t)image;
+    const uint64_t sites[] = {0x1000, 0x1004};
+    for (unsigned i = 0; i < 2; ++i) {
+        state.PC = sites[i];
+        if (!setjmp(resumed)) {
+            if (i == 0) neverd_step_v13_1000((void *)&state);
+            else neverd_step_v13_1004((void *)&state);
+            abort();
+        }
+        if (original_site != sites[i] || state.SGX.GPR[0] != state.GPR[0])
+            abort();
+    }
+    return 0;
+}
+)C";
+  for (bool LLVM : {false, true}) {
+    auto [Code, Manifest] = source(Request, LLVM, 13);
+    EXPECT_NE(Manifest.find("\"native_requests\": 0"), std::string::npos);
+    execute(std::string(Provider) + Code, Harness);
+  }
+}
+
 TEST_F(X64ContinuationExportTest,
        SgxTransferRefusesUnboundOrDifferentInstructions) {
   load({0x0f, 0x01, 0xd7, 0x90, 0x66, 0x0f, 0x01, 0xd7, 0xc3});

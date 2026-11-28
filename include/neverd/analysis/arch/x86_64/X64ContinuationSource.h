@@ -399,9 +399,9 @@ enum class X64ContinuationProfile : uint8_t {
   /// SegmentBaseMSRAddressBits binds the CPU's canonical MSR width.
   NativeSmmNoFaultV12,
   /// Native CPL3 code64 SGX with XCR0=7, IF=1, IOPL=0 and CET disabled. Only
-  /// canonical ENCLU leaves 2/3/4 are admitted. Restore explicit GPRs, flags
-  /// and x87/SSE/AVX, then jump to the original immutable executable ENCLU.
-  /// EENTER's next-PC output remains the original site plus three. The old C
+  /// ENCLU leaves 2/3/4 with optional segment, address and final REX prefixes
+  /// are admitted. Restore GPRs, flags and x87/SSE/AVX, then jump to the
+  /// original immutable ENCLU. EENTER returns the actual next PC. The old C
   /// frame and bounded driver are abandoned; original continuations execute
   /// natively. Native EPC/TCS/SSA, FS/GS caches, debug/supervisor state and
   /// mappings must already match the original environment. State/image and

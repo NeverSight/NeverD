@@ -27,6 +27,7 @@
 #include "X64ContinuationTaskPriority.h"
 #include "X64ContinuationUserInterrupts.h"
 #include "X64ControlTransitions.h"
+#include "X64EncluEncoding.h"
 #include "X64FredReturnEncoding.h"
 #include "X64MachineFlags.h"
 #include "X64PortIOEncoding.h"
@@ -1461,13 +1462,13 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.NativeBytes == std::vector<uint8_t>({0x0f, 0xaa});
   if (SmmState && !SmmReturn)
     RequireNative("the SMM profile only owns canonical native RSM");
-  const bool SgxTransfer =
-      SgxState &&
-      Instruction.ProfileProjection ==
-          InterpreterProfileProjection::X64SgxTransferV1 &&
-      Instruction.NativeBytes == std::vector<uint8_t>({0x0f, 0x01, 0xd7});
+  const bool SgxTransfer = SgxState &&
+                           Instruction.ProfileProjection ==
+                               InterpreterProfileProjection::X64SgxTransferV1 &&
+                           detail::x64EncluEncoding(Instruction.NativeBytes) ==
+                               detail::X64EncluForm::Transfer;
   if (SgxState && !SgxTransfer)
-    RequireNative("the SGX profile only owns canonical original-site ENCLU");
+    RequireNative("the SGX profile requires a valid original-site ENCLU");
   const auto Vmrun = SvmState && Instruction.ProfileProjection ==
                                      InterpreterProfileProjection::X64SvmRunV1
                          ? x64VmrunAddressWidth(Instruction.NativeBytes)
