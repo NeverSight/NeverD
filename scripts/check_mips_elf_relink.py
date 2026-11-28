@@ -22,7 +22,8 @@ ABIS = {
     "n64": ("mips64", "gnuabi64", 5058),
 }
 MODES = ("section", "inplace")
-PRODUCT_VERSION = 13
+SAVED_ASSEMBLY_FLAGS = ("-fintegrated-as", "-save-temps=obj")
+PRODUCT_VERSION = 14
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -110,6 +111,8 @@ class Profile:
     dwarf_version: int = 0
     entry_alias: bool = False
     c_call: bool = False
+    saved_assembly: bool = False
+    large_frame: bool = False
 
     @property
     def high_address(self):
@@ -133,7 +136,10 @@ class Profile:
     def name(self):
         suffix = f"{self.abi}-{'le' if self.little else 'be'}"
         if self.c_call:
-            return f"c-call-{self.isa}-{suffix}"
+            prefix = "c-call-large-frame" if self.large_frame else "c-call"
+            if self.saved_assembly:
+                prefix += "-asm"
+            return f"{prefix}-{self.isa}-{suffix}"
         if self.entry_alias:
             return f"entry-alias-{self.isa}-{suffix}"
         if self.dwarf_version:
@@ -179,7 +185,13 @@ def profiles(version=PRODUCT_VERSION):
                 for isa in encodings:
                     yield Profile(abi, little, isa, compressed_entry=isa != "classic", entry_alias=True)
                     if version >= 13:
-                        yield Profile(abi, little, isa, compressed_entry=isa != "classic", c_call=True)
+                        c_profile = Profile(abi, little, isa, compressed_entry=isa != "classic", c_call=True)
+                        yield c_profile
+                        if version >= 14:
+                            yield replace(c_profile, saved_assembly=True)
+                            if isa == "mips16":
+                                yield replace(c_profile, large_frame=True)
+                                yield replace(c_profile, large_frame=True, saved_assembly=True)
             if version >= 11:
                 for dwarf_version in (4, 5):
                     yield Profile(abi, little, dwarf_version=dwarf_version)
@@ -343,7 +355,7 @@ def assemble_startup(args, build, profile):
          "-mattr=+noabicalls", "-o", build / "start.o", "-"], source=startup(profile))
 
 
-def build_c_call_objects(args, build, profile, replacement_clang=None):
+def build_c_call_objects(args, build, profile, replacement_clang=None, replacement_flags=()):
     sources = FIXTURES / "c_abi"
     abi = {"o32": "32", "n32": "n32", "n64": "64"}[profile.abi]
     flags = ["--target=" + profile.triple, "-march=" + profile.cpu, "-mabi=" + abi,
@@ -351,10 +363,14 @@ def build_c_call_objects(args, build, profile, replacement_clang=None):
              "-fno-ident", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables"]
     if profile.isa != "classic":
         flags.append("-mips16" if profile.isa == "mips16" else "-mmicromips")
+    if profile.large_frame:
+        flags.append("-DCHECK_LARGE_FRAME")
+    if profile.saved_assembly:
+        flags.extend(SAVED_ASSEMBLY_FLAGS)
     assemble_startup(args, build, profile)
     run([args.clang, *flags, "-c", sources / "start.c", "-o", build / "caller.o"])
     run([args.clang, *flags, "-DREVISION=7", "-c", sources / "calc.c", "-o", build / "calc.o"])
-    run([replacement_clang or args.clang, *flags, "-DREVISION=5", "-c", sources / "calc.c",
+    run([replacement_clang or args.clang, *flags, *replacement_flags, "-DREVISION=5", "-c", sources / "calc.c",
          "-o", build / "updated.o"])
     return ["caller.o", "start.o", "calc.o"]
 
@@ -458,9 +474,24 @@ def check_partial_link_order(neverd, old_lld, new_lld, manifest, out):
             raise ValueError(f"{build.name}: mismatched input order changed the {mode} output")
 
 
-def c_call_upgrade_profiles():
-    # r15 can compile the C caller on classic and microMIPS in both byte orders.
-    return [p for p in profiles() if p.c_call and p.isa != "mips16"]
+def c_call_upgrade_profiles(include_mips16=False):
+    # r16 also supports direct MIPS16 objects for this cross-unit C caller.
+    return [p for p in profiles(13) if p.c_call and (include_mips16 or p.isa != "mips16")]
+
+
+def reserve_mips16_callee(tools, build, profile):
+    # The original callee is the last code input. Shortening its input
+    # section also shortens PT_LOAD and changes the linker's trailing fill.
+    sections = subprocess.check_output([tools.readobj, "--elf-output-style=JSON", "--sections", build / "calc.o"],
+                                       text=True, timeout=60)
+    size, = (item["Section"]["Size"] for item in json.loads(sections)[0]["Sections"]
+             if item["Section"]["Name"]["Name"] == ".text.calc")
+    nop = "0x00650065" if profile.little else "0x65006500"
+    layout = build / "callee-slot.ld"
+    write(layout, f"SECTIONS {{ .text.calc : {{ *(.text.calc) . = MAX(., {size}); }} ={nop} }}\n")
+    replacement = build / "updated-slot.o"
+    run([tools.lld, "-r", "-T", layout, "-o", replacement, build / "updated.o"])
+    return replacement
 
 
 def qualify_upgrade(args):
@@ -468,13 +499,15 @@ def qualify_upgrade(args):
     def tools_in(directory):
         suffix = ".exe" if (directory / "ld.lld.exe").is_file() else ""
         return argparse.Namespace(clang=directory / ("clang" + suffix), mc=directory / ("llvm-mc" + suffix),
-                                  llc=directory / ("llc" + suffix), lld=directory / ("ld.lld" + suffix))
+                                  llc=directory / ("llc" + suffix), lld=directory / ("ld.lld" + suffix),
+                                  readobj=directory / ("llvm-readobj" + suffix))
 
     old, new = tools_in(args.original_tools.resolve()), tools_in(args.tools.resolve())
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     results = {}
-    cases = c_call_upgrade_profiles() if args.c_calls else profiles(1)
+    saved_replacement = args.c_calls == "saved-replacement"
+    cases = c_call_upgrade_profiles(saved_replacement) if args.c_calls else profiles(1)
     with tempfile.TemporaryDirectory(prefix="mips upgrade ") as temp:
         for profile in cases:
             build = Path(temp) / profile.name
@@ -482,7 +515,8 @@ def qualify_upgrade(args):
             build.mkdir()
             out.mkdir(exist_ok=True)
             if args.c_calls:
-                objects = build_c_call_objects(old, build, profile, replacement_clang=new.clang)
+                objects = build_c_call_objects(old, build, profile, replacement_clang=new.clang,
+                                               replacement_flags=SAVED_ASSEMBLY_FLAGS if saved_replacement else ())
             else:
                 objects = build_upgrade_objects(old, new, build, out, profile, args.partial_link, args.archive_tool)
             for separate, name in ((False, "base.ld"), (True, "section.ld")):
@@ -490,12 +524,13 @@ def qualify_upgrade(args):
             original = out / "original.elf"
             run([old.lld, "-static", "-T", build / "base.ld", "-o", original, *(build / p for p in objects)])
             manifest = build / "manifest.json"
-            encode(manifest, dict(objects=objects, original="calc.o", replacement="updated.o",
-                                  function="calc", layout="base.ld", section=".calc.update", sectionLayout="section.ld"))
+            inputs = dict(objects=objects, original="calc.o", replacement="updated.o",
+                          function="calc", layout="base.ld", section=".calc.update", sectionLayout="section.ld")
             staged = build / "updated" / "calc.o"
             staged.parent.mkdir()
-            shutil.copyfile(build / "updated.o", staged)
             for mode in MODES:
+                encode(manifest, inputs)
+                replacement = build / "updated.o"
                 target = out / f"{mode}.elf"
                 target.write_bytes(b"prior product\n")
                 command = [args.neverd, "patch", original, f"--relink={manifest}", f"--mode={mode}",
@@ -504,7 +539,15 @@ def qualify_upgrade(args):
                 run(command, error="do not reproduce")
                 if target.read_bytes() != b"prior product\n":
                     raise ValueError(f"{profile.name}: failed upgrade changed {mode} output")
-                run([*command, f"--original-linker-path={old.lld}"])
+                command.append(f"--original-linker-path={old.lld}")
+                if saved_replacement and profile.isa == "mips16" and mode == "inplace":
+                    run(command, error="inplace relink changed the entry or load layout")
+                    if target.read_bytes() != b"prior product\n":
+                        raise ValueError(f"{profile.name}: rejected load layout changed the output")
+                    replacement = reserve_mips16_callee(new, build, profile)
+                    encode(manifest, {**inputs, "replacement": replacement.name})
+                run(command)
+                shutil.copyfile(replacement, staged)
                 script = build / ("section.ld" if mode == "section" else "base.ld")
                 reference = build / "reference.elf"
                 run([new.lld, "-static", "-T", script, "-o", reference,
@@ -529,7 +572,8 @@ def qualify_upgrade(args):
                         raise ValueError(f"{profile.name}: rejected linker option changed the prior output")
             results[profile.name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
     # Existing upgrade archives use the original six-profile format.
-    products = ({"version": PRODUCT_VERSION, "suite": "c-call-upgrade", "profiles": results, "objects": {}}
+    suite = "c-call-upgrade-saved" if saved_replacement else "c-call-upgrade"
+    products = ({"version": PRODUCT_VERSION, "suite": suite, "profiles": results, "objects": {}}
                 if args.c_calls else results)
     encode(root / "products.json", products)
     print(f"Relinked {len(results)} original-release programs with the new linker in both modes")
@@ -942,7 +986,11 @@ def execute(args):
         # Archived original-format manifests contain the six classic R2 cases.
         version = 1
         hashes = manifest
-    cases = c_call_upgrade_profiles() if manifest.get("suite") == "c-call-upgrade" else list(profiles(version))
+    suite = manifest.get("suite")
+    if suite in ("c-call-upgrade", "c-call-upgrade-saved"):
+        cases = c_call_upgrade_profiles(include_mips16=suite == "c-call-upgrade-saved")
+    else:
+        cases = list(profiles(version))
     if set(hashes) != {p.name for p in cases}:
         raise ValueError("MIPS relink products do not match the expected profile set")
     if args.partial_link:
@@ -992,6 +1040,15 @@ def execute(args):
         sizes = ranges["section"]["size"], inplace["size"]
         sizes_match = (max(sizes) < old["size"] if profile.shrinking
                        else sizes == (old["size"], old["size"]))
+        if suite == "c-call-upgrade-saved" and profile.isa == "mips16":
+            sizes_match = sizes[0] == sizes[1] < old["size"]
+            unused = old["size"] - inplace["size"]
+            if sizes_match:
+                nop = (0x6500).to_bytes(2, "little" if profile.little else "big")
+                with (root / profile.name / "inplace.elf").open("rb") as source:
+                    source.seek(inplace["offset"] + inplace["size"])
+                    if source.read(unused) != nop * (unused // 2):
+                        raise ValueError(f"{profile.name}: incorrect MIPS16 padding after the new function")
         if (inplace["va"] != old["va"] or inplace["offset"] != old["offset"]
                 or not sizes_match):
             raise ValueError(f"{profile.name}: incorrect function placement {ranges}")
@@ -1030,8 +1087,8 @@ if __name__ == "__main__":
     upgrade.add_argument("--neverd", required=True)
     upgrade.add_argument("--original-tools", required=True, type=Path)
     upgrade.add_argument("--tools", required=True, type=Path)
-    upgrade.add_argument("--c-calls", action="store_true",
-                         help="relink r15 C caller objects with a callee compiled by the current fork")
+    upgrade.add_argument("--c-calls", nargs="?", const="direct", choices=("direct", "saved-replacement"),
+                         help="keep direct C objects from r15, or from r16 with a saved-assembly replacement")
     upgrade.add_argument("--archive-tool", type=Path,
                          help="use fork llvm-ar to check lazy member selection during a partial link")
     runtime = commands.add_parser("execute")

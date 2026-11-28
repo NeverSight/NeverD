@@ -13,3 +13,7 @@ struct Result {
 };
 
 struct Result calc(struct Input value, unsigned seed, ...);
+
+#ifdef CHECK_LARGE_FRAME
+void fill_frame(unsigned char *frame, unsigned size, unsigned char value);
+#endif

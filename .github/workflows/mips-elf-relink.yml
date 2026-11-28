@@ -72,7 +72,7 @@ jobs:
             -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
             -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
             -DLLVM_PARALLEL_LINK_JOBS=1 "${args[@]}"
-          cmake --build build-tools --parallel 4 --target clang llc llvm-mc llvm-ar lld
+          cmake --build build-tools --parallel 4 --target clang llc llvm-mc llvm-ar llvm-readobj lld
       - name: Build the native CLI with the published fork SDK
         env:
           CC: ${{ matrix.cc }}
@@ -111,20 +111,22 @@ jobs:
             --neverd build-check/bin/neverd$suffix --mc build-tools/bin/llvm-mc$suffix \
             --llc build-tools/bin/llc$suffix --lld build-tools/bin/ld.lld$suffix \
             --clang build-tools/bin/clang$suffix
-      - name: Relink original r13, r14 and r15 executables with the current fork
+      - name: Relink original r13 through r16 executables with the current fork
         env:
           LLVM_R13: 24ced447e1718432292dc9d54b6eb229323409d1
           LLVM_R14: 6c769154fbe9db2fe9e2e2dc1b04bebfe64e1312
           LLVM_R15: 54143a8d7c037ee4c22f1f238bd4d50ca9a5fd00
+          LLVM_R16: 66bcb9e672583193b1b725cccd0cee96f1b2b105
         run: |
           suffix=
           if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
           mkdir current-tools
-          for tool in clang llc ld.lld llvm-ar; do
+          for tool in clang llc ld.lld llvm-ar llvm-readobj; do
             cp -L "build-tools/bin/$tool$suffix" "current-tools/$tool$suffix"
           done
-          for release in r15 r14 r13; do
+          for release in r16 r15 r14 r13; do
             case "$release" in
+              r16) revision="$LLVM_R16" ;;
               r15) revision="$LLVM_R15" ;;
               r14) revision="$LLVM_R14" ;;
               r13) revision="$LLVM_R13" ;;
@@ -132,19 +134,22 @@ jobs:
             git -C toolchain-src fetch --no-tags --depth 1 origin "$revision"
             git -C toolchain-src checkout --detach "$revision"
             tools=(llc llvm-mc lld)
-            if [[ "$release" == r15 ]]; then tools+=(clang); fi
+            if [[ "$release" == r15 || "$release" == r16 ]]; then tools+=(clang); fi
             cmake --build build-tools --parallel 4 --target "${tools[@]}"
             root="products/from-$release"
             mkdir -p "$root"
             build-tools/bin/ld.lld$suffix --version | tee "$root/linker.txt"
             grep -F "$revision" "$root/linker.txt"
             args=(--neverd "build-check/bin/neverd$suffix" --original-tools build-tools/bin --tools current-tools)
-            python scripts/check_mips_elf_relink.py upgrade --root "$root" "${args[@]}"
-            if [[ "$release" == r15 ]]; then
+            if [[ "$release" == r15 || "$release" == r16 ]]; then
               build-tools/bin/clang$suffix --version | tee "$root/clang.txt"
               grep -F "$revision" "$root/clang.txt"
-              python scripts/check_mips_elf_relink.py upgrade --root "$root-c" --c-calls "${args[@]}"
+              c_calls=direct
+              if [[ "$release" == r16 ]]; then c_calls=saved-replacement; fi
+              python scripts/check_mips_elf_relink.py upgrade --root "$root-c" --c-calls "$c_calls" "${args[@]}"
             fi
+            if [[ "$release" == r16 ]]; then continue; fi
+            python scripts/check_mips_elf_relink.py upgrade --root "$root" "${args[@]}"
             if [[ "$release" == r14 ]]; then
               python scripts/check_mips_elf_relink.py upgrade --root "$root-partial" --partial-link --archive-tool "current-tools/llvm-ar$suffix" "${args[@]}"
               python scripts/check_mips_elf_relink.py upgrade --root "$root-partial-pic" --partial-link=pic --archive-tool "current-tools/llvm-ar$suffix" "${args[@]}"
@@ -180,7 +185,7 @@ jobs:
           for host in Linux macOS Windows; do
             dir="products/relink-$host"
             test "$(cat "$dir/neverd.txt")" = "$(git rev-parse HEAD)"
-            for root in "$dir" "$dir/from-r13" "$dir/from-r14" "$dir/from-r15" "$dir/from-r15-c"; do
+            for root in "$dir" "$dir/from-r13" "$dir/from-r14" "$dir/from-r15" "$dir/from-r15-c" "$dir/from-r16-c"; do
               /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$root"
             done
             /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$dir/from-r14-partial" --partial-link
