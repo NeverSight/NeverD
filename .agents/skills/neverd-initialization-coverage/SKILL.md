@@ -25,6 +25,8 @@ For local stack storage, compare a covered load with a read before the write. In
 
 Read `analyzers.audit.direct_read_initialization`. Each direct MedIR load or supported read-modify-write visited contributes to exactly one counter. `local_stack` means the local reaching-write check handled the read. Findings give its individual outcome. `outside_or_unresolved` leaves the bytes' prior state open. The counters omit reads inside called functions. An absent object means Audit did not enter this pass.
 
+Apple records CVE-2026-113910 in Compression as a memory initialization issue. The article describes a read inside an output buffer while part of that buffer still held prior contents. [Author's account](https://willenborg.dev/blog/self-copy/) · [Apple security update](https://support.apple.com/en-asia/149227)
+
 For a routine filling a caller's output buffer, identify who initialized the source bytes on every relevant path and which bytes reach the returned output. If the evidence ends at an incoming pointer or a runtime-dependent range, record that boundary alongside the aggregate verdict. A single observed constant store establishes only its covered load. An observed uninitialized read alone does not establish that bytes reach an external consumer.
 
 ## Verify a change
