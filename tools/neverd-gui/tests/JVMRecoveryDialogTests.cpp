@@ -24,6 +24,7 @@
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSignalSpy>
+#include <QSplitter>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
@@ -262,6 +263,32 @@ private slots:
       Copy->click();
       QCOMPARE(QApplication::clipboard()->text(), Text);
     }
+  }
+  void tabPaneTracksSizeChanges() {
+    neverd::gui::JVMRecoveryDialog Dialog(TEST_JVM_WORKER);
+    Dialog.show();
+    auto *Tabs = Dialog.findChild<QTabWidget *>();
+    auto *Split = Dialog.findChild<QSplitter *>();
+    auto *Source = Dialog.findChild<QPlainTextEdit *>("jvmSource");
+    auto *IR = Dialog.findChild<QPlainTextEdit *>("jvmIR");
+    QVERIFY(Tabs && Split && Source && IR);
+    Tabs->setCurrentWidget(Source);
+    const QSize Minimum = Dialog.minimumSizeHint();
+    const int Width = Minimum.width() + Tabs->width();
+    Source->setMinimumWidth(Width);
+    QTRY_VERIFY(Dialog.minimumSizeHint().width() >= Width);
+    Tabs->setCurrentWidget(IR);
+    QVERIFY(Dialog.minimumSizeHint().width() >= Width);
+    Tabs->setCurrentWidget(Source);
+    Source->setMinimumWidth(0);
+    QTRY_COMPARE(Dialog.minimumSizeHint(), Minimum);
+
+    Split->setSizes({Split->width() / 3, Split->width()});
+    const auto Sizes = Split->sizes();
+    const auto PageSize = Source->size();
+    Tabs->setCurrentWidget(IR);
+    QCOMPARE(Split->sizes(), Sizes);
+    QCOMPARE(IR->size(), PageSize);
   }
   void incompleteMethodShowsMappedBytecodeAndDiagnostics() {
     QTemporaryDir Temp;
