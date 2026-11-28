@@ -23,6 +23,7 @@
 #define NEVERD_IR_LOW_NDOP_EMULATOR_H
 
 #include "neverd/ir/X86/X86LegacySegments.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/MIPS/MIPSSystemContext.h"
 #include "neverd/loader/BinaryImage.h"
@@ -101,10 +102,14 @@ public:
   /// Seed a concrete hart's floating environment for scalar F/D execution.
   void setRISCVFCSR(uint8_t Value) { RISCVFCSR = Value; }
   std::optional<uint8_t> getRISCVFCSR() const { return RISCVFCSR; }
-  /// Sample the guest's 64-bit cycle counter once per CSR read. An absent
-  /// sample means the counter is unavailable at the current privilege level.
+  /// Sample the selected guest counter once per executed read. A missing
+  /// sample means this counter is unavailable at the current privilege level.
+  void setRISCVCounterReader(riscv::Counter Kind,
+                             std::function<std::optional<uint64_t>()> Read) {
+    RISCVCounterReaders.at(static_cast<unsigned>(Kind)) = std::move(Read);
+  }
   void setRISCVCycleReader(std::function<std::optional<uint64_t>()> Read) {
-    RISCVCycleReader = std::move(Read);
+    setRISCVCounterReader(riscv::Counter::Cycle, std::move(Read));
   }
   /// Return the low 64 bits only when every bit in that view is known.
   /// Slice a smaller defined view through SUBBYTES before observing it.
@@ -350,10 +355,14 @@ private:
   bool X87ContextKnown = false;
   uint8_t X87PayloadKnown = 0;
   std::vector<uint64_t> CallPreservedRegs;
-  std::function<std::optional<uint64_t>()> RISCVCycleReader;
+  std::array<std::function<std::optional<uint64_t>()>,
+             static_cast<unsigned>(riscv::Counter::Count)>
+      RISCVCounterReaders;
   std::optional<uint8_t> RISCVFCSR;
 
+  std::optional<uint64_t> findScalarOperand(const NdVar &Operand) const;
   uint64_t readOperand(const NdVar &Operand) const;
+  bool readScalarOperands(const LowOp &Op, uint64_t &A, uint64_t &B) const;
   bool executeMIPSScalar(const LowOp &Op);
   bool executeUncertainScalarCopy(const LowOp &Op);
   uint64_t unknownOperandBits(const NdVar &Operand) const;
@@ -400,6 +409,9 @@ private:
   stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
            OrderedAlignment Alignment = OrderedAlignment::Natural,
            std::optional<AArch64ScalarCPAControl> CPAChecks = std::nullopt);
+  bool stepWithState(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
+                     OrderedAlignment Alignment,
+                     std::optional<AArch64ScalarCPAControl> CPAChecks);
   bool executeArith(const LowOp &Op);
   bool executeFloatArith(const LowOp &Op);
   bool executeFloatConvert(const LowOp &Op);
@@ -409,6 +421,7 @@ private:
   bool executeCompare(const LowOp &Op);
   bool executeBool(const LowOp &Op);
   bool executeMisc(const LowOp &Op);
+  bool executeRISCVCounter(const LowOp &Op, const riscv::CounterRead &Read);
   bool executeIntrinsic(const LowOp &Op);
   bool executeRISCVFloating(const LowOp &Op);
   bool executeX86Crypto(const LowOp &Op);

@@ -21,16 +21,17 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.h"
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.h"
 #include "neverd/ir/low/LowIntrinsicOutputs.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/low/X86/X86CompactShape.h"
 #include "neverd/lift/IntegerRegisters.h"
-#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -59,6 +60,19 @@ llvm::APInt shiftInteger(NdOp Opcode, const llvm::APInt &Value,
     return Value.ashr(std::min(Amount, Width - 1));
   default:
     llvm_unreachable("expected an integer shift");
+  }
+}
+
+// LOAD and STORE convert target byte order at the memory boundary. Byte zero
+// of a wide LowIR register is always the least significant byte.
+template <typename T>
+void addVMXLanes(llvm::MutableArrayRef<uint8_t> Left,
+                 llvm::ArrayRef<uint8_t> Right) {
+  using namespace llvm::support::endian;
+  for (unsigned I = 0; I != ppc::VectorBytes; I += sizeof(T)) {
+    T A = read<T, llvm::endianness::little>(Left.data() + I);
+    T B = read<T, llvm::endianness::little>(Right.data() + I);
+    write<T, llvm::endianness::little>(Left.data() + I, A + B);
   }
 }
 
@@ -169,17 +183,17 @@ bool NdOpEmulator::executeX86Crypto(const LowOp &Op) {
 bool NdOpEmulator::executeArith(const LowOp &Op) {
   if (Op.NumInputs < 2)
     return false;
-  // Constant recovery may validate a guessed value against the image later.
-  // Strict execution must not turn an absent or partial operand into zero.
-  if (StrictMode && (!knownOperandBytes(Op.Inputs[0], 0, Op.Inputs[0].Size) ||
-                     !knownOperandBytes(Op.Inputs[1], 0, Op.Inputs[1].Size)))
+  const bool IsWide = Op.Output.Size > sizeof(uint64_t) ||
+                      Op.Inputs[0].Size > sizeof(uint64_t) ||
+                      Op.Inputs[1].Size > sizeof(uint64_t);
+  if (IsWide && StrictMode &&
+      (!knownOperandBytes(Op.Inputs[0], 0, Op.Inputs[0].Size) ||
+       !knownOperandBytes(Op.Inputs[1], 0, Op.Inputs[1].Size)))
     return false;
   const bool IsBitwise = Op.Opcode == NdOp::INT_AND ||
                          Op.Opcode == NdOp::INT_OR ||
                          Op.Opcode == NdOp::INT_XOR;
-  if (IsBitwise && (Op.Output.Size > sizeof(uint64_t) ||
-                    Op.Inputs[0].Size > sizeof(uint64_t) ||
-                    Op.Inputs[1].Size > sizeof(uint64_t))) {
+  if (IsBitwise && IsWide) {
     if (Op.Output.Size == 0 || Op.Inputs[0].Size != Op.Output.Size ||
         Op.Inputs[1].Size != Op.Output.Size ||
         !knownOperandBytes(Op.Inputs[0], 0, Op.Inputs[0].Size) ||
@@ -200,9 +214,6 @@ bool NdOpEmulator::executeArith(const LowOp &Op) {
     return true;
   }
 
-  const bool IsWide = Op.Output.Size > sizeof(uint64_t) ||
-                      Op.Inputs[0].Size > sizeof(uint64_t) ||
-                      Op.Inputs[1].Size > sizeof(uint64_t);
   if (IsWide) {
     // Do not silently truncate an unimplemented wide arithmetic opcode to its
     // low host word.  These operations are required by the x86 double-width
@@ -272,8 +283,9 @@ bool NdOpEmulator::executeArith(const LowOp &Op) {
     return true;
   }
 
-  uint64_t A = readOperand(Op.Inputs[0]);
-  uint64_t B = readOperand(Op.Inputs[1]);
+  uint64_t A, B;
+  if (!readScalarOperands(Op, A, B))
+    return false;
   uint64_t Result = 0;
 
   switch (Op.Opcode) {
@@ -295,8 +307,19 @@ bool NdOpEmulator::executeArith(const LowOp &Op) {
   case NdOp::INT_XOR:
     Result = A ^ B;
     break;
-  case NdOp::INT_LEFT:
+  case NdOp::INT_LEFT: {
+    // writeOutput truncates to the destination. A wider destination must
+    // still observe the shift at the input width.
+    Result = B < sizeof(A) * 8 ? A << B : 0;
+    const unsigned Size = Op.Inputs[0].Size;
+    if (Size && Size < Op.Output.Size)
+      Result &= llvm::maskTrailingOnes<uint64_t>(Size * 8);
+    break;
+  }
   case NdOp::INT_RIGHT:
+    // The scalar read already truncated A to the input width.
+    Result = B < sizeof(A) * 8 ? A >> B : 0;
+    break;
   case NdOp::INT_ASHR: {
     const unsigned Width =
         Op.Inputs[0].Size ? unsigned(Op.Inputs[0].Size) * 8 : 64;
@@ -649,6 +672,26 @@ bool NdOpEmulator::executePowerPCFixedPoint(const LowOp &Op,
   return true;
 }
 
+bool NdOpEmulator::executeRISCVCounter(const LowOp &Op,
+                                       const riscv::CounterRead &Read) {
+  if (!Read.admits(Img.Arch) || Op.NumInputs != 1 ||
+      Op.Inputs[0].Size != sizeof(Intrinsic) ||
+      Op.Inputs[0].Offset >= unsigned(Intrinsic::_Count) ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Op.MemoryOrdering != NdMemoryOrdering::None ||
+      (!Op.Output.isReg() && !Op.Output.isTemp()) ||
+      Op.Output.Size != Img.getPointerSize())
+    return false;
+  const auto &Reader = RISCVCounterReaders[static_cast<unsigned>(Read.Kind)];
+  if (!Reader)
+    return false;
+  const auto Sample = Reader();
+  if (!Sample)
+    return false;
+  writeOutput(Op.Output, Read.HighHalf ? *Sample >> 32 : *Sample);
+  return true;
+}
+
 bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
   if (Op.NumInputs < 1 || !Op.Inputs[0].isConst())
     return false;
@@ -660,19 +703,11 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
     return false;
   if (Id == Intrinsic::RISCVFloating || Id == Intrinsic::RISCVFPControl)
     return executeRISCVFloating(Op);
-  if (const auto *Read = riscv::cycleRead(Id)) {
-    if (!Read->admits(Img.Arch) || Op.NumInputs != 1 ||
-        (!Op.Output.isReg() && !Op.Output.isTemp()) ||
-        Op.Output.Size != Img.getPointerSize() || !RISCVCycleReader)
-      return false;
-    const auto Sample = RISCVCycleReader();
-    if (!Sample)
-      return false;
-    writeOutput(Op.Output, Read->HighHalf ? *Sample >> 32 : *Sample);
-    return true;
-  }
-  if (Id == Intrinsic::PPCVaddubm) {
+  if (unsigned LaneBytes = ppc::vmxAddLaneBytes(Id)) {
     if (!isPowerPC(Img.Arch) || Op.NumInputs != 3 ||
+        Op.Inputs[0].Size != sizeof(Intrinsic) ||
+        Op.Inputs[0].Offset >= unsigned(Intrinsic::_Count) ||
+        Op.MemoryOrdering != NdMemoryOrdering::None ||
         (!Op.Output.isReg() && !Op.Output.isTemp()) ||
         Op.Output.Size != ppc::VectorBytes ||
         Op.Inputs[1].Size != ppc::VectorBytes ||
@@ -682,8 +717,19 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
       return false;
     auto Bytes = readOperandBytes(Op.Inputs[1]);
     const auto Right = readOperandBytes(Op.Inputs[2]);
-    for (unsigned I = 0; I != ppc::VectorBytes; ++I)
-      Bytes[I] += Right[I];
+    switch (LaneBytes) {
+    case sizeof(uint8_t):
+      addVMXLanes<uint8_t>(Bytes, Right);
+      break;
+    case sizeof(uint16_t):
+      addVMXLanes<uint16_t>(Bytes, Right);
+      break;
+    case sizeof(uint32_t):
+      addVMXLanes<uint32_t>(Bytes, Right);
+      break;
+    default:
+      llvm_unreachable("invalid VMX add lane size");
+    }
     writeOutputBytes(Op.Output, Bytes);
     return true;
   }
