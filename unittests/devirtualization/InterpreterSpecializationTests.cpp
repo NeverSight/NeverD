@@ -3173,11 +3173,10 @@ TEST(InterpreterSpecialization,
     // An absolute address can overlap the return word for some entry SP,
     // even with stack alignment. Use a distinct stack-relative byte to make
     // this a genuine two-outcome test without an entry frame exclusion.
-    P.add(0x200,
-          {op(NdOp::INT_ADD, reg(48), {reg(32), constant(ReturnByte)}),
-           op(NdOp::INT_SUB, reg(56), {reg(32), constant(16)}),
-           op(NdOp::SELECT, reg(40), {reg(8, 1), reg(48), reg(56)}),
-           op(NdOp::STORE, {}, {reg(40), constant(3, 1)})});
+    P.add(0x200, {op(NdOp::INT_ADD, reg(48), {reg(32), constant(ReturnByte)}),
+                  op(NdOp::INT_SUB, reg(56), {reg(32), constant(16)}),
+                  op(NdOp::SELECT, reg(40), {reg(8, 1), reg(48), reg(56)}),
+                  op(NdOp::STORE, {}, {reg(40), constant(3, 1)})});
     P.add(0x201, {ret()});
     P.Code.at(0x201).NativeStackControl =
         SpecializationNativeStackControl::Return;
@@ -5557,6 +5556,20 @@ TEST(InterpreterSpecialization,
   const auto NarrowResult = specializeInterpreter(P, {0x100}, Narrow);
   EXPECT_FALSE(NarrowResult.complete());
   EXPECT_TRUE(NarrowResult.Residual.Blocks.empty());
+
+  Narrow.MaxNativeReturnTargets = 2;
+  const auto NativeLimit = specializeInterpreter(P, {0x100}, Narrow);
+  ASSERT_TRUE(NativeLimit.complete()) << NativeLimit.Diagnostic;
+  for (uint64_t Selector : {0u, 1u}) {
+    WideByteOracle Actual(llvm::endianness::little);
+    Actual.word(reg(8, 1), Selector);
+    Actual.word(reg(24), 1);
+    Actual.word(reg(32), 0x1008);
+    for (unsigned I = 0; I != 8; ++I)
+      Actual.Memory[0x1008 + I] = 0xa0 + I;
+    ASSERT_TRUE(Actual.run(NativeLimit.Residual)) << Actual.Diagnostic;
+    EXPECT_EQ(Actual.number(reg(0)), Selector ? 11u : 22u);
+  }
 
   P.Code.at(0x200).Ops[0].Inputs[2] = reg(16);
   const auto Unbounded = specializeInterpreter(P, {0x100}, O);
