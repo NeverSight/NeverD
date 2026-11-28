@@ -2029,7 +2029,8 @@ public:
   /// Those it defines, declared before any body: a use can precede the
   /// definition as a call can.
   std::set<const HighFunc *> AddressTakenDefinitions;
-  void noteFunctionAddress(va_t Addr, const std::vector<HighFunc> &Funcs);
+  void noteFunctionAddress(va_t Addr, const std::vector<HighFunc> &Funcs,
+                           bool ProvenCodeAddress = false);
   /// A constant known to be an address, which a function entry there makes
   /// that function's.
   static bool isAddressProvenance(ConstantAddressProvenance Provenance) {

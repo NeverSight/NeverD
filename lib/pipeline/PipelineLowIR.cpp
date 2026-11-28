@@ -54,6 +54,7 @@
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytesScope.h"
 #include "neverd/loader/SymbolDecoration.h"
+#include "neverd/loader/X86/X64DispatchFrame.h"
 #include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -5246,18 +5247,31 @@ bool computeCallRegisterEffects(
     std::set<va_t> Callees;
     for (const auto &[Entry, Effect] : Effects)
       Callees.insert(Entry);
+    // Restricted PE loads keep only root publics in the image inventory.
+    // A reached native service still has its header contract. Consult its
+    // exact public only after the complete dispatch instructions match.
+    const auto ClassifyCallee = [&](va_t Entry, llvm::StringRef Name) {
+      if (Dbg && !Img.LoadOnlyFunctionEntries.empty() &&
+          (Name.empty() || isSynthesizedFuncName(Name)) &&
+          decodeX64DispatchFrame(Img, Entry))
+        if (const auto Public = Dbg->functionName(Entry)) {
+          Classify(Entry, *Public);
+          return;
+        }
+      Classify(Entry, Name);
+    };
     if (FunctionNames) {
       // What functionNamesAt gives these: the analysis cache read every
       // named address of the image once.
       for (const va_t Entry : Callees)
         if (const auto Named = FunctionNames->find(Entry);
             Named != FunctionNames->end())
-          Classify(Entry, Named->second);
+          ClassifyCallee(Entry, Named->second);
         else
-          Classify(Entry, (kAutoFuncPrefix + llvm::utohexstr(Entry)).str());
+          ClassifyCallee(Entry, {});
     } else {
       for (const auto &[Entry, Name] : functionNamesAt(Img, Callees))
-        Classify(Entry, Name);
+        ClassifyCallee(Entry, Name);
     }
     for (const Import &Imp : Img.Imports)
       Classify(Imp.IATAddr, Imp.Name);

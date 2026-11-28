@@ -4011,7 +4011,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     }
     if (E.Kind == ExprKind::Const && isAddressProvenance(E.ConstProvenance))
       if (const auto Key = functionAddressKey(E))
-        noteFunctionAddress(*Key, Funcs);
+        noteFunctionAddress(*Key, Funcs, E.ConstProvenance ==
+                                           ConstantAddressProvenance::CodeAddress);
     if (isImageBaseConstant(E))
       ReachesImageBase = true;
     if (E.Kind == ExprKind::Const &&
@@ -4762,7 +4763,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
 }
 
 void HighCWriter::noteFunctionAddress(va_t Addr,
-                                      const std::vector<HighFunc> &Funcs) {
+                                      const std::vector<HighFunc> &Funcs,
+                                      bool ProvenCodeAddress) {
   if (FunctionAddressNames.count(Addr))
     return;
   for (const HighFunc &Func : Funcs)
@@ -4778,11 +4780,17 @@ void HighCWriter::noteFunctionAddress(va_t Addr,
     OwnFunctionSymbols = collectImageFunctionSymbols(*Opts.Image);
   const HighCImageFunctionSymbols &Symbols =
       SharedFunctionSymbols ? *SharedFunctionSymbols : *OwnFunctionSymbols;
-  if (const auto Found = Symbols.find(Addr); Found != Symbols.end()) {
+  std::string Name;
+  if (const auto Found = Symbols.find(Addr); Found != Symbols.end())
+    Name = Found->second->Name;
+  if (ProvenCodeAddress && Dbg && !Opts.Image->LoadOnlyFunctionEntries.empty() &&
+      (Name.empty() || isSynthesizedFuncName(Name)))
+    if (const auto Public = Dbg->functionName(Addr))
+      Name = *Public;
+  if (!Name.empty()) {
     mips::requireNumericCodePointerSource(Opts.Image, Addr);
-    const Symbol &Sym = *Found->second;
-    FunctionAddressNames.emplace(Addr, FunctionAddressTarget{Sym.Name});
-    AddressTakenFunctions.insert(Sym.Name);
+    FunctionAddressNames.emplace(Addr, FunctionAddressTarget{Name});
+    AddressTakenFunctions.insert(std::move(Name));
   }
 }
 

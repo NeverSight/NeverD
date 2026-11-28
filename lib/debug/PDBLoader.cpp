@@ -1948,7 +1948,7 @@ PDBDebugContext::loadImpl(const std::filesystem::path &PdbPath,
             return Err;
           // A physical bridge links its two code operands from assembly. The
           // ordinary call-site name resolver never sees either reference.
-          if (const auto Frame = x64DispatchFrame(Image, VA))
+          if (const auto Frame = decodeX64DispatchFrame(Image, VA))
             for (va_t Target : {Frame->Linkage, Frame->Target})
               if (auto Err =
                       Ctx->PImpl->ingestPublicAt(Target, /*Strict=*/true))
