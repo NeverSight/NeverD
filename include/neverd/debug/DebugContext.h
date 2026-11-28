@@ -241,10 +241,11 @@ public:
     const auto Prototype = resolvePrototype(Name);
     return Prototype && Prototype->NoReturn;
   }
-  /// Public name only.  PDB `--func` must not walk the owning module's
-  /// S_LOCAL stream just to replace `sub_<va>`.
+  /// Public name at the exact entry.  PDB `--func` must not walk the owning
+  /// module's S_LOCAL stream just to replace `sub_<va>`.
   virtual std::optional<std::string> functionName(va_t Addr) const {
-    if (auto FS = resolveFunction(Addr); FS && !FS->Name.empty())
+    if (auto FS = resolveFunction(Addr);
+        FS && FS->Addr == Addr && !FS->Name.empty())
       return FS->Name;
     return std::nullopt;
   }

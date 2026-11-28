@@ -2230,7 +2230,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         });
   if (E.IntrinsicId == Intrinsic::X64CallRCX)
     return renderX64CallRCXExpression(
-        Opts.TheArch, E,
+        Opts.TheArch, E, &E != StatementCall,
         [this](const HighExpr &V) { return intrinsicOperandStr(V); },
         [this](const MedVar &V) { return varName(V); },
         [this](const MedVar &V) {

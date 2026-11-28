@@ -54,6 +54,7 @@
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytesScope.h"
 #include "neverd/loader/SymbolDecoration.h"
+#include "neverd/loader/X86/X64DispatchFrame.h"
 #include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -5243,21 +5244,33 @@ bool computeCallRegisterEffects(
       FixedEntryStackArgs[Entry] =
           Proto->ArgCount > std::size(Win64Args) ? Proto->ArgCount : 0;
     };
-    std::set<va_t> Callees;
-    for (const auto &[Entry, Effect] : Effects)
-      Callees.insert(Entry);
-    if (FunctionNames) {
-      // What functionNamesAt gives these: the analysis cache read every
-      // named address of the image once.
-      for (const va_t Entry : Callees)
-        if (const auto Named = FunctionNames->find(Entry);
-            Named != FunctionNames->end())
-          Classify(Entry, Named->second);
-        else
-          Classify(Entry, (kAutoFuncPrefix + llvm::utohexstr(Entry)).str());
-    } else {
-      for (const auto &[Entry, Name] : functionNamesAt(Img, Callees))
+    // A focused PE load keeps only requested publics in the image. A
+    // reached native service still has its header contract. Read its exact
+    // public only when its complete dispatch instructions match.
+    const bool SparsePublics = Dbg && !Img.LoadOnlyFunctionEntries.empty();
+    const auto ClassifyCallee = [&](va_t Entry, llvm::StringRef Name) {
+      if (!isSynthesizedFuncName(Name)) {
         Classify(Entry, Name);
+        return;
+      }
+      if (SparsePublics && decodeX64DispatchFrame(Img, Entry))
+        if (const auto Public = Dbg->functionName(Entry))
+          Classify(Entry, *Public);
+    };
+    if (FunctionNames) {
+      // Effects already contains one entry per reached callee.
+      for (const auto &[Entry, Effect] : Effects) {
+        const auto Named = FunctionNames->find(Entry);
+        ClassifyCallee(Entry, Named != FunctionNames->end()
+                                  ? llvm::StringRef(Named->second)
+                                  : llvm::StringRef());
+      }
+    } else {
+      std::set<va_t> Callees;
+      for (const auto &[Entry, Effect] : Effects)
+        Callees.insert(Entry);
+      for (const auto &[Entry, Name] : functionNamesAt(Img, Callees))
+        ClassifyCallee(Entry, Name);
     }
     for (const Import &Imp : Img.Imports)
       Classify(Imp.IATAddr, Imp.Name);

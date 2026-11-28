@@ -12,15 +12,28 @@
 #define NEVERD_IR_MED_X86_X64CALLRCXPROFILE_H
 
 #include "neverd/ir/intrinsics/X86/X64CallRCX.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedIR.h"
 
 namespace neverd {
 inline bool x64CallRCXProfileValue(const MedVar &V) { return V.Size <= 16; }
 inline bool x64CallRCXProfileOperation(const MedOp &Op) {
-  return Op.NumInputs <= Op.Inputs.size() &&
-         (Op.Opcode != NdOp::INTRINSIC ||
-          (Op.NumInputs && Op.Inputs[0].isConst() &&
-           Op.Inputs[0].ConstVal == uint64_t(Intrinsic::X64CallRCX)));
+  if (Op.NumInputs > Op.Inputs.size())
+    return false;
+  if (Op.Opcode != NdOp::INTRINSIC)
+    return true;
+  if (!Op.NumInputs || !Op.Inputs[0].isConst())
+    return false;
+  const auto Id = Op.Inputs[0].ConstVal;
+  if (Id == uint64_t(Intrinsic::X64CallRCX))
+    return true;
+  // These operations transport the original x87 state across an opaque call.
+  // The native call exposes the hardware state to its callee and declares
+  // the x87/MMX register clobbers. The surrounding save/restore stays live.
+  return (Id == uint64_t(Intrinsic::X87ContextBegin) ||
+          Id == uint64_t(Intrinsic::X87ContextExport) ||
+          Id == uint64_t(Intrinsic::X87ContextRefresh)) &&
+         x87ContextMedShapeIsValid(Op, Arch::X64);
 }
 inline bool x64CallRCXCallerProfile(const MedFunc &F) {
   for (const auto *Values : {&F.Params, &F.Locals})
