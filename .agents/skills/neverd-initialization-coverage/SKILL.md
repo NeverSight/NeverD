@@ -1,6 +1,6 @@
 ---
 name: neverd-initialization-coverage
-description: Check whether NeverD scan proves that bytes in an owned native program were initialized before a read. Use for local stack reads, caller-provided buffers, partial writes, and interpreting direct_read_initialization when evaluating a coverage claim.
+description: Verify byte initialization and output evidence in NeverD scans of owned native programs. Use for runtime-indexed or backwards reads, partial writes, local stack loads, returned bytes and interpreting indexed_read_output or UNKNOWN.
 ---
 
 # Verify read initialization coverage
@@ -21,9 +21,26 @@ Use the native static audit to answer a byte-level question. Identify the source
 
 For local stack storage, compare a covered load with a read before the write. Inspect the finding's instruction address and verdict. A read spanning the entry stack pointer also depends on caller storage. When the compiler removes or reorders the operations, inspect the machine MedIR consumed by Audit before changing an expectation.
 
+## Check a runtime index and its output
+
+Use a fully initialized input for the native reference run. Record the compiled function, its input extent and its output contract. For a backwards lookup, account for the largest distance, the smallest distance and the whole load width. Use the same compiled function object for the scan and the reference executable.
+
+Read `analyzers.audit.indexed_read_output`. On a single retained indexed load, the nonzero bucket in each histogram answers the corresponding question. For an image with several reads, the counters summarize the inventory. Use a function-sized control to check an individual case.
+
+| Compiled control | Written before read | Reaches function output |
+| --- | --- | --- |
+| Initialize a word, copy a byte from a bounded runtime distance to the returned cursor | YES | YES, returned storage |
+| Return the selected initialized byte in a scalar | YES | YES, returned value |
+| Fully replace the only copied byte at the returned address before exit | YES | NO |
+| The allowed source range extends beyond the known write | UNKNOWN | UNKNOWN |
+| Apply arithmetic to an initialized byte before returning it | YES | UNKNOWN for whole-byte transport |
+| A recognized native indexed load vanished from machine MedIR | UNKNOWN | UNKNOWN, with `unmatched_native` |
+
+One unresolved indexed read contributes `UNKNOWN` to the scan verdict unless an independent finding establishes `UNSAFE`. Zero indexed reads leave this property's verdict `UNKNOWN`. Verify both the JSON and the CLI exit code. For normal library inputs, compare output bytes or a known return value against a reference even when the static result is inconclusive.
+
 ## Interpret the result
 
-Read `analyzers.audit.direct_read_initialization`. Each direct MedIR load or supported read-modify-write visited contributes to exactly one counter. `local_stack` means the local reaching-write check handled the read. Findings give its individual outcome. `outside_or_unresolved` leaves the bytes' prior state open. The counters omit reads inside called functions. An absent object means Audit did not enter this pass.
+Read `analyzers.audit.direct_read_initialization`. Each direct MedIR load or supported read-modify-write visited contributes to exactly one counter. `local_stack` means the local reaching-write check handled the read. Findings give its individual outcome. `outside_or_unresolved` leaves the bytes' prior state open. A nonzero `bounded_index_store` counts a load covered across its full runtime index range. The direct-read inventory counts operations in lifted functions. Catalog call effects have separate checks. An absent object means Audit did not enter this pass.
 
 Apple records CVE-2026-113910 in Compression as a memory initialization issue. The article describes a read inside an output buffer while part of that buffer still held prior contents. [Author's account](https://willenborg.dev/blog/self-copy/) · [Apple security update](https://support.apple.com/en-asia/149227)
 
@@ -33,4 +50,4 @@ For a routine filling a caller's output buffer, identify who initialized the sou
 
 Run the direct-read cases in `NeverDSafetyTests` and the native scan adapter test. Compare the integrated CLI, worker and Python SDK reports for the same control. For a hot-path change, use the same input binaries and a Release build for interleaved baseline and candidate measurements.
 
-The report contract, proof implementation and machine-code controls are maintained here. [Scan report](../../../docs/memory-safety-scan.md) · [Static audit](../../../lib/safety/AllocLifetime.cpp) · [MedIR tests](../../../unittests/safety/AllocLifetimeTests.cpp) · [Native adapter tests](../../../tools/neverd-worker/tests/memory_safety_scan_test.py)
+The report contract, proof implementation and machine-code controls are maintained here. [Scan report](../../../docs/memory-safety-scan.md) · [Static audit](../../../lib/safety/AllocLifetime.cpp) · [Indexed byte proof](../../../lib/safety/IndexedReadOutput.h) · [MedIR tests](../../../unittests/safety/AllocLifetimeTests.cpp) · [Native adapter tests](../../../tools/neverd-worker/tests/memory_safety_scan_test.py)
