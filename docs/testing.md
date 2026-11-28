@@ -23052,6 +23052,44 @@ explicitly skips native execution on Windows, which lacks `<unistd.h>`.
 
 The `Lift native qualification` workflow owns the 108 previously unqualified cases (62 failures and 46 skips). It installs Clang 23 or newer, GNU GCC and the i386 development libraries on a native Linux x86-64 runner, and initializes the pinned binary corpus. `unittests/Inputs/lift-qualification.json` retains every original test identity. `scripts/run_lift_qualification.py` rejects missing, duplicate, disabled, skipped or failed cases and a nonzero process exit; `qualification.json` records individual passes, source/corpus revisions, compiler versions and binary hashes.
 
+The general GoogleTest runner writes a sibling `*.verification.json` for successful
+runs and for rejected runs, including discovery errors and missing or malformed
+result XML. The `*.qualification.json` receipt still requires a successful audit.
+The native Lift profile writes the same report to `verification.json` in its
+output directory, including failures during inventory, host and toolchain checks.
+To read the verification report, run the following command.
+
+```bash
+python3 scripts/verification_report.py result.verification.json
+```
+
+The top entry identifies the first recorded blocker, the diagnostic and any
+specific missing evidence. The stage list shows which later checks ran. A
+rejected GoogleTest case retains its XML diagnostic. A test can identify a
+missing observation with `RecordProperty("neverd_missing_evidence", description)`.
+The runner reads optional execution observations from the root GoogleTest
+property `neverd_execution_evidence`. A global test environment can record this
+JSON object at teardown. A property on an individual test applies only to that
+test. An ordinary GoogleTest pass count supplies neither execution observation.
+
+Other producers can use the same reader with a local JSON document. Supply the
+schema `neverd.verification.v1` and a `stages` array in the producer's check
+order. Each stage has a `path` array of names and a `state` of `passed`,
+`failed`, `blocked`, `not_run` or `unknown`. The optional `diagnostic` and
+`missing_evidence` strings carry the producer's explanation. The root property
+and the standalone document use the same two optional execution fields shown below.
+
+```json
+{"record_comparison": {"total": 3, "compared": 3, "matches": 0}, "caller_loop": "not_run"}
+```
+
+Comparison counts describe individually checked records. Omit `total` when the
+inventory size is unknown. The independent `caller_loop` observation can be
+`unknown`, `not_run`, `started` or `completed`. Missing observations remain
+unknown. Pass `--json` to print the normalized document. The reader's exit
+status indicates whether it could read and render the report. The qualification
+runner retains responsibility for the test verdict.
+
 The profile executes native i386/x86-64 controls, x87 extended precision, and generated Swift SSE result, state and unmasked-trap checks at both optimization levels. The AArch64 parity controls decode the actual `.text` of a pinned Rust runtime. Cross-target decoding does not establish native execution on that target; use the separate source-patch native process jobs for Windows/Linux x64/ARM64 and the local macOS checks.
 
 ```bash
