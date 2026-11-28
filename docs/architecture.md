@@ -326,17 +326,41 @@ share descriptor/frame decisions. Recursive delivery owns #DF classification,
 CR2 publication and shutdown. `X64PagedExecution` binds generated scalar steps
 to that memory, authenticates instruction fetches, stages restart state and
 commits prepared stores. `ir/X86/X86UndefinedOpcodeRules` owns the explicit
-processor choice for UD0 fetch priority. The paged code64 continuation admits
-original UD0 with up to thirteen qualified non-LOCK legacy/REX prefixes and
-the audited terminal intrinsic; an opcode beyond the fifteen-byte instruction
-limit remains an explicit native or invalid-decode boundary.
-`X64PagedExecution` requires the target CPU's choice before fetch, then
-authenticates the prefix and opcode bytes and, for the complete-fetch choice, reads
-the remaining ModR/M, SIB and displacement bytes from live executable RAM.
-It raises #GP before a fetch that would require the sixteenth instruction byte.
-No data operand is read, and the existing fault owner delivers #UD, #GP or a
-preceding instruction-fetch #PF. The legacy protected executor uses the
-same profile type for its segmented original-byte fetch.
+processor choice for UD0 fetch priority. In code64, the paged source reader
+records up to thirteen legacy or REX prefixes, including LOCK, followed by
+`0F FF`. With a complete-fetch CPU binding, the executor reads the live
+ModR/M, SIB and displacement from executable memory before reporting #UD. It
+reports #GP(0) if another byte would exceed the fifteen-byte limit. The
+opcode-only binding reports #UD after the two opcode bytes.
+
+Fifteen prefixes, or fourteen prefixes followed by `0F`, prove a length fault
+within the first fifteen bytes. The separate `PrefixLengthFaultAfter15Bytes`
+CPU binding checks an enabled instruction breakpoint before fetching that span
+in address order. A fetch fault within the span takes precedence over #GP(0).
+A changed byte requests a new lift. The CFG retains a terminal decode failure
+for paged entry selection only when its bytes belong to the selected function,
+have an executable owner and contain no unapplied relocation. Software SGX
+uses the same span and preserves the original PC across AEX and ERESUME.
+The legacy protected executor uses the same UD0 profile type for segmented fetch.
+
+The mixed-mode fetch for HLT, fast system transfers, bound MSRs, RSM and
+software enclave instructions shares the virtual-interrupt and execution
+breakpoint checks. A pending virtual-interrupt conflict at CPL3 raises #GP(0)
+before an instruction breakpoint or code-page access. Already accepted
+instruction work resumes at its saved stage.
+
+`X86SgxMemory` binds the enclave's platform key operations and freezes their
+identity during a suspended instruction. The mixed-mode executor validates
+TARGETINFO, KEYREQUEST and destination permissions in architectural order,
+assembles the public report body and commits the prepared store. The platform
+supplies the processor-specific key derivation and local report MAC. The same
+EPC bank owns the contents, permissions and tracking result of each SGX2 page.
+EACCEPTCOPY publishes a page and its access rights together after both operands
+have been checked. For EREPORT2 the executor assembles the report and submits its
+authentication prefix to the platform. EVERIFYREPORT2 checks the CPU security
+version before authenticating the 224-byte prefix. EGETKEY256 requests a distinct
+32-byte key derivation.
+[Wide keys and reports](x86-sgx-transfer.md#egetkey256-and-ereport2) · [Software SGX1](x86-sgx-transfer.md#software-sgx1-enclave-execution) · [SGX2 page operations](x86-sgx-transfer.md#sgx2-dynamic-enclave-pages)
 
 Faultable IRET and RETF reuse the same continuation
 return and descriptor templates through that concrete evaluator. Their bound
@@ -2945,9 +2969,15 @@ LowIR facts without inventing live-in register values. Exact ordinary scalar
 loads share `readImmutableImageScalar` with MedIR: only uniquely mapped,
 immutable data or supported instruction storage without overlapping fixups
 can supply bits, and pointer-width address candidates retain their separate
-relocation proof. Cold reads charge the image metadata inventory against the
-existing evidence budget; repeated reads cache successes and failures within
-one CFG build. An unaffordable read leaves arithmetic-only proofs usable.
+relocation proof. An image that runs at its link address
+(`BinaryImage::LoadsAtLinkAddress`) holds every address it stores unchanged,
+and the walk only follows a value to the code it names, so there
+`readImmutableBranchScalar` returns those candidates too: the Go 1.20 and
+1.21 runtimes index an absolute table with a constant (`mov $5, %ecx; lea
+table(%rip), %rdx; jmp *(%rdx,%rcx,8)`), and the jump becomes a branch to the
+label its word names, which must still be a decoded instruction start. Cold
+reads charge the image metadata inventory against the existing evidence
+budget; repeated reads cache successes and failures within one CFG build. An unaffordable read leaves arithmetic-only proofs usable.
 If ordinary constant propagation cannot resolve a target, a bounded,
 straight-path symbolic query may prove that its full-width scalar expression
 is constant for every input. `LowScalarSymbolic` shares integer semantics with
@@ -3046,9 +3076,15 @@ relocation-proven pointers outside the code hold, which are roots of the
 function already. A jump that reads its table through an exact field takes only
 the labels of that table's run, which ends where another field of the code
 names an address. An edge is kept only where every callee-saved register the
-label's code reads before writing has been written on every path to the jump:
+label's code reads before writing has been written on every path to the jump
+(under the image's calling convention, so Win64 counts `%rsi` and `%rdi` too):
 a table has words its index never selects, and following one must not turn a
-register the caller keeps into an input of the function. Jumps are decided in
+register the caller keeps into an input of the function. A jump through a
+table of its own labels goes to one of them whenever control reaches it, so
+when every label reads such a register, the reads are the program's own
+(gimli's `FileEntry::clone` stores the `%r15` its prologue saved as an unused
+payload): that jump keeps its whole table, and the function's table jumps stop
+testing those registers. Jumps are decided in
 the order control reaches them and the result is checked once more as a whole.
 `LowFunc::ValueDispatches` holds the result beside the recovered tables,
 because it recovers none; MedIR lists it with them, marked
@@ -3059,7 +3095,11 @@ that names no kept label fails as loudly as before. The comparison needs every
 label as a number. HighC prints the image's words as numbers already. The LLVM
 mirror of a relocated slot that holds such a label keeps the label's original
 address as a plain integer for the same reason: LLVM defines no comparison of
-block addresses, and an optimizer may give two labels one. The proof-based
+block addresses, and an optimizer may give two labels one. A linked AArch64
+Mach-O executable reads its label slots after dyld has applied the image slide.
+When recompiling a function into that image, the emitter compares each loaded
+label's offset from the original function entry with the corresponding case
+offset. Both addresses move together. The proof-based
 recoveries run first and are unchanged; a dispatch by value claims no table
 storage, no index and no relocation suppression.
 
@@ -3071,8 +3111,9 @@ the type allows no other value. After the scalar recoveries,
 `CFGBuilder::recoverOwnLabelTableBranches` reads such a jump's target back
 through the blocks that are each the only way into the next, starting with
 the constants every path into the first of them leaves in a register (a
-table address hoisted out of a loop; a call keeps only what the callee
-preserves): the table's address plus its 32-bit slot,
+table address hoisted out of a loop; a call keeps only what the image's
+calling convention preserves, which under Win64 includes `%rsi` and `%rdi`):
+the table's address plus its 32-bit slot,
 read from a read-only, non-executable section.
 The labels are the table's leading slots, up to the first slot that names
 anything but code of the function, an instruction start of one linear decode
@@ -7235,6 +7276,21 @@ reads Go's results where the unit's `DW_AT_producer` records `regabi`
 Where the DWARF states nothing, the lift's recovery decides, as it does without
 DWARF. A unit built with the stack ABI returns no register value. Results are
 never parameters.
+
+A unit built with line tables only (rustc's `-Cdebuginfo=1`, the level of the
+Rust standard library; clang's `-gline-tables-only`; gcc's `-g1`) names its
+functions and records the type of none: no subprogram has a `DW_AT_type`, a
+prototype, a parameter or `...`. Read as full DWARF, each of its functions
+returned nothing and took nothing, so its callers passed it no argument and
+every parameter it reads printed as an unknown value, and its result was lost
+(`__rust_alloc` forwarding `__rdl_alloc`'s pointer became a void call). The
+loader asks the unit first (`unitDescribesSignatures`): where no subprogram of
+it records a signature, a function that records none itself, directly or
+through its declaration or abstract instance, states nothing about its return.
+Without an authenticated return state its declaration binds no argument
+(`hasFixedPlatformCallDeclaration`), and the lift's recovery decides, as it
+does without DWARF. A unit built with `-g` keeps every declaration, `void
+f(void)` included.
 
 Go's parameter list names no positions either: a string takes two registers.
 The DWARF parameters bind nothing (`bindDebugParams`), and the C writer prints
@@ -11512,6 +11568,10 @@ Their bounds describe the exact index occurrence used by the table load,
 including any subtraction or shift already performed. Source-label
 normalization must not adjust those bounds again: it belongs only to case-label
 recovery. Reapplying it can silently remove a reachable final case.
+When arithmetic is distributed over the incoming states of a loop, a
+normalized arm can be newer than the selector expression used to search for
+reciprocal division. The bounded SAT query checks that arm directly. A
+reachable out-of-range state prevents publication of the table.
 A loader-normalized absolute table may use the same exact, point-sensitive
 finite-domain proof as a relative table. The physical pointer run supplies a
 read ceiling, not a selector bound. An AArch64 indexed load whose address
@@ -13058,7 +13118,11 @@ Addresses print as the member holding them: `(uintptr_t)&stack_storage.var_m48`,
 `(CStringT*)&stack_storage.var_m48` for a pointer parameter, or
 `&stack_storage.var_m48[8]` inside an array. Frame aliases print the address
 they hold at each use, so a frame pointer joined across a try's normal and
-exceptional edges is one address and never a variable. A 16-byte integer that
+exceptional edges is one address and never a variable. So does every other
+printer of a variable, a call argument typed by its callee's declaration and
+the object of a virtual call included: each asks `placeVarText` and
+`frameSlotVarText` what the variable names before it prints its name, as
+`exprStr` does. A 16-byte integer that
 no member may hold at its alignment is one copy of its bytes:
 `__builtin_memset(&stack_storage.var_m50, 0, 16)`, or a `__builtin_memcpy` from
 a fresh carrier of its exact width. A member keeps the slot's name from before
@@ -18946,6 +19010,17 @@ omitted as an unconstrained factor only after the shared bit-origin proof
 establishes independence from the predicate and all other columns. Marginal
 domains alone never authorize a Cartesian-product assumption.
 
+`SpecializationControlTargetHint` supplies sorted candidate values at one
+physical indirect transfer, including a native return. It is a precision
+request, not a control-flow or environment declaration. When structural
+targets are unavailable, the core proves under the current path that no
+target lies outside the candidates before trying their guarded edges. An
+incomplete or inconclusive candidate set falls back to ordinary finite-value
+enumeration; an exhausted proof or an unproved edge cannot publish a partial
+graph. Hint sites, values, symbolic construction and solver work have separate
+bounds. `ProvenControlTargetHints` counts successful path-specific coverage
+proofs, not distinct sites or source-level certificates.
+
 The temporary visited-node index uses a dense map. Serialization still follows the ordered traversal, so table growth and hash order do not change the key, variable renaming, or budget charges.
 
 MBA simplification keeps exact derivations inside `lib/symbolic/mba`.
@@ -19851,6 +19926,8 @@ file and guest-process execution remain separate capabilities.
 
 ## Where to edit
 
+`lib/model` owns seekable local model inputs, storage ranges, template findings, graph inventories and compatible-baseline comparison. The independent `neverd_model_scan_json_v1` entry point serves the explicit CLI scan and the workbench worker before any native image session is loaded. See the [model report](model-scan.md).
+
 Some lifters share instruction forms through local tables. PowerPC and
 RISC-V use integer opcode tables. MIPS uses
 `MIPSIntegerOpcodes.def` for classic fields shared with microMIPS and MIPS16
@@ -20573,6 +20650,8 @@ rejects.
 The shared `SourceABI` owner distinguishes a logical by-value record from its physical address carrier. Darwin ARM64 C declarations for six or sixteen doubles keep the complete record type and use an eight-byte integer-register or naturally aligned stack carrier, independently of floating argument registers and the x8 result pointer. ABI equality and projection batching retain this distinction, calling convention and parameter roles. Partial, overlapping, incompatible or stale carriers are rejected. This declaration alone does not bind LowIR calls, project entries, emit HighC calls or authorize frame borrows: those require a separate copy-storage proof. Compiler and native ABI tests cover register exhaustion, stack packing, arbitrary floating bits, copy mutation isolation and independent indirect results; they are not a complete `setTransform:` recovery test.
 
 Debug signatures name recovered parameters by where they arrive, never by position. `SourceParameterPlacement` places each source parameter under the ordinary convention of its target: System V x86-64, Microsoft x64, AAPCS64 and i386 cdecl/stdcall, each in its own file. It returns the registers and stack slots that hold each parameter's pieces, and the hidden result pointer. HighC binds a recovered parameter to the piece at its register or entry stack offset; an i386 stack parameter's offset counts from the lowest stack parameter number, since MedABIPass numbers the stack parameters before it promotes a register parameter a call passes on. LLVM-C binds its arguments the same way, through the binding the two writers share (`bindDebugParams`, `lib/backend/c/DebugParamBinding`): the LLVM emitter records where each argument arrives in the `neverd.parameter-sites` function metadata, its register or the MedIR parameter index that numbers its stack slot. An argument of no recorded place binds by position only while every parameter before it fills one integer slot, as in every convention, and an MSVC indirect result keeps its arguments' positions in both writers. A later piece is named after its parameter and byte offset (`p_8`), and the declared type applies only where the location holds the whole value as its bytes. A DWARF pointer is as wide as its unit's addresses, four bytes on i386 and 32-bit ARM, so the parameter after it is the next slot's. An i386 function whose DWARF says its parameters enter it in registers is placed where it says (`FunctionSym::ParamEntryLocations`, `placeEnteredParameters`): GCC passes a local function's first three in EAX, EDX and ECX (regparm), clang its first two in ECX and EDX (fastcc), and the rest follow in stack slots while every parameter before has a known place. No call to such a function takes argument types by position. Unoptimized code locates parameters only in their spill slots, so it binds by cdecl's. Placement stops at the first parameter whose place the rules cannot be sure of: a record whose passing the source does not state, a scalar wider than a register, a memory record of unknown alignment, or an Apple arm64 aggregate spill without a described layout. Later parameters keep their machine names, and functions of languages with their own conventions, such as Go, bind nothing. The DWARF loader gives parameter and result types alone a passing mode and scalar layout: C records pass by value, C++ classes as `DW_AT_calling_convention` states, and `_Complex` values as complex numbers. Rust records stay unknown, because Rust's own ABI and `extern "C"` pass some records differently. PDB records follow the Microsoft C++ ABI: i386 passes them as their bytes, while x64 passes them as their bytes or as an address in the same position. Call prototypes and argument casts still come only from signatures that map by position, whose parameters are all integers or all floating values.
+
+On 64-bit targets, LLVM-C keeps a declared 8-, 16- or 32-bit integer parameter when it binds to one wider 32- or 64-bit argument and every use truncates or masks the value to the declared width or less. The definition and declarations for direct callers use the same signed or unsigned type. A wider observation or a stored function address keeps the machine signature. Exact LLVM-type export also retains that signature.
 
 The shared `SourceFrameAnalysis` can check initialized private by-value copies at an original call when independent effect certificates describe the consumer and any complete indirect-result producer. It checks all reaching paths and loop backedges, exact active ranges, other argument aliases and later uses. Consuming a copy invalidates its initialization and saved-byte identities; a later read requires a new definite write. Initialization facts also expire on possible writes and frame release, while retained Swift scratch obligations remain intact. The query returns parameter extents only after complete frame restoration; it grants no machine identity, SDK effect, call binding or source-publication permission. Tests include branches, loops, partial writes, aliases and retained scratch; native ARM64 fixtures with real ObjC/CALayer reject reads of consumed copies and accept independently initialized disposable copies.
 
@@ -22153,6 +22232,8 @@ Interpreter specialization retains full-width guest addresses. At publication, i
 The version-3 conditional result-object profile adds a nullable RAX result whose nonzero value owns a nonwrapping object of the exact pre-call RDX size, disjoint from the declared entry frame. The size must be proved positive and unique at each occurrence; otherwise the transition refuses. Every invocation receives a fresh object identity, including repeated visits to one static site. Projection retains the exact size with that identity, separates contexts with different sizes, and discards stale pointer facts when the site is called again. A conditional edge may also retain nullness only after exhaustive proof, then binds it again at the successor. A structurally contained write to a proved nonnull result object uses that declared disjoint extent to preserve the frame; every other write keeps the ordinary alias proof. The declaration supplies no unchecked per-store exemption, initialized bytes, allocator identity or source/native certificate. This is an explicit conditional callee effect, not a conclusion from a concrete address or an import name.
 
 Version 4 extends that conditional result-object contract with sorted, disjoint absolute exclusions. For every normal return with a nonnull result, the entire exact result object must miss each declared range; a null result grants no object extent. The x64 owner validates and hashes the ranges, while the common evaluator assumes the declared relation at each fresh result and reestablishes it at successor nodes. A complete current absolute cell inside an excluded range survives a write only after the same write is proved contained in the current nonnull object. Other cells retain ordinary per-write alias checks and conservative invalidation. These ranges are caller-supplied preconditions about every invocation, not facts authenticated by a single observed address or an image section. Raw integrity binds them, but ordinary source and native proof consumers still reject the conditional call domain.
+
+Version 5 is a separate extension of the version-2 frame-span relation for explicit caller-frame outputs. Each declared full-width x64 argument pointer must be proved an exact entry-frame offset at every call occurrence, and its bounded byte span must fit the declared frame. Normal return gives every byte in those spans a fresh unconstrained value after the ordinary call forgetting; unchanged old values remain permitted. Overlapping saved-pointer facts and the opaque entry caller-word fact are retired; live native return locations remain live, with their changed contents subject to later target proof. The x64 owner validates and hashes the argument registers and extents, and raw validation binds them to each retained call marker. This is a caller-owned conditional effect for every invocation, not an inferred import prototype or a concrete observation. Incomplete pointer proof or an out-of-frame span refuses recovery. Source and native adapters still reject the raw call event.
 
 Within one specialization node, a proved nonnull result may be reused for later stores because path constraints only accumulate. The cache is keyed by the fresh object root; a later invocation at the same static call site receives a new root and cannot inherit the old proof. A must-nonnull fact projected across an edge is also valid for that node's current root.
 
@@ -24341,9 +24422,11 @@ SIMD import in `X64ContinuationAvxImage.h`. The LLVM terminal context intrinsic
 owns the final control/MSR writes and inseparable XRSTOR/RSM sequence; neither
 source emitter models a vendor's private SMRAM layout.
 
-The native SGX continuation projection owns canonical ENCLU leaves 2/3/4 in
-`X64ContinuationSgx.h`, using that same XSAVE image authority. Its terminal
-LLVM/NeverC interface restores the explicit input bank and jumps to the
+The native SGX continuation projection owns ENCLU leaves 2/3/4 in
+`X64ContinuationSgx.h`, using that same XSAVE image authority. It shares
+prefix classification with the mixed-mode software SGX executor. Both accept
+a segment override, an address-size override and a final REX in code64.
+The terminal LLVM/NeverC interface restores the explicit input bank and jumps to the
 immutable original instruction site. The original ENCLU therefore owns its
 PC-dependent outputs and native enclave/AEP continuation. Neither C emitter
 relocates EENTER and substitutes a guessed RCX value or models EPC/SSA/AEX.

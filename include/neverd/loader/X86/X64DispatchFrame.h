@@ -42,15 +42,12 @@ struct X64DispatchFrame {
   std::string TargetSymbol;
 };
 
-/// The bridge at \p Address, if one is there.  \p FunctionNameAt, when given,
-/// answers as Image.getFunctionNameAt does, from an index of the image.
+/// Read the linked instruction operands before requesting any symbol names.
 inline std::optional<X64DispatchFrame>
-x64DispatchFrame(const BinaryImage &Image, va_t Address,
-                 llvm::function_ref<std::string(va_t)> FunctionNameAt = {}) {
+decodeX64DispatchFrame(const BinaryImage &Image, va_t Address) {
   if (Image.Arch != Arch::X64 || Image.Bits != Bitness::Bits64 ||
       Image.Format != BinaryFormat::COFF || Image.IsRelocatable ||
-      Address > InvalidVA - X64DispatchFrame::EncodedBytes ||
-      !Image.isCodeRange(Address, X64DispatchFrame::EncodedBytes))
+      Address > InvalidVA - X64DispatchFrame::EncodedBytes)
     return std::nullopt;
   const uint8_t *Bytes = Image.readVA(Address, X64DispatchFrame::EncodedBytes);
   // mov rax,rsp; cli; sub rsp,16; push rax; pushfq; push imm8;
@@ -59,7 +56,8 @@ x64DispatchFrame(const BinaryImage &Image, va_t Address,
                                            0xec, 0x10, 0x50, 0x9c, 0x6a};
   if (!Bytes || !std::equal(Prefix.begin(), Prefix.end(), Bytes) ||
       Bytes[12] != 0x48 || Bytes[13] != 0x8d || Bytes[14] != 0x05 ||
-      Bytes[19] != 0x50 || Bytes[20] != 0xb8 || Bytes[25] != 0xe9)
+      Bytes[19] != 0x50 || Bytes[20] != 0xb8 || Bytes[25] != 0xe9 ||
+      !Image.isCodeRange(Address, X64DispatchFrame::EncodedBytes))
     return std::nullopt;
   // A PE fixup beginning before the sequence may still overlap its bytes.
   // Asked only of the bytes that already read as the sequence: the question
@@ -90,16 +88,27 @@ x64DispatchFrame(const BinaryImage &Image, va_t Address,
   const auto Linkage = Relative(15, 19), Target = Relative(26, 30);
   if (!Linkage || !Target)
     return std::nullopt;
-  const auto NameAt = [&](va_t At) {
-    return FunctionNameAt ? FunctionNameAt(At) : Image.getFunctionNameAt(At);
-  };
-  X64DispatchFrame Result{Address,
+  return X64DispatchFrame{Address,
                           *Linkage,
                           *Target,
                           llvm::support::endian::read32le(Bytes + 21),
                           static_cast<int8_t>(Bytes[11]),
-                          NameAt(*Linkage),
-                          NameAt(*Target)};
+                          {},
+                          {}};
+}
+
+/// The bridge with assembly-safe link identities for both code operands.
+inline std::optional<X64DispatchFrame>
+x64DispatchFrame(const BinaryImage &Image, va_t Address,
+                 llvm::function_ref<std::string(va_t)> FunctionNameAt = {}) {
+  auto Result = decodeX64DispatchFrame(Image, Address);
+  if (!Result)
+    return std::nullopt;
+  const auto NameAt = [&](va_t At) {
+    return FunctionNameAt ? FunctionNameAt(At) : Image.getFunctionNameAt(At);
+  };
+  Result->LinkageSymbol = NameAt(Result->Linkage);
+  Result->TargetSymbol = NameAt(Result->Target);
   // Assembly operands name code symbols. Reject non-identifiers instead of
   // letting a display name introduce assembler syntax or choose a new target.
   const auto Symbol = [](llvm::StringRef Name) {
@@ -108,7 +117,7 @@ x64DispatchFrame(const BinaryImage &Image, va_t Address,
            llvm::all_of(Name,
                         [](char C) { return llvm::isAlnum(C) || C == '_'; });
   };
-  if (!Symbol(Result.LinkageSymbol) || !Symbol(Result.TargetSymbol))
+  if (!Symbol(Result->LinkageSymbol) || !Symbol(Result->TargetSymbol))
     return std::nullopt;
   return Result;
 }

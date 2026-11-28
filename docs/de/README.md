@@ -1,6 +1,6 @@
 **Sprachen**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
+<!-- i18n-source: 5a80af8799dc800d65c3ba227cdb578e8edce910f296be92b37bf16083b2a22f -->
 
 [← NeverD-Projekt](project.md)
 
@@ -18,6 +18,7 @@ Englische Anleitungen liegen direkt unter `docs/`. Übersetzungen sind in `ar/`,
 | [Mitwirken](CONTRIBUTING.md) | Entwicklungsumgebung, Build-Profile, Ablauf, Stil und PR-Anforderungen |
 | [Architektur](architecture.md) | IR-Pfade, Komponentengrenzen, striktes Lifting, Supporttiefe und Änderungsorte |
 | [Quellcode- und native Objektpatches](source-patching.md) | Compilerwahl, native Objekte, Bindungen, Ausnahmen, Veröffentlichung und geprüfte Profile |
+| [Offline-Sicherheitsprüfung von Modellen (Englisch)](../model-scan.md) | GGUF, Safetensors-Shards, zugehörige Vorlagen, ONNX-Struktur und lokale Referenzmodelle |
 | [Offline-Webanalyse (Englisch)](../web-analysis.md) | C++-Prüfung von Artefakten, Quellen, Bindungen und Maps, Metadatenrichtlinie, SDK und aktueller Prüfumfang |
 | [Primitive JavaScript-Umschreibungen (Englisch)](../web-source-rewrite-profile.md) | Explizite Durchläufe, lokale Ersetzungsprüfungen, exakte Umkehrung und beleggebundener lokaler Export |
 | [Profil für eigenständige Bun-Programme (Englisch)](../web-bun-profile.md) | Abgegrenzte ELF-, Thin-Mach-O- und PE-Extraktion für x64/ARM64, ursprüngliche Bereiche und Herkunft festgelegter Testdateien |

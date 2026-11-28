@@ -1,6 +1,6 @@
 **Lingue**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
+<!-- i18n-source: 5a80af8799dc800d65c3ba227cdb578e8edce910f296be92b37bf16083b2a22f -->
 
 [← Progetto NeverD](project.md)
 
@@ -18,6 +18,7 @@ Le guide inglesi sono direttamente in `docs/`. Le traduzioni sono raggruppate in
 | [Contribuire](CONTRIBUTING.md) | Ambiente, profili di build, workflow, stile e requisiti PR |
 | [Architettura](architecture.md) | Percorsi IR, confini dei componenti, lifting strict, profondità del supporto e punti di modifica |
 | [Patch da sorgenti e oggetti nativi](source-patching.md) | Compilatori, oggetti nativi, associazioni, eccezioni, transazioni e profili verificati |
+| [Analisi di sicurezza dei modelli offline (inglese)](../model-scan.md) | GGUF, frammenti Safetensors, template associati, struttura ONNX e modelli locali di riferimento |
 | [Analisi Web offline (inglese)](../web-analysis.md) | Ispezione C++ di artefatti, sorgenti, associazioni e mappe, criteri dei metadati, SDK e verifica attuale |
 | [Riscritture primitive JavaScript (inglese)](../web-source-rewrite-profile.md) | Passaggi espliciti, verifiche di sostituzione locale, inversa esatta ed esportazione locale vincolata alla ricevuta |
 | [Profilo Bun autonomo (inglese)](../web-bun-profile.md) | Estrazione delimitata di ELF, Mach-O a singola architettura e PE per x64/ARM64, intervalli originali e provenienza dei campioni fissati |

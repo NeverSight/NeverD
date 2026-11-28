@@ -10,6 +10,8 @@
 #define NEVERD_LIB_ANALYSIS_ARCH_X86_64_X86MODESTATE_H
 
 #include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
+#include "neverd/ir/X86/X86DebugRules.h"
+#include "neverd/ir/X86/X86ExceptionDelivery.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -26,6 +28,11 @@ inline const auto &modeRegisters(const X86ModeState &S) {
   return S.Core.Core.Core.Core.Core.Core;
 }
 
+inline uint64_t modeInstructionAddress(const X86ModeState &S, bool Long64) {
+  const auto PC = modeRegisters(S).PC;
+  return Long64 ? PC : uint32_t(S.Core.Core.Core.CS.Base + PC);
+}
+
 inline uint8_t modeCPL(const X86ModeState &S,
                        const translate::X86PagingState &C) {
   if (!(C.CR0 & 1) || S.RetainedRealCS)
@@ -35,34 +42,54 @@ inline uint8_t modeCPL(const X86ModeState &S,
 }
 
 /// Authenticate a system instruction with the same segmented or wide fetch
-/// used by its current execution mode. A backing read is unpaid until fetch
-/// succeeds or generates a guest exception.
+/// used by its current execution mode. Pending virtual interrupts and enabled
+/// instruction breakpoints are checked before fetch. A backing read is unpaid
+/// until fetch succeeds or generates a guest exception.
 inline llvm::Expected<bool>
-fetchX86SystemInstruction(const X86ModeState &S, translate::X86PagedMemory &M,
+fetchX86SystemInstruction(X86ModeState &S, translate::X86PagedMemory &M,
                           llvm::ArrayRef<uint8_t> Expected,
                           std::optional<X86FullSegmentLimitChoice> LimitChoice,
-                          X86ModeExecutionResult &Out) {
+                          X86ModeExecutionResult &Out,
+                          X86EventKind &FaultKind) {
   using namespace translate;
   const auto &V = S.Core.Core;
   const auto &R = modeRegisters(S);
   const auto &CS = V.Core.CS;
   const uint8_t CPL = modeCPL(S, M.controls());
+  const bool Long64 = (M.controls().EFER & 0x400) && (CS.Attributes & 0x2000);
+  if (x86PendingVirtualInterrupt(CPL, M.controls().CR4, R.RFlags)) {
+    Out.InstructionAttempted = true;
+    Out.Exception = X86MemoryException{13, 0, {}};
+    return false;
+  }
+  const uint64_t Address = modeInstructionAddress(S, Long64);
+  if (S.Debug &&
+      (!M.sgxMemory() || M.sgxMemory()->instructionBreakpointsAt(Address))) {
+    const auto Matches = x86ExecutionBreakpoints(
+        S.Debug->DR, S.Debug->DR7, Address, R.RFlags, S.SSBlocked);
+    if (Matches) {
+      x86PublishInstructionDebug(*S.Debug, false, Matches);
+      Out.InstructionAttempted = true;
+      Out.Exception = X86MemoryException{1, 0, {}};
+      FaultKind = X86EventKind::InstructionBreakpoint;
+      return false;
+    }
+  }
   auto C = M.controls();
   C.RFlags = R.RFlags;
   if (auto E = M.bindControls(C))
     return std::move(E);
   llvm::SmallVector<uint8_t, 15> Bytes(Expected.size());
-  auto Read = (C.EFER & 0x400) && (CS.Attributes & 0x2000)
-                  ? M.load({R.PC, MemoryAccessKind::Execute, CPL}, Bytes)
-                  : M.loadSegment({X86SegmentRegister::CS,
-                                   {uint32_t(CS.Base), CS.Limit, CS.Selector,
-                                    CS.Attributes, bool(V.Unusable & 1),
-                                    S.RetainedRealCS},
-                                   uint32_t(R.PC),
-                                   MemoryAccessKind::Execute,
-                                   CPL,
-                                   LimitChoice},
-                                  Bytes);
+  auto Read = Long64 ? M.load({R.PC, MemoryAccessKind::Execute, CPL}, Bytes)
+                     : M.loadSegment({X86SegmentRegister::CS,
+                                      {uint32_t(CS.Base), CS.Limit, CS.Selector,
+                                       CS.Attributes, bool(V.Unusable & 1),
+                                       S.RetainedRealCS},
+                                      uint32_t(R.PC),
+                                      MemoryAccessKind::Execute,
+                                      CPL,
+                                      LimitChoice},
+                                     Bytes);
   if (!Read)
     return Read.takeError();
   if (Read->BackingFault) {
@@ -86,6 +113,7 @@ fetchX86SystemInstruction(const X86ModeState &S, translate::X86PagedMemory &M,
 inline bool sameModeState(const X86ModeState &A, const X86ModeState &B) {
   return A.Core.Core == B.Core.Core && A.Debug == B.Debug && A.SMM == B.SMM &&
          A.MCA == B.MCA && A.Startup == B.Startup &&
+         A.DeadlineTimer == B.DeadlineTimer &&
          A.RetainedRealCS == B.RetainedRealCS &&
          std::tie(A.Core.SysenterCS, A.Core.SysenterESP, A.Core.SysenterEIP,
                   A.Core.Reserved, A.STIBlocked, A.SSBlocked, A.Halted,

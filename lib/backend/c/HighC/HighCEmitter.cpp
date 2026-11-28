@@ -2190,9 +2190,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     bool IntegerCallsOnly = true;
   };
   std::map<std::string, CallUse> CallUses;
-  const bool Precall = Opts.PrecallMemory != Win64PrecallMemory::None &&
-                       Opts.TheArch == Arch::X64 &&
-                       Opts.Format == BinaryFormat::COFF;
+  const bool Win64 =
+      Opts.TheArch == Arch::X64 && Opts.Format == BinaryFormat::COFF;
   c_detail::Win64OpenCallDeclarations OpenCalls;
   std::map<std::string, TypeRef> SourceCalleeTypes;
   std::map<std::string, TypeRef> FloatingResults;
@@ -2231,7 +2230,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
                     "HighC callees disagree on MIPS instruction mode");
             }
           CallUse &Use = CallUses[Name];
-          if (Precall && Use.IntegerCallsOnly)
+          if (Win64 && Use.IntegerCallsOnly)
             Use.IntegerCallsOnly = c_detail::isWin64IntegerCall(E);
           uint16_t &Bytes = Use.ResultBytes;
           // An indirect call declares no function: the record it returns is
@@ -2766,7 +2765,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
       // declaration needs nothing else: a re-spelling from its types would
       // lose `const`, and conflict with the header a unit includes too.
       const FunctionSym &Library = DebugExternSigs[Name];
-      if (Precall && !ImportSlot && c_detail::hasOnlyWin64SymbolName(Library) &&
+      if (Win64 && !ImportSlot && c_detail::hasOnlyWin64SymbolName(Library) &&
           !msvcCallee(Identifier, Opts.Format)) {
         const auto Use = CallUses.find(Name);
         if (Use != CallUses.end() && Use->second.IntegerCallsOnly) {
@@ -2850,7 +2849,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         // from the output leaves them to it, where its parameters fill the
         // slots its decoration spells.
         const auto Known = knownArity(Symbol, Name);
-        if (Precall && !ImportSlot && !Known && Read != CallUses.end() &&
+        if (Win64 && !ImportSlot && !Known && Read != CallUses.end() &&
             Read->second.IntegerCallsOnly && !DoubleWord &&
             Floating == FloatingResults.end() &&
             Record == RegisterRecordResults.end()) {
@@ -4012,7 +4011,9 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     }
     if (E.Kind == ExprKind::Const && isAddressProvenance(E.ConstProvenance))
       if (const auto Key = functionAddressKey(E))
-        noteFunctionAddress(*Key, Funcs);
+        noteFunctionAddress(*Key, Funcs,
+                            E.ConstProvenance ==
+                                ConstantAddressProvenance::CodeAddress);
     if (isImageBaseConstant(E))
       ReachesImageBase = true;
     if (E.Kind == ExprKind::Const &&
@@ -4763,7 +4764,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
 }
 
 void HighCWriter::noteFunctionAddress(va_t Addr,
-                                      const std::vector<HighFunc> &Funcs) {
+                                      const std::vector<HighFunc> &Funcs,
+                                      bool ProvenCodeAddress) {
   if (FunctionAddressNames.count(Addr))
     return;
   for (const HighFunc &Func : Funcs)
@@ -4779,11 +4781,18 @@ void HighCWriter::noteFunctionAddress(va_t Addr,
     OwnFunctionSymbols = collectImageFunctionSymbols(*Opts.Image);
   const HighCImageFunctionSymbols &Symbols =
       SharedFunctionSymbols ? *SharedFunctionSymbols : *OwnFunctionSymbols;
-  if (const auto Found = Symbols.find(Addr); Found != Symbols.end()) {
+  std::string Name;
+  if (const auto Found = Symbols.find(Addr); Found != Symbols.end())
+    Name = Found->second->Name;
+  if (ProvenCodeAddress && Dbg &&
+      !Opts.Image->LoadOnlyFunctionEntries.empty() &&
+      isSynthesizedFuncName(Name))
+    if (const auto Public = Dbg->functionName(Addr))
+      Name = *Public;
+  if (!Name.empty()) {
     mips::requireNumericCodePointerSource(Opts.Image, Addr);
-    const Symbol &Sym = *Found->second;
-    FunctionAddressNames.emplace(Addr, FunctionAddressTarget{Sym.Name});
-    AddressTakenFunctions.insert(Sym.Name);
+    FunctionAddressNames.emplace(Addr, FunctionAddressTarget{Name});
+    AddressTakenFunctions.insert(std::move(Name));
   }
 }
 
@@ -5942,6 +5951,25 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
           throw std::invalid_argument("Indirect record or error-register "
                                       "source entries need a projection proof");
       });
+  // A PE import library supplies the definition of its named linker veneer.
+  // Keep it inspectable on its own. In a whole translation unit it is an
+  // external declaration, so linking the original import library supplies
+  // exactly one definition and the caller still reaches the imported API.
+  if (Opts.WholeProgram && Funcs.size() > 1 && Opts.Image &&
+      Opts.Format == BinaryFormat::COFF && Opts.TheArch == Arch::AArch64 &&
+      !Opts.Image->ImportStubIndices.empty()) {
+    for (size_t I = 0; I < Funcs.size(); ++I) {
+      const HighFunc &F = Funcs[I];
+      if (!Opts.Image->ImportStubIndices.contains(F.Entry) ||
+          Opts.userName(F.Entry) || Opts.Image->findExportAt(F.Entry) ||
+          !Opts.Image->statedFunctionNameAt(F.Entry).empty())
+        continue;
+      const Import *Imported = Opts.Image->findImportStubAt(F.Entry);
+      if (Imported && !Imported->Name.empty() &&
+          (F.Name == Imported->Name || isSynthesizedFuncName(F.Name)))
+        LeftOut[I] = true;
+    }
+  }
   // The records the code reads members of through others, as
   // `l->head->child` reads a node, which only a rendering finds: each
   // rendering asks the local types for those an earlier one found.

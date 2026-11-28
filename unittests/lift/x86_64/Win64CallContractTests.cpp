@@ -2758,7 +2758,13 @@ TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
                     std::string::npos,
                 !Stored);
       EXPECT_NE(Source.find("take_stack("), std::string::npos);
-      EXPECT_FALSE(llvm::StringRef(Source).contains("__NEVERD_WIN64_OPEN"));
+      EXPECT_EQ(llvm::StringRef(Source).contains(
+                    ", take_stack) __asm__(\"take_stack\")"),
+                !LLVM);
+      for (llvm::StringRef Dialect : {"-std=gnu11", "-std=gnu2x"})
+        source_call_execution_test::checkSyntax(
+            Source, {"--target=x86_64-w64-windows-gnu", "-ffreestanding",
+                     "-Werror=deprecated-non-prototype", Dialect});
       for (const auto Memory :
            {Win64PrecallMemory::FlatV6, Win64PrecallMemory::WindowV6}) {
         COptions.PrecallMemory = Memory;
@@ -2802,7 +2808,7 @@ TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
         EXPECT_EQ(llvm::StringRef(Bound).contains(Read), !Stored);
         EXPECT_EQ(llvm::StringRef(Bound).contains(
                       ", take_stack) __asm__(\"take_stack\")"),
-                  !LLVM && !Stored);
+                  !LLVM);
         EXPECT_EQ(llvm::StringRef(Bound).contains(
                       "const uint64_t link_base = 0x" +
                       llvm::utohexstr(Image.Base) + "ULL;"),
@@ -2819,7 +2825,7 @@ TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
   }
 }
 
-TEST(Win64CallContract, PrecallOpenDeclarationsRequireIntegerUsesAtEveryCall) {
+TEST(Win64CallContract, OpenDeclarationsRequireIntegerUsesAtEveryCall) {
   constexpr va_t Words = Text + 5, Mixed = Text + 6, Typed = Text + 7;
   auto Image = makeImage({0xe8, 0, 0, 0, 0, 0xc3, 0xc3, 0xc3},
                          {{Text, "caller"},
@@ -2873,16 +2879,19 @@ TEST(Win64CallContract, PrecallOpenDeclarationsRequireIntegerUsesAtEveryCall) {
   Options.Format = Image.Format;
   Options.Image = &Image;
   Options.PrecallEntry = Text;
-  Options.PrecallMemory = Win64PrecallMemory::FlatV6;
-  std::string Source;
-  llvm::raw_string_ostream OS(Source);
-  ASSERT_TRUE(HighCEmitter().emit({Caller}, OS, Options, &Debug));
-  const llvm::StringRef C(Source);
-  EXPECT_TRUE(C.contains("__NEVERD_WIN64_OPEN(uint64_t, open_words)"));
-  EXPECT_TRUE(C.contains("open_words(1)"));
-  EXPECT_FALSE(C.contains(", mixed_slots)"));
-  EXPECT_FALSE(C.contains(", typed_word)"));
-  EXPECT_TRUE(C.contains("typed_word(uint32_t value)"));
+  for (const auto Memory :
+       {Win64PrecallMemory::None, Win64PrecallMemory::FlatV6}) {
+    Options.PrecallMemory = Memory;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    ASSERT_TRUE(HighCEmitter().emit({Caller}, OS, Options, &Debug));
+    const llvm::StringRef C(Source);
+    EXPECT_TRUE(C.contains("__NEVERD_WIN64_OPEN(uint64_t, open_words)"));
+    EXPECT_TRUE(C.contains("open_words(1)"));
+    EXPECT_FALSE(C.contains(", mixed_slots)"));
+    EXPECT_FALSE(C.contains(", typed_word)"));
+    EXPECT_TRUE(C.contains("typed_word(uint32_t value)"));
+  }
 }
 
 TEST(Win64CallContract, MissingInteriorStackSlotCannotDiscardLaterArguments) {
@@ -5545,13 +5554,41 @@ TEST(CallExitRegisters, OpaqueExitDoesNotInventAStoredValue) {
             ASSERT_TRUE(
                 HighCEmitter().emit(Result.HighFuncs, Output, COptions));
           }
-          const auto Name = Source.find(" produce_exit(");
-          ASSERT_NE(Name, std::string::npos) << Source;
-          const auto Start = Source.rfind('\n', Name) + 1;
-          const auto End = Source.find(';', Name);
-          ASSERT_NE(End, std::string::npos) << Source;
-          const std::string Provider = Source.substr(Start, End - Start) +
-                                       " { ++observed_calls; return 1; }\n";
+          const llvm::StringRef Generated(Source);
+          std::string Provider;
+          if (Generated.contains(", produce_exit) __asm__(")) {
+            // Open declarations carry a linker name, not a C signature for
+            // a definition. Bind the independent oracle to that same name.
+            if (Generated.contains(", produce_exit) __asm__(\"produce_exit\")")) {
+              Provider = R"(
+int64_t neverd_test_producer(void) __asm__("produce_exit");
+)";
+            } else {
+              ASSERT_TRUE(Generated.contains(
+                  ", produce_exit) __asm__(__NEVERD_WIN64_STR("
+                  "__USER_LABEL_PREFIX__) \"produce_exit\")"))
+                  << Source;
+              Provider = R"(
+#define NEVERD_TEST_STRING_INNER(x) #x
+#define NEVERD_TEST_STRING(x) NEVERD_TEST_STRING_INNER(x)
+int64_t neverd_test_producer(void)
+    __asm__(NEVERD_TEST_STRING(__USER_LABEL_PREFIX__) "produce_exit");
+#undef NEVERD_TEST_STRING
+#undef NEVERD_TEST_STRING_INNER
+)";
+            }
+            Provider += R"(
+int64_t neverd_test_producer(void) { ++observed_calls; return 1; }
+)";
+          } else {
+            const auto Name = Source.find(" produce_exit(");
+            ASSERT_NE(Name, std::string::npos) << Source;
+            const auto Start = Source.rfind('\n', Name) + 1;
+            const auto End = Source.find(';', Name);
+            ASSERT_NE(End, std::string::npos) << Source;
+            Provider = Source.substr(Start, End - Start) +
+                       " { ++observed_calls; return 1; }\n";
+          }
           const std::string Guard = R"(
 #include <stdint.h>
 #include <stdlib.h>

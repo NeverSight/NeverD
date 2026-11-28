@@ -10,6 +10,8 @@
 #ifndef NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64SEGMENTENCODING_H
 #define NEVERD_LIB_ANALYSIS_ARCH_X86_64_X64SEGMENTENCODING_H
 
+#include "neverd/support/ISAEncoding.h"
+
 #include "llvm/ADT/ArrayRef.h"
 
 #include <cstddef>
@@ -36,15 +38,21 @@ struct X64SegmentMemoryOperand {
   int64_t Displacement = 0;
 };
 
-/// One prefix per group, followed by at most one final REX. LOCK/REP and
-/// duplicate or misplaced prefixes are not admitted by this grammar.
+/// One prefix per group, followed by at most one final REX. A caller that
+/// handles a LOCK/REP encoding fault can request its presence explicitly.
 inline bool x64SegmentPrefixes(llvm::ArrayRef<uint8_t> Bytes, size_t &P,
-                               X64SegmentPrefixes &F) {
-  if (Bytes.empty() || Bytes.size() > 15)
+                               X64SegmentPrefixes &F,
+                               bool *SawLockOrRep = nullptr) {
+  if (Bytes.empty() || Bytes.size() > x86::kMaxInstructionLen)
     return false;
+  if (SawLockOrRep)
+    *SawLockOrRep = false;
   bool Segment = false;
   while (P < Bytes.size()) {
-    if (Bytes[P] == 0x66 && !F.Operand16)
+    if (SawLockOrRep && !*SawLockOrRep &&
+        (Bytes[P] == 0xf0 || Bytes[P] == 0xf2 || Bytes[P] == 0xf3))
+      *SawLockOrRep = true;
+    else if (Bytes[P] == 0x66 && !F.Operand16)
       F.Operand16 = true;
     else if (Bytes[P] == 0x67 && F.AddressBytes == 8)
       F.AddressBytes = 4;

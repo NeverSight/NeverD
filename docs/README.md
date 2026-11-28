@@ -20,6 +20,7 @@ and `roadmap.md`. Shared images remain in `assets/`.
 | [Contributing](../CONTRIBUTING.md) | Development setup, build profiles, workflow, style, and PR expectations |
 | [Architecture](architecture.md) | IR routes, component boundaries, strict lifting, support depth, and where to edit |
 | [Source and native object patches](source-patching.md) | Compiler choice, native objects, bindings, exceptions, transactions and verified profiles |
+| [Offline model security scan](model-scan.md) | GGUF, sharded Safetensors, companion templates, ONNX structure and local baselines |
 | [Offline web analysis](web-analysis.md) | C++ artifact/source/binding/map inspection, metadata policy, SDK and current qualification |
 | [Primitive JavaScript rewrites](web-source-rewrite-profile.md) | Explicit passes, local substitution checks, exact inverse and receipt-bound local export |
 | [Bun standalone profile](web-bun-profile.md) | Qualified ELF, thin Mach-O and PE extraction for x64/ARM64, original ranges and pinned fixture provenance |

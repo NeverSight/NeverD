@@ -1,0 +1,450 @@
+{
+  "software_revision": "742bd35861070fc7ebf0c0cf40ce575fc0912009",
+  "baseline_revision": "f1284c6fc347c7c220be72cdb20dbcec84adf4d9",
+  "llvm_prebuilt": "neverd-llvm-v23.0.0-r6",
+  "sdk_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "direct_publication": {
+    "layouts": 34,
+    "keys": [
+      "IA",
+      "IB"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "originals": 68,
+    "attempts": 136,
+    "published": 68,
+    "refused_without_output": 68,
+    "identical_original_image_hashes": true,
+    "baseline": {
+      "wrong_accepts": 16,
+      "wrong_refusals": 40,
+      "originals_with_wrong_exit_rows": 20,
+      "wrong_accept_layouts": [
+        "EntryJoin",
+        "SavedEntryLost",
+        "EntryLost",
+        "EntryResign"
+      ],
+      "wrong_refusal_layouts": [
+        "AddFlags",
+        "SubFlags",
+        "AndFlags",
+        "Select",
+        "SelectSpill",
+        "TwoAddresses",
+        "TwoClobber",
+        "Always",
+        "NeverEncoding",
+        "ThirdSelect"
+      ]
+    },
+    "candidate": {
+      "wrong_accepts": 0,
+      "wrong_refusals": 0,
+      "originals_with_wrong_exit_rows": 0
+    },
+    "baseline_report_sha256": "dfabe49e7a520a36144981e1fdb8d20a39329201d48b177ea83887c35c3289d4",
+    "candidate_report_sha256": "fb07a8d79343d83adfe73810a94540f62befca4e17c64058c3dd47ad2406f83c",
+    "baseline_source_files": {
+      "lib/backend/codegen/MachO/MachOSigningJoins.cpp": "91945214e72cc1b27a74cb09b5ab8044f465f0d1a212c7415974cbfead7b96ae",
+      "lib/backend/codegen/MachO/MachOSigningAddress.cpp": "2d6b1cab1a1fed6fefb4009c30d97f5ff63f2c09c3fc8e4d532140b0dbd4ea80",
+      "lib/backend/codegen/MachO/MachORegisterResults.cpp": "1a17d378a9e624b3ba0db7712f5c4909f9ac332521b227794e01e21f486d6a4f",
+      "lib/analysis/arch/aarch64/AArch64UnwindRecovery.cpp": "39948ddd87640e3b50652b2933b98a1f12cf6ffe49e185499861524d5090eabc",
+      "include/neverd/decode/AArch64/AArch64RegisterCopy.h": "58362fea8623e87f0fe37de9871b7df7388434d367c86ce58f21204e624ac4a9",
+      "include/neverd/analysis/AArch64UnwindRecovery.h": "4801bf58635f326c8f51bbede005db993c14707239aad6a676cb81dd1ed3270f",
+      "lib/backend/codegen/MachO/MachOSigningJoins.h": "c03ed24bd4614a56c6c05a528a721f227349b569e56f8d06741f2b889a36a8e5",
+      "lib/backend/codegen/MachO/MachOSigningAddress.h": "c712fe78a3161de2d199e44b02fcdc2173b5ed802d918eed7da9b75f713520c7",
+      "lib/backend/codegen/MachO/MachORegisterResults.def": "27cb79dc66a98edec2425250763cdb3d44d283331701dd8239a07fb05efcf262"
+    },
+    "cases": [
+      {
+        "layout": "Moves",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "e1dcf54ccfbf2d75ec0f96b5c0b7d1e172be56d9f658fa4880b3097447623e1b",
+          "IB": "a49b0a44e1cd1dbd21ae6fc8db59b4af04a36a949293bfa75ebbf95dbee598f8"
+        }
+      },
+      {
+        "layout": "AddFlags",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "32b004739e5dca8452dd1c616113b296b33ac9cb37d4ace999bb38ccf8de6a21",
+          "IB": "ba8f17a8c26d13e0ce4e18d35b16dc27601d0bb2f89fe3876a0c51d938ecd34a"
+        }
+      },
+      {
+        "layout": "SubFlags",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "18b2dea7a4ad6237fdb8a590c25ffb4b4d994cb426b4d6a3ab1c7d624b3835a4",
+          "IB": "323bd27a3c05549776b96ed31faab2d93117477133ffccb48c6f5e96ba91ab7d"
+        }
+      },
+      {
+        "layout": "AndFlags",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "a2e6754bc8298dff69b3b4ffb90472b8dbd32e55013bf935aa43f84ae0a2005c",
+          "IB": "52f93ef37229dd24ba77b57a5486e2ebc089f2c25c74fa044407821df8fd0f2f"
+        }
+      },
+      {
+        "layout": "Select",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "4644832a949296d823bbfc3340bdfef059ca4bb0d404b6853cf3b4c684eb6355",
+          "IB": "db7e794209339347446edd669416ecbe9d0f46f9a38d5ffbcaac33870ab8bddc"
+        }
+      },
+      {
+        "layout": "SelectSpill",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "aeba6e7905be5ac2c3537065dc5251fd952d9b9dd907af8ce96ff5bbbc178d4d",
+          "IB": "cb73a8336644a101cccc2ab606345de26495e8b965f4d70c3a5a42ac50855e78"
+        }
+      },
+      {
+        "layout": "TwoAddresses",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "a83e0460934590bff58ab17b886d7fa2483e9b933c81d3d47f5eae85c41726fd",
+          "IB": "286a1e530e73290409d5091ebcad8ccb81f93cf5b3ead7daf31aa9f4241dfe01"
+        }
+      },
+      {
+        "layout": "TwoCrossed",
+        "valid_exit_mask": 0,
+        "original_sha256": {
+          "IA": "74278212719cf442d0803ec866ef99f7dc5f06a9f85a2e153ad863bdc57c8284",
+          "IB": "05850f4c4e5d4afad3dc0298ae6aa0bd3f1affba8baf99a425d7e6d81c489978"
+        }
+      },
+      {
+        "layout": "TwoClobber",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "7655da6a5ea4d5b429c8d9015352d4165bc9bf921fc565fbf30309f264d02935",
+          "IB": "2595a047e7299b240edf49212d2cf4f5faa665844840c4c81c6b950d7dd596ea"
+        }
+      },
+      {
+        "layout": "EntryJoin",
+        "valid_exit_mask": 0,
+        "original_sha256": {
+          "IA": "62054b36e7d1e556e464ebdd203b3d22fe35f4c0dcc94344123f6d4f71e15dd6",
+          "IB": "a6cf517e48622d1350db62ef1d76f4553ffaae7fade2d2159350686f31095410"
+        }
+      },
+      {
+        "layout": "SavedEntry",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "3848386710847f406fb763c9c58fc30ffd83d376ba58d55e5f3d531d54ec96d7",
+          "IB": "28720df3ec75f8c0ec336c795497cb45e445419be033f4e62759cf8075722896"
+        }
+      },
+      {
+        "layout": "SavedEntryLost",
+        "valid_exit_mask": 0,
+        "original_sha256": {
+          "IA": "e2cc04237d7c210b03099887bee69b737e2fad00bb4b4319708d2bcdfd7f4097",
+          "IB": "3ae32c916ea9226afbbf6eef0ea213d3b3de69d8b019b3ca17de38e3b464db36"
+        }
+      },
+      {
+        "layout": "WrongSlotPC",
+        "valid_exit_mask": 3,
+        "original_sha256": {
+          "IA": "f7f16a645fa59bbc2fb8928a944fe90f9dafe89d5ab528ce16c051c8ca53a2a6",
+          "IB": "e6dfb6b12e3f5bb495f716c096afb22113413dfd9f81f5188a83bc0cae977575"
+        }
+      },
+      {
+        "layout": "EntryCopy",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "c8ed28d5ca7d1726a22d43b788ab84f6f81732fdac9c91ecc5894b374f96ca86",
+          "IB": "652e8108fa82bf1f2b51ed4ce065e82450152f0f0d10e7e7628c74d87d065c37"
+        }
+      },
+      {
+        "layout": "EntryLost",
+        "valid_exit_mask": 0,
+        "original_sha256": {
+          "IA": "5a2a5f4fdf1bd45da9e923370f7ba255849c6cf153b1ef8021d19cbeb0f6174b",
+          "IB": "2793cdb3324dbbe609db6ce6f2b82e07f8a77e604c2d700343c41e513da14449"
+        }
+      },
+      {
+        "layout": "EntryResign",
+        "valid_exit_mask": 0,
+        "original_sha256": {
+          "IA": "25b735c97f9e28dc2560e7e17af5278a59f0b60cfbe8e335398ca5156c1ab67a",
+          "IB": "f501fbe10980a231bdb0c89d637cb93bd1bc3835b03236af80d774344bf5b1a8"
+        }
+      },
+      {
+        "layout": "Loop",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "5ac0683ced51589a7bd9a70e3a8f6e1bde70959630a4145790471ee595fe05f5",
+          "IB": "5c80ceb0f593e0efcf86ce81fcecf55e5b2a7121886ae679423dd305af5d8b98"
+        }
+      },
+      {
+        "layout": "LoopLost",
+        "valid_exit_mask": 0,
+        "original_sha256": {
+          "IA": "a7e086ce291ed5848fc1e39ff2bf237a125ce9da948ba1ba0dcf2b2f1f18eb8b",
+          "IB": "4e6490abe73e81badffc603820f5954c3db93986a08ed794c08e43ae3e36f7e3"
+        }
+      },
+      {
+        "layout": "Always",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "afdbc4c2c8b72fc0b2b7181ecc03660bb7b6add5c4de9632daa0cefdd2a56910",
+          "IB": "0822adb332b8f2f7a3672c18990e68c989ed910b6c6bd411bb3261ba01e9f389"
+        }
+      },
+      {
+        "layout": "NeverEncoding",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "579c8989fcf77238d8d823858265cf8162e8f50b9def17b2d635a18f64c92867",
+          "IB": "779654402cc81d5f021db1fc6c65fb31c0a5f46e05964af51200638fa10bc0ec"
+        }
+      },
+      {
+        "layout": "SelectWrong",
+        "valid_exit_mask": 0,
+        "original_sha256": {
+          "IA": "5c9ec6898ea055125f16bc409a6e41558564c1c0b2a5adba9f0d61b6d008eed1",
+          "IB": "7e2b73c3792a7f7bc17166d4703a35ff5d5f0fbd69fd12d2ac2aa5d63c47899f"
+        }
+      },
+      {
+        "layout": "ThirdSelect",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "057843754480f781f2e32d1f469ef47bb953b0a31d0b96e0e63ab85109690249",
+          "IB": "0d0b4b888664fd160099dab3b9d887fa1a8ce7c6a04b60f4576563941e52bf6b"
+        }
+      },
+      {
+        "layout": "ThirdSelectLost",
+        "valid_exit_mask": 3,
+        "original_sha256": {
+          "IA": "af664bdc827f478e92c63473e40efefb8445215ef038cd1b8b32b837d7c0900f",
+          "IB": "f2ee3afa97d6e38e0c3759eea999a4fc162ac6b2cce61e2c487f74e1ede6939e"
+        }
+      },
+      {
+        "layout": "HalfRelease",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "7ecf45431e18c976425bb7e83a930106961f1ebc99c1673d5ebc917cea1600a1",
+          "IB": "9c60ee54f3c744cfef8cf0512932291af51f352c67a1a5e2d09ed161393844ff"
+        }
+      },
+      {
+        "layout": "HalfStale",
+        "valid_exit_mask": 3,
+        "original_sha256": {
+          "IA": "9ee8664cb656f1c6d88f3b14a96ad995a96d5162413ca4ef5c02da6f0ada6fc0",
+          "IB": "428caff0b49b2de0a5ad74381726ac636f807156097eb76b5d6535ca1bd4a2ca"
+        }
+      },
+      {
+        "layout": "SelectLost",
+        "valid_exit_mask": 0,
+        "original_sha256": {
+          "IA": "93da470ed304bc120085a60d47d469ed5916d83bda20b99457e66e2e0379cd01",
+          "IB": "4355e5949213b7bf01041e6105454ff0873ba67c9170fbac3a4870795ad432c9"
+        }
+      },
+      {
+        "layout": "Release",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "2295ace928d740810c1429335d43241254dc2b2e5f9ff34c9982a7bb72501ba5",
+          "IB": "75e8b01e26b73ecbb5c9afda224f976b31ca5e03002e1f8d855db9a94f830462"
+        }
+      },
+      {
+        "layout": "ReleaseStale",
+        "valid_exit_mask": 3,
+        "original_sha256": {
+          "IA": "4582d19e60e857f68f759a97ca864dab659d7746b007d78d55386bba924b5b9f",
+          "IB": "f630f883bb46841bf71570a949d26a039d140f7471c560cb7bdcdf552fe77afe"
+        }
+      },
+      {
+        "layout": "Stale",
+        "valid_exit_mask": 3,
+        "original_sha256": {
+          "IA": "e90608e125385e14cf77eaced06beab59a9b77bc3d7002d7ea2d21471aaf558f",
+          "IB": "c9ef994d259150d8c340c3013401878646c0716037d4539b677e576d4cd79671"
+        }
+      },
+      {
+        "layout": "Partial",
+        "valid_exit_mask": 3,
+        "original_sha256": {
+          "IA": "ac4ac07176ca9fb1911753b02e4f757002ddd8ff18ebbd2e8155da6dcee76e34",
+          "IB": "4a0e00b63018495765ebc59e23054f3db3fffc4db030e691b3c6cae4bcc12067"
+        }
+      },
+      {
+        "layout": "Adjacent",
+        "valid_exit_mask": 7,
+        "original_sha256": {
+          "IA": "31aac60a2608cd085410ba56fc6f666148f583c0b29506df770ff57a57520c8d",
+          "IB": "4cbcedd7fa208861af061897c9e76f07e442261e531c4aa7bb6054e1dcdcf70f"
+        }
+      },
+      {
+        "layout": "Alias",
+        "valid_exit_mask": 3,
+        "original_sha256": {
+          "IA": "8033904938517b49e73cc0d0814dc2a9154dddaf730f2638d4f6141cb9e27682",
+          "IB": "b912bbff245c9ca841d14022646e8b376051e55aebdbe73d50a9851a8153c502"
+        }
+      },
+      {
+        "layout": "FirstLost",
+        "valid_exit_mask": 5,
+        "original_sha256": {
+          "IA": "ad47aedafa52ec2aeddcff2625a16a455e32b40bb070727697fdecd666f6b1ad",
+          "IB": "97e4d50ecbfd9f28554f5f16d49fec06ac44f5853c8f869f0ef553fb0c9ec233"
+        }
+      },
+      {
+        "layout": "SecondLost",
+        "valid_exit_mask": 6,
+        "original_sha256": {
+          "IA": "1d27c3ef40cf2c7ee6c0ed2c51906ce6eb58fc357f6467c7140ce61deb7509fb",
+          "IB": "c123d435a6ac5cda21f5cc703a83f6bd188a2730cf02f64ca9491a94f3c8a8d3"
+        }
+      }
+    ]
+  },
+  "qualification": {
+    "cpu": "Apple M4 Max",
+    "macos": "15.6.1",
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "configuration": "Release",
+    "tests": {
+      "image_and_async_unwind": 224,
+      "adjacent_image": 63,
+      "portable_unwind": 46,
+      "function_discovery": 34,
+      "compact_and_dwarf_language": 53
+    },
+    "total": 420,
+    "failed": 0,
+    "skipped": 0,
+    "receipt_sha256": "d542b6fedfc5f3ab493b6aaf9e057a34f5e01b300d8e6295671137dda6cdc317",
+    "test_binary_sha256": "fc1bd7509bcd4a44874ced55c2f3c36c35331d630db6451788735d25341c7657",
+    "joined_regression": {
+      "published_signing_address_images": 318,
+      "verified_signing_rows": 1834,
+      "refused_signing_address_cases": 266,
+      "resolved_interrupted_signing_pcs": 1760,
+      "verified_distant_signing_islands": 28,
+      "resolved_stack_signing_pcs": 132,
+      "verified_shared_authentication_exits": 396,
+      "rejected_image_exit_rows": 198,
+      "resolved_active_spill_snapshots": 2572,
+      "verified_cross_block_authentication_rows": 510,
+      "verified_cross_block_slot_snapshots": 136
+    },
+    "optimized_images": [
+      "original to O0",
+      "O0 to O2",
+      "original to O2 for the cross-block fixtures"
+    ],
+    "dev_decoder_recheck": {
+      "dev_revision": "49d8d6d14ca087873bc6191302269c90314b8de6",
+      "capstone_revision": "c6e6e51565944b8a225e41e0ce697adfc17f24bf",
+      "compared_decoder_revision": "b0009d26a8c617b2328833c96291ac8264036866",
+      "aarch64_sources_and_public_headers_identical": true,
+      "targets": {
+        "NeverDArm64eUnwindRecoveryTests": {
+          "test_binary_sha256": "064ebdc297a432d465bf76bad04bcca8dd6f4e8bec73ee7cd3eec0f6787f2e18",
+          "passed": 46,
+          "skipped": 0
+        },
+        "NeverDArm64eLiftedImageTests": {
+          "test_binary_sha256": "8c1de958ec1aa6cfd7f79b7e9afae32630db348a661bb6a75ec287ca722cb643",
+          "passed": 1,
+          "skipped": 0
+        }
+      },
+      "capstone_source_archive_sha256": "6f0a245c3274791e5c0788407b69e54a8737a77547dc290822fd220734ef8c54",
+      "capstone_library_sha256": "04ea3e60c63926175eb1ff2562af31cf3969cbf9b103ccc9f39673f7762115da"
+    }
+  },
+  "arm_model": {
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/46168244442",
+    "workflow_revision": "36b8ead4fd9acf1ce0bc7aa0362d6a65696d5782",
+    "model_version": "11.32+19",
+    "guest_sha256": "830bc23f5aa2e133de163ff620db0d842996631b2367a8b775d614c8932da38c",
+    "assembly_sha256": "33694c9c7d1b4cad9561059217e6f883fde5187c1e2faedd245d24d03654f2f4",
+    "manifest_sha256": "0b12db0fe06c7a7a4fbc6f080b66c1939819e6bd787434760d674beeba3a9e0f",
+    "calls_per_wrapper_body": {
+      "2": 126,
+      "4": 198,
+      "6": 136
+    },
+    "signed_path_and_exit_combinations_per_new_body": 6,
+    "inventories": {
+      "joins": {
+        "bodies": 460,
+        "calls_across_EL0_EL1_and_four_EnPACM_settings": 14880,
+        "feature_disabled_control_exit": 1
+      },
+      "combined": {
+        "bodies": 324,
+        "calls_across_EL0_EL1_and_four_EnPACM_settings": 8352,
+        "feature_disabled_control_exit": 1
+      },
+      "carriers": {
+        "bodies": 138,
+        "calls_across_EL0_EL1_and_four_EnPACM_settings": 2400,
+        "feature_disabled_control_exit": 1
+      },
+      "distant": {
+        "bodies": 84,
+        "calls_across_EL0_EL1_and_four_EnPACM_settings": 1344,
+        "feature_disabled_control_exit": 1
+      },
+      "scratch-free": {
+        "bodies": 54,
+        "calls_across_EL0_EL1_and_four_EnPACM_settings": 864,
+        "feature_disabled_control_exit": 1
+      },
+      "previous": {
+        "bodies": 36,
+        "calls_across_EL0_EL1_and_four_EnPACM_settings": 576,
+        "feature_disabled_control_exit": 1
+      },
+      "guests": {
+        "bodies": 96,
+        "calls_across_EL0_EL1_and_four_EnPACM_settings": 1536,
+        "feature_disabled_control_exit": 1
+      },
+      "legacy": {
+        "bodies": 66,
+        "calls_across_EL0_EL1_and_four_EnPACM_settings": 1056,
+        "feature_disabled_control_exit": 1
+      }
+    }
+  },
+  "native_arm64e_x1": "Deferred to the existing free-runner TODO."
+}

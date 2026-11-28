@@ -1466,6 +1466,7 @@ void FuncDetector::scanCallTargets(
 
   const unsigned ThreadsN = workerThreadCount();
   constexpr size_t MinChunk = limits::kMinFuncScanChunk;
+  size_t BytesUntilParallel = MinChunk;
 
   auto AddRange = [&](const Segment *Seg, va_t Start, uint64_t RequestedLen) {
     if (!Seg || !Seg->isExecutable() || Seg->Data.empty() || Start < Seg->VA)
@@ -1477,6 +1478,7 @@ void FuncDetector::scanCallTargets(
         RequestedLen, Seg->Data.size() - static_cast<size_t>(StartOff)));
     if (ScanLen == 0)
       return;
+    BytesUntilParallel -= std::min(BytesUntilParallel, ScanLen);
     if (Img.Arch == Arch::X86 || Img.Arch == Arch::X64) {
       // A long range is swept in pieces on the worker threads and the pieces
       // joined afterwards exactly as one sweep would have gone; see below.
@@ -1662,17 +1664,23 @@ void FuncDetector::scanCallTargets(
                          LocalCodeAddresses.end());
   };
 
-  std::vector<std::thread> Ts;
-  Ts.reserve(ThreadsN);
-  for (unsigned T = 0; T < ThreadsN; ++T)
-    Ts.emplace_back([&] {
-      try {
-        Worker();
-      } catch (const func_detect_detail::DiscoveryCancelled &) {
-      }
-    });
-  for (auto &T : Ts)
-    T.join();
+  // Short symbol and section ranges do not need a new thread. Use the same
+  // private decoder so their targets do not depend on the caller's settings.
+  if (PieceJobs.empty() && BytesUntilParallel != 0) {
+    Worker();
+  } else {
+    std::vector<std::thread> Ts;
+    Ts.reserve(ThreadsN);
+    for (unsigned T = 0; T < ThreadsN; ++T)
+      Ts.emplace_back([&] {
+        try {
+          Worker();
+        } catch (const func_detect_detail::DiscoveryCancelled &) {
+        }
+      });
+    for (auto &T : Ts)
+      T.join();
+  }
   func_detect_detail::checkCancellation(Cancellation);
 
   // The targets the joined sweeps find, added to \p Out in order at the end.

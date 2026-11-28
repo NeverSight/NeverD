@@ -20,6 +20,8 @@
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVFloating.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/NdOpEmulator.h"
@@ -295,15 +297,29 @@ void checkLeafReturnWidth(Arch A, llvm::ArrayRef<uint32_t> Words,
   }
 }
 
-TEST(RISCVCycle, RegisterPairRequiresAStableHighWord) {
+TEST(RISCVCounter, RegisterPairRequiresStableHighWordsFromTheSameCounter) {
   using namespace cycle_fixture;
   for (Arch A : {Arch::RISCV32, Arch::RISCV32D}) {
     llvm::StringRef ISA = hasRISCVDoubleABI(A)
                               ? "rv32i2p1_f2p2_d2p2_zicntr2p0_zicsr2p0"
                               : "rv32i2p1_zicntr2p0_zicsr2p0";
-    checkLeafReturnWidth(A, Read64, 8, false, ISA);
-    checkLeafReturnWidth(A, WrongEdge, 4, false, ISA);
-    checkLeafReturnWidth(A, Overwritten, 4, false, ISA);
+    for (const auto &C : Counters) {
+      checkLeafReturnWidth(A, {C.High, C.Low, C.Last, Retry, Return}, 8, false,
+                           ISA);
+      checkLeafReturnWidth(A, {C.High, C.Low, C.Last, Equal, Return}, 4, false,
+                           ISA);
+      checkLeafReturnWidth(A,
+                           {C.High, C.Low, C.Last, Retry, ReplaceHigh, Return},
+                           4, false, ISA);
+      for (const auto &Other : Counters) {
+        if (C.Kind == Other.Kind)
+          continue;
+        checkLeafReturnWidth(A, {C.High, Other.Low, C.Last, Retry, Return}, 4,
+                             false, ISA);
+        checkLeafReturnWidth(A, {C.High, C.Low, Other.Last, Retry, Return}, 4,
+                             false, ISA);
+      }
+    }
   }
 }
 
@@ -938,6 +954,155 @@ TEST(RISCVProfile, FloatingTransfersPreservePayloadsAndValidateNaNBoxes) {
   }
 }
 
+TEST(RISCVProfile, RoundedResultsAccrueFlagsAndObserveAliasedCSRFields) {
+  using integerreg::riscv::fpr;
+  for (Arch A : {Arch::RISCV32D, Arch::RISCV64D}) {
+    BinaryImage Image;
+    Image.Arch = A;
+    Image.Bits = isRISCV32(A) ? Bitness::Bits32 : Bitness::Bits64;
+    Image.RISCV.SingleFloat = Image.RISCV.DoubleFloat = true;
+    Decoder Dec;
+    ASSERT_TRUE(Dec.selectMode(Image, 0x1000));
+    NdOpEmulator Emu(Image);
+    Emu.setStrictMode(true);
+    auto Run = [&](uint32_t W) {
+      uint8_t Bytes[4];
+      llvm::support::endian::write32le(Bytes, W);
+      DecodedInsn Insn;
+      if (Dec.decodeOneForLift(Bytes, 4, 0x1000, Insn) != 4)
+        return false;
+      std::vector<LowOp> Ops;
+      Dec.liftToLow(Insn, Ops);
+      return !Ops.empty() &&
+             llvm::all_of(Ops, [&](const LowOp &O) { return Emu.step(O); });
+    };
+    const auto RR = [](unsigned F7, unsigned R2, unsigned RM) {
+      return (F7 << 25) | (R2 << 20) | (11u << 15) | (RM << 12) | (10u << 7) |
+             0x53u;
+    };
+    const auto CSR = [](unsigned C, unsigned Source, unsigned F, unsigned Dst) {
+      return (C << 20) | (Source << 15) | (F << 12) | (Dst << 7) | 0x73u;
+    };
+    constexpr uint64_t One = UINT64_C(0x3ff0000000000000);
+    Emu.setRegister(fpr(11), One);
+    Emu.setRegister(fpr(12), UINT64_C(0x3ca0000000000000));
+    EXPECT_FALSE(Run(RR(1, 12, 7)));
+    for (unsigned RM = 0; RM <= 4; ++RM) {
+      Emu.setRISCVFCSR(0x10);
+      ASSERT_TRUE(Run(CSR(2, RM, 5, 0))); // fsrmi zero,rm
+      ASSERT_TRUE(Run(RR(1, 12, 7)));     // fadd.d fa0,fa1,fa2,dyn
+      EXPECT_EQ(Emu.getRegister(fpr(10)), One + unsigned(RM >= 3));
+      EXPECT_EQ(Emu.getRISCVFCSR(), (RM << 5) | 0x11);
+    }
+    ASSERT_TRUE(Run(CSR(1, 1, 7, 10))); // clear NX, return the old flags
+    EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)), 17u);
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x90);
+    Emu.setRegister(fpr(12), 0);
+    ASSERT_TRUE(Run(RR(13, 12, 0))); // fdiv.d 1/0
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x98);
+    Emu.setRegister(fpr(11), UINT64_C(0xbff0000000000000));
+    ASSERT_TRUE(Run(RR(45, 0, 0))); // fsqrt.d -1
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0x7ff8000000000000));
+    Emu.setRegister(fpr(11), UINT64_C(0x4000000000000000));
+    ASSERT_TRUE(Run(RR(45, 0, 1))); // sqrt(2) toward zero
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0x3ff6a09e667f3bcc));
+    Emu.setRegister(fpr(11), UINT64_C(0xffffffff00000001));
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff3f000000));
+    ASSERT_TRUE(Run(RR(8, 12, 0))); // fmul.s smallest subnormal by 0.5
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff00000000));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x9b);
+    Emu.setRegister(fpr(11), UINT64_C(0xffffffff7f7fffff));
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff40000000));
+    ASSERT_TRUE(Run(RR(8, 12, 0)));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x9f);
+    Emu.setRISCVFCSR(0x20);         // RTZ, no flags
+    ASSERT_TRUE(Run(RR(8, 12, 7))); // max finite times two saturates
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff7f7fffff));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x25);
+    Emu.setRISCVFCSR(0x20);
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff00000001));
+    ASSERT_TRUE(
+        Run(RR(0, 12, 7))); // max finite plus a subnormal also saturates
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff7f7fffff));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x21);
+    // The product is exactly 2^128. A negative subnormal addend brings it
+    // below the overflow boundary even though binary128 RNE loses the addend.
+    constexpr uint32_t FMA = (13u << 27) | (12u << 20) | (11u << 15) |
+                             (7u << 12) | (10u << 7) | 0x43u;
+    Emu.setRegister(fpr(11), UINT64_C(0xffffffff5f800000));
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff5f800000));
+    Emu.setRegister(fpr(13), UINT64_C(0xffffffff80000001));
+    ASSERT_TRUE(Run(FMA));
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff7f7fffff));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x21);
+    Emu.setRegister(fpr(13), UINT64_C(0xffffffff00000001));
+    ASSERT_TRUE(Run(FMA));
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff7f7fffff));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x25);
+    Emu.setRISCVFCSR(0);
+    Emu.setRegister(fpr(11), UINT64_C(0xffffffff00800000));
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff3f7fffff));
+    ASSERT_TRUE(Run(RR(8, 12, 0)));
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff00800000));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 3); // tiny at full precision, rounded normal
+    Emu.setRISCVFCSR(0);
+    Emu.setRegister(fpr(11), UINT64_C(0xffffffff00000001));
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff00000001));
+    Emu.setRegister(fpr(13), UINT64_C(0xffffffff00800000));
+    ASSERT_TRUE(
+        Run(FMA | 8)); // fnmsub.s: min normal minus min subnormal squared
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff00800000));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 1); // non-tiny at full precision
+    Emu.setRegister(integerreg::gpr(10), UINT32_MAX);
+    ASSERT_TRUE(Run(CSR(3, 10, 1, 10))); // csrrw a0,fcsr,a0
+    EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)), 1u);
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0xff);
+    EXPECT_FALSE(Run(RR(1, 12, 7))); // reserved dynamic frm
+    EXPECT_FALSE(riscv::decodeFloating(RR(1, 12, 5), 4, Image.RISCV));
+    EXPECT_FALSE(riscv::decodeFloating(RR(45, 1, 0), 8, Image.RISCV));
+  }
+}
+
+TEST(RISCVProfile, DiscardedQuotientStillUpdatesFlagsInBothCOutputs) {
+  for (Arch A : {Arch::RISCV32D, Arch::RISCV64D}) {
+    LinkedImage File(A);
+    // fsrmi zero,3; fmv.w.x ft0,zero; fdiv.s ft1,ft0,ft0,dyn; frflags a0; ret
+    File.setWords({0x0021d073, 0xf0000053, 0x180070d3, 0x00102573, 0x00008067});
+    File.riscvAttributes(isRISCV32(A) ? "rv32i2p1_f2p2_d2p2_zicsr2p0"
+                                      : "rv64i2p1_f2p2_d2p2_zicsr2p0");
+    auto Image = ELFLoader().loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    for (bool LLVM : {false, true}) {
+      llvm::LLVMContext Ctx;
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {Image->Entry};
+      Options.LiftMode = LLVM;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Image, Ctx, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      CEmitterOptions Emit;
+      Emit.Image = &*Image;
+      Emit.TheArch = A;
+      Emit.Format = BinaryFormat::ELF;
+      std::string Text;
+      llvm::raw_string_ostream Out(Text);
+      if (LLVM) {
+        ASSERT_TRUE(Result.LlvmModule);
+        ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, Emit));
+      } else {
+        ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit));
+      }
+      const auto Set = Text.find(", frm");
+      const auto Divide = Text.find("fdiv.s ");
+      const auto Read = Text.find(", fflags");
+      ASSERT_NE(Read, std::string::npos) << Text;
+      EXPECT_LT(Set, Divide) << Text;
+      EXPECT_LT(Divide, Read) << Text;
+    }
+  }
+}
+
 TEST(RISCVProfile, ReusedDecoderTracksExtensionEvidenceAndHalfwordBoundaries) {
   const uint8_t Addi[] = {0x05, 0x05}; // c.addi a0,1
   const uint8_t Mul[] = {0x33, 0x05, 0xb5, 0x02};
@@ -980,6 +1145,10 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
       {.Attribute = "_zicntr2p0_zicsr2p0",
        .Features = "+i,+zicntr",
        .Zicntr = true},
+      {.Attribute = "_zbkb1p0", .Features = "+i,+zbkb"},
+      {.Attribute = "_zbb1p0_zbkb1p0",
+       .Features = "+i,+zbb,+zbkb",
+       .Zbb = true},
       {.Attribute = "_zicond1p0", .Features = "+i,+zicond", .Zicond = true},
       {.Attribute = "_c2p0_zicond1p0",
        .Features = "+i,+c,+zicond",
@@ -1026,9 +1195,11 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
         else
           EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
       };
-      Check(cycle_fixture::Low, C.Zicntr);
-      Check(cycle_fixture::Discard, C.Zicntr);
-      Check(cycle_fixture::High, C.Zicntr && A == Arch::RISCV32);
+      for (const auto &Counter : cycle_fixture::Counters) {
+        Check(Counter.Low, C.Zicntr);
+        Check(Counter.Discard, C.Zicntr);
+        Check(Counter.High, C.Zicntr && isRISCV32(A));
+      }
       for (uint32_t Word : cycle_fixture::Other)
         Check(Word, false);
       Check(zicond_fixture::Eqz, C.Zicond);
@@ -1059,7 +1230,7 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
     }
     for (const char *Version :
          {"_zmmul1p1", "_zba1p1", "_zbb1p1", "_zbs2p0", "_zicond1p1",
-          "_zicond2p0", "_zicntr2p1", "_zicntr3p0"}) {
+          "_zicond2p0", "_zicntr2p1", "_zicntr3p0", "_zbkb1p1"}) {
       LinkedImage Unsupported(A);
       Unsupported.riscvAttributes(Base + Version);
       auto Bad = ELFLoader().loadBuffer(Unsupported.buffer());

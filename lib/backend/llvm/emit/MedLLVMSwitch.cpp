@@ -136,8 +136,9 @@ bool MedLLVMEmitter::emitValueDispatch(const MedBlock &Blk, const MedOp &BrOp,
   // A dispatch on another value than the jump's, such as the slot of a
   // relative table, compares the value its selector occurrence bound to.
   MedVar Selector = BrOp.Inputs[0];
-  if (JT->SelectorUseRefs.size() == 1 &&
-      JT->SelectorUseRefs.front().ExpectedOpcode != NdOp::INDIR_BR) {
+  const bool RelativeSlot = JT->SelectorUseRefs.size() == 1 &&
+      JT->SelectorUseRefs.front().ExpectedOpcode != NdOp::INDIR_BR;
+  if (RelativeSlot) {
     const auto Plan =
         CurMedFunc->SwitchSelectorPlans.find({JT->InsnAddr, Blk.Id});
     if (Plan == CurMedFunc->SwitchSelectorPlans.end() ||
@@ -156,9 +157,18 @@ bool MedLLVMEmitter::emitValueDispatch(const MedBlock &Blk, const MedOp &BrOp,
     Ty = llvm::IntegerType::get(*Ctx, PtrBits);
     Target = Builder.CreateTrunc(Target, Ty, "vd.target");
   }
-  // The image's slots hold each label as the address it had there, which
-  // names the label and is no address in this module: a jump to any other
-  // value has nowhere to go.
+  // A standalone mirror holds the original numeric label. In the linked
+  // image the loader relocates the slot and the owning function together.
+  // Their difference identifies the same local block at every load address.
+  va_t LabelBase = 0;
+  if (RelocatedDispatchLabels && !RelativeSlot) {
+    LabelBase = CurMedFunc->Entry;
+    auto *Owner = Mod->getOrInsertGlobal(makeNdDataSymbol(LabelBase),
+                                         Builder.getInt8Ty());
+    Owner->setDSOLocal(true);
+    Target = Builder.CreateSub(
+        Target, llvm::ConstantExpr::getPtrToInt(Owner, Ty), "label.offset");
+  }
   auto *DefaultBB = llvm::BasicBlock::Create(*Ctx, "vd.default.trap", CurFunc);
   llvm::IRBuilder<> DefaultBuilder(DefaultBB);
   DefaultBuilder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx),
@@ -171,7 +181,7 @@ bool MedLLVMEmitter::emitValueDispatch(const MedBlock &Blk, const MedOp &BrOp,
   std::set<uint64_t> Seen;
   for (size_t K = 0; K < CaseBlocks.size(); ++K) {
     const llvm::APInt Label =
-        llvm::APInt(64, static_cast<uint64_t>(JT->CaseLabels[K]))
+        llvm::APInt(64, static_cast<uint64_t>(JT->CaseLabels[K]) - LabelBase)
             .zextOrTrunc(Ty->getBitWidth());
     if (Seen.insert(Label.getZExtValue()).second)
       SW->addCase(llvm::ConstantInt::get(*Ctx, Label), CaseBlocks[K]);

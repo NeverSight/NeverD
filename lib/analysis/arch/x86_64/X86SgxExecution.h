@@ -12,6 +12,9 @@
 
 #include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
 
+#include <span>
+#include <vector>
+
 namespace neverd::analysis::detail {
 struct X86SgxFrameProgress {
   std::optional<uint64_t> XSavePage, GprPage;
@@ -20,13 +23,18 @@ struct X86SgxFrameProgress {
 struct X86SgxInstructionProgress {
   std::optional<uint64_t> TCSPhysical;
   X86SgxFrameProgress Frame, NotificationFrame;
+  // Retain a completed KEYREQUEST/TARGETINFO read across a later backing stop.
+  std::vector<uint8_t> Request;
+  std::optional<std::array<uint8_t, 64>> ReportData;
+  // Completed page walks survive a later missing page-table backing.
+  std::optional<uint64_t> SecInfo, Destination, Source;
 };
 
 class X86SgxExecution {
 public:
   static llvm::Expected<std::optional<uint8_t>>
   instructionException(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC,
-                       const translate::X86SgxMemory &Memory);
+                       const translate::X86PagedMemory &Memory);
   static llvm::Expected<X86ModeExecutionResult>
   instruction(X86ModeState &State, translate::X86PagedMemory &Memory,
               bool Fetched, llvm::ArrayRef<uint8_t> Original,
@@ -40,6 +48,34 @@ public:
                                       uint64_t SavedFlags);
 
 private:
+  static constexpr unsigned Report2Size = 1024, Report2PayloadSize = 768;
+  static llvm::Expected<std::array<uint8_t, Report2Size>>
+  buildReport2(const translate::X86SgxKeyPlatform &Platform,
+               const translate::X86SgxPage &SECS,
+               std::span<const uint8_t, 64> Data,
+               translate::X86SgxReport2MACCoverage Coverage);
+  enum class KeyReportLeaf : uint32_t {
+    Report = 0,
+    Key = 1,
+    VerifyReport2 = 8,
+    Report2 = 10,
+    Key256 = 11
+  };
+  static llvm::Expected<X86ModeExecutionResult>
+  keyOrReport(KeyReportLeaf Leaf, X86ModeState &State,
+              translate::X86PagedMemory &Memory,
+              X86SgxInstructionProgress &Progress, unsigned InstructionSize,
+              X86ModeExecutionResult Result);
+  static llvm::Expected<X86ModeExecutionResult>
+  dynamicMemory(X86ModeState &State, translate::X86PagedMemory &Memory,
+                X86SgxInstructionProgress &Progress, unsigned InstructionSize,
+                X86ModeExecutionResult Result);
+  static llvm::Expected<bool>
+  walkOperand(translate::X86PagedMemory &Memory,
+              const translate::X86LinearAccess &Access,
+              X86ModeExecutionResult &Result, uint64_t &Physical);
+  static void retireEnclaveLeaf(X86ModeState &State, unsigned InstructionSize,
+                                X86ModeExecutionResult &Result);
   static llvm::Expected<bool> bindFrame(translate::X86PagedMemory &Memory,
                                         const translate::X86SgxEnclave &Enclave,
                                         const translate::X86SgxPage &TCS,

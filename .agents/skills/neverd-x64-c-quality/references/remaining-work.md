@@ -19,6 +19,13 @@ breakpoint from a post-commit trap. TPR aliases, device routing, source
 arbitration and complete environment import remain open. The registry inputs
 have the ordinary scalar binding below.
 
+For physical entries whose return stack can change, the V6 paged
+`return_stack_events` interface supplies named C entry points on both routes.
+The producer supplies the current offline state and paged memory once per
+invocation. Each instruction obtains its operands at its original PC. CALL,
+RET, audited unproved jumps and privilege returns expose their distinct exits.
+See [the invocation and resumption contract](../../../../docs/x64-continuation-source.md#paged-entries-with-a-changing-return-stack).
+
 The single-function ordinary C view can take an original V6 pre-CALL state
 directly, including a bounded stack window for offline analysis. Its checked
 64-bit load consumes one observation at the actual operand. The unbound
@@ -37,6 +44,8 @@ to that attempt. Ordinary exports perform no debugger queries.
 The [manifest probe](../../../../scripts/qemu_xbegin_probe.py) stages the
 unresolved instruction in a fresh diskless KVM guest and produces the complete
 request from its first stop. It uses the same debugger capture and V6 validator.
+Use `--x64-xbegin-observation` to reuse either capture file with a new selection
+that includes the observed instruction. The target request owns its dispatch.
 An entry selection can keep automatic RTM checks at other sites. The observed
 site contributes the vector 6 step and has no RTM abort successor of its own.
 
@@ -48,10 +57,16 @@ retains its recovered value. The default source imports the original word
 and preserves the registry call through optimization. The physical word
 can differ across invocations with identical ordinary entry parameters.
 Single-entry HighC exports also keep mapped direct callees distinct from
-MinGW header declarations when only the PDB names the omitted routine. In
-original-state exports the Win64 integer calls whose parameter types are
-unknown use open declarations. Calls retain their default argument promotions
-and original linker symbols in both GNU C11 and C23.
+MinGW header declarations when only the PDB names the omitted routine.
+Ordinary and original-state HighC exports use open declarations for direct
+Win64 calls with unknown parameter types when every use passes only integer
+or pointer slots. Both GNU C11 and C23 retain the argument promotions and
+original linker symbols. A focused PE export resolves the two code operands
+of a verified native dispatch frame from exact PDB publics. The same
+instruction check lets the register analysis use a reached service's
+documented parameters when its public was omitted at load. A direct Win64
+call can retain its physical RCX result across the x87 context transport,
+with both the call target and the two x87 state transfers preserved.
 The V6 `native_rtm_abort_steps` binding handles an authenticated immediate
 abort pair under declared RTM support as one translated step. It preserves
 early-abort EAX and the original fallback. The earlier environment-budget

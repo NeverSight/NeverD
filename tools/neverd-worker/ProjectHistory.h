@@ -122,6 +122,7 @@ public:
   std::string blockedReason() const { return blocked_; }
   /// Refuses an edit while the history is blocked (blockedReason).
   void requireUsable() const;
+  bool matchesLoadedState(const Json &state) const;
   void verifyLoadedState(const Json &state);
   static Json normalizedState(Json state);
   /// Read and validate committed user tables without loading edit history or

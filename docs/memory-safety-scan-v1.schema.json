@@ -15,7 +15,38 @@
       "type": "object",
       "required": ["audit", "hunt"],
       "properties": {
-        "audit": {"$ref": "#/$defs/analyzer"},
+        "audit": {
+          "$ref": "#/$defs/analyzer",
+          "properties": {
+            "indexed_read_output": {
+              "type": "object",
+              "required": ["reads", "verdict", "written_before_read", "reaches_output", "returned_value", "returned_storage", "unmatched_native"],
+              "properties": {
+                "reads": {"$ref": "#/$defs/count"},
+                "verdict": {"enum": ["SAFE", "UNKNOWN"]},
+                "written_before_read": {"$ref": "#/$defs/writeEvidence"},
+                "reaches_output": {
+                  "$ref": "#/$defs/writeEvidence",
+                  "required": ["YES", "NO", "UNKNOWN"],
+                  "properties": {"NO": {"$ref": "#/$defs/count"}}
+                },
+                "returned_value": {"$ref": "#/$defs/count"},
+                "returned_storage": {"$ref": "#/$defs/count"},
+                "unmatched_native": {"$ref": "#/$defs/count"}
+              }
+            },
+            "direct_read_initialization": {
+              "type": "object",
+              "required": ["preceding_constant_store", "local_stack", "outside_or_unresolved"],
+              "properties": {
+                "preceding_constant_store": {"$ref": "#/$defs/count"},
+                "bounded_index_store": {"$ref": "#/$defs/count"},
+                "local_stack": {"$ref": "#/$defs/count"},
+                "outside_or_unresolved": {"$ref": "#/$defs/count"}
+              }
+            }
+          }
+        },
         "hunt": {"$ref": "#/$defs/analyzer"}
       }
     },
@@ -24,6 +55,11 @@
   "$defs": {
     "verdict": {"enum": ["SAFE", "UNSAFE", "UNKNOWN"]},
     "count": {"type": "integer", "minimum": 0},
+    "writeEvidence": {
+      "type": "object",
+      "required": ["YES", "UNKNOWN"],
+      "properties": {"YES": {"$ref": "#/$defs/count"}, "UNKNOWN": {"$ref": "#/$defs/count"}}
+    },
     "address": {"type": "string", "pattern": "^0x[0-9A-Fa-f]+$"},
     "analyzer": {
       "type": "object",

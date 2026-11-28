@@ -247,6 +247,12 @@ void scanImportThunks(BinaryImage &Img) {
   if (TargetImports.empty() && Img.RuntimeCallablePointerSlots.empty())
     return;
 
+  if (!Img.LoadOnlyFunctionEntries.empty() &&
+      Img.Format == BinaryFormat::COFF && Img.Arch == Arch::AArch64) {
+    scanSelectedImportThunksAArch64(Img, TargetImports);
+    return;
+  }
+
   auto Existing = Img.getSymbolAddresses();
   const ImportThunkCandidates Candidates(Img);
   [[maybe_unused]] size_t Added = 0;
@@ -687,7 +693,11 @@ void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress) {
 
   [[maybe_unused]] size_t Added = 0;
   auto ScanRange = [&](const Segment *Seg, va_t Start, uint64_t RequestedLen) {
+    // Mach-O link-edit offsets can equal code addresses in a zero-based
+    // image. Dyld consumes these records through their load commands.
     if (!Seg || !Seg->isReadable() || Seg->isWritable() ||
+        (Img.Format == BinaryFormat::MachO &&
+         Seg->Name == section_names::macho::LinkeditSeg) ||
         Seg->Data.size() < PtrSize || Start < Seg->VA)
       return;
     const uint64_t StartOff64 = Start - Seg->VA;

@@ -1,6 +1,6 @@
 **语言**: [English](../../README.md) | [简体中文](project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: dc8f42e6cd494f4f2776cff5c3a1fd76711742ca11d1131eaed3b3cf5ea6fa64 -->
+<!-- i18n-source: 0af0d83722aeab684a0e8227e901ca4146336762b19d4173eaf981456cf80116 -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 
 | 目标 | 已验证的 ELF 配置 |
 |---|---|
-| RISC-V | 小端 RV32（ILP32、ILP32D） 和 RV64（LP64、LP64D）。根据 ELF 中的标记选择 M、A、整数 C，或单独的 Zmmul、Zaamo、Zalrsc 和 Zca 扩展。ELF ISA 属性也可启用 Zba 1.0、Zbb 1.0、Zbs 1.0 和 Zicond 1.0。Zicntr 2.0 支持 `rdcycle`，RV32 还支持 `rdcycleh`。 |
-| PowerPC | 大端和小端 PPC32 System V 及 PPC64 ELFv1/ELFv2。PPC32 支持通过 secure PLT 和传统 BSS-PLT 进行跨模块调用。两种 PPC64 ABI 均支持跨模块 PLT 调用和 TOC 切换。ELFv1 使用函数描述符，ELFv2 支持全局入口和本地入口。已验证有符号和无符号除法、返回乘积高字的乘法、报告溢出的乘法，以及这些指令对 CR0 和 XER 的影响。PPC64 还支持 POWER10 带前缀的整数加法、加载和存储指令。 VMX 的 `vaddubm` 对 16 对字节分别做模 256 加法。 |
+| RISC-V | 小端 RV32（ILP32、ILP32D） 和 RV64（LP64、LP64D）。根据 ELF 中的标记选择 M、A、整数 C，或单独的 Zmmul、Zaamo、Zalrsc 和 Zca 扩展。ELF ISA 属性也可启用 Zba 1.0、Zbb 1.0、Zbs 1.0 和 Zicond 1.0。Zicntr 2.0 支持 `rdcycle`、`rdtime` 和 `rdinstret`，RV32 还可分别读取这三个计数器的高 32 位。 Zbkb 1.0 支持 `pack` 和 `packh`，RV64 还支持 `packw`。 |
+| PowerPC | 大端和小端 PPC32 System V 及 PPC64 ELFv1/ELFv2。PPC32 支持通过 secure PLT 和传统 BSS-PLT 进行跨模块调用。两种 PPC64 ABI 均支持跨模块 PLT 调用和 TOC 切换。ELFv1 使用函数描述符，ELFv2 支持全局入口和本地入口。已验证有符号和无符号除法、返回乘积高字的乘法、报告溢出的乘法，以及这些指令对 CR0 和 XER 的影响。PPC64 还支持 POWER10 带前缀的整数加法、加载和存储指令。VMX 的 `vaddubm`、`vadduhm` 和 `vadduwm` 分别对 8、16 和 32 位无符号元素逐项相加，结果按元素位宽回绕。 对应的逐元素模减法为 `vsububm`、`vsubuhm` 和 `vsubuwm`。 |
 
 这些架构配置的原生代码重写仍待实现。 [RISC-V 和 PowerPC 支持范围（英文）](../riscv-powerpc.md)
 
@@ -341,6 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 发现的函数 |
 | `disasm` | 反汇编（`--func` 名称或十六进制） |
 | `sym-explore` | 有界原生 LowIR 路径探索（`--func`；JSON 输出） |
+| `scan --gguf` | [检查本地模型、比较张量并验证独立重建的 GGUF 文件](../model-scan.md) |
 | `scan` | [检查对象生命周期、初始化、访问边界和格式字符串，输出 JSON](../memory-safety-scan.md) |
 | `hex` | 按地址十六进制转储 |
 | `cfg` / `callgraph` | CFG / 调用图（JSON；可选 DOT/SVG） |

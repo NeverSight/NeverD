@@ -4,11 +4,11 @@
 
 | ELF machine | Class and byte order | ABI used for integer arguments and returns | Encoding |
 | --- | --- | --- | --- |
-| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbb, Zbs, Zicond, Zicntr cycle reads |
-| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbb, Zbs, Zicond, Zicntr cycle reads |
-| RISC-V | ELF32 or ELF64, little-endian | ILP32D or LP64D, eight floating argument registers and two floating result registers | Integer profile plus F/D loads, stores, register transfers and sign injection, including compressed floating memory forms |
-| PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset and VMX byte addition |
-| PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Classic scalar, POWER10 prefixed fixed-point forms and VMX byte addition |
+| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbb, Zbs, Zbkb register packing, Zicond, Zicntr cycle, time and instret reads |
+| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbb, Zbs, Zbkb register packing, Zicond, Zicntr cycle, time and instret reads |
+| RISC-V | ELF32 or ELF64, little-endian | ILP32D or LP64D, eight floating argument registers and two floating result registers | Integer profile plus scalar F/D arithmetic, conversions, comparisons, sign injection, register and memory transfers, compressed floating memory forms and floating-point control/status registers |
+| PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset and VMX byte, halfword and word addition and subtraction |
+| PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Classic scalar, POWER10 prefixed fixed-point forms and VMX byte, halfword and word addition and subtraction |
 
 For RISC-V, the ELF class selects XLEN. The float ABI flag selects the integer or double-float calling convention. A double-float image with an explicit ISA attribute must advertise D. The loader
 reads normalized `Tag_RISCV_arch` attributes for M, A and their integer
@@ -26,6 +26,8 @@ uses the physical instruction length for the link address.
 
 The double-float ABI passes named floating values in `fa0`–`fa7` while integer arguments independently consume `a0`–`a7`. A qualifying one- or two-member record can use both register files. Unnamed variadic arguments follow the integer convention. Single-precision register values are NaN-boxed in the 64-bit floating register file. Loads, stores and raw register moves retain payload bits. Sign injection checks narrow operand boxing. [RISC-V hardware floating-point calling convention](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#_hardware_floating_point_calling_convention).
 
+Scalar F/D arithmetic supports the five standard rounding modes. An instruction with dynamic rounding reads `frm`. Arithmetic, square root, fused multiply-add, conversions and comparisons accrue the applicable exceptions in `fflags`. CSR reads, swaps, bit sets and clears access `fflags`, `frm` and their shared representation in `fcsr`. The concrete emulator takes an explicit initial FCSR. Native RISC-V output executes these operations in the guest's floating-point environment. [RISC-V F extension](https://docs.riscv.org/reference/isa/v20260120/unpriv/f-st-ext.html). [RISC-V D extension](https://docs.riscv.org/reference/isa/v20260120/unpriv/d-st-ext.html).
+
 Zba 1.0 enables the three XLEN-wide shift-and-add forms. On RV64,
 `add.uw`, `sh1add.uw`, `sh2add.uw`, `sh3add.uw` and `slli.uw`
 zero-extend the first source word before arithmetic. Zbs 1.0 enables
@@ -38,17 +40,27 @@ counts examine the low 32 bits, and counting the leading or trailing zeros
 of a zero word yields 32. The ELF ISA attribute selects each extension.
 [RISC-V Bit Manipulation specification](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
 
+Zbkb 1.0 enables register packing. `pack` places the low half of the first
+source below the low half of the second. `packh` packs their low bytes in
+the same order and zero-extends the result. RV64 `packw` packs the low
+halfwords and sign-extends bit 31. With a zero second source, RV32 `pack`
+and RV64 `packw` also encode the Zbb instruction `zext.h`.
+[RISC-V scalar cryptography specification](https://docs.riscv.org/reference/isa/v20240411/unpriv/scalar-crypto.html).
+
 Zicond 1.0 adds `czero.eqz` and `czero.nez`. They compare the whole second
 source register with zero. When the named condition holds, the result is
 zero. Otherwise the result is the first source register. Linked ELF inputs
 need the `zicond1p0` ISA attribute, and rebuilt LLVM functions retain
 `+zicond`. [RISC-V Zicond specification](https://docs.riscv.org/reference/isa/unpriv/zicond.html).
 
-With the Zicntr 2.0 ELF attribute, `rdcycle` reads XLEN bits from the guest
-cycle counter with either the integer or double-float ABI. On RV32, `rdcycleh` reads its upper 32 bits. Each instruction
-samples separately, including a read whose destination is x0. Native C and
-LLVM projections read the guest CSR. LowIR emulation accepts a caller-supplied
-64-bit counter reader and stops if a sample is unavailable.
+With the Zicntr 2.0 ELF attribute, `rdcycle`, `rdtime` and `rdinstret`
+read XLEN bits from the cycle, real-time and retired-instruction counters.
+RV32 reads the low 32 bits and uses `rdcycleh`, `rdtimeh` and `rdinstreth`
+for the upper 32. Each read samples separately, including reads into x0.
+RV32 recovers a 64-bit result when a high/low/high loop retries until two
+high reads from the same counter agree. Native C and LLVM read the guest CSR.
+LowIR emulation calls the source installed for that counter with
+`setRISCVCounterReader` once per instruction and stops if the selected counter is unavailable.
 [RISC-V counter extensions](https://docs.riscv.org/reference/isa/unpriv/counters.html).
 
 Linked RV32 and RV64 executables and shared libraries support the default
@@ -164,9 +176,10 @@ currently rejected. [OpenPOWER ELFv2 ABI](https://openpower.foundation/specifica
 The scalar encodings and flag definitions follow Books I and II of versions
 2.07b and 3.1c of the ISA. [OpenPOWER ISA](https://openpowerfoundation.org/specifications/isa/).
 
-PowerPC `vaddubm` adds corresponding bytes in two VMX registers modulo
-256. Each byte discards its carry. The sixteen lanes have the same addition
-semantics in either byte order. The AltiVec ABI passes vectors in v2 through
+PowerPC VMX `vaddubm`, `vadduhm` and `vadduwm` add unsigned elements
+of 8, 16 and 32 bits respectively. `vsububm`, `vsubuhm` and `vsubuwm`
+subtract the second source from the first at those widths. Each lane wraps independently in
+both byte orders. The AltiVec ABI passes vectors in v2 through
 v13 and returns a vector in v2. [AltiVec Programming Environments Manual](https://www.nxp.com/docs/en/reference-manual/ALTIVECPOWERISAPEM.pdf).
 
 ## Analysis coverage
@@ -174,9 +187,9 @@ v13 and returns a vector in v2. [AltiVec Programming Environments Manual](https:
 | Stage | RISC-V | PowerPC |
 | --- | --- | --- |
 | Identify and load | ELF class, machine, flags and attributes | ELF class, machine, ABI flag and byte order |
-| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences, atomics, cycle reads and the floating transfers and sign operations above | Integer ALU, signed and unsigned word/doubleword division, VMX modulo byte addition, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
+| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences, atomics, register packing, base counter reads, scalar F/D operations and floating-point control/status registers | Integer ALU, signed and unsigned word/doubleword division, VMX modulo byte, halfword and word addition and subtraction, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
 | CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer and double-float ABI argument registers | Direct and conditional branches, CTR loops, conditional direct and indirect calls, CTR jumps and guarded LR returns, integer register arguments |
-| Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset | Same stages in target byte order |
+| Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset and scalar F/D operations, including RISC-V rounding and FCSR | Same stages in target byte order for the qualified PowerPC subset |
 | Native rewrite | Unsupported | Unsupported |
 
 When selected on its own, a straight-line RV32 or PPC32 leaf can establish a
@@ -254,7 +267,7 @@ displacement and boundary rules for a PC-relative linkage stub.
 [Power ISA, Book I](https://openpowerfoundation.org/specifications/isa/).
 
 The strict lifters report unsupported instructions at their original VA.
-Other RISC-V system and CSR instructions, rounded floating arithmetic, V and vendor extensions still
+Other RISC-V system and CSR instructions, V and vendor extensions still
 require lifting support. Additional PowerPC VMX operations, VLE, SPE, VSX,
 other prefixed forms and system instructions also remain outside this profile.
 Relative relocations write the link-time pointer in target byte order.
@@ -347,7 +360,7 @@ python3 unittests/lift/elf-integer/wide_shifts.py \
   --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld
 ```
 
-The bit-operation fixture executes all Zbb instructions and the indexed
+The bit-operation fixture executes all Zbb instructions, the Zbkb packing forms and the indexed
 byte-reversed transfers and trailing-zero counts. A separate caller compares each register result and
 each affected or surrounding byte with a Python oracle. It checks the
 original and all three rebuilt projections at two optimization levels on
@@ -378,10 +391,12 @@ python3 unittests/lift/elf-integer/conditional_branches.py \
 ```
 
 The counter and VMX fixture links each rebuilt callee to a separately compiled
-native caller. ILP32, ILP32D, LP64 and LP64D runs read the guest counter under
-QEMU. RV32 also repeats its high/low/high loop across a forced rollover. PowerPC callers exercise two-argument addition and a three-argument function
-that leaves its first vector unused. Both check all 65,536 unsigned byte pairs
-on PPC32 and PPC64 in both byte orders. Pass `--elfv1-ld /path/to/powerpc64-linux-gnu-ld`
+native caller. ILP32, ILP32D, LP64 and LP64D runs bracket each counter read
+with independent guest reads under QEMU. Deterministic samples force an RV32
+rollover and check which counter each instruction observes. PPC32 and PPC64
+callers test all 65,536 byte pairs, carries, borrows and wraparound at halfword and
+word boundaries, and a chain that changes element width. They run in both
+byte orders. Pass `--elfv1-ld /path/to/powerpc64-linux-gnu-ld`
 to exercise ELFv1 function descriptors as well.
 
 ```sh

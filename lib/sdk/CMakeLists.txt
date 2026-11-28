@@ -94,6 +94,7 @@ endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/NeverDProjectDatabase.cmake)
 neverd_add_project_database()
 add_library(neverd_shared SHARED ${NEVERD_SDK_SOURCES})
+neverd_stage_notices(neverd_shared nlohmann-json "${CMAKE_SOURCE_DIR}/LICENSES/nlohmann-json/LICENSE.MIT")
 if(BUILD_TESTING)
     target_sources(neverd_shared PRIVATE capi/SessionTestAccess.cpp)
 endif()
@@ -140,6 +141,7 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDLift
     NeverDLoader
     NeverDJVMRecovery
+    NeverDModel
     NeverDPythonRecovery
     NeverDLuaRecovery
     NeverDSupport

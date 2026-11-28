@@ -25,6 +25,7 @@
 #include "neverd/decode/InstructionRelocations.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 #include "neverd/ir/low/AArch64ImmediateMemoryImage.h"
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/GuardedZeroSelect.h"
@@ -2724,6 +2725,16 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       int Sz = Dec.decodeUnitForLift(Seg->Data.data() + Off, Remain, Cur, Unit);
       const DecodedInsn &DI = Unit.Head;
       if (Sz <= 0) {
+        // Preserve the failed decode. A paged continuation may bind a known
+        // terminal fetch fault only if its entire span belongs to this path.
+        if (Img.Arch == Arch::X64 && PathMode == InstructionMode::Default) {
+          const auto Fault =
+              x86PagedCode64FaultEncoding(Seg->Data.data() + Off, Remain);
+          if (Fault && Img.hasExecutableCodeOwnerRange(Cur, Fault->Size) &&
+              instructionFitsCurrentOwnership(Cur, Fault->Size) &&
+              !Img.hasUnappliedCodeRelocation(Cur, Fault->Size))
+            UnsupportedInstructionAddresses.insert(Cur);
+        }
         DecodeFailureAddresses.insert(Cur);
         break;
       }

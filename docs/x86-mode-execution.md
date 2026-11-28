@@ -302,6 +302,17 @@ latched machine checks, SMI, INIT, SIPI, NMI and fixed local APIC vectors.
 `interrupt` accepts an already selected IRQ or NMI. The embedding supplies
 error records, controller arrivals and startup signals.
 
+### Local timer and halted execution
+
+A bound deadline timer receives the full EDX:EAX value on WRMSR and returns
+it on RDMSR. Pass an absolute guest TSC with the interrupt bank to sample
+expiry. A deadline can become pending while IF is clear, while HLT is waiting,
+or on the boundary that admits SMI. The regression programs the deadline in
+code64, executes HLT, runs RSM from private real-mode firmware and checks the
+fixed interrupt's saved return PC against the instruction following HLT.
+Eight original KVM comparisons check deadline-mode selection, expiry, masking,
+MSR readback and IRR. [Local APIC timer binding](x86-local-apic.md#local-tsc-deadline) · [Execution receipts](evidence/x86-code64-prefix-faults-2026-11-28.json)
+
 ### Conventional machine checks
 
 Bind `X86ModeState::MCA` to the virtual CPU's banks and optional global control
@@ -351,6 +362,21 @@ keeps that enclave's EPC pages and ownership available for a later ERESUME.
 This profile accepts one logical processor outside VMX operation.
 [Linux KVM INIT and SIPI](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/lapic.c)
 [Intel SGX section 40.9](https://cdrdv2-public.intel.com/843859/332831-sdm-vol-3d-dec-24.pdf)
+
+### Returning from SMM with branch single-stepping
+
+RSM reads the save area and checks the restored control and debug state before
+a branch single step can retire. An invalid save image shuts the CPU down. A
+missing physical page for a restored PAE PDPT suspends the instruction in SMM.
+A valid return with firmware TF and BTF uses the processor's
+`RsmCountsAsBranch` binding. If the processor takes the trap, NeverD sets
+DR6.BS, clears BTF and delivers #DB through the restored IDT with the saved
+return PC. An unbound retirement stays at the firmware instruction.
+
+The local P- and E-core KVM vCPUs read zero back after writing BTF in
+IA32_DEBUGCTL. The two retirement choices are software-model coverage. The
+separate KVM save-map checks execute SMI and RSM with ordinary debug state.
+[Intel branch single-stepping](https://cdrdv2-public.intel.com/874250/253669-090-sdm-vol-3b.pdf) · [Qualification record](evidence/x86-sgx-256bit-2026-11-28.json)
 
 ## Qualification at `6f81b8559b`
 

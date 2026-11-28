@@ -32,8 +32,8 @@ KVM vCPUs on EPYC 7763 and EPYC 9V74 processors. Each runner executed twelve
 x64 guest images. With the upper half of RAX zero, the original
 `67 0F 01 D8` and the HighC and LLVM-to-C outputs at O0/O2 all returned.
 The four generated guests completed 200 register and xstate contexts per
-runner. With a nonzero upper half, all six images per runner raised vector 13
-with error code zero at `67 0F 01 D8`. Each exception frame records the full
+runner. With `0xfedcba98` in the upper half, all six images per runner raised
+vector 13 with error code zero at `67 0F 01 D8`. Each exception frame records the full
 faulting RAX and instruction bytes.
 
 The generated faults occurred inside LLVM's native
@@ -44,6 +44,56 @@ instead occurs at the fixture's original VMRUN. The current 64-bit NeverC
 revision produced the same machine objects and guest images as the hosted
 fixtures.
 [AMD KVM execution and byte hashes](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
+
+On November 28 the regenerated HighC and LLVM-to-C images ran on an EPYC
+7763 (Ubuntu 24.04) and an EPYC 9V74 (Ubuntu 22.04). Each executed all
+twelve images. For each zero-high-half input, the debugger observed the
+route's own `67 0F 01 D8`, then RIP+4 with the same full RAX and VMCB exit
+`0x81`. For each nonzero-high-half input the next observation was a processor
+exception with vector 13, error code zero, the same RAX and the prefixed
+instruction's RIP. The four generated sites belonged to the intrinsic called
+from the original NeverD step at `0x1010`. Each AMD runner completed 200
+generated register and xstate contexts. The Intel runner in each workflow
+exposed no guest SVM.
+
+The pinned LLVM r12 backend compiled the current x64 NeverC IR. The new HighC
+objects differed from the older hosted fixtures. The LLVM-to-C objects matched
+the earlier ones. Both runs used the current objects and boot images, with
+matching ELF symbol files for the four generated tagged-input cases.
+[EPYC 7763 execution](https://github.com/gmh5225/test_mac_intel/actions/runs/46132714914)
+· [EPYC 9V74 execution](https://github.com/gmh5225/test_mac_intel/actions/runs/46132796766)
+· [Per-image addresses and hashes](evidence/x86-code64-prefix-faults-2026-11-28.json)
+
+The r17 candidate was also rebuilt in `test_mac_intel` using the verified x64
+NeverC executable. Both SDK builds at `5646cd6173` reproduced the exact bytes of
+the two C exports archived at `e0584f30c4`. All eight generated object and
+boot-image hashes and the four tagged-input symbol files matched the catalog.
+Nested KVM executed those eight images and the four original controls on an
+EPYC 7763 and an EPYC 9V45. On each CPU all six zero-high-half cases returned,
+and all six nonzero-high-half cases raised #GP(0) at the four-byte instruction.
+Each generated fault mapped back to the original step at `0x1010`.
+[EPYC 7763 hosted rebuild](https://github.com/gmh5225/test_mac_intel/actions/runs/46144197510) · [EPYC 9V45 hosted rebuild](https://github.com/gmh5225/test_mac_intel/actions/runs/46144437596)
+
+The workflow exported HighC and LLVM-to-C from NeverD `d3f236e236`. x64 NeverC
+`6d63a76bd6` and the LLVM r17 backend rebuilt all eight generated images.
+On an EPYC 7763 all six cases with a zero upper half returned at RIP+4 with
+VMCB exit code `0x81`. All six cases with `0xfedcba98` in the upper half raised
+#GP(0) at `67 0f 01 d8`. Both outcomes preserved RAX. Each generated fault PC
+mapped to input step `0x1010`. An independent local rebuild matched all eight
+objects, symbol ELFs and guest images.
+[Hardware execution and guest rebuild](https://github.com/gmh5225/test_mac_intel/actions/runs/46164846857) · [Per-image fault PCs and hashes](evidence/x86-sgx-256bit-2026-11-28.json)
+
+Local Hex-Rays analysis of the retained HighC O2 symbol ELF reproduced the
+RCX counterexample at `ida_vmrun_rcx_result`. It returned the constant
+`0x1234` in the pseudocode. The hosted AMD traces observed `RCX=0x5678` after
+VMEXIT. For the separate prefixed wrapper, Hex-Rays rendered a VMRUN call
+followed by a return of its input. The two hardware inputs established when
+that return actually executed. [IDA output, original bytes and guest observations](evidence/x86-code64-prefix-faults-2026-11-28.json)
+
+The local QEMU 10.2.2 TCG run returned for both high-half inputs. The Ubuntu
+packaged TCG run stopped earlier in the guest's VMCB exit-code check.
+The hosted KVM jobs record the registers and instruction bytes at the actual
+VMRUN and its successor or exception. [TCG run log](https://github.com/gmh5225/test_mac_intel/actions/runs/46143713941)
 
 After integrating `dev` through `d7c5338cf5`, a fresh r7 SDK shared library
 still exported identical HighC and LLVM-to-C source bytes. The portable x64

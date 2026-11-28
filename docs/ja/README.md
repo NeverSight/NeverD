@@ -1,6 +1,6 @@
 **Languages**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
+<!-- i18n-source: 5a80af8799dc800d65c3ba227cdb578e8edce910f296be92b37bf16083b2a22f -->
 
 [← NeverD プロジェクト](project.md)
 
@@ -18,6 +18,7 @@
 | [貢献ガイド](CONTRIBUTING.md) | 開発環境、ビルドプロファイル、ワークフロー、スタイル、PR 要件 |
 | [アーキテクチャ](architecture.md) | IR 経路、コンポーネント境界、strict lifting、サポート深度、変更箇所 |
 | [ソースとネイティブオブジェクトのパッチ](source-patching.md) | コンパイラ選択、ネイティブオブジェクト、束縛、例外、公開処理と検証済みプロファイル |
+| [オフラインモデルセキュリティスキャン（英語）](../model-scan.md) | GGUF、分割 Safetensors、付属テンプレート、ONNX 構造、ローカル基準モデルとの比較 |
 | [オフライン Web 解析（英語）](../web-analysis.md) | C++ による成果物・ソース・バインディング・マップの検査、メタデータ方針、SDK と現在の検証範囲 |
 | [JavaScript の基本書き換え（英語）](../web-source-rewrite-profile.md) | 明示的なパス、局所置換の検証、厳密な逆変換、検証記録に結び付いたローカル出力 |
 | [Bun 単体実行ファイルのプロファイル（英語）](../web-bun-profile.md) | 範囲を限定した x64/ARM64 の ELF、単一アーキテクチャ Mach-O、PE 抽出、元の範囲と固定テスト素材の出所 |

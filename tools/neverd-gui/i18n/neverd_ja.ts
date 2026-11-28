@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Model Security Scan...</source>
+        <translation>モデルのセキュリティスキャン...</translation>
+    </message>
+    <message>
+        <source>Inspect local model files and package templates</source>
+        <translation>ローカルのモデルファイルと付属テンプレートを検査</translation>
+    </message>
+    <message>
         <source>Inspect JVM classes and JARs…</source>
         <translation>JVM クラスと JAR を調べる…</translation>
     </message>
@@ -11552,6 +11560,193 @@ Your previous graph is still available.</source>
     <message>
         <source>Save native component to a new file</source>
         <translation>ネイティブ構成要素を新しいファイルに保存</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ModelScanDialog</name>
+    <message>
+        <source>Inferred projection layouts</source>
+        <translation>推定された射影構造</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>オフ</translation>
+    </message>
+    <message>
+        <source>&amp;Quantization sample (KiB)</source>
+        <translation>量子化サンプル（KiB）(&amp;Q)</translation>
+    </message>
+    <message>
+        <source>Model Security Scan</source>
+        <translation>モデルのセキュリティスキャン</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>フォルダー…</translation>
+    </message>
+    <message>
+        <source>File…</source>
+        <translation>ファイル…</translation>
+    </message>
+    <message>
+        <source>Select model package</source>
+        <translation>モデルパッケージを選択</translation>
+    </message>
+    <message>
+        <source>Select model file</source>
+        <translation>モデルファイルを選択</translation>
+    </message>
+    <message>
+        <source>&amp;Model</source>
+        <translation>モデル(&amp;M)</translation>
+    </message>
+    <message>
+        <source>&amp;Baseline (optional)</source>
+        <translation>基準モデル（任意）(&amp;B)</translation>
+    </message>
+    <message>
+        <source>Scan</source>
+        <translation>スキャン</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>スキャンをキャンセル</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>解析ワーカーを起動中…</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>根拠</translation>
+    </message>
+    <message>
+        <source>Status or type</source>
+        <translation>状態または種類</translation>
+    </message>
+    <message>
+        <source>Selected evidence</source>
+        <translation>選択した根拠</translation>
+    </message>
+    <message>
+        <source>Previous page</source>
+        <translation>前のページ</translation>
+    </message>
+    <message>
+        <source>Next page</source>
+        <translation>次のページ</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>レポートを書き出す…</translation>
+    </message>
+    <message>
+        <source>Save report to a new file</source>
+        <translation>レポートを新しいファイルに保存</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>解析ワーカーが停止しました。</translation>
+    </message>
+    <message>
+        <source>Reading model artifacts…</source>
+        <translation>モデルファイルを読み込み中…</translation>
+    </message>
+    <message>
+        <source>Model scanning is unavailable in this worker.</source>
+        <translation>このワーカーはモデルスキャンに対応していません。</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>キャンセル済み</translation>
+    </message>
+    <message>
+        <source>%1 tensors</source>
+        <translation>テンソル %1 個</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>検出結果</translation>
+    </message>
+    <message>
+        <source>Coverage gaps</source>
+        <translation>未検査の範囲</translation>
+    </message>
+    <message>
+        <source>Artifacts</source>
+        <translation>モデルファイル</translation>
+    </message>
+    <message>
+        <source>Templates</source>
+        <translation>テンプレート</translation>
+    </message>
+    <message>
+        <source>Tensors</source>
+        <translation>テンソル</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>メタデータ</translation>
+    </message>
+    <message>
+        <source>Exported graphs</source>
+        <translation>エクスポートされたグラフ</translation>
+    </message>
+    <message>
+        <source>Layers inferred from names</source>
+        <translation>名前から推定した層</translation>
+    </message>
+    <message>
+        <source>Baseline comparison</source>
+        <translation>基準モデルとの比較</translation>
+    </message>
+    <message>
+        <source>Tensor comparison</source>
+        <translation>テンソルの比較</translation>
+    </message>
+    <message>
+        <source>Component changes</source>
+        <translation>構成要素の変更</translation>
+    </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>詳細オプション（JSON）</translation>
+    </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>テンソルまたは演算子を検索</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>グラフのスコープ</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>宣言</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>GGUF を再構築…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>詳細オプションで template_policy に keep、remove、replace のいずれかを指定してください。</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>依存関係</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>来歴</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>アダプター行列</translation>
     </message>
 </context>
 </TS>

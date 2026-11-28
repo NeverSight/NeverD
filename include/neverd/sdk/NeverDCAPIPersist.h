@@ -150,7 +150,8 @@ NEVERD_API const char *neverd_func_attributes_json(neverd_session_t Sess,
 
 /// The C declaration of the function at \p Entry as IDA's Y edits it: the
 /// user's ("type", neverd_func_edit), else the signature the decompiler
-/// prints for it, read against the local types:
+/// prints for it. If the body is unavailable, use a recorded prototype for
+/// this exact entry that reads against the local types.
 /// {"entry","stated","declaration","name","return","variadic",
 ///  "parameters":[{"name","type","location"}],"problems","hides_prototype"}.
 /// "hides_prototype" says whether a declaration stated for it hides the

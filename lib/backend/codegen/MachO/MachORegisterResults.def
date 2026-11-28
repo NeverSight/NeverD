@@ -41,7 +41,10 @@ MACHO_REGISTER_TEXT(kCall, "bl ")
 MACHO_REGISTER_TEXT(kTail, "b ")
 MACHO_REGISTER_TEXT(kAddress, "adr ")
 MACHO_REGISTER_TEXT(kSigningRouteSuffix, "_sign_")
-MACHO_REGISTER_TEXT(kSigningRouteWord, ".long {0} | (((. - {1}{2}) / {3}) << {4})\n")
+MACHO_REGISTER_TEXT(kSigningIslandSuffix, "_auth_")
+MACHO_REGISTER_TEXT(kSigningResumeSuffix, "_resume_")
+MACHO_REGISTER_TEXT(kSigningRouteWord,
+                    ".long {0} | (((. - {1}{2}) / {3}) << {4})\n")
 MACHO_REGISTER_TEXT(kRestoreBoundary, "Lneverd_reg_fallthrough_${:uid}_")
 MACHO_REGISTER_TEXT(kRestoreAdd, "add ")
 MACHO_REGISTER_TEXT(kZeroAddressOffset, ", #0\n")
@@ -107,6 +110,13 @@ MACHO_REGISTER_VALUE(unsigned, kDwarfSP, 31)
 MACHO_REGISTER_VALUE(uint32_t, kSIMDDataMask, 0x0e000000)
 MACHO_REGISTER_VALUE(uint32_t, kSIMDDataClass, 0x0e000000)
 
+// One branch after the PAC skips every adjacent authentication block.
+// An AUT needs a second instruction to return to its continuation.
+#ifdef MACHO_SIGNING_ISLAND_LAYOUT
+MACHO_SIGNING_ISLAND_LAYOUT(2, 1, 2)
+#undef MACHO_SIGNING_ISLAND_LAYOUT
+#endif
+
 // Darwin intra-procedure call registers first, then the other caller-saved
 // temporaries that do not carry NeverD's Darwin register results.
 #ifdef MACHO_SIGNING_SCRATCH
@@ -139,9 +149,11 @@ MACHO_REGISTER_HINT(PACIBSP)
 MACHO_REGISTER_HINT(AUTIASP)
 MACHO_REGISTER_HINT(AUTIBSP)
 MACHO_REGISTER_ALU(ADD)
+MACHO_REGISTER_ALU(ADDS)
 MACHO_REGISTER_ALU(SUB)
 MACHO_REGISTER_ALU(SUBS)
 MACHO_REGISTER_ALU(AND)
+MACHO_REGISTER_ALU(ANDS)
 MACHO_REGISTER_ALU(ORR)
 MACHO_REGISTER_ALU(EOR)
 MACHO_REGISTER_ALU(MOV)

@@ -889,6 +889,15 @@ budgets use the specialization suite. The core retains only exhaustive pair
 projections and widens missing predecessor facts; these checks do not certify
 ordinary source ABIs or native fault behavior.
 
+`InterpreterSpecialization.IndirectTargetCandidatesRequireFreshCompleteCoverageProof`
+checks a proved indirect target set, unreachable and noncanonical extra
+candidates, a missing candidate that must fall back to full enumeration, an
+over-limit domain and an unbounded target that must refuse. The native-return
+finite-word regression also replays candidates at a physical return and checks
+both return targets.
+Run `NeverDInterpreterSpecializationTests` for this precision API; observed
+candidates alone grant no control edge or source ABI.
+
 `InterpreterSpecialization.UnsignedRanges*` checks bounded subtraction across
 recovery cuts, register/frame carriers and masked values with unrelated high
 payload bits. Unsigned bounds require exhaustive Boolean proofs; joins widen
@@ -1624,12 +1633,21 @@ LOAD of the slot with the labels' offsets from the table. A label that reads
 `%rbx` before any path to the jump wrote it is left out, a slot that names an
 address inside an instruction ends the table, a table address loaded into
 `%r12` before a loop is found at its dispatch, a dispatch that one of its
-labels re-enters with another table's address is withdrawn, and a table in
-`.data` gives no labels. `x64swx_enumbyte0`, `3` and `5` in `NeverDSwitchXformTests` run the
+labels re-enters with another table's address is withdrawn, a table in
+`.data` gives no labels, and a dispatch whose every label stores the `%r15`
+its prologue saved on some path keeps both labels. `x64swx_enumbyte0`, `3` and `5` in `NeverDSwitchXformTests` run the
 same shape from C, an unreachable default on a byte argument, through the lift,
 recompile and emulation and compare the results; `x64swx_enumload` runs eight
 such switches in a row on bytes read back from the stack, whose domains run out
 of evidence.
+`JTE_X86_64.AWin64OwnLabelDispatchKeepsRsiAndRdi` builds the same shape as a
+Win64 object: a label that reads `%rsi` before any write is left out, since
+Win64 keeps `%rsi`, and a table address loaded into `%rsi` before a call still
+gives the jump after the call its two labels.
+`JTE_X86_64.AConstantIndexIntoAFixedImageTableBranchesToItsLabel` links a
+static executable whose jump reads an absolute table with a constant index,
+as the Go runtime does: the jump becomes a branch to the sixth slot's label and
+reaches no other.
 `JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
 whose first state is a constant: scalar recovery first takes its dispatch as a
 direct branch and withdraws that guess when the cases loop back, and the
@@ -8980,6 +8998,11 @@ bionic's ptrace request an int.
 `CSymbolNames.ACallToTheFirstOfSameNamedDefinitionsTakesItsPrototype` gives a
 call to the first of two same-named definitions only that definition's
 parameters.
+`X86_64_DebugParams.CallsPassTheFrameAddressTheirArgumentHolds` decompiles
+`test_debug_frame_argument.exe`, whose callers set the first argument to the
+address of their buffer on both paths to one call: each call to a callee whose
+`-g` DWARF declares its parameters passes that address, as an integer and as a
+pointer, never a local that nothing assigns.
 `HighCStoreForwarding.ALandingPadStoresTheExceptionTheUnwinderHandsIt` keeps a
 landing pad's store of `eh_exception` after a call that returns and one that
 does not. `TypeRender.UnitsTakeTheSystemsOwnTypesFromItsHeaders` takes glibc's
@@ -8995,7 +9018,12 @@ typedef parameters need, and `IndirectCallsTakeNoSignatureFromTheirCaller`
 keeps the caller's signature off an indirect call inside it.
 `X86_32_DebugParams.ParametersAfterAPointerTakeTheNextSlot` decompiles
 `test_debug_params32.o`, built with `-g`, whose parameters follow a pointer of
-four bytes. `ReadsTheDefinitionsOfTheProgramsTypes` reads a unit's
+four bytes. `X86_64_DebugParams.LineTablesOnlyRecordNoSignature` decompiles
+`test_debug_line_tables.exe`, built with `-gline-tables-only` and a build ID:
+its DWARF names `dlt_add` and records no type, and the call still passes both
+arguments and `dlt_add` still returns its sum. The same code built with `-g`
+(`test_debug_full_signatures.exe`) keeps `void dfs_none(void)`.
+`ReadsTheDefinitionsOfTheProgramsTypes` reads a unit's
 local types definitions back in C as written, whole in C++, and in Rust and
 Go as far as their structures lay them out, saying why for the rest.
 `TheProgramsTypesSpellTheirRecordsAndTheirMembers` gives Rust and Go the
@@ -10678,21 +10706,32 @@ ModR/M, SIB or first displacement byte on an absent page in code64. Both
 fetch profiles run with zero, eleven, twelve and thirteen `66` prefixes
 through HighC and LLVM-to-C, Clang and 64-bit NeverC at O0/O2.
 `UD0RefusesMissingOrInvalidFetchProfile` checks fail-loud admission
-for bare, `67`, `66`, `66 67` and thirteen-prefix UD0 before CPU or RAM effects.
+for bare, `67`, `66`, `66 67`, LOCK and thirteen-prefix UD0 before CPU or RAM effects.
 `X64PagedUD0PrefixTest.QualifiedPrefixesMatchTheDecoder` checks every one of
-the 703 decoded zero-to-two-prefix combinations and rejects LOCK.
+the 703 decoded zero-to-two-prefix combinations and the separate paged recognition of LOCK.
 `ExtendedPrefixesAndLengthBoundaryMatchTheDecoder` checks each of the 26
 qualified prefix bytes repeated at lengths 3–13, plus five mixed sequences
-at those lengths. LOCK and an opcode beyond the 15-byte instruction limit
-remain explicit boundaries.
+at those lengths. It also checks LOCK at three positions and distinguishes
+a valid fifteen-byte instruction from an incomplete opcode escape.
+`PagedEntriesEndAtPrefixFaults` exercises entry discovery at the fault and
+after a fallthrough. `PrefixLengthFaultAuthenticatesOnlyTheFirst15Bytes`
+changes bytes 15 and 16 independently and checks the unbound profile.
+`PrefixLengthFaultMatchesOriginalBreakpointAndFetchPriority` compares 384
+original KVM and generated executions per core across CPL0–3, RF, breakpoint
+matches and the accessible prefix span. `VirtualInterruptPrecedesRsmAndEncluBreakpointsAndFetch`
+compares the original RSM, ENCLU and HLT with the mixed-mode executor.
+Its 129 cases per core cover CR4.PVI, VIF/VIP, execution breakpoints, missing
+code pages and four ENCLU prefixes that raise #UD after successful fetch.
+`PendingVirtualInterruptRestartsEnclaveExit` follows the software #GP(0)
+through AEX, the outside frame, ERESUME and the original EEXIT.
 `UD0AddressExtentUsesLiveBytesAfterTheOpcode`
 exports an image ending at the two-byte opcode, then changes its live ModR/M
 and SIB to distinguish #UD from a displacement-fetch #PF without relifting;
 the same case uses a three-byte `67` prefix-plus-opcode image in code64.
 The register-indirect data address is noncanonical and is never read.
 Pin `UD0FetchPriorityMatchesOriginalHybridCPU` to the qualified P and E cores
-separately; compare 21 representative prefix sequences, three encoded address
-tails and eight generated compiler/route/optimization lanes (504 comparisons
+separately. Compare 32 representative prefix sequences, three page-boundary
+placements and eight generated compiler/route/optimization lanes (768 comparisons
 per core when x64 NeverC is configured) through the original KVM handler,
 fault stack RIP/error code, CR2, all GPRs, flags and RAM with each generated
 lane. The model's execution binding is intentionally independent of the host
@@ -10703,13 +10742,34 @@ Capstone rejects. It records the original signal, trap vector, fault RIP,
 page-fault error and fault address; these user-mode observations do not replace
 the KVM/generated-C comparisons. A separate repeated-`66` length sweep
 observes P-core #GP at 13 prefixes while the E core still raises #UD; both
-raise #GP at 14 prefixes. The extended probe checks 5,208 length, tail and
-page-boundary combinations on each core using every qualified byte repeated
-and five mixed sequences. On the P core, attempting the sixteenth encoded
-byte raises #GP before a missing-page #PF; the E core raises #UD after the
-opcode. The bound continuation follows this measured order through the
-fifteen-byte opcode limit. See the
-[prefix qualification](evidence/x86-code64-ud0-prefixes-2026-11-24.json).
+raise #GP at 14 prefixes. The extended probe checks 7,175 cases on each core,
+including 1,295 with an overlong prefix or escape. These cases place a protected page at every
+offset from the original RIP through the end of the supplied stream.
+The probe verifies the signal, vector, error code, original RIP and page-fault
+address. The generated enclave regression also follows an inaccessible live
+address tail into the EPC page and checks the external frame, SSA and resumed
+instruction. [Qualification record](evidence/x86-code64-prefix-faults-2026-11-28.json)
+
+For SGX1 key/report changes, run the `X86ModeSgxThreadTest` cases in
+`NeverDX64PagedExecutionTests`. They check fault priority, the SSA and resumed
+PC, unchanged failed destinations, successful 16-byte key stores, and every byte
+of a local report. The Intel SDK reference contains its own verified public
+report and target. The x64 NeverC qualification also rebuilds both generated
+VMRUN routes at O0/O2 and compares all eight object and guest-image digests to
+the executed AMD KVM guests.
+[Intel SDK reference](https://github.com/gmh5225/test_mac_intel/actions/runs/46139290670)
+
+For SGX2 dynamic memory changes, run the `X86ModeSgxThreadTest` acceptance,
+copy, permission, timestamp and paging-retry cases. Check that
+`CompiledBodiesUseTheAcceptedPrivatePage` reports eight executions with x64
+NeverC installed. HighC and LLVM-to-C each read and write the newly accepted
+page using Clang and NeverC at O0 and O2. The fault cases check the SSA's
+original instruction address, the page-fault address and the order of competing
+operand faults. The standalone signed Intel SDK simulation covers its
+implemented SGX1 leaves. For a hardware result, check the EPC discovery and
+the number of enclave instructions executed in the runner's native report.
+[SGX2 cases and hardware discovery](https://github.com/gmh5225/test_mac_intel/actions/runs/46143175318)
+
 On Linux x64, build the independent probes against the configured Capstone
 archive, then pin each run to an identified P or E core:
 
@@ -19041,6 +19101,8 @@ patch-full binaries; use `check-neverd` for the complete aggregate.
 
 ## Incremental CTest workflow
 
+`NeverDModelScanCLI` exercises GGUF layouts, large sparse files, MLX-style shard indexes, tokenizer and adapter comparison, nested ONNX graphs, CLI option isolation, C ABI cancellation and worker report parity. `NeverDGuiModelScan` checks the displayed evidence against the actual CLI using the worker process.
+
 `NeverDDebugCallReceiverTests` checks call-scoped debug receiver binding on
 32-bit ARM, AArch64 and x64, including partial writes, changed arguments,
 custom register order, changed native occurrences and conflicting declarations.
@@ -23012,6 +23074,48 @@ explicitly skips native execution on Windows, which lacks `<unistd.h>`.
 
 The `Lift native qualification` workflow owns the 108 previously unqualified cases (62 failures and 46 skips). It installs Clang 23 or newer, GNU GCC and the i386 development libraries on a native Linux x86-64 runner, and initializes the pinned binary corpus. `unittests/Inputs/lift-qualification.json` retains every original test identity. `scripts/run_lift_qualification.py` rejects missing, duplicate, disabled, skipped or failed cases and a nonzero process exit; `qualification.json` records individual passes, source/corpus revisions, compiler versions and binary hashes.
 
+The general GoogleTest runner writes a sibling `*.verification.json` for successful
+runs and for rejected runs, including discovery errors and missing or malformed
+result XML. The `*.qualification.json` receipt still requires a successful audit.
+The native Lift profile writes the same report to `verification.json` in its
+output directory, including failures during inventory, host and toolchain checks.
+To read the verification report, run the following command.
+
+```bash
+python3 scripts/verification_report.py result.verification.json
+```
+
+The top entry identifies the first recorded blocker, the diagnostic and any
+specific missing evidence. The stage list shows which later checks ran. A
+rejected GoogleTest case retains its XML diagnostic. A test can identify a
+missing observation with `RecordProperty("neverd_missing_evidence", description)`.
+The runner reads optional execution observations from the root GoogleTest
+property `neverd_execution_evidence`. A global test environment can record this
+JSON object at teardown. Both runners first match the XML test identities to the
+expected inventory and the test binary to its pre-run digest. If either check
+fails, the report leaves comparison counts unrecorded and caller execution
+unknown. After both checks pass, a skipped or failed case can still carry
+observations from the run. A property on an individual test applies only to that
+test. An ordinary GoogleTest pass count supplies neither execution observation.
+
+Other producers can use the same reader with a local JSON document. Supply the
+schema `neverd.verification.v1` and a `stages` array in the producer's check
+order. Each stage has a `path` array of names and a `state` of `passed`,
+`failed`, `blocked`, `not_run` or `unknown`. The optional `diagnostic` and
+`missing_evidence` strings carry the producer's explanation. The root property
+and the standalone document use the same two optional execution fields shown below.
+
+```json
+{"record_comparison": {"total": 3, "compared": 3, "matches": 0}, "caller_loop": "not_run"}
+```
+
+Comparison counts describe individually checked records. Omit `total` when the
+inventory size is unknown. The independent `caller_loop` observation can be
+`unknown`, `not_run`, `started` or `completed`. Missing observations remain
+unknown. Pass `--json` to print the normalized document. The reader's exit
+status indicates whether it could read and render the report. The qualification
+runner retains responsibility for the test verdict.
+
 The profile executes native i386/x86-64 controls, x87 extended precision, and generated Swift SSE result, state and unmasked-trap checks at both optimization levels. The AArch64 parity controls decode the actual `.text` of a pinned Rust runtime. Cross-target decoding does not establish native execution on that target; use the separate source-patch native process jobs for Windows/Linux x64/ARM64 and the local macOS checks.
 
 ```bash
@@ -23787,6 +23891,7 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 `ReturningCallRepeatedContainedWritesReuseNonnullProof` checks that a bounded sequence of in-object writes retains all physical stores under a solver-query allowance that requires reuse of the proven nonnull result. The old evaluator exhausts that allowance; the new one completes without adding an alias premise.
 `ReturningCallObjectExclusionSavesCurrentGlobalProofQueries` checks the version-4 caller premise with a current image pointer word followed by an in-object clear and a later reload. The same program completes under version 3 but requires more alias queries; a tight query limit completes only under version 4. The test also verifies complete stores, raw receipt binding and malformed or legacy exclusion refusal. The exclusion is an explicit test contract; the test does not authenticate any allocator or observed runtime address.
 `ReturningCallResultObjectBoundsSymbolicOffset` checks a solver-bounded dynamic offset with a nullable result and explicit low-range frame exclusion. It also refuses the same store without that exclusion, refuses an offset that can cross the object boundary, and accepts the bounded store after a proved nonnull branch without the exclusion.
+`ReturningCallFrameOutputReplacesPreservedBytes` checks that a version-5 output pointer replaces an initialized caller-frame word, retains both post-call branches, and binds the output extent into the raw receipt. The version-2 control keeps the old word; malformed argument registers and extents and a proven out-of-frame output refuse. This checks the declared conditional effect, not an actual callee or source ABI.
 
 `PEFixedImageTest.ReturningCallCanRetainDeclaredEarlierFrameBytes` in `NeverDPEFixedImageTests` distinguishes the version 2 frame-span relation from version 1 and rejects overlap with the call stack area. `RetainsDisjointCurrentFrameSpans` in `NeverDSymMemoryKnowledgeTests` checks that only current bytes in the declared intervals survive, with bounded atomic failure. Run these focused targets for changes to this relation; neither test authenticates an external callee's actual writes.
 
@@ -25952,6 +26057,8 @@ mismatched source pointer widths, selected externals and preserved LLVM
 prototypes. The native pointer suite compiles a complete public MinGW toy and
 checks both matching CRT layouts and rejection of mismatched MSVCRT/UCRT
 headers or same-offset fields of a different type. These source checks do not certify native kernel or ARM64 execution.
+
+`LLVMCSourceParameters.DebugWordRequiresUnobservedUpperBits` checks the C definition and a separately selected direct caller against a 32-bit header. It covers truncation, masking, upper-bit reads, a stored function address and exact LLVM-type export. `NarrowDebugParametersRespectObservedBits` compiles byte and signed halfword declarations with the generated C, executes all 16-bit inputs, and checks that an observed bit above the declared width preserves the wider parameter.
 
 ## Repeated image memory in C
 

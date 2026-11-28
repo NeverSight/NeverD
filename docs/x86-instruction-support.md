@@ -130,25 +130,83 @@ records the P/E original-CPU matrices, full paging run and exact dependency and
 report digests.
 The earlier [prefix qualification](evidence/x86-code64-ud0-prefixes-2026-11-24.json)
 covered all 703 zero-to-two-prefix forms decoded by Capstone, excluding LOCK.
-The paged binding now admits up to thirteen qualified operand/address-size,
-segment, REP and REX prefixes when Capstone decodes the opcode. On the measured
-P core, a required sixteenth instruction byte raises #GP before the next-page
-fetch; the measured E core raises #UD after the opcode. LOCK and opcodes that
-cannot fit within fifteen bytes remain explicit boundaries. The
-[length qualification](evidence/x86-code64-ud0-length-2026-11-25.json)
-records original P/E-core observations and generated-C comparisons.
+The [November 25 length qualification](evidence/x86-code64-ud0-length-2026-11-25.json)
+measured the P core's ModR/M fetch and the E core's opcode-only behavior for
+longer prefix sequences. The code64 paged continuation now also accepts LOCK
+within the thirteen prefixes before `0F FF`. A separate CPU binding covers
+fifteen prefixes and fourteen followed by `0F`. On both measured cores an
+inaccessible byte within the first fifteen causes #PF. Once those bytes are
+accessible, #GP(0) occurs at the original RIP. A matching enabled execution
+breakpoint takes precedence over fetch when RF and SS inhibition permit it.
+Software enclave execution preserves the interrupted RIP in the SSA across
+AEX and ERESUME. A CPL3 virtual-interrupt conflict also precedes breakpoints
+and fetch for ENCLU, RSM and HLT in the mixed-mode executor.
+[Original CPU and generated-code qualification](evidence/x86-code64-prefix-faults-2026-11-28.json)
 
 | Execution domain | Verified behavior |
 | --- | --- |
 | Real, virtual-8086, protected, compatibility and 64-bit code | Control-register and far transfers, task gates and nested IRET, Intel SYSENTER and SYSEXIT, and original-IDT fault frames. An incoming task or a backing pause preserves the completed stores and the original restart point. |
 | Software SMM | SMI enters private RAM and RSM restores firmware edits. The processor’s long-mode capability selects the 32-bit or 64-bit KVM save map. Both 512-byte images were compared with original KVM execution. |
-| Software SGX | Initialized x64 TCS, EPCM, SSA, EENTER, EEXIT, ERESUME, AEX, debug opt-in, EXINFO and AEX notification. A nested handler repairs a saved divisor and retries the original instruction through both C emitters. |
-| Asynchronous events | Fixed APIC interrupts, NMI, SMI, machine checks, threshold-triggered CMCI, and INIT/SIPI preserve their priority, inhibition and acceptance receipts across CPU transitions. |
+| Software SGX | Initialized x64 TCS, EPCM, SSA, EENTER, EEXIT, ERESUME, AEX, debug opt-in, EXINFO and AEX notification. A nested handler repairs a saved divisor and retries the original instruction through both C emitters. Software EGETKEY and EREPORT validate EPC operands and retire against a bound key platform. SGX2 EACCEPT, EMODPE and EACCEPTCOPY update the imported EPCM and page contents. A processor with SGX256 can execute EGETKEY256 and EREPORT2 against a bound platform. EVERIFYREPORT2 authenticates the complete MAC prefix on a processor that enumerates leaf 8. |
+| Asynchronous events | Fixed APIC interrupts, NMI, SMI, machine checks, threshold-triggered CMCI, and INIT/SIPI retain their priority, inhibition and acceptance across CPU transitions. A guest-programmed local TSC deadline can expire at HLT and remain pending through SMI and RSM. |
 
-Generated host C uses x64 Clang or x64 NeverC. NeverC rejects i386, i686 and
-the x32 ABI. The three designated Actions runners reported zero EPC sections.
-Intel’s signed simulation enclave and the Linux software regressions have
-independent execution records. [Test results and hardware discovery](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+NeverD emits host C for x64 Clang or x64 NeverC. Other x86 compilation targets
+use Clang. NeverC checks its native 64-bit ABI in the driver, translation
+profiles and embedded frontend. Its six x86-64/AArch64 target controls passed
+and nine 32-bit or ILP32 targets were rejected across all four translation
+profiles. [Compiler and x86 guest receipts](evidence/x86-code64-prefix-faults-2026-11-28.json)
+
+At `5646cd6173`, each of the LLVM r12 and r17 builds passed all 62 selected
+mode, SMM, SGX and event tests locally. The complete execution suite passed
+274/274 on each of the Intel P and E cores for both SDKs. Each SDK also passed
+265/265 generated-C tests, 133/133 export tests and 859/861 paging tests. The
+two remaining paging cases require a KVM CPU exposing LA57.
+
+At `eb9ed90195`, each SDK passed the same 62 selected tests with Capstone
+`8e33b3ed6e` and the x64 NeverC binary used on the hosted AMD systems. Six
+ptrace branch checks passed. The two VMRUN C exports matched the inputs
+executed on those AMD systems byte for byte.
+
+The three designated Actions runners
+reported zero EPC sections and executed zero native enclave cases. The Linux
+software job passed 60 of 62 tests. Its two original-CPU comparisons received
+`EACCES` opening `/dev/kvm` in the test executables, including isolated repeats.
+The local KVM runs completed five mode-transition comparisons and eight deadline
+comparisons. Intel’s signed simulation enclave independently exercised key and
+report operations and resumed two divide faults at the original instruction.
+[Qualification record](evidence/x86-code64-prefix-faults-2026-11-28.json) · [Runner discovery](https://github.com/gmh5225/test_mac_intel/actions/runs/46144355081) · [Independent KVM repeats](https://github.com/gmh5225/test_mac_intel/actions/runs/46145102623) · [Signed enclave simulation](https://github.com/gmh5225/test_mac_intel/actions/runs/46139290670)
+
+At `2e999385dc`, the r12 and r17 builds each passed all 70 selected tests locally.
+Each build read the upper eight bytes of the generated 256-bit key through HighC
+and LLVM-to-C with Clang and x64 NeverC at O0 and O2. The two original KVM
+SMM save maps also matched all 512 bytes apiece. The RSM retirement tests
+covered nine combinations of save-area and branch-step state.
+[Software results and hardware observations](evidence/x86-sgx-256bit-2026-11-28.json)
+
+At `d3f236e236`, both SDK builds passed all 76 selected tests locally with
+x64 NeverC `6d63a76bd6`. Each passed all 286 mode tests on each of the P and E
+cores, all 265 generated-C tests and all 133 export tests. Each passed 859 of
+861 paging tests. The two skips require a CPU that exposes LA57. On the hosted
+Linux runner, 73 of 76 selected cases passed and three KVM comparisons skipped.
+[Hosted software run](https://github.com/gmh5225/test_mac_intel/actions/runs/46164278006) · [Per-test counts and software authenticator vectors](evidence/x86-sgx-256bit-2026-11-28.json)
+
+The merged dev revision `764a88f8d6` passed the same 76 cases locally with r17
+and reproduced both VMRUN C exports. The hosted run passed 73 of 76. Immediately
+before the first isolated comparison, the launching process read KVM API
+version 12. That test received `EACCES` opening `/dev/kvm`, as did subsequent
+probes and isolated tests. Local KVM completed five mode-transition comparisons,
+eight timer comparisons and both SMM save maps.
+[Merged-source workflow](https://github.com/gmh5225/test_mac_intel/actions/runs/46165445785)
+
+The production submodule and SDK tag select LLVM r12. The r17 candidate produced
+the eight VMRUN objects and images used in the hosted AMD runs. Release
+qualification still requires native enclave execution on a machine with usable
+EPC. Processor-specific SMM state needs a hardware comparison. The SGX software
+executor starts with initialized EPC pages. Supervisor construction and paging,
+CET and XSTATE beyond AVX still need execution support. The interrupt model
+binds one logical CPU. Cross-CPU machine-check banks and external error sources
+need platform state.
+[Software enclave profile](x86-sgx-transfer.md#everifyreport2) · [Machine-check routing](x86-mode-execution.md#conventional-machine-checks) · [VMRUN comparison](x86-vmrun-context.md#hosted-amd-svm-execution) · [Candidate SDK release](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r17)
 
 After the `0d5a4ee1df` merge, each SDK again passed 243 complete mode-execution
 cases, 853 paging cases with two LA57-only skips, 48 alternate-core execution
@@ -570,7 +628,7 @@ families remain separate work.
 
 | Instructions or family | Missing contract |
 | --- | --- |
-| UD0 in ordinary x64 executable output | The ordinary lifter records a terminal UD0 intrinsic without an invented RAX write, but its LLVM emitter still lowers that intrinsic to `llvm.trap`. The resulting executable does not retain the original UD0 bytes or processor-specific fetch priority. The explicit paged code64 continuation accepts up to thirteen qualified non-LOCK prefixes and binds opcode-only versus complete ModR/M/SIB/displacement fetch at execution time. That path delivers the original #UD or an earlier instruction-fetch #PF/#GP through HighC and LLVM-to-C; the runtime reads live instruction bytes beyond Capstone's opcode decode and never reads the encoded data operand. Ordinary x64 executable replay, overlong opcode sequences and CPUs without a qualified fetch profile remain open. |
+| UD0 in ordinary x64 executable output | The ordinary lifter records a terminal UD0 and preserves RAX. Its LLVM emitter lowers UD0 to `llvm.trap`, so exact byte replay and processor-specific fetch priority remain open for ordinary executables. The paged code64 continuation accepts up to thirteen legacy or REX prefixes, including LOCK. Its CPU binding selects an opcode-only fetch or a complete fetch of the live ModR/M, SIB and displacement. Memory reads for UD0 are confined to instruction fetch. Both C emitters deliver the original #UD or an earlier fetch #PF/#GP. A separate length-fault binding covers fifteen prefixes and fourteen prefixes followed by `0F`. Other overlong encodings and length-fault priority on additional CPUs remain open. |
 | REP beyond the explicit paged memory-string binding | Long-mode MOVS/STOS/LODS and REPE/REPNE CMPS/SCAS own element progress, page/alignment faults, handler repair/IRET/retry and producer-selected IRQ/NMI boundaries through both C routes. The local processor profile binds addr32 entry normalization and destination-first CMPS reads. The [protected legacy memory-string executor](x86-legacy-segments.md#protected-memory-strings) adds segmented 16/32-bit progress, exact operand faults, original handler repair and IRQ/NMI restart through the internal C++ state interface. Long-mode INS/OUTS use the explicit paged device binding. The [protected legacy port binding](x86-legacy-segments.md#protected-port-devices) adds IN/OUT/INS/OUTS with segmented progress, TSS permission checks and retained input effects across fault delivery. The explicit protected source dispatcher now retains these pauses. Ordinary function projection, physical device read-ahead, fast-string event timing and other processor profiles remain separate. Native LLVM/NeverC completion interfaces continue to own all seven families in their executing environment. |
 | SNP/RMP and VMGEXIT outside explicit native bindings | Nine appended decoder IDs and native LLVM/NeverC APIs now retain exact register/flag completion and memory effects. The [explicit SNP/SEV-ES source bindings](x86-snp-state.md) connect canonical x64 bytes to both C routes, including PVALIDATE address32 and both VMGEXIT prefixes. Unbound ordinary ABI lifting, other source prefixes/modes, faults/restart and physical RMP/SEV-ES service execution remain unqualified. The [dated census](evidence/x86-snp-census-2026-10-31.json) records the earlier missing implementation. |
 | LDS, LES, LSS, LFS, LGS | LLVM provides thirteen native interfaces; NeverC provides the nine long-mode forms. Explicit V6 owns both destinations and declared clear/preserve null FS/GS policies. The paged binding adds all CPLs, null SS at CPL0..2, ordered descriptor/page/alignment faults, handler repair/retry and event scheduling, qualified on both local hybrid core types. The [protected legacy transition](x86-legacy-segments.md#explicit-selector-instructions) now owns all five i386 LxS forms with staged cache/GPR publication over paged RAM. The [protected legacy executor](x86-legacy-segments.md#protected-instruction-and-event-execution) now connects these instructions to original-byte fetch, IDT fault delivery and IRET/RETF. The explicit protected source dispatcher connects this owner; ordinary legacy function projection, compatibility source dispatch and other processor qualification remain open. Ordinary strict/permissive lifting still refuses the scalar load/COPY approximation. |

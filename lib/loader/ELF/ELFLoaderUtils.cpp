@@ -275,6 +275,14 @@ bool recordRuntimeCallableRelocation(uint32_t RelocType, va_t Slot,
   return false;
 }
 
+bool isAbsoluteSymbolRelocation(Arch Target, uint32_t Type) {
+#define NEVERD_ELF_ABSOLUTE_SYMBOL(ISA, Reloc)                                 \
+  if (Target == Arch::ISA && Type == llvm::ELF::Reloc)                         \
+    return true;
+#include "ELFDynamicRelocations.def"
+  return false;
+}
+
 std::optional<uint64_t> symbolRelocationValue(Arch Target, uint32_t RelocType,
                                               uint64_t SymbolVA,
                                               int64_t Addend) {

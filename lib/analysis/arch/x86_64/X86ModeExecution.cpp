@@ -9,6 +9,7 @@
 
 #include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
 
+#include "X64EncluEncoding.h"
 #include "X86ModeStartup.h"
 #include "X86ModeState.h"
 #include "X86ModeSystemInstruction.h"
@@ -444,9 +445,7 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
   if (!Mode)
     return Mode.takeError();
   const uint64_t Address =
-      *Mode == X86ExecutionMode::Long64
-          ? modeRegisters(S).PC
-          : uint32_t(S.Core.Core.Core.CS.Base + modeRegisters(S).PC);
+      detail::modeInstructionAddress(S, *Mode == X86ExecutionMode::Long64);
   // A published task may suspend while validating its incoming selectors.
   // The journal still belongs to the already authenticated outgoing opcode.
   if (!P->Low.PendingTask &&
@@ -512,6 +511,7 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
   }
   const auto Index = uint32_t(modeRegisters(S).GPR[1]);
   if (!Locked && ((S.MCA && X86MachineCheckState::ownsMSR(Index)) ||
+                  (S.DeadlineTimer && Index == X86TscDeadlineTimer::MSR) ||
                   (SEP && detail::sysenterMSR(Index)))) {
     Op = SystemOp::ReadMSR;
     Locked = systemLockPrefix(Binding.Bytes, ReadMSR, Long64);
@@ -545,19 +545,21 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
       P->PendingRSM.reset();
     return FinishSystem(std::move(*Got), FaultKind);
   }
-  static constexpr uint8_t Enclu[]{0x0f, 0x01, 0xd7};
+  const auto Enclu = Long64 && Memory.sgxMemory()
+                         ? detail::x64EncluEncoding(Binding.Bytes)
+                         : std::nullopt;
   std::optional<uint8_t> EnclaveException;
-  if (Memory.sgxMemory() && Memory.sgxMemory()->active() &&
-      (!Binding.Body || !Binding.Validate)) {
+  if (Enclu == detail::X64EncluForm::Undefined)
+    EnclaveException = 6;
+  else if (!Enclu && Memory.sgxMemory() && Memory.sgxMemory()->active() &&
+           (!Binding.Body || !Binding.Validate)) {
     auto Denied = detail::X86SgxExecution::instructionException(
-        Binding.Bytes, Binding.Address, *Memory.sgxMemory());
+        Binding.Bytes, Binding.Address, Memory);
     if (!Denied)
       return Denied.takeError();
     EnclaveException = *Denied;
   }
-  if (*Mode == X86ExecutionMode::Long64 && Memory.sgxMemory() &&
-      (EnclaveException ||
-       llvm::ArrayRef(Binding.Bytes) == llvm::ArrayRef(Enclu))) {
+  if (Long64 && Memory.sgxMemory() && (Enclu || EnclaveException)) {
     if (!P->PendingSGX)
       P->PendingSGX.emplace();
     X86EventKind FaultKind = X86EventKind::Fault;
@@ -814,6 +816,8 @@ llvm::Expected<X86ModeExecutionResult> X86ModeExecution::runBoundaries(
     if (Interrupts && !S.Pending) {
       if (Interrupts->APIC.readCr8() != S.Core.Core.Core.Core.Core.CR8)
         return invalid("CPU CR8 and local APIC task priority disagree");
+      if (S.DeadlineTimer && Interrupts->SampledTSC)
+        S.DeadlineTimer->poll(*Interrupts->SampledTSC, Interrupts->APIC);
       if (Interrupts->MachineCheck) {
         if (!S.MCA)
           return invalid("machine-check reports require a bound MCA bank");
@@ -898,10 +902,8 @@ llvm::Expected<X86ModeExecutionResult> X86ModeExecution::runBoundaries(
       auto Current = mode(S);
       if (!Current)
         return Current.takeError();
-      const auto Address =
-          *Current == X86ExecutionMode::Long64
-              ? modeRegisters(S).PC
-              : uint32_t(S.Core.Core.Core.CS.Base + modeRegisters(S).PC);
+      const auto Address = detail::modeInstructionAddress(
+          S, *Current == X86ExecutionMode::Long64);
       for (const auto &Candidate : Instructions)
         if (Candidate.Mode == *Current && Candidate.Address == Address) {
           if (I)

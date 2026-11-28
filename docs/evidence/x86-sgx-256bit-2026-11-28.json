@@ -1,0 +1,2589 @@
+{
+  "date": "2026-11-28",
+  "neverd": "2e999385dc5a2175c2bf7675e9e2476eabc63919",
+  "local": [
+    {
+      "neverd": "2e999385dc5a2175c2bf7675e9e2476eabc63919",
+      "capstone": "5f1c7f8088b86441678bec68256ba6e36100a71e",
+      "llvm_tag": "neverd-llvm-v23.0.0-r12",
+      "llvm_source": "6947b7db63e913244e0aa6de087d1ad2e791e86f",
+      "compiler_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+      "software_passed": 70,
+      "software_skipped": 0,
+      "software_report_sha256": "98186beb0bff641ae2be4f082aa6f0eeeff2e8a09edfc661f2dc80f7719cf4d4",
+      "compiled_sgx2_page_accesses": 8,
+      "original_mode_comparisons": 5,
+      "original_deadline_comparisons": 8,
+      "cli_sha256": "c1a146dd32b31b07e28ee79f5f1eb43527f2a5868df89355142213a8ee5c5298",
+      "enclu_encodings": 26,
+      "compiled_provider_returns": 208,
+      "native_enclave_executions": 0,
+      "branch_oracle_and_vmrun_checks": [
+        {
+          "executable": "NeverDX64PagedExecutionTests",
+          "tests": [
+            "X64PagedBranchDebugTest.OriginalBranchSelectionThroughBothCRoutes"
+          ],
+          "xml_sha256": "774e8f1377f6246475a0b7b67dabfd14d758d6d604551fdd74c6510f05b9513a"
+        },
+        {
+          "executable": "NeverDX86PagingTests",
+          "tests": [
+            "X86LegacyBranchDebugTest.OriginalProtectedBranchSelection"
+          ],
+          "xml_sha256": "ebd2b3a242f4a99819304e46df9617f8c661396a5f8194fed59ddedec74e1e60"
+        },
+        {
+          "executable": "NeverDX86LegacySourceTests",
+          "tests": [
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/ClangO0",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/ClangO2",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/NeverCO0",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/NeverCO2"
+          ],
+          "xml_sha256": "e18e5cabfc1d27ea36f7adf0561cdb38ee94160a89b3108524281d66a90c6863"
+        },
+        {
+          "executable": "NeverDX64ContinuationExportTests",
+          "tests": [
+            "X64ContinuationExportTest.VmrunTransportsOriginalStateAndStopsAtVmexit"
+          ],
+          "xml_sha256": "d7b3329defd61d54d93f106f9f7c5d4dabdc84284980fef197d42651e616c390"
+        }
+      ],
+      "unchanged_executed_vmrun_export_sha256": {
+        "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+        "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+      },
+      "original_smm_save_maps": 2,
+      "rsm_software_profile_cases": 9,
+      "compiled_wide_key_reads": 8,
+      "compiler_source": "5a70f355ef14d30454128ff29b867044f7b9c583",
+      "compiler_receipt_sha256": "ff5d461ca9a8fa7c38136ab0d061bfd8779b4f27bfe57e47773c1dd7dd2026de",
+      "compiler_artifact_url": "https://github.com/gmh5225/test_mac_intel/actions/runs/46145102623/artifacts/15263139058",
+      "mode_owners": {
+        "p": {
+          "sha256": "d1671810c59f1d9496525bf6aa75722927423da1c4cf49c26b46a4c294e05dfb",
+          "passed": 280,
+          "total": 280,
+          "shards": [
+            {
+              "cpu": 2,
+              "sha256": "6e5e97629156037f7efcc0946647a6ae16370491c521eebd0734bf3cb12bd9a5",
+              "tests": 140
+            },
+            {
+              "cpu": 8,
+              "sha256": "60f481f30a5c26ea096b63b9abf3fab3e664fd952ed42b5a5c82eb3b1aa4ea81",
+              "tests": 140
+            }
+          ]
+        },
+        "e": {
+          "sha256": "07ed2982a34c35ce93d247162f330cfb4485fbbed7e781bdf41f4c5609f5b44c",
+          "passed": 280,
+          "total": 280,
+          "shards": [
+            {
+              "cpu": 15,
+              "sha256": "25b39dbac559cd8cbd31e34d97904bf96b4ec62a2e619167ddee97ce9a5cbaf6",
+              "tests": 140
+            },
+            {
+              "cpu": 17,
+              "sha256": "75011cd8a51c2778ad567397b8978b0a0946bd07c0ef246ea743d258fda41691",
+              "tests": 140
+            }
+          ]
+        }
+      },
+      "other_owners": {
+        "lower": {
+          "executable": "NeverDX86PagingTests",
+          "binary_sha256": "199a73e004030b2e13532f4cc967c64dd9f315b1076d9494cfcd11b37424c573",
+          "passed": 859,
+          "total": 861,
+          "skips": {
+            "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "Bound KVM CPU has no LA57",
+            "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "Bound KVM CPU has no LA57"
+          },
+          "shards": [
+            {
+              "cpu": 4,
+              "file": "lower-0.xml",
+              "sha256": "373009831719624810e28ddbb7b2a9e6010e53464e68f5111d6c65d4c6c85e36",
+              "cases": 431
+            },
+            {
+              "cpu": 6,
+              "file": "lower-1.xml",
+              "sha256": "d4d9291f963d89f6c5e2e50d97bec044f6498258a426805b0f7d35cb8829da8f",
+              "cases": 430
+            }
+          ]
+        },
+        "generated": {
+          "executable": "NeverDX86LegacySourceTests",
+          "binary_sha256": "7cde0d5b33a84ea118f6cdf7d53c7e0ffc20087c96b1260d0cb397d48a13dce3",
+          "passed": 265,
+          "total": 265,
+          "skips": {},
+          "shards": [
+            {
+              "cpu": 2,
+              "file": "generated-0.xml",
+              "sha256": "da55b1c891c74e20fb26b649b54753e1f91355ff145ab17b13f442f46c0b8191",
+              "cases": 133
+            },
+            {
+              "cpu": 8,
+              "file": "generated-1.xml",
+              "sha256": "e02d23f16df76738682564bca385f91f50a78b6c04e47f84e058d4f648b60dc2",
+              "cases": 132
+            }
+          ]
+        },
+        "exports": {
+          "executable": "NeverDX64ContinuationExportTests",
+          "binary_sha256": "b0e3d8c62aae0cdb3e96f8d3a1e04b93e73b4f6917574d2d3aaf57da892b9a70",
+          "passed": 133,
+          "total": 133,
+          "skips": {},
+          "shards": [
+            {
+              "cpu": 1,
+              "file": "exports-0.xml",
+              "sha256": "49910299dc751649ac995033a46ae0fb4600d4065fc385e94a7b6670a245c7a0",
+              "cases": 133
+            }
+          ]
+        }
+      }
+    },
+    {
+      "neverd": "2e999385dc5a2175c2bf7675e9e2476eabc63919",
+      "capstone": "5f1c7f8088b86441678bec68256ba6e36100a71e",
+      "llvm_tag": "neverd-llvm-v23.0.0-r17",
+      "llvm_source": "93a7e578d2b105139e938d1da8b502d0689a25a0",
+      "production_llvm_gitlink": "6947b7db63e913244e0aa6de087d1ad2e791e86f",
+      "compiler_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+      "software_passed": 70,
+      "software_skipped": 0,
+      "software_report_sha256": "98186beb0bff641ae2be4f082aa6f0eeeff2e8a09edfc661f2dc80f7719cf4d4",
+      "compiled_sgx2_page_accesses": 8,
+      "original_mode_comparisons": 5,
+      "original_deadline_comparisons": 8,
+      "cli_sha256": "c1a146dd32b31b07e28ee79f5f1eb43527f2a5868df89355142213a8ee5c5298",
+      "enclu_encodings": 26,
+      "compiled_provider_returns": 208,
+      "native_enclave_executions": 0,
+      "branch_oracle_and_vmrun_checks": [
+        {
+          "executable": "NeverDX64PagedExecutionTests",
+          "tests": [
+            "X64PagedBranchDebugTest.OriginalBranchSelectionThroughBothCRoutes"
+          ],
+          "xml_sha256": "7d39ac83df2eff7a2e5c19e983c18c292bba2c4cdbf6fb85463b927fa413ff68"
+        },
+        {
+          "executable": "NeverDX86PagingTests",
+          "tests": [
+            "X86LegacyBranchDebugTest.OriginalProtectedBranchSelection"
+          ],
+          "xml_sha256": "562381bdd40b13142d6354557d163cf8aac473ee6b81bfb46dc68caef6547c75"
+        },
+        {
+          "executable": "NeverDX86LegacySourceTests",
+          "tests": [
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/ClangO0",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/ClangO2",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/NeverCO0",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/NeverCO2"
+          ],
+          "xml_sha256": "3f396ebd206fe76cc2e080d2b71bf05780c36599f89befdafd9f07e3e03fd508"
+        },
+        {
+          "executable": "NeverDX64ContinuationExportTests",
+          "tests": [
+            "X64ContinuationExportTest.VmrunTransportsOriginalStateAndStopsAtVmexit"
+          ],
+          "xml_sha256": "5656f629fff19e2748fc0f4562f866d6b9d8b98ef5b9d0605a3a618e462d0b01"
+        }
+      ],
+      "unchanged_executed_vmrun_export_sha256": {
+        "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+        "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+      },
+      "original_smm_save_maps": 2,
+      "rsm_software_profile_cases": 9,
+      "compiled_wide_key_reads": 8,
+      "compiler_source": "5a70f355ef14d30454128ff29b867044f7b9c583",
+      "compiler_receipt_sha256": "ff5d461ca9a8fa7c38136ab0d061bfd8779b4f27bfe57e47773c1dd7dd2026de",
+      "compiler_artifact_url": "https://github.com/gmh5225/test_mac_intel/actions/runs/46145102623/artifacts/15263139058",
+      "mode_owners": {
+        "p": {
+          "sha256": "79d8a9109aea240ba2576d94986e55557aa00db4db232968cbc652f97823ec96",
+          "passed": 280,
+          "total": 280,
+          "shards": [
+            {
+              "cpu": 0,
+              "sha256": "8d763e84ba34db8d68cbf76f0385efd918365ea466a43ce2b6c1139f7ee8bf94",
+              "tests": 140
+            },
+            {
+              "cpu": 10,
+              "sha256": "165bb8662ba040ede00c1ed0a2d369a6e1a97f1e6e0bba9cf6509d078cd373a6",
+              "tests": 140
+            }
+          ]
+        },
+        "e": {
+          "sha256": "2848cbb3ed0e2e1bd8539d84bc7fe9ae77088b64159abac0e5db02e059accbde",
+          "passed": 280,
+          "total": 280,
+          "shards": [
+            {
+              "cpu": 14,
+              "sha256": "0fef35fed7903f3d7d002a456abef0a8e4c52e9f57014e2008e7e5dafeac29ab",
+              "tests": 140
+            },
+            {
+              "cpu": 18,
+              "sha256": "05c250a5117c57e1a1603b62fcf281f93fd3844b7f6d0bb5d3a3fa07e1572dfc",
+              "tests": 140
+            }
+          ]
+        }
+      },
+      "other_owners": {
+        "lower": {
+          "executable": "NeverDX86PagingTests",
+          "binary_sha256": "199a73e004030b2e13532f4cc967c64dd9f315b1076d9494cfcd11b37424c573",
+          "passed": 859,
+          "total": 861,
+          "skips": {
+            "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "Bound KVM CPU has no LA57",
+            "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "Bound KVM CPU has no LA57"
+          },
+          "shards": [
+            {
+              "cpu": 0,
+              "file": "lower-0.xml",
+              "sha256": "da87ed5ef4edd1e403810af01c66caaa3e5b6a99046a10f7ccc191128c0cd104",
+              "cases": 431
+            },
+            {
+              "cpu": 10,
+              "file": "lower-1.xml",
+              "sha256": "2d1c50cca66929eba068faa0124f57615c8e44ca65556a7dea308e944343c586",
+              "cases": 430
+            }
+          ]
+        },
+        "generated": {
+          "executable": "NeverDX86LegacySourceTests",
+          "binary_sha256": "0b1649c338dd81dd6ebde471d163f9e9494f03164e49389543e08a4f0c22819c",
+          "passed": 265,
+          "total": 265,
+          "skips": {},
+          "shards": [
+            {
+              "cpu": 4,
+              "file": "generated-0.xml",
+              "sha256": "aef8ea8321fd613b572836e1728a68743fbcb94125e9233b0e45b6f752567652",
+              "cases": 133
+            },
+            {
+              "cpu": 6,
+              "file": "generated-1.xml",
+              "sha256": "6b4df3cf994d0af74181ab1e362143320bac61ece3e24a010cd5fd2c0f08745a",
+              "cases": 132
+            }
+          ]
+        },
+        "exports": {
+          "executable": "NeverDX64ContinuationExportTests",
+          "binary_sha256": "47ae64f0f7ed3e023387e36afdda520977ed131b020123e362b69bd969b455de",
+          "passed": 133,
+          "total": 133,
+          "skips": {},
+          "shards": [
+            {
+              "cpu": 9,
+              "file": "exports-0.xml",
+              "sha256": "c6188ae171c257ea353ee2f5b1914bc46eb6dd40135356cec26aee3260edfdbc",
+              "cases": 133
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "report2": {
+    "reference": "https://cdrdv2-public.intel.com/932753/319433-063-architecture-instruction-set-extensions-programming-reference.pdf",
+    "vector_key": "public test bytes 0 through 31",
+    "vectors": {
+      "False": {
+        "prefix": "1ae20152cdfe04519d2aa8e5a5024f5f3a648b0fa7349a15a9b3708a4e252713",
+        "mac": "a002a23b03b4f6747783f1e0901cfad8ac363229d0de73e6cd01edeb998250e3",
+        "payload": "0af0006833bc15df0c94ccedf5294bf9d9d4cbefc05c7c9c73ab060b247dbc9a",
+        "teeinfo": "893a2d5b8713c124888d56023a6d29ee5a97bb54d0792a35e3a8f01d38aa6452bf5846d1c4745879267dc8bf70e9e561"
+      },
+      "True": {
+        "prefix": "a574979c93fa083697f7d7edf7bec1949557d196c2115f5a672a523f4fd98248",
+        "mac": "2fe6b834348d86a40222fdcf9796eea1be62174b2e3c83931e3a1faa06393082",
+        "payload": "39219c67d3df2dc4ec51255d46924a17c838ff8b3f32285f18d300bcbb073bad",
+        "teeinfo": "aefcf8ad5e42c854bb89dafe03ea62dda22c0ddd0bf4f1fe851fbf6b06834fcd444506610f5e43a1590eebe0aed33fb3"
+      }
+    },
+    "digest_differential": {
+      "comparisons": 144,
+      "algorithms": [
+        384,
+        512
+      ],
+      "input_sizes": [
+        0,
+        1,
+        3,
+        111,
+        112,
+        113,
+        127,
+        128,
+        129,
+        255,
+        512,
+        4097
+      ],
+      "chunk_sizes": [
+        1,
+        17,
+        111,
+        128,
+        129,
+        65536
+      ],
+      "reference": "Python hashlib",
+      "wrappers": [
+        "neverd::SHA512",
+        "neverd::web::SHA512"
+      ]
+    },
+    "web_package_integrity": {
+      "sha256": "c5da2459be1e7d55a2e27d1e459d8cb8501ece1fdc5a465efbfe31d7f2cf3b32",
+      "passed": 6,
+      "total": 6
+    }
+  },
+  "rsm_btf": {
+    "kernel": "7.0.0-44-generic",
+    "cpus": [
+      {
+        "cpu": 2,
+        "kvm_api": 12,
+        "supported_cpuid_entries": 55,
+        "debugctl": [
+          {
+            "written": 0,
+            "set_count": 1,
+            "get_count": 1,
+            "read_back": 0
+          },
+          {
+            "written": 2,
+            "set_count": 1,
+            "get_count": 1,
+            "read_back": 0
+          },
+          {
+            "written": 0,
+            "set_count": 1,
+            "get_count": 1,
+            "read_back": 0
+          }
+        ]
+      },
+      {
+        "cpu": 15,
+        "kvm_api": 12,
+        "supported_cpuid_entries": 55,
+        "debugctl": [
+          {
+            "written": 0,
+            "set_count": 1,
+            "get_count": 1,
+            "read_back": 0
+          },
+          {
+            "written": 2,
+            "set_count": 1,
+            "get_count": 1,
+            "read_back": 0
+          },
+          {
+            "written": 0,
+            "set_count": 1,
+            "get_count": 1,
+            "read_back": 0
+          }
+        ]
+      }
+    ]
+  },
+  "hosted_software": [
+    {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46158428097",
+      "neverd": "a6c22cea910beec41129574d70f31866ac636fef",
+      "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+      "compiler_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+      "stddef_sha256": "3c777cede27a6654eea18ff7302ddd0c055dfa6eaf7d3e3da733fe90df7669c0",
+      "host": "Intel(R) Xeon(R) 6975P-C",
+      "passed": 65,
+      "registered": 67,
+      "skipped": [
+        {
+          "test": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+          "reason": "KVM unavailable: 13"
+        },
+        {
+          "test": "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm",
+          "reason": "KVM unavailable: 13"
+        }
+      ],
+      "native_width": 64,
+      "accepted": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-macosx15.0.0",
+        "arm64-apple-macosx15.0.0",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc"
+      ],
+      "rejected": [
+        "i386-unknown-linux-gnu",
+        "i686-unknown-linux-gnu",
+        "i686-pc-windows-msvc",
+        "i386-apple-darwin",
+        "x86_64-unknown-linux-gnux32",
+        "x86_64-unknown-linux-muslx32",
+        "arm64_32-apple-watchos",
+        "aarch64-unknown-linux-gnu_ilp32",
+        "aarch64-unknown-linux-gnuilp32"
+      ],
+      "rejected_abi_options": [
+        "ilp32",
+        "x32"
+      ],
+      "vmrun_export_sha256": null,
+      "record_sha256": {
+        "software": "ddceff1b0e5278c5d8acd812a960ad62f5d183ffbd1da6843116f1aefb912ea7",
+        "compiler": "c278f557664fe34223278d7189350669207121732d58a7191fcdce54a59e2690",
+        "translation-targets": "5202e3b4e8652ba194d3f366f8c0f6ee33c1195c19ea973c708fb386a5e43772",
+        "kvm-comparisons": "664adf7b79a5d42d3266a0aaef6b223b982d34694b166813bfb05fa069e06373"
+      }
+    },
+    {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46160091208",
+      "neverd": "2e999385dc5a2175c2bf7675e9e2476eabc63919",
+      "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+      "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+      "stddef_sha256": "3c777cede27a6654eea18ff7302ddd0c055dfa6eaf7d3e3da733fe90df7669c0",
+      "host": "Intel(R) Xeon(R) 6975P-C",
+      "passed": 67,
+      "registered": 70,
+      "skipped": [
+        {
+          "test": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+          "reason": "KVM unavailable: 13"
+        },
+        {
+          "test": "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm",
+          "reason": "KVM unavailable: 13"
+        },
+        {
+          "test": "X86ModeInterruptTest.SoftwareSmmSaveMapAndEditedRsmMatchKvm",
+          "reason": "KVM unavailable: 13"
+        }
+      ],
+      "native_width": 64,
+      "accepted": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-macosx15.0.0",
+        "arm64-apple-macosx15.0.0",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc"
+      ],
+      "rejected": [
+        "i386-unknown-linux-gnu",
+        "i686-unknown-linux-gnu",
+        "i686-pc-windows-msvc",
+        "i386-apple-darwin",
+        "x86_64-unknown-linux-gnux32",
+        "x86_64-unknown-linux-muslx32",
+        "arm64_32-apple-watchos",
+        "aarch64-unknown-linux-gnu_ilp32",
+        "aarch64-unknown-linux-gnuilp32"
+      ],
+      "rejected_abi_options": [
+        "ilp32",
+        "x32"
+      ],
+      "vmrun_export_sha256": {
+        "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+        "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+      },
+      "record_sha256": {
+        "software": "b99a82e922eb3a2155e943949df65068405164d43ab1a5c8d8d23746b292e347",
+        "compiler": "42b30c235d4eff7aef8f45763c58f9a14cd3307779de2f610298e8bf80787811",
+        "translation-targets": "3ee5385c1f717db9d4b785d18d4210228489739d1570762ce245b0790d20a51d",
+        "kvm-comparisons": "7368d08b64e3ad44d4d043ef2f284d8e896cc1be17ed58d8260314b58d14f478"
+      }
+    },
+    {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46162726859",
+      "neverd": "a798d22ed8f229ae13aa045361a654373e52adc3",
+      "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+      "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+      "stddef_sha256": "3c777cede27a6654eea18ff7302ddd0c055dfa6eaf7d3e3da733fe90df7669c0",
+      "host": "Intel(R) Xeon(R) 6975P-C",
+      "passed": 72,
+      "registered": 75,
+      "skipped": [
+        {
+          "test": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+          "reason": "KVM unavailable: 13"
+        },
+        {
+          "test": "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm",
+          "reason": "KVM unavailable: 13"
+        },
+        {
+          "test": "X86ModeInterruptTest.SoftwareSmmSaveMapAndEditedRsmMatchKvm",
+          "reason": "KVM unavailable: 13"
+        }
+      ],
+      "native_width": 64,
+      "accepted": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-macosx15.0.0",
+        "arm64-apple-macosx15.0.0",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc"
+      ],
+      "rejected": [
+        "i386-unknown-linux-gnu",
+        "i686-unknown-linux-gnu",
+        "i686-pc-windows-msvc",
+        "i386-apple-darwin",
+        "x86_64-unknown-linux-gnux32",
+        "x86_64-unknown-linux-muslx32",
+        "arm64_32-apple-watchos",
+        "aarch64-unknown-linux-gnu_ilp32",
+        "aarch64-unknown-linux-gnuilp32"
+      ],
+      "rejected_abi_options": [
+        "ilp32",
+        "x32"
+      ],
+      "vmrun_export_sha256": {
+        "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+        "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+      },
+      "record_sha256": {
+        "software": "34d2e0fcc88fef0dd39f06b86511e8c727035ea817952a7ee311ca2740a4bcc6",
+        "compiler": "42b30c235d4eff7aef8f45763c58f9a14cd3307779de2f610298e8bf80787811",
+        "translation-targets": "3ee5385c1f717db9d4b785d18d4210228489739d1570762ce245b0790d20a51d",
+        "kvm-comparisons": "90203724d759d0cf0f78faec7506fb5c0d13d3809d73ba25949ce82d312aa437"
+      }
+    },
+    {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46164278006",
+      "neverd": "d3f236e23642ae050ab1edab1bbc85c6a8236406",
+      "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+      "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+      "stddef_sha256": "3c777cede27a6654eea18ff7302ddd0c055dfa6eaf7d3e3da733fe90df7669c0",
+      "host": "Intel(R) Xeon(R) 6975P-C",
+      "passed": 73,
+      "registered": 76,
+      "skipped": [
+        {
+          "test": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+          "reason": "KVM unavailable: 13"
+        },
+        {
+          "test": "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm",
+          "reason": "KVM unavailable: 13"
+        },
+        {
+          "test": "X86ModeInterruptTest.SoftwareSmmSaveMapAndEditedRsmMatchKvm",
+          "reason": "KVM unavailable: 13"
+        }
+      ],
+      "native_width": 64,
+      "accepted": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-macosx15.0.0",
+        "arm64-apple-macosx15.0.0",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc"
+      ],
+      "rejected": [
+        "i386-unknown-linux-gnu",
+        "i686-unknown-linux-gnu",
+        "i686-pc-windows-msvc",
+        "i386-apple-darwin",
+        "x86_64-unknown-linux-gnux32",
+        "x86_64-unknown-linux-muslx32",
+        "arm64_32-apple-watchos",
+        "aarch64-unknown-linux-gnu_ilp32",
+        "aarch64-unknown-linux-gnuilp32"
+      ],
+      "rejected_abi_options": [
+        "ilp32",
+        "x32"
+      ],
+      "vmrun_export_sha256": {
+        "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+        "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+      },
+      "record_sha256": {
+        "software": "bbf0297e2545c59a74fc41676dd9d485a179cb61ad593873ca0a157760778f5d",
+        "compiler": "42b30c235d4eff7aef8f45763c58f9a14cd3307779de2f610298e8bf80787811",
+        "translation-targets": "3ee5385c1f717db9d4b785d18d4210228489739d1570762ce245b0790d20a51d",
+        "kvm-comparisons": "1943d26d71cd502ec1faec3070dee7406f21f92fe8f093dc9300f375ab6d9f42"
+      }
+    },
+    {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46165445785",
+      "neverd": "764a88f8d6cd096b089c714108ed92491c06f79d",
+      "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+      "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+      "stddef_sha256": "3c777cede27a6654eea18ff7302ddd0c055dfa6eaf7d3e3da733fe90df7669c0",
+      "host": "AMD EPYC 7763 64-Core Processor",
+      "passed": 73,
+      "registered": 76,
+      "skipped": [
+        {
+          "test": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+          "reason": "KVM unavailable: 13"
+        },
+        {
+          "test": "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm",
+          "reason": "KVM unavailable: 13"
+        },
+        {
+          "test": "X86ModeInterruptTest.SoftwareSmmSaveMapAndEditedRsmMatchKvm",
+          "reason": "KVM unavailable: 13"
+        }
+      ],
+      "native_width": 64,
+      "accepted": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-macosx15.0.0",
+        "arm64-apple-macosx15.0.0",
+        "x86_64-pc-windows-msvc",
+        "aarch64-pc-windows-msvc"
+      ],
+      "rejected": [
+        "i386-unknown-linux-gnu",
+        "i686-unknown-linux-gnu",
+        "i686-pc-windows-msvc",
+        "i386-apple-darwin",
+        "x86_64-unknown-linux-gnux32",
+        "x86_64-unknown-linux-muslx32",
+        "arm64_32-apple-watchos",
+        "aarch64-unknown-linux-gnu_ilp32",
+        "aarch64-unknown-linux-gnuilp32"
+      ],
+      "rejected_abi_options": [
+        "ilp32",
+        "x32"
+      ],
+      "vmrun_export_sha256": {
+        "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+        "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+      },
+      "record_sha256": {
+        "software": "668751b9b630d014860c2ecd3e0486a5de69cf34d46c829f4cb612f3f2b0823a",
+        "compiler": "f591946cec06a45ab8fec10f8bccdf02f51dbd669b39b0f8ac456ff71a6845b7",
+        "translation-targets": "3ee5385c1f717db9d4b785d18d4210228489739d1570762ce245b0790d20a51d",
+        "kvm-comparisons": "cf2cd0ef70850c10ae4e6053bc61e387e0dd84437a05c1e72968eaaf9e399a05"
+      }
+    }
+  ],
+  "neverc": {
+    "source": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+    "archived_public_stl_registry": {
+      "tests": 377,
+      "log_sha256": "300c0cd75317f3d34e6b936995ac7aaadc488d57ab4e73b2672fe914006494dd",
+      "restored_sha256": "c118bcd96239aae0ab28cca41b7b698d2741239b85675d577393e139d2005bcb"
+    },
+    "bounded_leaf_disassembly": {
+      "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+      "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+      "source_sha256": "27461fc0a04ddeb8e109d9d322608183fa8dfecda472799542ef673bde96c086",
+      "public_api": "_enclu_bounded_u32",
+      "llvm_intrinsic": "llvm.x86.enclu.bounded",
+      "inline_asm": false,
+      "hardware_executions": 0,
+      "rows": [
+        {
+          "backend": "NeverC",
+          "optimization": "O0",
+          "ir_sha256": "464858190b1778ca479442f5e6aafccb43622af7ebdff4138d78489abedbaa41",
+          "object_sha256": "c89c8345c266ea070861075e9336f014a4e82d7271d0c95805fd4a3686b6599b",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x24",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0xa7",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x127",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0x1a7",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0x227",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x2a7",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x327",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x3a7",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x427",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        },
+        {
+          "backend": "r12",
+          "optimization": "O0",
+          "ir_sha256": "464858190b1778ca479442f5e6aafccb43622af7ebdff4138d78489abedbaa41",
+          "object_sha256": "d9ae9f0edf37aedc3dee2583eba83583dad578296c22a558f0c80708dc77e828",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x2c",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0xbf",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x14f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0x1df",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0x26f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x2ff",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x38f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x41f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x4af",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        },
+        {
+          "backend": "r17",
+          "optimization": "O0",
+          "ir_sha256": "464858190b1778ca479442f5e6aafccb43622af7ebdff4138d78489abedbaa41",
+          "object_sha256": "d9ae9f0edf37aedc3dee2583eba83583dad578296c22a558f0c80708dc77e828",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x2c",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0xbf",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x14f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0x1df",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0x26f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x2ff",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x38f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x41f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x4af",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        },
+        {
+          "backend": "NeverC",
+          "optimization": "O2",
+          "ir_sha256": "4f748c9f8a3456c400a5b34d3d6d198d36478fb4c4e591dfaf3d45dbc5df5dc4",
+          "object_sha256": "a4d74b5f41ac21e2d351f3b54ca579347c6348589076e53ed6b2913f2972f788",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x10",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0x43",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x73",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0xa3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0xd3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x103",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x133",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x163",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x193",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        },
+        {
+          "backend": "r12",
+          "optimization": "O2",
+          "ir_sha256": "4f748c9f8a3456c400a5b34d3d6d198d36478fb4c4e591dfaf3d45dbc5df5dc4",
+          "object_sha256": "2480b20ddb16a171cd7571c6cab3dbc27d5d69168a2b37f72a2fca1ffd87ebf9",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x10",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0x43",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x73",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0xa3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0xd3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x103",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x133",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x163",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x193",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        },
+        {
+          "backend": "r17",
+          "optimization": "O2",
+          "ir_sha256": "4f748c9f8a3456c400a5b34d3d6d198d36478fb4c4e591dfaf3d45dbc5df5dc4",
+          "object_sha256": "2480b20ddb16a171cd7571c6cab3dbc27d5d69168a2b37f72a2fca1ffd87ebf9",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x10",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0x43",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x73",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0xa3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0xd3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x103",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x133",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x163",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x193",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        }
+      ]
+    },
+    "general_disassembly": {
+      "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+      "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+      "opcodes": [
+        "vmread",
+        "vmwrite",
+        "vmrun",
+        "enclu",
+        "xrstor64",
+        "rsm"
+      ],
+      "rows": [
+        {
+          "sdk": "r12",
+          "optimization": "O0",
+          "opcodes": [
+            "vmread",
+            "vmwrite",
+            "vmrun",
+            "enclu",
+            "xrstor64",
+            "rsm"
+          ],
+          "ir_sha256": "79eb71fc31385f366247e2a043424d16329246a6338f0e137236cf978963d4d9",
+          "object_sha256": "8ac8d30a9ffee043823f7ce650fb9aee4526115f5fff12de4c16a7b364e75710"
+        },
+        {
+          "sdk": "r17",
+          "optimization": "O0",
+          "opcodes": [
+            "vmread",
+            "vmwrite",
+            "vmrun",
+            "enclu",
+            "xrstor64",
+            "rsm"
+          ],
+          "ir_sha256": "79eb71fc31385f366247e2a043424d16329246a6338f0e137236cf978963d4d9",
+          "object_sha256": "8ac8d30a9ffee043823f7ce650fb9aee4526115f5fff12de4c16a7b364e75710"
+        },
+        {
+          "sdk": "r12",
+          "optimization": "O2",
+          "opcodes": [
+            "vmread",
+            "vmwrite",
+            "vmrun",
+            "enclu",
+            "xrstor64",
+            "rsm"
+          ],
+          "ir_sha256": "cea0f9e0c1a4c4a93e59bafbba0a15861156dd5bd3dd7ee802caf8fc826b7c0f",
+          "object_sha256": "622238f3acb496fae498964214a11ba48bba1cd69c0526477cbd7a0599dd3d29"
+        },
+        {
+          "sdk": "r17",
+          "optimization": "O2",
+          "opcodes": [
+            "vmread",
+            "vmwrite",
+            "vmrun",
+            "enclu",
+            "xrstor64",
+            "rsm"
+          ],
+          "ir_sha256": "cea0f9e0c1a4c4a93e59bafbba0a15861156dd5bd3dd7ee802caf8fc826b7c0f",
+          "object_sha256": "622238f3acb496fae498964214a11ba48bba1cd69c0526477cbd7a0599dd3d29"
+        }
+      ]
+    },
+    "direct_frontend_and_driver_options": {
+      "compiler": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+      "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+      "accepted": 3,
+      "rejected": 17,
+      "cases": [
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "x86_64-unknown-linux-gnu",
+            "-emit-obj"
+          ],
+          "exit": 0,
+          "object_sha256": "3869fb4944095f20fe99dd39db69a1b254b9c1d31cab883b7113cfa44dc5c8c8",
+          "format": "ELF64"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "aarch64-unknown-linux-gnu",
+            "-emit-obj"
+          ],
+          "exit": 0,
+          "object_sha256": "39f6b20e0a9a46d6602c6cbed63a00440d6cfd3a3742976517d2b01a1502cb5a",
+          "format": "ELF64"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "i386-unknown-linux-gnu",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target triple 'i386-unknown-linux-gnu'"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "i686-unknown-linux-gnu",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target triple 'i686-unknown-linux-gnu'"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "i686-pc-windows-msvc",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target triple 'i686-pc-windows-msvc'"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "i386-apple-darwin",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target triple 'i386-apple-darwin'"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "x86_64-unknown-linux-gnux32",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target triple 'x86_64-unknown-linux-gnux32'"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "x86_64-unknown-linux-muslx32",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target triple 'x86_64-unknown-linux-muslx32'"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "arm64_32-apple-watchos",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target triple 'arm64_32-apple-watchos'"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "aarch64-unknown-linux-gnu_ilp32",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target triple 'aarch64-unknown-linux-gnu_ilp32'"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "aarch64-unknown-linux-gnuilp32",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target triple 'aarch64-unknown-linux-gnuilp32'"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "x86_64-unknown-linux-gnu",
+            "-target-abi",
+            "ilp32",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target ABI 'ilp32'"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "x86_64-unknown-linux-gnu",
+            "-target-abi",
+            "x32",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target ABI 'x32'"
+        },
+        {
+          "arguments": [
+            "-cc1",
+            "-triple",
+            "aarch64-unknown-linux-gnu",
+            "-target-abi",
+            "ilp32",
+            "-emit-obj"
+          ],
+          "exit": 1,
+          "diagnostic": "error: unknown target ABI 'ilp32'"
+        },
+        {
+          "arguments": [
+            "--target=x86_64-apple-macosx15.0.0",
+            "-arch",
+            "x86_64",
+            "-c"
+          ],
+          "exit": 0,
+          "object_sha256": "1da7a9aa3b89ec0d6e7c35af71d7323bfbf20b9925cd02fc7b4cef5cf7e25d69",
+          "format": "LLVM bitcode, wrapper x86_64"
+        },
+        {
+          "arguments": [
+            "--target=x86_64-apple-macosx15.0.0",
+            "-arch",
+            "i386",
+            "-c"
+          ],
+          "exit": 1,
+          "diagnostic": "neverc: error: invalid arch name 'i386'"
+        },
+        {
+          "arguments": [
+            "--target=x86_64-apple-macosx15.0.0",
+            "-arch",
+            "i686",
+            "-c"
+          ],
+          "exit": 1,
+          "diagnostic": "neverc: error: invalid arch name 'i686'"
+        },
+        {
+          "arguments": [
+            "-m32",
+            "-c"
+          ],
+          "exit": 1,
+          "diagnostic": "neverc: error: unknown argument: '-m32'"
+        },
+        {
+          "arguments": [
+            "-mx32",
+            "-c"
+          ],
+          "exit": 1,
+          "diagnostic": "neverc: error: unknown argument: '-mx32'"
+        },
+        {
+          "arguments": [
+            "-m16",
+            "-c"
+          ],
+          "exit": 1,
+          "diagnostic": "neverc: error: unknown argument: '-m16'"
+        }
+      ]
+    }
+  },
+  "hosted_vmrun": [
+    {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46164176454",
+      "neverd": "2e999385dc5a2175c2bf7675e9e2476eabc63919",
+      "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+      "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+      "llvm": "93a7e578d2b105139e938d1da8b502d0689a25a0",
+      "guests": [
+        {
+          "route": "high",
+          "input": "mapped",
+          "optimization": "O0",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "f98f61899765c5149f8df199b581e589e1916133bf86e4d35fe7943e0e2de6fc",
+          "object_sha256": "12f3efbe99a04404a2fcd5da6cf2e7c864f401b927c4cdd25610a4d6eeb75800",
+          "image_sha256": "4e13ec16635702c27f1656103ef16ade6d5a64915bb579e6db260ea038786553",
+          "elf_sha256": "a617393a38049e740f06fd7551ad95ea485cead092d7c297b66c9adeaaf70242"
+        },
+        {
+          "route": "high",
+          "input": "mapped",
+          "optimization": "O2",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "83d10c98bb52d9358fb9b67aeb1eb8b815791f19357bf6b1363303f7950d1bd2",
+          "object_sha256": "3300524c953cbbf069215f84ace0cd068eeb6f823211d070af7d862b6a1c8a81",
+          "image_sha256": "5751266fbd7d9d048a9148e1aada6699a68969d40251d0a2c99c1190962b5141",
+          "elf_sha256": "da8df8f97bb1a97629731b16f2787ee3319dfa978d4431d179de0d24c1d5ca5d"
+        },
+        {
+          "route": "high",
+          "input": "tagged",
+          "optimization": "O0",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "626253cdb3c6755cca6caf80fd7b4a7b333511763f50cfe52064a6898712603a",
+          "object_sha256": "2d8a57407173852b6f56e5dc59df5d09a222435c6b0d1ddf9eec20fb226d4c07",
+          "image_sha256": "80ef5d0ec5c2343878ea80dbf3b37fab562d2e84177f605cbb5edfb2c563ec81",
+          "elf_sha256": "754b830e4258fcc565f786c207d98c797b55f0b68c9f0fd97ea22b0b370daa12"
+        },
+        {
+          "route": "high",
+          "input": "tagged",
+          "optimization": "O2",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "a182fd3ec190034b2f30659b95fa75562da04f9b5d142a8586211863a4f44950",
+          "object_sha256": "4ce060cf3dced71b8fe5c771f35bfb5310481b624df1e9f1dac328bc6d95059c",
+          "image_sha256": "ac43fe0ee87e2e9dca99655e0598fbdbcb16b170d0efb87a03287ed87158d10f",
+          "elf_sha256": "dd0386aebe8df78c1d484c36aec3149e82972b91a44a669bb6dcf586e4e471e9"
+        },
+        {
+          "route": "llvm",
+          "input": "mapped",
+          "optimization": "O0",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "fe156fe524b9e499dcb693b7e29cbcaf42e97a279edbfb4f90d29f32c3cb1892",
+          "object_sha256": "985d74bf317205fadcb1c6db23b919aaf3a8b7af7d55b7937b17a51ddbf9c7ae",
+          "image_sha256": "96cf79cc90fbbc9f3e2934d8e42ca16813fafde5086e5ef80b15e9716ef7d0fa",
+          "elf_sha256": "11a9b8dd16c4df7c08dfecd1bcbffb4ad5d7fc9928868002e7d773899ccbead7"
+        },
+        {
+          "route": "llvm",
+          "input": "mapped",
+          "optimization": "O2",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "1a3029fdb1a705711c799fd697f8a61c5f55788cbc353106595407722291465c",
+          "object_sha256": "e836a4d9093e830c609bef4da98beb7d1dffa61a3a7e2bfe4d50355b826a7587",
+          "image_sha256": "c718bc3ae671f080663b652527d7e23938b991153ae7554d4f34526652fe3ff0",
+          "elf_sha256": "3f1f6b45834d630986b743a0bcbf8901ad78faa1b9b061dfc92c1349f278c969"
+        },
+        {
+          "route": "llvm",
+          "input": "tagged",
+          "optimization": "O0",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "b3863f66dc10e311bfac672853cccae81afe4036e65b1c4840ab44e91bce9f88",
+          "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+          "image_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b",
+          "elf_sha256": "a63df62ba27af42652a355d3db6f98c8a8f5dfae950a73ef9e09bf0fc3e1fb0b"
+        },
+        {
+          "route": "llvm",
+          "input": "tagged",
+          "optimization": "O2",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "44ef98bf9ba14d840621f4fea219dfa61652e312738b50dae125c12945531465",
+          "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+          "image_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e",
+          "elf_sha256": "90ee93cf18692f67bfd60891320e96ac7c51e1d423eb2f97c7a084c53f017c90"
+        }
+      ],
+      "projections": {
+        "origin": "NeverD software test exports",
+        "software_receipt_sha256": "b99a82e922eb3a2155e943949df65068405164d43ab1a5c8d8d23746b292e347"
+      },
+      "runners": [
+        {
+          "image": "neverd-kvm-svm-ubuntu-22.04-attempt-1",
+          "cpu": "AMD EPYC 7763 64-Core Processor",
+          "status": "passed",
+          "report_sha256": "6a0d2dbafdcef26014384d4269a2d9a68a38fd73c9bab8e9ee0aaf3dcbf4265a",
+          "cases": [
+            {
+              "route": "original",
+              "optimization": "O0",
+              "vmcb_input": "tagged",
+              "guest_sha256": "d7a49c3bb848463647781a61f8983d462f010189c642cae17d48e8ac02bf047e",
+              "rip": "0x100245",
+              "rax": "0xfedcba9800106000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x100245",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "original",
+              "optimization": "O2",
+              "vmcb_input": "tagged",
+              "guest_sha256": "a9fb8fc10553ac13a9a62d0afae84e0a13dd208f8fc63e66e03842a166a8fb5b",
+              "rip": "0x100245",
+              "rax": "0xfedcba9800106000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x100245",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "high",
+              "optimization": "O0",
+              "vmcb_input": "tagged",
+              "guest_sha256": "80ef5d0ec5c2343878ea80dbf3b37fab562d2e84177f605cbb5edfb2c563ec81",
+              "rip": "0x10b045",
+              "rax": "0xfedcba9800111000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x10b045",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "high",
+              "optimization": "O2",
+              "vmcb_input": "tagged",
+              "guest_sha256": "ac43fe0ee87e2e9dca99655e0598fbdbcb16b170d0efb87a03287ed87158d10f",
+              "rip": "0x105015",
+              "rax": "0xfedcba980010b000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x105015",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "llvm",
+              "optimization": "O0",
+              "vmcb_input": "tagged",
+              "guest_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b",
+              "rip": "0x10ab25",
+              "rax": "0xfedcba9800110000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x10ab25",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "llvm",
+              "optimization": "O2",
+              "vmcb_input": "tagged",
+              "guest_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e",
+              "rip": "0x104fb5",
+              "rax": "0xfedcba980010b000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x104fb5",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "original",
+              "optimization": "O0",
+              "vmcb_input": "mapped",
+              "guest_sha256": "99b8064bfcb4a1d63ef2c0ed027b832748f38b4c7a8b8e67f6e976124794c5bd",
+              "rip": "0x100245",
+              "rax": "0x106000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "outcome": "returned",
+              "next_pc": "0x100249",
+              "vmexit": "0x81"
+            },
+            {
+              "route": "original",
+              "optimization": "O2",
+              "vmcb_input": "mapped",
+              "guest_sha256": "9adff5fc5a5c145c3324cee11f4628f5bb125b37f1753a44ed48f589426b1c9a",
+              "rip": "0x100245",
+              "rax": "0x106000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "outcome": "returned",
+              "next_pc": "0x100249",
+              "vmexit": "0x81"
+            },
+            {
+              "route": "high",
+              "optimization": "O0",
+              "vmcb_input": "mapped",
+              "guest_sha256": "4e13ec16635702c27f1656103ef16ade6d5a64915bb579e6db260ea038786553",
+              "rip": "0x10b035",
+              "rax": "0x111000",
+              "contexts": 50,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "returned",
+              "next_pc": "0x10b039",
+              "vmexit": "0x81"
+            },
+            {
+              "route": "high",
+              "optimization": "O2",
+              "vmcb_input": "mapped",
+              "guest_sha256": "5751266fbd7d9d048a9148e1aada6699a68969d40251d0a2c99c1190962b5141",
+              "rip": "0x104fe5",
+              "rax": "0x10b000",
+              "contexts": 50,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "returned",
+              "next_pc": "0x104fe9",
+              "vmexit": "0x81"
+            },
+            {
+              "route": "llvm",
+              "optimization": "O0",
+              "vmcb_input": "mapped",
+              "guest_sha256": "96cf79cc90fbbc9f3e2934d8e42ca16813fafde5086e5ef80b15e9716ef7d0fa",
+              "rip": "0x10ab15",
+              "rax": "0x110000",
+              "contexts": 50,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "returned",
+              "next_pc": "0x10ab19",
+              "vmexit": "0x81"
+            },
+            {
+              "route": "llvm",
+              "optimization": "O2",
+              "vmcb_input": "mapped",
+              "guest_sha256": "c718bc3ae671f080663b652527d7e23938b991153ae7554d4f34526652fe3ff0",
+              "rip": "0x104f85",
+              "rax": "0x10b000",
+              "contexts": 50,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "returned",
+              "next_pc": "0x104f89",
+              "vmexit": "0x81"
+            }
+          ],
+          "generated_return_contexts": 200
+        },
+        {
+          "image": "neverd-kvm-svm-ubuntu-24.04-attempt-1",
+          "cpu": "Intel(R) Xeon(R) 6975P-C",
+          "status": "unavailable",
+          "report_sha256": "c6c176716ab6ac1028232f3e06b1de10be4af9764a443423c1fc962a34f37d3b",
+          "cases": []
+        }
+      ]
+    },
+    {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46164846857",
+      "neverd": "d3f236e23642ae050ab1edab1bbc85c6a8236406",
+      "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+      "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+      "llvm": "93a7e578d2b105139e938d1da8b502d0689a25a0",
+      "guests": [
+        {
+          "route": "high",
+          "input": "mapped",
+          "optimization": "O0",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "f98f61899765c5149f8df199b581e589e1916133bf86e4d35fe7943e0e2de6fc",
+          "object_sha256": "12f3efbe99a04404a2fcd5da6cf2e7c864f401b927c4cdd25610a4d6eeb75800",
+          "image_sha256": "4e13ec16635702c27f1656103ef16ade6d5a64915bb579e6db260ea038786553",
+          "elf_sha256": "a617393a38049e740f06fd7551ad95ea485cead092d7c297b66c9adeaaf70242"
+        },
+        {
+          "route": "high",
+          "input": "mapped",
+          "optimization": "O2",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "83d10c98bb52d9358fb9b67aeb1eb8b815791f19357bf6b1363303f7950d1bd2",
+          "object_sha256": "3300524c953cbbf069215f84ace0cd068eeb6f823211d070af7d862b6a1c8a81",
+          "image_sha256": "5751266fbd7d9d048a9148e1aada6699a68969d40251d0a2c99c1190962b5141",
+          "elf_sha256": "da8df8f97bb1a97629731b16f2787ee3319dfa978d4431d179de0d24c1d5ca5d"
+        },
+        {
+          "route": "high",
+          "input": "tagged",
+          "optimization": "O0",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "626253cdb3c6755cca6caf80fd7b4a7b333511763f50cfe52064a6898712603a",
+          "object_sha256": "2d8a57407173852b6f56e5dc59df5d09a222435c6b0d1ddf9eec20fb226d4c07",
+          "image_sha256": "80ef5d0ec5c2343878ea80dbf3b37fab562d2e84177f605cbb5edfb2c563ec81",
+          "elf_sha256": "754b830e4258fcc565f786c207d98c797b55f0b68c9f0fd97ea22b0b370daa12"
+        },
+        {
+          "route": "high",
+          "input": "tagged",
+          "optimization": "O2",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "a182fd3ec190034b2f30659b95fa75562da04f9b5d142a8586211863a4f44950",
+          "object_sha256": "4ce060cf3dced71b8fe5c771f35bfb5310481b624df1e9f1dac328bc6d95059c",
+          "image_sha256": "ac43fe0ee87e2e9dca99655e0598fbdbcb16b170d0efb87a03287ed87158d10f",
+          "elf_sha256": "dd0386aebe8df78c1d484c36aec3149e82972b91a44a669bb6dcf586e4e471e9"
+        },
+        {
+          "route": "llvm",
+          "input": "mapped",
+          "optimization": "O0",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "fe156fe524b9e499dcb693b7e29cbcaf42e97a279edbfb4f90d29f32c3cb1892",
+          "object_sha256": "985d74bf317205fadcb1c6db23b919aaf3a8b7af7d55b7937b17a51ddbf9c7ae",
+          "image_sha256": "96cf79cc90fbbc9f3e2934d8e42ca16813fafde5086e5ef80b15e9716ef7d0fa",
+          "elf_sha256": "11a9b8dd16c4df7c08dfecd1bcbffb4ad5d7fc9928868002e7d773899ccbead7"
+        },
+        {
+          "route": "llvm",
+          "input": "mapped",
+          "optimization": "O2",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "1a3029fdb1a705711c799fd697f8a61c5f55788cbc353106595407722291465c",
+          "object_sha256": "e836a4d9093e830c609bef4da98beb7d1dffa61a3a7e2bfe4d50355b826a7587",
+          "image_sha256": "c718bc3ae671f080663b652527d7e23938b991153ae7554d4f34526652fe3ff0",
+          "elf_sha256": "3f1f6b45834d630986b743a0bcbf8901ad78faa1b9b061dfc92c1349f278c969"
+        },
+        {
+          "route": "llvm",
+          "input": "tagged",
+          "optimization": "O0",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "b3863f66dc10e311bfac672853cccae81afe4036e65b1c4840ab44e91bce9f88",
+          "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+          "image_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b",
+          "elf_sha256": "a63df62ba27af42652a355d3db6f98c8a8f5dfae950a73ef9e09bf0fc3e1fb0b"
+        },
+        {
+          "route": "llvm",
+          "input": "tagged",
+          "optimization": "O2",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "44ef98bf9ba14d840621f4fea219dfa61652e312738b50dae125c12945531465",
+          "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+          "image_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e",
+          "elf_sha256": "90ee93cf18692f67bfd60891320e96ac7c51e1d423eb2f97c7a084c53f017c90"
+        }
+      ],
+      "projections": {
+        "origin": "NeverD software test exports",
+        "software_receipt_sha256": "bbf0297e2545c59a74fc41676dd9d485a179cb61ad593873ca0a157760778f5d"
+      },
+      "runners": [
+        {
+          "image": "neverd-kvm-svm-ubuntu-22.04-attempt-1",
+          "cpu": "AMD EPYC 7763 64-Core Processor",
+          "status": "passed",
+          "report_sha256": "6a0d2dbafdcef26014384d4269a2d9a68a38fd73c9bab8e9ee0aaf3dcbf4265a",
+          "cases": [
+            {
+              "route": "original",
+              "optimization": "O0",
+              "vmcb_input": "tagged",
+              "guest_sha256": "d7a49c3bb848463647781a61f8983d462f010189c642cae17d48e8ac02bf047e",
+              "rip": "0x100245",
+              "rax": "0xfedcba9800106000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x100245",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "original",
+              "optimization": "O2",
+              "vmcb_input": "tagged",
+              "guest_sha256": "a9fb8fc10553ac13a9a62d0afae84e0a13dd208f8fc63e66e03842a166a8fb5b",
+              "rip": "0x100245",
+              "rax": "0xfedcba9800106000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x100245",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "high",
+              "optimization": "O0",
+              "vmcb_input": "tagged",
+              "guest_sha256": "80ef5d0ec5c2343878ea80dbf3b37fab562d2e84177f605cbb5edfb2c563ec81",
+              "rip": "0x10b045",
+              "rax": "0xfedcba9800111000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x10b045",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "high",
+              "optimization": "O2",
+              "vmcb_input": "tagged",
+              "guest_sha256": "ac43fe0ee87e2e9dca99655e0598fbdbcb16b170d0efb87a03287ed87158d10f",
+              "rip": "0x105015",
+              "rax": "0xfedcba980010b000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x105015",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "llvm",
+              "optimization": "O0",
+              "vmcb_input": "tagged",
+              "guest_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b",
+              "rip": "0x10ab25",
+              "rax": "0xfedcba9800110000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x10ab25",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "llvm",
+              "optimization": "O2",
+              "vmcb_input": "tagged",
+              "guest_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e",
+              "rip": "0x104fb5",
+              "rax": "0xfedcba980010b000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "fault",
+              "vector": 13,
+              "error": 0,
+              "fault_pc": "0x104fb5",
+              "bytes": "670f01d8"
+            },
+            {
+              "route": "original",
+              "optimization": "O0",
+              "vmcb_input": "mapped",
+              "guest_sha256": "99b8064bfcb4a1d63ef2c0ed027b832748f38b4c7a8b8e67f6e976124794c5bd",
+              "rip": "0x100245",
+              "rax": "0x106000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "outcome": "returned",
+              "next_pc": "0x100249",
+              "vmexit": "0x81"
+            },
+            {
+              "route": "original",
+              "optimization": "O2",
+              "vmcb_input": "mapped",
+              "guest_sha256": "9adff5fc5a5c145c3324cee11f4628f5bb125b37f1753a44ed48f589426b1c9a",
+              "rip": "0x100245",
+              "rax": "0x106000",
+              "contexts": 0,
+              "instruction_bytes": "670f01d8",
+              "outcome": "returned",
+              "next_pc": "0x100249",
+              "vmexit": "0x81"
+            },
+            {
+              "route": "high",
+              "optimization": "O0",
+              "vmcb_input": "mapped",
+              "guest_sha256": "4e13ec16635702c27f1656103ef16ade6d5a64915bb579e6db260ea038786553",
+              "rip": "0x10b035",
+              "rax": "0x111000",
+              "contexts": 50,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "returned",
+              "next_pc": "0x10b039",
+              "vmexit": "0x81"
+            },
+            {
+              "route": "high",
+              "optimization": "O2",
+              "vmcb_input": "mapped",
+              "guest_sha256": "5751266fbd7d9d048a9148e1aada6699a68969d40251d0a2c99c1190962b5141",
+              "rip": "0x104fe5",
+              "rax": "0x10b000",
+              "contexts": 50,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "returned",
+              "next_pc": "0x104fe9",
+              "vmexit": "0x81"
+            },
+            {
+              "route": "llvm",
+              "optimization": "O0",
+              "vmcb_input": "mapped",
+              "guest_sha256": "96cf79cc90fbbc9f3e2934d8e42ca16813fafde5086e5ef80b15e9716ef7d0fa",
+              "rip": "0x10ab15",
+              "rax": "0x110000",
+              "contexts": 50,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "returned",
+              "next_pc": "0x10ab19",
+              "vmexit": "0x81"
+            },
+            {
+              "route": "llvm",
+              "optimization": "O2",
+              "vmcb_input": "mapped",
+              "guest_sha256": "c718bc3ae671f080663b652527d7e23938b991153ae7554d4f34526652fe3ff0",
+              "rip": "0x104f85",
+              "rax": "0x10b000",
+              "contexts": 50,
+              "instruction_bytes": "670f01d8",
+              "original_step": "0x1010",
+              "outcome": "returned",
+              "next_pc": "0x104f89",
+              "vmexit": "0x81"
+            }
+          ],
+          "generated_return_contexts": 200
+        },
+        {
+          "image": "neverd-kvm-svm-ubuntu-24.04-attempt-1",
+          "cpu": "Intel(R) Xeon(R) 6975P-C",
+          "status": "unavailable",
+          "report_sha256": "c6c176716ab6ac1028232f3e06b1de10be4af9764a443423c1fc962a34f37d3b",
+          "cases": []
+        }
+      ]
+    }
+  ],
+  "native_sgx": {
+    "discovery_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46160091208",
+    "runners": {
+      "macos-15-intel": {
+        "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+        "runner_image": {
+          "RUNNER_OS": "macOS",
+          "RUNNER_ARCH": "X64",
+          "ImageOS": "macos15",
+          "ImageVersion": "20260824.0482.1"
+        },
+        "kernel": "24.6.0",
+        "features": {
+          "sgx": true,
+          "sgx_launch_control": false,
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "hypervisor": true
+        },
+        "native_executions": 0,
+        "reasons": [
+          "SGX1 is not exposed by CPUID",
+          "CPUID does not enumerate an EPC section",
+          "The Linux SGX enclave runner requires a Linux kernel driver",
+          "No accessible SGX enclave device"
+        ],
+        "report_sha256": "70401ee395d3e8c27cf58608e31812e8a74aff46947d964492a6bceaf40b043f",
+        "la57": false,
+        "cpuid_sha256": "7f9c76f85aa5e22d26b523dba4e7498a17045ac0b94a5fdaa4a06ce0983554b6"
+      },
+      "macos-26-intel": {
+        "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+        "runner_image": {
+          "RUNNER_OS": "macOS",
+          "RUNNER_ARCH": "X64",
+          "ImageOS": "macos26",
+          "ImageVersion": "20260824.0517.1"
+        },
+        "kernel": "25.6.0",
+        "features": {
+          "sgx": true,
+          "sgx_launch_control": false,
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "hypervisor": true
+        },
+        "native_executions": 0,
+        "reasons": [
+          "SGX1 is not exposed by CPUID",
+          "CPUID does not enumerate an EPC section",
+          "The Linux SGX enclave runner requires a Linux kernel driver",
+          "No accessible SGX enclave device"
+        ],
+        "report_sha256": "43aa2feea385ffdadb3b12048b4e223e93d6468e929d0fe23d0408be40bdc321",
+        "la57": false,
+        "cpuid_sha256": "aeacdc1c10bf4eecbf1c4d2085afad160a10c5145edcf3b5467d0b8358c89d7d"
+      },
+      "ubuntu-24.04": {
+        "cpu": "AMD EPYC 7763 64-Core Processor",
+        "runner_image": {
+          "RUNNER_OS": "Linux",
+          "RUNNER_ARCH": "X64",
+          "ImageOS": "ubuntu24",
+          "ImageVersion": "20261122.23.1"
+        },
+        "kernel": "7.0.0-1020-azure",
+        "features": {
+          "sgx": false,
+          "sgx_launch_control": false,
+          "sgx1": false,
+          "sgx2": false,
+          "first_epc_section": 0,
+          "hypervisor": true
+        },
+        "native_executions": 0,
+        "reasons": [
+          "SGX1 is not exposed by CPUID",
+          "CPUID does not enumerate an EPC section",
+          "No accessible SGX enclave device"
+        ],
+        "report_sha256": "8c57afd5f1410455a6b2366697785a2d477c5373d4c28e54970dd31449faf60f",
+        "linux_selftest": {
+          "linux_source": "7d0a66e4bb9081d75c82ec4957c50034cb0ea449",
+          "source": "tools/testing/selftests/sgx",
+          "status": "unavailable",
+          "cases": {},
+          "test_sgx_sha256": "c5cd1494e9c03a3da0f790855d6ecedc6b075e86ca6552b460ca9aed5998c8d9",
+          "test_encl.elf_sha256": "baf0b590fb4cf83b23347068d97d1af62149bae1d9f02ad13207d10d16ff9ac9",
+          "reasons": [
+            "SGX1 is not exposed by CPUID",
+            "CPUID does not enumerate an EPC section",
+            "No accessible SGX enclave device",
+            "The Linux selftest needs read/write access to /dev/sgx_enclave"
+          ]
+        },
+        "la57": false,
+        "cpuid_sha256": "035660a4305be213827f760d54c2786378f64577eefdac5b023e0f5ad1e54572"
+      }
+    }
+  },
+  "release": {
+    "production_tag": "neverd-llvm-v23.0.0-r12",
+    "production_gitlink": "6947b7db63e913244e0aa6de087d1ad2e791e86f",
+    "native_sgx_qualified": false
+  },
+  "everifyreport2": {
+    "neverd": "d3f236e23642ae050ab1edab1bbc85c6a8236406",
+    "reference": "https://cdrdv2-public.intel.com/929362/332831-093-sdm-vol-3d.pdf",
+    "legacy_reference": "https://cdrdv2-public.intel.com/733582/intel-tdx-cpu-architectural-specification.pdf",
+    "mac_window_bytes": 224,
+    "report_pair_public_hmac": {
+      "192": "f320853d2e63ce78bb2cb03167da1260ebb7974fc82d3f181ca6b03f7505bbe1",
+      "224": "cd391871843ae85acd66e2aa071689fed3972faf7f5d1172552abe1fcff61fed"
+    },
+    "private_read_bytes": 256,
+    "sdm093_alignment": 4096,
+    "tdx002_alignment": 256,
+    "native_enclave_executions": 0,
+    "local": [
+      {
+        "neverd": "d3f236e23642ae050ab1edab1bbc85c6a8236406",
+        "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+        "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+        "capstone": "0863317f25561b495c449fafb9cd37af1772599f",
+        "llvm": "6947b7db63e913244e0aa6de087d1ad2e791e86f",
+        "llvm_tag": "neverd-llvm-v23.0.0-r12",
+        "production_gitlink": "6947b7db63e913244e0aa6de087d1ad2e791e86f",
+        "passed": 76,
+        "skipped": 0,
+        "native_sgx_executions": 0,
+        "xml_sha256": {
+          "NeverDX64ContinuationExportTests.xml": "3b52ccd099452e73800590b624b5c7c6ff61daf4862f310ccfd776985cb23bf5",
+          "NeverDX64PagedExecutionTests.xml": "17c6eb382c4170e3687ba30f4ca01fcd4841f9a0ae31d025e4575cc726a173a7",
+          "NeverDX86LegacySourceTests.xml": "4eaf15ebf4b4d9b5cf488b63c4530be92effac5644e478a35751d1e74c1ce963",
+          "NeverDX86PagingTests.xml": "f1a3634548907b195ae473c8857c47c27f34122ddba6415802b785a73d8c5dbc"
+        },
+        "software_sha256": "9cd8ddf54625c209e3a520477ad49d7ea68210c1dac952d85b9771b499b32f4a",
+        "vmrun_export_sha256": {
+          "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+        },
+        "properties": {
+          "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame": {
+            "continuous_native_event_comparisons": "5",
+            "original_initial_sregs_writes": "5",
+            "original_mode_rewrites": "0"
+          },
+          "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm": {
+            "cpu_comparisons": "8"
+          },
+          "X86ModeInterruptTest.SoftwareSmmSaveMapAndEditedRsmMatchKvm": {
+            "kvm_save_maps": "2"
+          },
+          "X86ModeInterruptTest.RsmChecksTheSaveImageBeforeBranchSingleStepping": {
+            "software_profile_cases": "9"
+          },
+          "X86ModeSgxThreadTest.CompiledBodiesUseTheAcceptedPrivatePage": {
+            "compiled_executions": "8"
+          },
+          "X86ModeSgxThreadTest.VerifyReportAuthenticatesTheFullPrefixAfterCPUSVN": {
+            "verification_cases": "10"
+          },
+          "X86ModeSgxThreadTest.VerifyReportChecksTheLegacyHeaderBeforeVersionAndMAC": {
+            "legacy_verification_cases": "10"
+          },
+          "X86ModeSgxThreadTest.CompiledBodiesReadTheUpperHalfOfTheWideKey": {
+            "compiled_executions": "8"
+          }
+        },
+        "mode_owners": {
+          "p": {
+            "sha256": "0ea85df9dd301655d80d91c1beb82fb25e8c9da5efd93ad8158d7af023010993",
+            "passed": 286,
+            "total": 286,
+            "shards": [
+              {
+                "cpu": 2,
+                "sha256": "8ea056d97980161503b74ca86db91353ba6d56a3f77fc5967e2c1b982c1ca930",
+                "tests": 143
+              },
+              {
+                "cpu": 8,
+                "sha256": "2e70767dd2e420716d25409c058cce1a87140edb42e555118dbf4c5d30254345",
+                "tests": 143
+              }
+            ]
+          },
+          "e": {
+            "sha256": "e45311cbc74b6af1e129b589eb0beee5d853ea8793d5a173cee2f358e89d3f81",
+            "passed": 286,
+            "total": 286,
+            "shards": [
+              {
+                "cpu": 15,
+                "sha256": "f31d355af5657ffe1c092371e2dc38c3ba4a7b0e5796a2d21397732212ec7894",
+                "tests": 143
+              },
+              {
+                "cpu": 17,
+                "sha256": "58a0c64e83c5c097ac2d8325d68ab608352a69592e736a7772c79c70a2394e4c",
+                "tests": 143
+              }
+            ]
+          }
+        },
+        "other_owners": {
+          "lower": {
+            "executable": "NeverDX86PagingTests",
+            "binary_sha256": "f24f6bf90b68139e10188f75722fc8bb0872d69cb8a3b3f286069e234f237d39",
+            "passed": 859,
+            "total": 861,
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "Bound KVM CPU has no LA57",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "Bound KVM CPU has no LA57"
+            },
+            "shards": [
+              {
+                "cpu": 4,
+                "file": "lower-0.xml",
+                "sha256": "c29ec6b9f795771a260a02aee160ce5e721f9068d73112a3595aa9fb46898199",
+                "cases": 431
+              },
+              {
+                "cpu": 6,
+                "file": "lower-1.xml",
+                "sha256": "c415c3230cd142669eae66d8fe5e7906a50112de468b2269f01dd414cb8301bd",
+                "cases": 430
+              }
+            ]
+          },
+          "generated": {
+            "executable": "NeverDX86LegacySourceTests",
+            "binary_sha256": "266bc4cbbd48a0de2c6efdccad499f124ad4f4c01440a7ce5a71483bb666d917",
+            "passed": 265,
+            "total": 265,
+            "skips": {},
+            "shards": [
+              {
+                "cpu": 2,
+                "file": "generated-0.xml",
+                "sha256": "b603994cc62059def64570b492f731840f881d6fb362ed0444015ea31e06237a",
+                "cases": 133
+              },
+              {
+                "cpu": 8,
+                "file": "generated-1.xml",
+                "sha256": "7a8df085c7a228003a87dd9001a889093d764b8a7ff0172abb3ed59edec35522",
+                "cases": 132
+              }
+            ]
+          },
+          "exports": {
+            "executable": "NeverDX64ContinuationExportTests",
+            "binary_sha256": "b0e3d8c62aae0cdb3e96f8d3a1e04b93e73b4f6917574d2d3aaf57da892b9a70",
+            "passed": 133,
+            "total": 133,
+            "skips": {},
+            "shards": [
+              {
+                "cpu": 1,
+                "file": "exports-0.xml",
+                "sha256": "39caccebfe166562204b2e30c738eb05d0d24c037bf1a90bb334e4f633be28e4",
+                "cases": 133
+              }
+            ]
+          }
+        }
+      },
+      {
+        "neverd": "d3f236e23642ae050ab1edab1bbc85c6a8236406",
+        "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+        "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+        "capstone": "0863317f25561b495c449fafb9cd37af1772599f",
+        "llvm": "93a7e578d2b105139e938d1da8b502d0689a25a0",
+        "llvm_tag": "neverd-llvm-v23.0.0-r17",
+        "production_gitlink": "6947b7db63e913244e0aa6de087d1ad2e791e86f",
+        "passed": 76,
+        "skipped": 0,
+        "native_sgx_executions": 0,
+        "xml_sha256": {
+          "NeverDX64ContinuationExportTests.xml": "0296c7d06499a84fd65313dcbcbcc4f7327f8e01acf72f645f07bde07570393d",
+          "NeverDX64PagedExecutionTests.xml": "934ddbc5b0a1033a94ae42c5d6009c048f9abbce1457b804a25728befd060178",
+          "NeverDX86LegacySourceTests.xml": "deb5cbb76c06c0d3b4a18b172bd8b2d0cb5211186ff69daaa6f15273679b3e9a",
+          "NeverDX86PagingTests.xml": "91451c8508579183f96136272d08718ece5dd3dcc277b59b113f37c99123d63e"
+        },
+        "software_sha256": "9cd8ddf54625c209e3a520477ad49d7ea68210c1dac952d85b9771b499b32f4a",
+        "vmrun_export_sha256": {
+          "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+        },
+        "properties": {
+          "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame": {
+            "continuous_native_event_comparisons": "5",
+            "original_initial_sregs_writes": "5",
+            "original_mode_rewrites": "0"
+          },
+          "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm": {
+            "cpu_comparisons": "8"
+          },
+          "X86ModeInterruptTest.SoftwareSmmSaveMapAndEditedRsmMatchKvm": {
+            "kvm_save_maps": "2"
+          },
+          "X86ModeInterruptTest.RsmChecksTheSaveImageBeforeBranchSingleStepping": {
+            "software_profile_cases": "9"
+          },
+          "X86ModeSgxThreadTest.CompiledBodiesUseTheAcceptedPrivatePage": {
+            "compiled_executions": "8"
+          },
+          "X86ModeSgxThreadTest.VerifyReportAuthenticatesTheFullPrefixAfterCPUSVN": {
+            "verification_cases": "10"
+          },
+          "X86ModeSgxThreadTest.VerifyReportChecksTheLegacyHeaderBeforeVersionAndMAC": {
+            "legacy_verification_cases": "10"
+          },
+          "X86ModeSgxThreadTest.CompiledBodiesReadTheUpperHalfOfTheWideKey": {
+            "compiled_executions": "8"
+          }
+        },
+        "mode_owners": {
+          "p": {
+            "sha256": "c0a423b83a0a617ad7488767138691fd0a592eef605bd6940ff99cc586466498",
+            "passed": 286,
+            "total": 286,
+            "shards": [
+              {
+                "cpu": 0,
+                "sha256": "00a8d3cab0751568c3a793d21efbc84f31725c4b93e767a5eae4d47aa44688fe",
+                "tests": 143
+              },
+              {
+                "cpu": 10,
+                "sha256": "3b71bc21195144214ce69dcaabaa22ba89986d42d4d68a5bf93ee9d384cf4b27",
+                "tests": 143
+              }
+            ]
+          },
+          "e": {
+            "sha256": "fda3689171151771171cdccd42df9a4f1a89e66bfd16a39661f8a063794d5117",
+            "passed": 286,
+            "total": 286,
+            "shards": [
+              {
+                "cpu": 14,
+                "sha256": "d58dacc60a599b30a687cbcb0a6f6eeb9fc71d2ec1be4e8df1256b204aab143b",
+                "tests": 143
+              },
+              {
+                "cpu": 18,
+                "sha256": "2732d5b5f71e5e5dc7294288ffb630bfc5019c3c452e83e9dfab5ba76dd93a03",
+                "tests": 143
+              }
+            ]
+          }
+        },
+        "other_owners": {
+          "lower": {
+            "executable": "NeverDX86PagingTests",
+            "binary_sha256": "f24f6bf90b68139e10188f75722fc8bb0872d69cb8a3b3f286069e234f237d39",
+            "passed": 859,
+            "total": 861,
+            "skips": {
+              "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3": "Bound KVM CPU has no LA57",
+              "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1": "Bound KVM CPU has no LA57"
+            },
+            "shards": [
+              {
+                "cpu": 0,
+                "file": "lower-0.xml",
+                "sha256": "ce2d978b15387df37ba4ef01ffb774fb8acee72a84e5d8f7359bd0fc5614ba78",
+                "cases": 431
+              },
+              {
+                "cpu": 10,
+                "file": "lower-1.xml",
+                "sha256": "8e6544760db4d6ebc081efd5711eedd8b029674a97f8eb0137faaaaf75961f6e",
+                "cases": 430
+              }
+            ]
+          },
+          "generated": {
+            "executable": "NeverDX86LegacySourceTests",
+            "binary_sha256": "f271202dd15dd3ee2b4c2eb2f3c3064862504bfcb6e5d0b7bb996e0089f88e44",
+            "passed": 265,
+            "total": 265,
+            "skips": {},
+            "shards": [
+              {
+                "cpu": 4,
+                "file": "generated-0.xml",
+                "sha256": "aafcf5c16a1ca046bff7ea8faba37133e6b0987beb6563d89f5a9b39f629c3ef",
+                "cases": 133
+              },
+              {
+                "cpu": 6,
+                "file": "generated-1.xml",
+                "sha256": "d401398bd379918ed87eb1d089e288be8f3e0963ae0013b0b0f7712d20e48117",
+                "cases": 132
+              }
+            ]
+          },
+          "exports": {
+            "executable": "NeverDX64ContinuationExportTests",
+            "binary_sha256": "47ae64f0f7ed3e023387e36afdda520977ed131b020123e362b69bd969b455de",
+            "passed": 133,
+            "total": 133,
+            "skips": {},
+            "shards": [
+              {
+                "cpu": 9,
+                "file": "exports-0.xml",
+                "sha256": "a3002c720a5fc6ee4411c006313709a4d7b3921830a28bb93f3b3af070e9417e",
+                "cases": 133
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "published_dev_integration": {
+    "neverd": "764a88f8d6cd096b089c714108ed92491c06f79d",
+    "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+    "compiler_sha256": "15fd2a757ed1d2d1c189bd9a546489b3551b4d5e3b13af7611fc538fd2a1d12b",
+    "capstone": "89d709a3c9ff6cd1bd11c7a8c8d4bcfe10360f2f",
+    "llvm": "93a7e578d2b105139e938d1da8b502d0689a25a0",
+    "llvm_tag": "neverd-llvm-v23.0.0-r17",
+    "production_gitlink": "6947b7db63e913244e0aa6de087d1ad2e791e86f",
+    "passed": 76,
+    "skipped": 0,
+    "native_sgx_executions": 0,
+    "xml_sha256": {
+      "NeverDX64ContinuationExportTests.xml": "93e232eae079cdaf65067314125530ea2769f412022465ba3745b033508bfcd4",
+      "NeverDX64PagedExecutionTests.xml": "b1beefa161c52d4ceff75f60b8e99cf4dc22367b9fdfb0b2ede3311f5c90a7f3",
+      "NeverDX86LegacySourceTests.xml": "97b2d6c077cbb1e806ddadd9e001e29f0906a199511c511ba1647c3974977613",
+      "NeverDX86PagingTests.xml": "f2dc1442d0d99a13abae63aa18ee1355de0f768f2bb6c5bf733122863219e198"
+    },
+    "software_sha256": "7b7616f8883eb0e5522bd798e66dd116f5d32a0788aa5298b950f836921bdae0",
+    "vmrun_export_sha256": {
+      "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+      "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+    },
+    "properties": {
+      "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame": {
+        "continuous_native_event_comparisons": "5",
+        "original_initial_sregs_writes": "5",
+        "original_mode_rewrites": "0"
+      },
+      "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm": {
+        "cpu_comparisons": "8"
+      },
+      "X86ModeInterruptTest.SoftwareSmmSaveMapAndEditedRsmMatchKvm": {
+        "kvm_save_maps": "2"
+      },
+      "X86ModeInterruptTest.RsmChecksTheSaveImageBeforeBranchSingleStepping": {
+        "software_profile_cases": "9"
+      },
+      "X86ModeSgxThreadTest.CompiledBodiesUseTheAcceptedPrivatePage": {
+        "compiled_executions": "8"
+      },
+      "X86ModeSgxThreadTest.VerifyReportAuthenticatesTheFullPrefixAfterCPUSVN": {
+        "verification_cases": "10"
+      },
+      "X86ModeSgxThreadTest.VerifyReportChecksTheLegacyHeaderBeforeVersionAndMAC": {
+        "legacy_verification_cases": "10"
+      },
+      "X86ModeSgxThreadTest.CompiledBodiesReadTheUpperHalfOfTheWideKey": {
+        "compiled_executions": "8"
+      }
+    },
+    "interpreter_specialization": {
+      "sha256": "083dd1b29c7c17d0df2182f64e9fc052bcded32daf77ca9d2c52d18262e3ef44",
+      "passed": 1,
+      "total": 1
+    }
+  },
+  "local_vmrun_rebuild": {
+    "neverd": "d3f236e23642ae050ab1edab1bbc85c6a8236406",
+    "neverc": "6d63a76bd672a99fa30e4adada120b4090cff8b0",
+    "compared_with": "https://github.com/gmh5225/test_mac_intel/actions/runs/46164846857",
+    "guest_receipt_sha256": "819742b5582721f8b1215fc98ab5a998b9501b52c8d39d24905e2d89311422a5",
+    "sources_objects_elfs_and_images_identical": 8,
+    "ir_after_matching_source_paths": 8,
+    "ir_fields_with_build_paths": [
+      "ModuleID",
+      "source_filename"
+    ]
+  },
+  "isolated_kvm_comparisons": {
+    "workflow": "https://github.com/gmh5225/test_mac_intel/actions/runs/46165445785",
+    "hosted": {
+      "before_suite": {
+        "neverd": "764a88f8d6cd096b089c714108ed92491c06f79d",
+        "executable_sha256": "5803828894d0a470ce68742721fc7a39eccaf3b4df2e2bf958ab3d09c0ebd8a4",
+        "receipt_sha256": "3da04392f14255062d8cad187a135cd34a4b0d234bb003816941e31493e114a1",
+        "cases": {
+          "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame": {
+            "result": "skipped",
+            "before": {
+              "api_version": 12
+            },
+            "after": {
+              "errno": 13,
+              "error": "Permission denied"
+            },
+            "reason": "KVM unavailable: 13"
+          },
+          "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm": {
+            "result": "skipped",
+            "before": {
+              "errno": 13,
+              "error": "Permission denied"
+            },
+            "after": {
+              "errno": 13,
+              "error": "Permission denied"
+            },
+            "reason": "KVM unavailable: 13"
+          },
+          "X86ModeInterruptTest.SoftwareSmmSaveMapAndEditedRsmMatchKvm": {
+            "result": "skipped",
+            "before": {
+              "errno": 13,
+              "error": "Permission denied"
+            },
+            "after": {
+              "errno": 13,
+              "error": "Permission denied"
+            },
+            "reason": "KVM unavailable: 13"
+          }
+        }
+      },
+      "after_suite": {
+        "neverd": "764a88f8d6cd096b089c714108ed92491c06f79d",
+        "executable_sha256": "5803828894d0a470ce68742721fc7a39eccaf3b4df2e2bf958ab3d09c0ebd8a4",
+        "receipt_sha256": "cf2cd0ef70850c10ae4e6053bc61e387e0dd84437a05c1e72968eaaf9e399a05",
+        "cases": {
+          "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame": {
+            "result": "skipped",
+            "before": {
+              "errno": 13,
+              "error": "Permission denied"
+            },
+            "after": {
+              "errno": 13,
+              "error": "Permission denied"
+            },
+            "reason": "KVM unavailable: 13"
+          },
+          "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm": {
+            "result": "skipped",
+            "before": {
+              "errno": 13,
+              "error": "Permission denied"
+            },
+            "after": {
+              "errno": 13,
+              "error": "Permission denied"
+            },
+            "reason": "KVM unavailable: 13"
+          },
+          "X86ModeInterruptTest.SoftwareSmmSaveMapAndEditedRsmMatchKvm": {
+            "result": "skipped",
+            "before": {
+              "errno": 13,
+              "error": "Permission denied"
+            },
+            "after": {
+              "errno": 13,
+              "error": "Permission denied"
+            },
+            "reason": "KVM unavailable: 13"
+          }
+        }
+      }
+    },
+    "local": {
+      "neverd": "d3f236e23642ae050ab1edab1bbc85c6a8236406",
+      "executable_sha256": "3f33d8d60682347e1d8ee3f86cc9a282836cb6061f13a9506a7378955855aa82",
+      "receipt_sha256": "6643f25b9c8cbc371f19264f0b217551fbe28e78f552902d9557628629838485",
+      "cases": {
+        "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame": {
+          "result": "completed",
+          "before": {
+            "api_version": 12
+          },
+          "after": {
+            "api_version": 12
+          },
+          "continuous_native_event_comparisons": 5
+        },
+        "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm": {
+          "result": "completed",
+          "before": {
+            "api_version": 12
+          },
+          "after": {
+            "api_version": 12
+          },
+          "cpu_comparisons": 8
+        },
+        "X86ModeInterruptTest.SoftwareSmmSaveMapAndEditedRsmMatchKvm": {
+          "result": "completed",
+          "before": {
+            "api_version": 12
+          },
+          "after": {
+            "api_version": 12
+          },
+          "kvm_save_maps": 2
+        }
+      }
+    }
+  },
+  "workflow_sources": {
+    "vmrun": "https://github.com/gmh5225/test_mac_intel/tree/e75b96fcc0d2f70909a0f2e83904bcfdf9a1cea8/neverd-vmrun-kvm",
+    "software": "https://github.com/gmh5225/test_mac_intel/blob/e75b96fcc0d2f70909a0f2e83904bcfdf9a1cea8/neverd-sgx-capabilities/software_semantics.py",
+    "device_comparisons": "https://github.com/gmh5225/test_mac_intel/blob/688cab54002e3654bf4cce904cbbc088496b6762/neverd-sgx-capabilities/kvm_comparisons.py"
+  }
+}

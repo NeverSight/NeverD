@@ -1431,7 +1431,9 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
            ".field_0 = (uint64_t)(uintptr_t)(" + Call + "); " + ResultName +
            ".field_1 = " + ErrorName + "; " + ResultName + "; })";
   }
-  if (Signature.ReturnType->Kind == NdTypeKind::Void)
+  // An effect-only statement still invokes the declared callee. Only a use of
+  // the return value needs its source-to-register carrier conversion.
+  if (&E == StatementCall || Signature.ReturnType->Kind == NdTypeKind::Void)
     return Call;
   auto Result = sourceValue(Call, Signature.ReturnType, E.Type);
   return Result ? *Result

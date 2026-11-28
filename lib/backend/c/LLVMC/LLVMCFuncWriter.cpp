@@ -49,6 +49,7 @@
 #include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/debug/UserPrototype.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/LibCRecordArguments.h"
 #include "neverd/loader/ExceptionCommon.h"
@@ -3405,13 +3406,13 @@ wholeDebugParameter(const FunctionSym &Signature,
 }
 } // namespace
 
-const LLVMCWriter::DefinitionPointerTypes &
-LLVMCWriter::definitionPointerTypes(const llvm::Function &Fn) const {
-  auto [It, Inserted] = DefinitionPointers.try_emplace(&Fn);
+const LLVMCWriter::DefinitionSourceTypes &
+LLVMCWriter::definitionSourceTypes(const llvm::Function &Fn) const {
+  auto [It, Inserted] = DefinitionTypesByFunction.try_emplace(&Fn);
   auto &Types = It->second;
-  if (!Inserted || Opts.PreserveLLVMFunctionTypes || Fn.isDeclaration() ||
-      !SelectedFunctions.contains(Fn))
+  if (!Inserted || Opts.PreserveLLVMFunctionTypes || Fn.isDeclaration())
     return Types;
+  const bool Selected = SelectedFunctions.contains(Fn);
   // setupFunction admits a definition's signature only at its original entry.
   // Symbol-name fallback is for external declarations, not this projection.
   auto Entry = rewrite_source::getOriginalVA(Fn);
@@ -3425,6 +3426,8 @@ LLVMCWriter::definitionPointerTypes(const llvm::Function &Fn) const {
   const auto Signature =
       Dbg ? Dbg->resolveFunction(static_cast<va_t>(**Entry)) : std::nullopt;
   if (!Signature) {
+    if (!Selected)
+      return Types;
     Types.Parameters.resize(Fn.arg_size());
     for (const auto &Argument : Fn.args())
       Types.Parameters[Argument.getArgNo()].Type =
@@ -3458,9 +3461,17 @@ LLVMCWriter::definitionPointerTypes(const llvm::Function &Fn) const {
     return Result;
   };
   const bool ProgramMain = !Indirect && declaresProgramMain(*Signature);
-  Types.Parameters.resize(Fn.arg_size());
+  if (Selected)
+    Types.Parameters.resize(Fn.arg_size());
+  const bool NarrowArguments =
+      Bindings && !Fn.isVarArg() &&
+      Fn.getCallingConv() == llvm::CallingConv::C &&
+      getTargetRegInfo(Opts.TheArch).PointerSize == sizeof(uint64_t) &&
+      !Fn.hasFnAttribute("neverd.x64_dispatch_frame") && !Fn.hasAddressTaken();
   for (const llvm::Argument &Arg : Fn.args()) {
     if (static_cast<int>(Arg.getArgNo()) == Sret) {
+      if (!Selected)
+        continue;
       if (const auto *Record = msvcIndirectReturnRecord(
               Signature->ReturnType, Opts.TheArch, Opts.Format))
         if (!cNamedTypeSpelling(Record->SourceName).empty())
@@ -3475,7 +3486,10 @@ LLVMCWriter::definitionPointerTypes(const llvm::Function &Fn) const {
     if (!DebugIndex)
       continue;
     const auto &Type = Signature->Params[*DebugIndex].second;
-    if (!Type || Type->Kind != NdTypeKind::Ptr || !Type->Pointee)
+    if (NarrowArguments && Type && canNarrowIntegerParameter(Arg, *Type))
+      Types.NarrowIntegers.emplace(Arg.getArgNo(),
+                                   NdType::makeInt(Type->Size, Type->IsSigned));
+    if (!Selected || !Type || Type->Kind != NdTypeKind::Ptr || !Type->Pointee)
       continue;
     const bool Record = Type->Pointee->Kind == NdTypeKind::Struct &&
                         !Type->Pointee->SourceName.empty() &&
@@ -3483,6 +3497,8 @@ LLVMCWriter::definitionPointerTypes(const llvm::Function &Fn) const {
     if (ProgramMain || Record || SameWidth(Type, Arg.getType()))
       Types.Parameters[Arg.getArgNo()] = Project(Type, Arg.getType());
   }
+  if (!Selected)
+    return Types;
   if (Indirect) {
     if (Sret >= 0 && static_cast<size_t>(Sret) < Types.Parameters.size())
       Types.Result = Types.Parameters[Sret];
@@ -10638,7 +10654,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   // an argument held as an integer converts where the code uses it.
   const bool ProgramMain = !Opts.PreserveLLVMFunctionTypes && DebugFn &&
                            SretParamIdx < 0 && declaresProgramMain(*DebugFn);
-  const auto &DefinitionTypes = definitionPointerTypes(Fn);
+  const auto &DefinitionTypes = definitionSourceTypes(Fn);
   auto BindParam = [&](llvm::Argument &Arg, unsigned) { return getName(&Arg); };
   auto ParamTypeStr = [&](llvm::Argument &Arg, unsigned ParamIdx) {
     if (Opts.PreserveLLVMFunctionTypes)
@@ -10650,6 +10666,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     const std::optional<size_t> DebugIdx =
         debugParamIndexOf(ParamIdx, SretParamIdx);
     if (DebugIdx) {
+      if (auto It = DefinitionTypes.NarrowIntegers.find(ParamIdx);
+          It != DefinitionTypes.NarrowIntegers.end())
+        return typeToC(It->second);
       TypeRef Ty = DebugFn->Params[*DebugIdx].second;
       if (Ty && Ty->Kind == NdTypeKind::Struct && Ty->IsEnum &&
           !Ty->SourceName.empty()) {
@@ -10664,7 +10683,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   // The typedef a prototype names a parameter's or the result's type by
   // (NdType::TypedefName), where the unit defines the program's types and
   // the integer or enumeration has the width the code holds. Pointer
-  // spellings belong to definitionPointerTypes, including the call bridges.
+  // spellings belong to definitionSourceTypes, including the call bridges.
   auto Alias = [&](const TypeRef &Ty, const llvm::Type *Held) -> std::string {
     if (!Opts.RecordDefinitions || Opts.PreserveLLVMFunctionTypes || !Ty ||
         Ty->TypedefName.empty() || !Held)

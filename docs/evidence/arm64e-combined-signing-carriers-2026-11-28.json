@@ -1,0 +1,320 @@
+{
+  "software_revision": "e1a11a53bd6dfb142358e3df44abc09b88f3e504",
+  "baseline_revision": "8f5a4eb2e4c7ad0c4d69a0972f97ab060eb95b5b",
+  "llvm_prebuilt": "neverd-llvm-v23.0.0-r6",
+  "sdk_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "direct_source_matrix": {
+    "source_layouts": 55,
+    "keys": [
+      "IA",
+      "IB"
+    ],
+    "inputs": 110,
+    "original_image_hashes_identical": true,
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "attempts": 220,
+    "expected_publications": 124,
+    "expected_refusals": 96,
+    "baseline": {
+      "wrong_accepts": 24,
+      "wrong_refusals": 72,
+      "inputs_with_wrong_rows": 36,
+      "false_accept_layouts": [
+        {
+          "copy": "Add",
+          "spill": "Offset",
+          "layout": "BadSP"
+        },
+        {
+          "copy": "Add",
+          "spill": "Offset",
+          "layout": "BadCopy"
+        },
+        {
+          "copy": "Add",
+          "spill": "Offset",
+          "layout": "LostLR"
+        },
+        {
+          "copy": "Add",
+          "spill": "Offset",
+          "layout": "Call"
+        },
+        {
+          "copy": "Add",
+          "spill": "Offset",
+          "layout": "Resign"
+        },
+        {
+          "copy": "Add",
+          "spill": "Offset",
+          "layout": "BadFirst"
+        }
+      ],
+      "false_refusal_layouts": [
+        {
+          "copy": "Or",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "Xor",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "AddReg",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "SubReg",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "Lsr",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "Asr",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "Ror",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "OrSelf",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "AndSelf",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "XorLeft",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "Sub",
+          "spill": "Ordered",
+          "layout": "Default"
+        },
+        {
+          "copy": "Sub",
+          "spill": "Index",
+          "layout": "Default"
+        },
+        {
+          "copy": "Sub",
+          "spill": "Scaled",
+          "layout": "Default"
+        },
+        {
+          "copy": "Extract",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "Select",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "ShiftReg",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "RotateReg",
+          "spill": "Offset",
+          "layout": "Default"
+        },
+        {
+          "copy": "ExtendedZero",
+          "spill": "Offset",
+          "layout": "Default"
+        }
+      ]
+    },
+    "candidate": {
+      "wrong_accepts": 0,
+      "wrong_refusals": 0,
+      "inputs_with_wrong_rows": 0
+    },
+    "outcomes": "Both optimization levels start from the original Mach-O. Rejected cases must leave no output.",
+    "baseline_report_sha256": "460bc67662353e6654161b3e6fad37b8ee1e2658185e1d446a5d0f16e65084c6",
+    "candidate_report_sha256": "9fd856876ef59b0700fb43763e2e9419734c541ef59c9a32d79eec648f66a384",
+    "baseline_replay": {
+      "method": "Recompile the four owning translation units and shared copy header from the development base against the final Release dependencies. Compare input hashes, unwind rows and publication outcomes at both optimizations.",
+      "original_inputs_confirmed": 110,
+      "report_sha256": "460bc67662353e6654161b3e6fad37b8ee1e2658185e1d446a5d0f16e65084c6"
+    }
+  },
+  "joined_regression": {
+    "publication_generations": [
+      "original to O0",
+      "O0 to O2"
+    ],
+    "observations": {
+      "published_signing_address_images": 216,
+      "verified_signing_rows": 1154,
+      "refused_signing_address_cases": 164,
+      "resolved_interrupted_signing_pcs": 944,
+      "verified_distant_signing_islands": 28,
+      "resolved_stack_signing_pcs": 132,
+      "verified_shared_authentication_exits": 396,
+      "rejected_image_exit_rows": 96,
+      "resolved_active_spill_snapshots": 876
+    },
+    "caller_oracle": "Both exits return and store the numeric source signing address. Only the alternate exit writes the second output slot.",
+    "unwind_oracle": "Check both signing PCs at live register and active CFA-slot rows using a frame slide. Reject historical signing PCs after relocation. Check each exit of rejected images independently."
+  },
+  "m4": {
+    "cpu": "Apple M4 Max",
+    "tests": {
+      "image_and_async_unwind": 224,
+      "adjacent_image": 63,
+      "portable_unwind": 46,
+      "discovery": 34,
+      "compact_and_dwarf_language": 53
+    },
+    "total": 420,
+    "failed": 0,
+    "skipped": 0,
+    "release_receipt_sha256": "87d39ca671fad2f8570132df5752c56fc003f82c9f77fa566689181b8c8b22ac",
+    "image_test_sha256": "59641c30331865759aecbb4caa1d0ed446a35ed4d11cc1c1dbcd464b6bdc58f2",
+    "macos": "15.6.1",
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)"
+  },
+  "free_macos_actions": {
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/46143020794",
+    "workflow_revision": "0cfc0240fd616845e4fb5afb8e752f1ce353ec85",
+    "cpu": "Apple M1 (Virtual)",
+    "tests": {
+      "image_and_async_unwind": 224,
+      "adjacent_image": 63,
+      "portable_unwind": 46,
+      "discovery": 34
+    },
+    "total": 367,
+    "failed": 0,
+    "skipped": 0,
+    "release_receipt_sha256": "4c6847f77bf8232e0f4e0f36c87dca2bfdcc337dd56ebd814552ed42689cdfef",
+    "image_test_sha256": "670deddd4df808a2e8fd4ef098a667fc36fd63800e20f9891515e37c5cc158b8",
+    "macos": "26.7.2",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)"
+  },
+  "unchanged_model_profile_objects": {
+    "profiles": [
+      "base",
+      "cursor",
+      "ordered",
+      "prefix",
+      "writeback"
+    ],
+    "comparison": "All Mach-O entry and driver sections and symbolic relocation rows match the previous harness."
+  },
+  "arm_model": {
+    "m4_export": {
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/46143293586",
+      "workflow_revision": "ef127d3c29a2a467d9d1b7c63d7d4727b302ec77",
+      "model_version": "11.32+19",
+      "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+      "assembly_sha256": "465bd87c6bfde472db731b83f30276c81b26aabfeeac682285494d4c2df872ba",
+      "guest_sha256": "e1eec7d7671c98f4bec11284a0b00a8be3c255fe43789e0ea1ef6cdb213af2c4",
+      "inventories": {
+        "joined": {
+          "bodies": 324,
+          "calls": 8352
+        },
+        "carriers": {
+          "bodies": 138,
+          "calls": 2400
+        },
+        "distant": {
+          "bodies": 84,
+          "calls": 1344
+        },
+        "scratch-free": {
+          "bodies": 54,
+          "calls": 864
+        },
+        "previous": {
+          "bodies": 36,
+          "calls": 576
+        },
+        "guests": {
+          "bodies": 96,
+          "calls": 1536
+        },
+        "legacy": {
+          "bodies": 66,
+          "calls": 1056
+        }
+      },
+      "disabled_feature_controls_passed": 7
+    },
+    "hosted_export": {
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/46147038399",
+      "workflow_revision": "9cfc3268275ff16765ff21fd675a4b406a72b728",
+      "model_version": "11.32+19",
+      "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+      "assembly_sha256": "465bd87c6bfde472db731b83f30276c81b26aabfeeac682285494d4c2df872ba",
+      "guest_sha256": "25461df8bb55572e37c6b0147fa5bed4cfc3bcceb27dbe8f2677d29040411156",
+      "inventories": {
+        "joined": {
+          "bodies": 324,
+          "calls": 8352
+        },
+        "carriers": {
+          "bodies": 138,
+          "calls": 2400
+        },
+        "distant": {
+          "bodies": 84,
+          "calls": 1344
+        },
+        "scratch-free": {
+          "bodies": 54,
+          "calls": 864
+        },
+        "previous": {
+          "bodies": 36,
+          "calls": 576
+        },
+        "guests": {
+          "bodies": 96,
+          "calls": 1536
+        },
+        "legacy": {
+          "bodies": 66,
+          "calls": 1056
+        }
+      },
+      "disabled_feature_controls_passed": 7
+    },
+    "same_guest_bytes": false,
+    "exception_levels": [
+      "EL0",
+      "EL1"
+    ],
+    "EnPACM_EnPACM0": [
+      "00",
+      "01",
+      "10",
+      "11"
+    ]
+  },
+  "native_arm64e_x1": "Deferred to the existing free hardware TODO."
+}

@@ -1,0 +1,150 @@
+{
+  "release_revision": "14d59e09bd27c2f4e4a9478037e51446679c5654",
+  "llvm_prebuilt": "neverd-llvm-v23.0.0-r6",
+  "sdk_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "publication": {
+    "keys": [
+      "IA",
+      "IB"
+    ],
+    "generations": [
+      "source to O0",
+      "O0 to O2"
+    ],
+    "observations": {
+      "published_signing_address_images": 92,
+      "verified_signing_rows": 410,
+      "refused_signing_address_cases": 34,
+      "resolved_interrupted_signing_pcs": 200,
+      "verified_distant_signing_islands": 28,
+      "resolved_stack_signing_pcs": 8,
+      "verified_shared_authentication_exits": 24
+    },
+    "sources": [
+      "full-width register copies and identity operations on LR",
+      "common and distinct signers feeding two independent authentication exits",
+      "active stack spills after a join and stores on both incoming arms"
+    ],
+    "negative_controls": [
+      "overwritten and partially overwritten modifier slots",
+      "unknown alias and deallocated or reused slot",
+      "truncated, misplaced and unrecognized stack values",
+      "narrow or nonzero register copies",
+      "one valid exit and one contradictory exit"
+    ]
+  },
+  "original_m4_reproduction": {
+    "source_layouts_per_key": 16,
+    "direct_source_publications_at_O0_and_O2": 64,
+    "previously_refused_valid_publications": 32,
+    "valid_publications": 60,
+    "expected_overwrite_refusals": 4
+  },
+  "m4": {
+    "cpu": "Apple M4 Max",
+    "release_tests": {
+      "image_and_async_unwind": 3,
+      "other_image_cases": 63,
+      "portable_unwind": 46,
+      "discovery": 34
+    },
+    "total": 146,
+    "failed": 0,
+    "skipped": 0,
+    "ctest_portable_passed": true,
+    "image_test_binary_sha256": "47881225e25da8f736e69f6ef6dd90bd578a935900bfaf09785ab5b88c98dbda",
+    "additional_dwarf_and_compact_unwind": 53
+  },
+  "free_macos_actions": {
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/46130085765",
+    "workflow_revision": "0aaf1b92a33f4bf152d0d40e2214037220b39cb7",
+    "cpu": "Apple M1 (Virtual)",
+    "release_tests": {
+      "image_and_async_unwind": 224,
+      "other_image_cases": 63,
+      "portable_unwind": 46,
+      "discovery": 34
+    },
+    "total": 367,
+    "failed": 0,
+    "skipped": 0,
+    "ctest_portable_passed": true,
+    "image_test_binary_sha256": "56ace73327116c8dbf24a52fdb82251fce98e2d97349c39eb8c2872887801f0c"
+  },
+  "arm_architectural_model": {
+    "profiles": "EL0 and EL1 at EnPACM/EnPACM0 = 00, 01, 10, 11",
+    "exit_oracle": "The alternate exit stores the original signing address in a second output slot. The primary exit leaves that slot zero.",
+    "m4_export": {
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/46133896744",
+      "workflow_revision": "5d180ed513c17617ebaeb96f303fd854042dfb31",
+      "model_version": "11.32+19",
+      "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+      "assembly_sha256": "ca74390fce1dfccb1ec2a9f9978f666faa12b316ddf05ff90005d610be8376de",
+      "guest_sha256": "c907b818a52ec2cca116e7c9a1b3af2b7a32341433047fe455acf27793eca191",
+      "execution": {
+        "joined": {
+          "bodies": 138,
+          "calls": 2400
+        },
+        "distant": {
+          "bodies": 84,
+          "calls": 1344
+        },
+        "scratch-free": {
+          "bodies": 54,
+          "calls": 864
+        },
+        "previous": {
+          "bodies": 36,
+          "calls": 576
+        },
+        "guests": {
+          "bodies": 96,
+          "calls": 1536
+        },
+        "legacy": {
+          "bodies": 66,
+          "calls": 1056
+        }
+      },
+      "disabled_feature_exit": 1
+    },
+    "hosted_export": {
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/46133780808",
+      "workflow_revision": "d3df051629256c8586665bd3215760b9fe2f657c",
+      "model_version": "11.32+19",
+      "model_sha256": "22dc2c236b2857241882e796e510230b87db9714281de8e5d1a2f6c944796168",
+      "assembly_sha256": "ca74390fce1dfccb1ec2a9f9978f666faa12b316ddf05ff90005d610be8376de",
+      "guest_sha256": "8ecedf9079bd99dd250635073c2fa9c7779603f1af6c165a9caf8156ecd02579",
+      "execution": {
+        "joined": {
+          "bodies": 138,
+          "calls": 2400
+        },
+        "distant": {
+          "bodies": 84,
+          "calls": 1344
+        },
+        "scratch-free": {
+          "bodies": 54,
+          "calls": 864
+        },
+        "previous": {
+          "bodies": 36,
+          "calls": 576
+        },
+        "guests": {
+          "bodies": 96,
+          "calls": 1536
+        },
+        "legacy": {
+          "bodies": 66,
+          "calls": 1056
+        }
+      },
+      "disabled_feature_exit": 1
+    },
+    "identical_exported_assembly": true
+  },
+  "native_arm64e_x1": "Deferred to the existing free-hardware TODO."
+}

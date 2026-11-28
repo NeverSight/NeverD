@@ -46,7 +46,8 @@ va_t mipsInvalidAddressBits(Arch Target, InstructionMode Mode) {
   return AlignmentBits | (isMIPS64(Target) ? 0 : ~va_t(UINT32_MAX));
 }
 
-IntegerControl integerControl(Arch A, RISCVProfile RV, const cs_insn &I) {
+IntegerControl integerControl(Arch A, const RISCVProfile &RV,
+                              const cs_insn &I) {
   if (isRISCV(A))
     return riscv::control(A, RV, I);
   if (isPowerPC(A))
@@ -159,7 +160,8 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
     CsArch = CS_ARCH_RISCV;
     CsMode = cs_mode((isRISCV64(TheArch) ? CS_MODE_RISCV64 : CS_MODE_RISCV32) |
                      CS_MODE_RISCV_FD | CS_MODE_RISCV_C | CS_MODE_RISCV_A |
-                     CS_MODE_RISCV_ZBA | CS_MODE_RISCV_ZBB | CS_MODE_RISCV_ZBS);
+                     CS_MODE_RISCV_ZBA | CS_MODE_RISCV_ZBB | CS_MODE_RISCV_ZBS |
+                     CS_MODE_RISCV_ZBKB);
     break;
   case Arch::PPC32:
   case Arch::PPC32LE:
@@ -594,6 +596,20 @@ void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
   }
   if (UndefinedEffects && !X86)
     UndefinedEffects->OpCount = Ops.size() - OpsStart;
+}
+
+void Decoder::liftWithUndefinedTransfer(
+    const DecodedInsn &Insn, std::vector<LowOp> &Ops,
+    llvm::ArrayRef<RelocatedAddressOperand> Relocs,
+    llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
+    LowUndefinedTransfer &Transfer) {
+  if (X86 && !Insn.AArch64Occurrence) {
+    X86->liftWithUndefinedTransfer(Insn.Raw, Ops, Relocs, ScalarRelocs,
+                                   Transfer);
+    return;
+  }
+  Transfer = {};
+  liftToLow(Insn, Ops, Relocs, ScalarRelocs);
 }
 
 void Decoder::fixupDecodedInsn(cs_insn *I) const {

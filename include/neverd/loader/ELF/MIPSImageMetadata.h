@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace neverd {
@@ -72,6 +73,14 @@ struct MIPSImageMetadata {
   /// A following signed displacement can still address an allocated object.
   /// Cells are recorded in table order.
   std::vector<va_t> UnmappedGOTPageSlots;
+
+  struct ImportVersion {
+    std::string Library;
+    std::string Version;
+  };
+  /// GNU version requirements attached to strong undefined function symbols
+  /// in the dynamic linker's primary GOT. They describe the entry binding.
+  std::map<va_t, ImportVersion> RequiredImportVersions;
 
   /// Retained linked instruction relocations, sorted by instruction VA. They
   /// authenticate individual fields, never unrelated equal-valued literals.

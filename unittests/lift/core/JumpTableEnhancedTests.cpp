@@ -5384,6 +5384,77 @@ TEST_F(JTE_X86_64, AnUnboundedOwnLabelTableDispatchesByValue) {
   ASSERT_FALSE(Writable.Blocks.empty());
   EXPECT_TRUE(Writable.ValueDispatches.empty());
   EXPECT_TRUE(Writable.JumpTables.empty());
+
+  // Every label of jt_own_join reads %r15 before a write on one path: the
+  // read is the program's own, so both labels stay.  Its table follows the
+  // three-word tables of jt_own_shared.
+  const neverd::va_t Join = Hoisted + (4 + 3 + 3) * 4;
+  const neverd::LowFunc JoinFunc = Build("jt_own_join");
+  ASSERT_EQ(JoinFunc.ValueDispatches.size(), 1u);
+  EXPECT_EQ(JoinFunc.ValueDispatches.front().Targets,
+            (std::vector<neverd::va_t>{Label(Join, 0), Label(Join, 1)}));
+}
+
+static fs::path ownLabelDispatchWin64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_own_label_win64.obj";
+}
+
+// Win64 also keeps %rsi and %rdi.  A label that reads %rsi before any write
+// reads the caller's value, so its edge is left out, and a table address in
+// %rsi survives a call, so the jump after it still dispatches by value.
+TEST_F(JTE_X86_64, AWin64OwnLabelDispatchKeepsRsiAndRdi) {
+  const fs::path Path = ownLabelDispatchWin64Obj();
+  if (!fs::exists(Path))
+    GTEST_SKIP() << "Win64 fixture not built: " << Path;
+  auto ImageOrErr = neverd::loadBinary(Path);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  ASSERT_EQ(Image.abiFormat(), neverd::BinaryFormat::COFF);
+  const neverd::Section *Rdata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rdata")
+      Rdata = &Section;
+  ASSERT_NE(Rdata, nullptr);
+  const auto Label = [&](neverd::va_t Table, size_t Slot) {
+    const uint8_t *Bytes = Image.readVA(Table + Slot * 4, 4);
+    int32_t Entry = 0;
+    if (Bytes)
+      std::memcpy(&Entry, Bytes, sizeof(Entry));
+    return Table + static_cast<int64_t>(Entry);
+  };
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  // A COFF object's symbols carry no sizes: each function ends at the next
+  // entry, which the lift pipeline hands the builder from discovery.
+  std::set<neverd::va_t> Entries;
+  for (const char *Name :
+       {"jt_win64_kept", "jt_win64_call_keeps", "jt_win64_ext"}) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    ASSERT_NE(Function, nullptr) << Name;
+    Entries.insert(Function->Addr);
+  }
+  const auto Build = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::CFGBuilder Builder;
+    Builder.setKnownFuncEntries(&Entries);
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  // jt_win64_kept's table holds three slots and a zero word.
+  const neverd::va_t Kept = Rdata->VA;
+  const neverd::LowFunc KeptFunc = Build("jt_win64_kept");
+  ASSERT_EQ(KeptFunc.ValueDispatches.size(), 1u);
+  EXPECT_EQ(KeptFunc.ValueDispatches.front().Targets,
+            std::vector<neverd::va_t>{Label(Kept, 0)});
+
+  const neverd::va_t Called = Kept + 4 * 4;
+  const neverd::LowFunc CalledFunc = Build("jt_win64_call_keeps");
+  ASSERT_EQ(CalledFunc.ValueDispatches.size(), 1u);
+  EXPECT_EQ(CalledFunc.ValueDispatches.front().Targets,
+            (std::vector<neverd::va_t>{Label(Called, 0), Label(Called, 1)}));
 }
 
 static fs::path scalarRetractedX64So() {
@@ -5439,6 +5510,52 @@ TEST_F(JTE_X86_64, WithdrawnScalarGuessKeepsTheProvedTable) {
   EXPECT_FALSE(Unbounded.UnsafeIndirectBranchAddresses.empty());
   for (const neverd::JumpTable &Table : Unbounded.JumpTables)
     EXPECT_TRUE(Table.AnalysisOnly);
+}
+
+static fs::path fixedConstantIndexX64Exe() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_fixed_constant_index.exe";
+}
+
+// An image that runs at its link address holds the addresses its absolute
+// table stores, so a constant index makes the jump a branch to the one label
+// that word names, as the Go 1.20 and 1.21 runtimes compile it.
+TEST_F(JTE_X86_64, AConstantIndexIntoAFixedImageTableBranchesToItsLabel) {
+  const fs::path Path = fixedConstantIndexX64Exe();
+  if (!fs::exists(Path))
+    GTEST_SKIP() << "ld.lld did not link " << Path.string();
+  auto ImageOrErr = neverd::loadBinary(Path);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  ASSERT_TRUE(Image.LoadsAtLinkAddress);
+  const neverd::Symbol *Table = Image.findSymbol("fixed_table");
+  ASSERT_NE(Table, nullptr);
+  const auto Label = [&](size_t Slot) {
+    const uint8_t *Bytes = Image.readVA(Table->Addr + Slot * 8, 8);
+    uint64_t Entry = 0;
+    if (Bytes)
+      std::memcpy(&Entry, Bytes, sizeof(Entry));
+    return static_cast<neverd::va_t>(Entry);
+  };
+  const neverd::Symbol *Function = Image.findSymbol("fixed_const_index");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Func =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  std::set<neverd::va_t> Starts;
+  for (const neverd::LowBlock &Block : Func.Blocks) {
+    Starts.insert(Block.StartAddr);
+    for (const neverd::LowOp &Op : Block.Ops)
+      EXPECT_NE(Op.Opcode, neverd::NdOp::INDIR_BR)
+          << "unresolved jump at 0x" << std::hex << Op.Addr;
+  }
+  EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_EQ(Starts.count(Label(5)), 1u);
+  EXPECT_EQ(Starts.count(Label(4)), 0u);
+  EXPECT_EQ(Starts.count(Label(6)), 0u);
 }
 
 static fs::path scaleAfterExtendX64Obj() {
@@ -14447,6 +14564,30 @@ TEST_F(JTE_ARM32, InlineStateDomainRejectsUnrelatedPredicateAndZeroBackedge) {
     EXPECT_TRUE(Low.JumpTables.empty());
     EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
     EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  }
+}
+
+TEST_F(JTE_ARM32, NormalizedMergedStatesRequireEveryArmInRange) {
+  auto Image = neverd::loadBinary(fs::path(TEST_OBJ_DIR) /
+                                  "test_inline_state_domain_arm.o");
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image->Arch, Image->Mode));
+  for (const char *Name : {"arm_inline_merged_states",
+                           "arm_inline_merged_outside"}) {
+    SCOPED_TRACE(Name);
+    const auto *Entry = Image->findSymbol(Name);
+    ASSERT_NE(Entry, nullptr);
+    neverd::CFGBuilder Builder;
+    const auto Low = Builder.build(*Image, Decoder, Entry->Addr, Entry->Name);
+    if (Entry->Name == "arm_inline_merged_states") {
+      ASSERT_EQ(Low.JumpTables.size(), 1u);
+      EXPECT_EQ(Low.JumpTables.front().Targets.size(), 4u);
+      EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+    } else {
+      EXPECT_TRUE(Low.JumpTables.empty());
+      EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+    }
   }
 }
 

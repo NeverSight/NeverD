@@ -155,6 +155,12 @@ struct Projection {
   /// this proved inclusive range. Missing means unconstrained. This relation
   /// survives joins that discard differing exact pointer displacements.
   std::map<uint64_t, ObjectRegisterRange> ObjectRegisterRanges;
+  /// Complete register equalities proved on each predecessor. A new node
+  /// uses them to relate independently seeded object-relative offsets.
+  std::set<std::pair<uint64_t, uint64_t>> ObjectRegisterEqualities;
+  /// Complete additive-inverse register pairs proved on every predecessor.
+  /// These preserve a negated frame pointer across independently seeded nodes.
+  std::set<std::pair<uint64_t, uint64_t>> InverseRegisterPairs;
   /// Complete values of nominated eight-byte entry-frame words. A missing
   /// domain is Top. Each predecessor proves its own values before a join can
   /// retain their union; no numeric entry-frame address is assumed.
@@ -186,6 +192,8 @@ struct ContextKey {
   // value. Keep distinct cases separate while their guards remain in the
   // residual graph.
   std::optional<uint64_t> RegisterPartition;
+  // A proved entry-frame byte separates only its nominated successor.
+  std::optional<uint64_t> FramePartition;
   // A complete entry-relative pointer is a structural fact, not a numeric
   // constant. Keep its displacement separately so a selected virtual stack
   // cursor can distinguish contexts without fixing the invocation's address.
@@ -201,15 +209,17 @@ struct ContextKey {
 
   bool operator<(const ContextKey &Other) const {
     return std::tie(Cursor.Address, Cursor.Mode, Controls, RegisterPartition,
-                    FrameControls, NativeStackActive, EntryReturnSlotIntact,
-                    StackDisplacement, ReturnSlots, NativeCallReturnCells,
-                    ReturnedObjectSizes, ReturnedObjectNonNull, FrameResidue) <
+                    FramePartition, FrameControls, NativeStackActive,
+                    EntryReturnSlotIntact, StackDisplacement, ReturnSlots,
+                    NativeCallReturnCells, ReturnedObjectSizes,
+                    ReturnedObjectNonNull, FrameResidue) <
            std::tie(Other.Cursor.Address, Other.Cursor.Mode, Other.Controls,
-                    Other.RegisterPartition, Other.FrameControls,
-                    Other.NativeStackActive, Other.EntryReturnSlotIntact,
-                    Other.StackDisplacement, Other.ReturnSlots,
-                    Other.NativeCallReturnCells, Other.ReturnedObjectSizes,
-                    Other.ReturnedObjectNonNull, Other.FrameResidue);
+                    Other.RegisterPartition, Other.FramePartition,
+                    Other.FrameControls, Other.NativeStackActive,
+                    Other.EntryReturnSlotIntact, Other.StackDisplacement,
+                    Other.ReturnSlots, Other.NativeCallReturnCells,
+                    Other.ReturnedObjectSizes, Other.ReturnedObjectNonNull,
+                    Other.FrameResidue);
   }
 };
 
@@ -313,6 +323,12 @@ void seed(SymContext &Ctx, SymState &State, SymRef Root,
     for (const auto &[Register, Pointer] : Values.AffineRegisters)
       State.write(SymSpace::Register, Register,
                   entryPointerValue(Ctx, Root, ObjectRoots, Pointer));
+    // Rebuild each finite word as an unconstrained carrier. Its incoming
+    // predicate restricts the current value to the proved domain; later
+    // writes still invalidate or change it through ordinary memory semantics.
+    for (const auto &Domain : Values.FrameValueDomains)
+      State.store(Ctx.mkAdd(Root, Ctx.mkConst(64, Domain.first)),
+                  Ctx.mkFreshVar(64, "frame_word"));
     // A complete affine value takes precedence over independently projected
     // byte marginals. They can agree only under the incoming frame predicate,
     // which has not been installed yet and is not a syntactic equality.
@@ -506,7 +522,8 @@ bool unsafeOriginByte(SymSpace Space, uint64_t Offset,
 }
 
 bool intersect(Projection &Into, const Projection &Incoming,
-               uint32_t TupleLimit, uint32_t &Widenings) {
+               uint32_t TupleLimit, uint32_t NativeReturnTupleLimit,
+               uint32_t &Widenings) {
   bool Changed = intersectMap(Into.Scalars, Incoming.Scalars);
   Changed |= intersectMap(Into.AffineRegisters, Incoming.AffineRegisters);
   for (auto It = Into.FrameRegisterOffsets.begin();
@@ -552,6 +569,24 @@ bool intersect(Projection &Into, const Projection &Incoming,
     }
     ++It;
   }
+  for (auto It = Into.ObjectRegisterEqualities.begin();
+       It != Into.ObjectRegisterEqualities.end();) {
+    if (!Incoming.ObjectRegisterEqualities.count(*It)) {
+      It = Into.ObjectRegisterEqualities.erase(It);
+      Changed = true;
+    } else {
+      ++It;
+    }
+  }
+  for (auto It = Into.InverseRegisterPairs.begin();
+       It != Into.InverseRegisterPairs.end();) {
+    if (!Incoming.InverseRegisterPairs.count(*It)) {
+      It = Into.InverseRegisterPairs.erase(It);
+      Changed = true;
+    } else {
+      ++It;
+    }
+  }
   for (auto It = Into.FrameValueDomains.begin();
        It != Into.FrameValueDomains.end();) {
     const auto Found = Incoming.FrameValueDomains.find(It->first);
@@ -563,7 +598,12 @@ bool intersect(Projection &Into, const Projection &Incoming,
     std::vector<uint64_t> Joined;
     std::set_union(It->second.begin(), It->second.end(), Found->second.begin(),
                    Found->second.end(), std::back_inserter(Joined));
-    if (Joined.size() > TupleLimit) {
+    const uint32_t Limit =
+        Into.Frame.NativeReturnSlots.count(It->first) &&
+                Incoming.Frame.NativeReturnSlots.count(It->first)
+            ? NativeReturnTupleLimit
+            : TupleLimit;
+    if (Joined.size() > Limit) {
       It = Into.FrameValueDomains.erase(It);
       Changed = true;
       ++Widenings;
@@ -987,6 +1027,8 @@ struct ControlRefinement {
   // cases. Physical ranges survive control-field renumbering across retries.
   std::map<std::pair<va_t, InstructionMode>, SymRegisterRange>
       RegisterPartitions;
+  std::map<std::pair<va_t, InstructionMode>, int64_t> FramePartitions;
+  std::map<std::pair<va_t, InstructionMode>, std::vector<uint64_t>> TargetHints;
   bool BudgetExceeded = false;
   bool PrecisionFailure = false;
   // Finite dispatch is already a valid abstraction. Walk its optional guard
@@ -1163,7 +1205,8 @@ private:
                    llvm::ArrayRef<SymRef> ObjectRoots,
                    const FrameOrigins &Origins, const FrameFacts &Frame,
                    SymRef Predicate, SpecializationCursor Successor,
-                   Projection &Out, bool &Reachable);
+                   const Projection &Incoming, Projection &Out,
+                   bool &Reachable);
   bool projectRange(SymContext &Ctx, SymRef Predicate, SymRef Value,
                     SymRef Root, uint32_t Field, uint64_t Mask, Projection &Out,
                     bool &Reachable);
@@ -1189,6 +1232,7 @@ private:
                           int64_t PreservedBegin,
                           const SpecializationReturningCall &Call,
                           const RecoveryCallTransition &Policy,
+                          llvm::ArrayRef<ReturningCallFrameOutput> Outputs,
                           FrameOrigins &Origins, FrameFacts &Frame);
   bool applyReturningResultObject(SymExec &Exec, SymState &State,
                                   SymRef FrameRoot,
@@ -1208,7 +1252,7 @@ private:
   bool projectObjectRegisterRanges(SymState &State,
                                    llvm::ArrayRef<SymRef> Roots,
                                    const FrameFacts &Frame, SymRef Predicate,
-                                   Projection &Out);
+                                   const Projection &Incoming, Projection &Out);
 
   SpecializationProvider &Provider;
   SpecializationCursor Entry;
@@ -1296,11 +1340,12 @@ bool Specializer::chargeCallWork(uint64_t Count) {
   return true;
 }
 
-bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
-                                     SymRef CallerStack, int64_t PreservedBegin,
-                                     const SpecializationReturningCall &Call,
-                                     const RecoveryCallTransition &Policy,
-                                     FrameOrigins &Origins, FrameFacts &Frame) {
+bool Specializer::applyReturningCall(
+    SymState &State, SymRef FrameRoot, SymRef CallerStack,
+    int64_t PreservedBegin, const SpecializationReturningCall &Call,
+    const RecoveryCallTransition &Policy,
+    llvm::ArrayRef<ReturningCallFrameOutput> Outputs, FrameOrigins &Origins,
+    FrameFacts &Frame) {
   const uint64_t Begin = static_cast<uint64_t>(PreservedBegin);
   const uint64_t Size =
       static_cast<uint64_t>(Options.EntryFrameBounds->End) - Begin;
@@ -1389,11 +1434,31 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
   Effect.MaxNodes = Options.MaxSymbolicNodes;
   applyReturningCallState(State, FrameRoot, CallerStack, PreservedBegin,
                           Options.EntryFrameBounds->End,
-                          Call.Original.Fallthrough.Address, Policy, Effect);
+                          Call.Original.Fallthrough.Address, Policy, Effect,
+                          Outputs);
   Result.EvaluatedOperations += Effect.WorkUsed;
   if (Effect.Status != SpecializationStatus::Complete)
     // A failed composition belongs only to this evaluator and is discarded.
     return fail(Effect.Status, Effect.Diagnostic);
+  for (const auto &Output : Outputs) {
+    for (uint16_t I = 0; I < Output.Bytes; ++I) {
+      const uint64_t Offset = Output.Offset + I;
+      NextOrigins.ExternalFrameBytes.erase(Offset);
+      for (auto It = NextFrame.AffineValues.begin();
+           It != NextFrame.AffineValues.end();) {
+        if (!chargeCallWork(1))
+          return false;
+        if (Offset - It->first < Policy.Stack.Size)
+          It = NextFrame.AffineValues.erase(It);
+        else
+          ++It;
+      }
+      if (NextFrame.EntryReturnSlotIntact && Options.EntryReturnSlot &&
+          Offset - static_cast<uint64_t>(Options.EntryReturnSlot->Offset) <
+              Options.EntryReturnSlot->Bytes)
+        NextFrame.EntryReturnSlotIntact = false;
+    }
+  }
   for (uint64_t Flag : Policy.FreshFlags)
     NextOrigins.UndefinedFlags.erase(Flag);
   setUnsafeOrigin(Policy.Stack, true, NextOrigins);
@@ -1587,11 +1652,9 @@ bool Specializer::projectObjects(SymState &State, llvm::ArrayRef<SymRef> Roots,
   return true;
 }
 
-bool Specializer::projectObjectRegisterRanges(SymState &State,
-                                              llvm::ArrayRef<SymRef> Roots,
-                                              const FrameFacts &Frame,
-                                              SymRef Predicate,
-                                              Projection &Out) {
+bool Specializer::projectObjectRegisterRanges(
+    SymState &State, llvm::ArrayRef<SymRef> Roots, const FrameFacts &Frame,
+    SymRef Predicate, const Projection &Incoming, Projection &Out) {
   if (Frame.ReturnedObjectSizes.empty() ||
       (!Options.ProveStoreFrameSeparation &&
        !Options.ProveStoreReturnSlotSeparation))
@@ -1680,6 +1743,32 @@ bool Specializer::projectObjectRegisterRanges(SymState &State,
       break;
     }
   }
+  for (auto Left = Out.ObjectRegisterRanges.begin();
+       Left != Out.ObjectRegisterRanges.end(); ++Left)
+    for (auto Right = std::next(Left); Right != Out.ObjectRegisterRanges.end();
+         ++Right) {
+      if (Left->second.RootIndex != Right->second.RootIndex)
+        continue;
+      if (!chargeObjectWork(1))
+        return false;
+      const auto LeftValue = State.read(SymSpace::Register, Left->first, 8);
+      const auto RightValue = State.read(SymSpace::Register, Right->first, 8);
+      const auto Pair = std::pair{Left->first, Right->first};
+      bool Equal = LeftValue == RightValue;
+      if (!Equal)
+        if (const auto Offset = affineDisplacement(Ctx, LeftValue, RightValue))
+          Equal = *Offset == 0;
+      if (!Equal && Incoming.ObjectRegisterEqualities.count(Pair)) {
+        const auto Proof =
+            enumerate(Ctx, Predicate, {Ctx.mkEq(LeftValue, RightValue)}, 1);
+        if (Failed)
+          return false;
+        Equal = Proof.Status == FiniteValueStatus::Complete &&
+                Proof.Tuples == std::vector<std::vector<uint64_t>>{{1}};
+      }
+      if (Equal)
+        Out.ObjectRegisterEqualities.insert(Pair);
+    }
   return true;
 }
 
@@ -2251,7 +2340,8 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
                               llvm::ArrayRef<SymRef> ObjectRoots,
                               const FrameOrigins &Origins,
                               const FrameFacts &Frame, SymRef Predicate,
-                              SpecializationCursor Successor, Projection &Out,
+                              SpecializationCursor Successor,
+                              const Projection &Incoming, Projection &Out,
                               bool &Reachable) {
   SymContext &Ctx = State.context();
   if (ReplayingDemands) {
@@ -2304,41 +2394,174 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
   Reachable = !Ctx.isConstZero(Predicate);
   if (!Reachable)
     return true;
-  if (!projectObjectRegisterRanges(State, ObjectRoots, Frame, Predicate, Out))
+  if (!projectObjectRegisterRanges(State, ObjectRoots, Frame, Predicate,
+                                   Incoming, Out))
     return false;
   if (Root) {
+    // Discover exact inverse expressions without querying every register
+    // pair. On later edges, only previously retained pairs need a solver
+    // proof; an incomplete proof discards the relation.
+    if (!Out.AffineRegisters.empty()) {
+      std::map<SymRef, std::vector<uint64_t>> RegistersByValue;
+      for (uint64_t Register : AffineCandidates) {
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "inverse register projection budget exhausted");
+        ++Result.EvaluatedOperations;
+        const SymRef Value = State.read(SymSpace::Register, Register, 8);
+        if (!Ctx.isConst(Value))
+          RegistersByValue[Value].push_back(Register);
+      }
+      for (const auto &[Register, Pointer] : Out.AffineRegisters) {
+        if (!Pointer.isFrame())
+          continue;
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "inverse register projection budget exhausted");
+        ++Result.EvaluatedOperations;
+        const SymRef Value = State.read(SymSpace::Register, Register, 8);
+        const auto Other = RegistersByValue.find(Ctx.mkNeg(Value));
+        if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "inverse register projection node budget exhausted");
+        if (Other == RegistersByValue.end())
+          continue;
+        for (uint64_t Right : Other->second)
+          if (Register != Right)
+            Out.InverseRegisterPairs.insert(std::minmax(Register, Right));
+      }
+    }
+    for (const auto &[Left, Right] : Incoming.InverseRegisterPairs) {
+      if (Out.InverseRegisterPairs.count({Left, Right}))
+        continue;
+      if (Result.EvaluatedOperations >= Options.MaxOperations)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "inverse register proof budget exhausted");
+      ++Result.EvaluatedOperations;
+      const auto Relation =
+          Ctx.mkEq(Ctx.mkAdd(State.read(SymSpace::Register, Left, 8),
+                             State.read(SymSpace::Register, Right, 8)),
+                   Ctx.mkConst(64, 0));
+      if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "inverse register proof node budget exhausted");
+      const auto Proof = enumerate(Ctx, Predicate, {Relation}, 1);
+      if (Failed)
+        return false;
+      if (Proof.Status == FiniteValueStatus::Complete &&
+          Proof.Tuples == std::vector<std::vector<uint64_t>>{{1}})
+        Out.InverseRegisterPairs.insert({Left, Right});
+    }
+  }
+  if (Root) {
+    std::set<uint64_t> Slots;
+    for (const auto &Domain : Incoming.FrameValueDomains)
+      Slots.insert(Domain.first);
+    // A live physical return word is a bounded candidate, not an asserted
+    // target. Prove its full current domain before carrying it to a successor.
+    Slots.insert(Frame.NativeReturnSlots.begin(),
+                 Frame.NativeReturnSlots.end());
     const auto Hints =
         Refinement.FrameWordHints.find({Successor.Address, Successor.Mode});
     if (Hints != Refinement.FrameWordHints.end())
-      for (uint64_t Slot : Hints->second) {
-        if (!State.hasMaterializedRegionRange(Root, Slot, 8))
-          continue;
+      Slots.insert(Hints->second.begin(), Hints->second.end());
+    for (uint64_t Slot : Slots) {
+      bool CompleteWord = false;
+      if (State.hasMaterializedRegionRange(Root, Slot, 8)) {
         if (Result.EvaluatedOperations >= Options.MaxOperations)
           return fail(SpecializationStatus::BudgetExceeded,
                       "frame word projection budget exhausted");
         ++Result.EvaluatedOperations;
         const auto Value =
             State.load(Ctx.mkAdd(Root, Ctx.mkConst(64, Slot)), 8);
-        const auto Domain =
-            enumerate(Ctx, Predicate, {Value}, Options.MaxControlTuples);
+        const uint32_t Limit = Frame.NativeReturnSlots.count(Slot)
+                                   ? Options.nativeReturnWordLimit()
+                                   : Options.MaxControlTuples;
+        const auto Domain = enumerate(Ctx, Predicate, {Value}, Limit);
         if (Failed)
           return false;
-        if (Domain.Status != FiniteValueStatus::Complete ||
-            Domain.Tuples.empty())
-          continue;
-        if (Domain.Tuples.size() >
-            Options.MaxOperations - Result.EvaluatedOperations)
-          return fail(SpecializationStatus::BudgetExceeded,
-                      "frame word projection budget exhausted");
-        Result.EvaluatedOperations += Domain.Tuples.size();
-        std::vector<uint64_t> Values;
-        Values.reserve(Domain.Tuples.size());
-        for (const auto &Tuple : Domain.Tuples)
-          Values.push_back(Tuple.front());
-        llvm::sort(Values);
-        Values.erase(std::unique(Values.begin(), Values.end()), Values.end());
-        Out.FrameValueDomains.emplace(Slot, std::move(Values));
+        CompleteWord = Domain.Status == FiniteValueStatus::Complete &&
+                       !Domain.Tuples.empty();
+        if (CompleteWord) {
+          if (Domain.Tuples.size() >
+              Options.MaxOperations - Result.EvaluatedOperations)
+            return fail(SpecializationStatus::BudgetExceeded,
+                        "frame word projection budget exhausted");
+          Result.EvaluatedOperations += Domain.Tuples.size();
+          std::vector<uint64_t> Values;
+          Values.reserve(Domain.Tuples.size());
+          for (const auto &Tuple : Domain.Tuples)
+            Values.push_back(Tuple.front());
+          llvm::sort(Values);
+          Values.erase(std::unique(Values.begin(), Values.end()), Values.end());
+          for (uint64_t I = 0; I < 8; ++I) {
+            const unsigned Shift =
+                8 * (Options.ByteOrder == llvm::endianness::little ? I : 7 - I);
+            const uint8_t Byte = Values.front() >> Shift;
+            if (std::all_of(
+                    Values.begin(), Values.end(), [&](uint64_t Candidate) {
+                      return static_cast<uint8_t>(Candidate >> Shift) == Byte;
+                    }))
+              Out.FrameBytes[Slot + I] = Byte;
+          }
+          Out.FrameValueDomains.emplace(Slot, std::move(Values));
+        }
       }
+      if (CompleteWord)
+        continue;
+      // A variable byte can make the complete word exceed the tuple limit.
+      // Keep only byte values independently proved on this physical edge.
+      for (uint64_t I = 0; I < 8; ++I) {
+        const uint64_t Offset = Slot + I;
+        if (Out.FrameBytes.count(Offset) ||
+            !State.hasMaterializedRegionRange(Root, Offset, 1))
+          continue;
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "frame byte projection budget exhausted");
+        ++Result.EvaluatedOperations;
+        const auto Byte =
+            State.loadMaterialized(Ctx.mkAdd(Root, Ctx.mkConst(64, Offset)), 1);
+        if (!Byte)
+          continue;
+        if (const auto Constant = Ctx.asConst(Byte)) {
+          Out.FrameBytes[Offset] = Constant->getZExtValue();
+          continue;
+        }
+        const auto Domain = enumerate(Ctx, Predicate, {Byte}, 1);
+        if (Failed)
+          return false;
+        if (Domain.Status == FiniteValueStatus::Complete &&
+            Domain.Tuples.size() == 1 && Domain.Tuples.front().size() == 1)
+          Out.FrameBytes[Offset] = Domain.Tuples.front().front();
+      }
+    }
+    const auto Partition =
+        Refinement.FramePartitions.find({Successor.Address, Successor.Mode});
+    if (Partition != Refinement.FramePartitions.end()) {
+      const uint64_t Offset = static_cast<uint64_t>(Partition->second);
+      if (!Out.FrameBytes.count(Offset) &&
+          State.hasMaterializedRegionRange(Root, Offset, 1)) {
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "frame partition byte projection budget exhausted");
+        ++Result.EvaluatedOperations;
+        const SymRef Byte =
+            State.loadMaterialized(Ctx.mkAdd(Root, Ctx.mkConst(64, Offset)), 1);
+        if (Byte) {
+          if (const auto Constant = Ctx.asConst(Byte)) {
+            Out.FrameBytes[Offset] = Constant->getZExtValue();
+          } else {
+            const auto Domain = enumerate(Ctx, Predicate, {Byte}, 1);
+            if (Failed)
+              return false;
+            if (Domain.Status == FiniteValueStatus::Complete &&
+                Domain.Tuples.size() == 1 && Domain.Tuples.front().size() == 1)
+              Out.FrameBytes[Offset] = Domain.Tuples.front().front();
+          }
+        }
+      }
+    }
   }
   // An edge guard may establish an offset that was not unique in its source
   // block. Keep the fact in this projection only: mutating State would leak
@@ -2858,6 +3081,11 @@ int Specializer::enqueue(SpecializationCursor Cursor,
       Partition != Refinement.RegisterPartitions.end())
     Key.RegisterPartition =
         constantWord(Incoming.Scalars, Partition->second, Options.ByteOrder);
+  if (const auto Partition =
+          Refinement.FramePartitions.find({Cursor.Address, Cursor.Mode});
+      Partition != Refinement.FramePartitions.end())
+    Key.FramePartition = constantFrameWord(
+        Incoming.FrameBytes, {Partition->second, 1}, Options.ByteOrder);
   Key.NativeStackActive = Incoming.Frame.NativeStackActive;
   Key.EntryReturnSlotIntact = Incoming.Frame.EntryReturnSlotIntact;
   Key.NativeCallReturnCells = Incoming.NativeCallReturnCells;
@@ -2897,6 +3125,7 @@ int Specializer::enqueue(SpecializationCursor Cursor,
          !chargeCallWork(Incoming.Origins.SafeRegisters.size())))
       return -1;
     if (intersect(Old.Incoming, Incoming, Options.MaxControlTuples,
+                  Options.nativeReturnWordLimit(),
                   Result.RelationalWidenings) &&
         !Old.Pending) {
       Old.Pending = true;
@@ -3029,7 +3258,8 @@ bool Specializer::emitTargets(
       Projection Unused;
       bool Reachable = true;
       if (!projectEdge(State, FrameRoot, ObjectRoots, Origins, Frame,
-                       Exec.pathPredicate(), Transfer, Unused, Reachable))
+                       Exec.pathPredicate(), Transfer, Draft.Incoming, Unused,
+                       Reachable))
         return false;
     }
     return true;
@@ -3069,7 +3299,7 @@ bool Specializer::emitTargets(
     Projection EdgeState;
     bool Reachable = true;
     if (!projectEdge(State, FrameRoot, ObjectRoots, Origins, Frame, Predicate,
-                     Cursor, EdgeState, Reachable))
+                     Cursor, Draft.Incoming, EdgeState, Reachable))
       return -1;
     if (!Reachable)
       return -2;
@@ -3253,27 +3483,71 @@ bool Specializer::emitTargets(
 
   std::set<uint64_t> Targets;
   const SymRef TargetValue = Exec.branchTarget();
-  const auto Structural =
-      finiteTargets(Ctx, TargetValue, Targets, Options.MaxIndirectTargets);
+  const uint32_t TargetLimit =
+      Instruction.NativeStackControl == SpecializationNativeStackControl::Return
+          ? Options.nativeReturnTargetLimit()
+          : Options.MaxIndirectTargets;
+  const auto Structural = finiteTargets(Ctx, TargetValue, Targets, TargetLimit);
   if (Structural != TargetSetResult::Exact) {
     Targets.clear();
-    auto Domain =
-        enumerate(Ctx, Path, {TargetValue}, Options.MaxIndirectTargets);
-    if (Failed)
-      return false;
-    if (Domain.Status == FiniteValueStatus::Unknown)
-      return fail(SpecializationStatus::BudgetExceeded,
-                  "finite indirect-target proof exceeded its solver budget");
-    if (Domain.Status != FiniteValueStatus::Complete) {
-      discover(State, TargetValue, FrameRoot);
-      return fail(
-          Structural == TargetSetResult::BudgetExceeded
-              ? SpecializationStatus::BudgetExceeded
-              : SpecializationStatus::UnresolvedControl,
-          "indirect control target is not an exact finite constant set");
+    bool HintsComplete = false;
+    const auto Hints = Refinement.TargetHints.find(
+        {Instruction.Origin.Address, Instruction.Origin.Mode});
+    if (Hints != Refinement.TargetHints.end() &&
+        Hints->second.size() <= TargetLimit && Ctx.width(TargetValue) <= 64) {
+      llvm::SmallVector<SymRef, 16> Cases;
+      for (uint64_t Target : Hints->second) {
+        if (Ctx.width(TargetValue) < 64 && Target >> Ctx.width(TargetValue))
+          continue;
+        auto Canonical = canonicalizeLowControlTarget(
+            Target, Instruction.Origin.Mode, Instruction.Origin.TargetMode,
+            Original.Inputs[0].Size);
+        if (!Canonical) {
+          llvm::consumeError(Canonical.takeError());
+          Cases.clear();
+          break;
+        }
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "indirect target hint work budget exhausted");
+        ++Result.EvaluatedOperations;
+        Cases.push_back(
+            Ctx.mkEq(TargetValue, Ctx.mkConst(Ctx.width(TargetValue), Target)));
+      }
+      if (!Cases.empty()) {
+        const auto Outside = Ctx.mkAnd(Path, Ctx.mkNot(Ctx.mkOr(Cases)));
+        const auto Coverage = enumerate(Ctx, Outside, {}, 1);
+        if (Failed)
+          return false;
+        if (Coverage.Status == FiniteValueStatus::Complete &&
+            Coverage.Tuples.empty()) {
+          for (uint64_t Target : Hints->second)
+            if (Ctx.width(TargetValue) == 64 ||
+                !(Target >> Ctx.width(TargetValue)))
+              Targets.insert(Target);
+          HintsComplete = true;
+          ++Result.ProvenControlTargetHints;
+        }
+      }
     }
-    for (const auto &Tuple : Domain.Tuples)
-      Targets.insert(Tuple.front());
+    if (!HintsComplete) {
+      auto Domain = enumerate(Ctx, Path, {TargetValue}, TargetLimit);
+      if (Failed)
+        return false;
+      if (Domain.Status == FiniteValueStatus::Unknown)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "finite indirect-target proof exceeded its solver budget");
+      if (Domain.Status != FiniteValueStatus::Complete) {
+        discover(State, TargetValue, FrameRoot);
+        return fail(
+            Structural == TargetSetResult::BudgetExceeded
+                ? SpecializationStatus::BudgetExceeded
+                : SpecializationStatus::UnresolvedControl,
+            "indirect control target is not an exact finite constant set");
+      }
+      for (const auto &Tuple : Domain.Tuples)
+        Targets.insert(Tuple.front());
+    }
   }
   std::vector<std::pair<uint64_t, int>> Destinations;
   if (Targets.size() > 1)
@@ -3368,6 +3642,11 @@ bool Specializer::evaluate(int Id) {
   if (Draft.Incoming.Frame.EntryReturnSlotIntact &&
       !chargeCallWork(Options.EntryReturnSlot->Bytes))
     return false;
+  if (Draft.Incoming.FrameValueDomains.size() >
+      Options.MaxOperations - Result.EvaluatedOperations)
+    return fail(SpecializationStatus::BudgetExceeded,
+                "frame word carrier budget exhausted");
+  Result.EvaluatedOperations += Draft.Incoming.FrameValueDomains.size();
   seed(Ctx, State, FrameRoot, ObjectRoots, Draft.Incoming,
        Options.EntryReturnSlot);
   LiveNativeCallReturnCells.clear();
@@ -3473,6 +3752,30 @@ bool Specializer::evaluate(int Id) {
     if (Ctx.numNodes() > Options.MaxSymbolicNodes)
       return fail(SpecializationStatus::BudgetExceeded,
                   "object pointer range predicate node budget exhausted");
+  }
+  for (const auto &[Left, Right] : Draft.Incoming.ObjectRegisterEqualities) {
+    if (!chargeObjectWork(1))
+      return false;
+    IncomingPredicate = Ctx.mkAnd(
+        IncomingPredicate, Ctx.mkEq(State.read(SymSpace::Register, Left, 8),
+                                    State.read(SymSpace::Register, Right, 8)));
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "object register equality predicate node budget exhausted");
+  }
+  for (const auto &[Left, Right] : Draft.Incoming.InverseRegisterPairs) {
+    if (Result.EvaluatedOperations >= Options.MaxOperations)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "inverse register predicate budget exhausted");
+    ++Result.EvaluatedOperations;
+    IncomingPredicate =
+        Ctx.mkAnd(IncomingPredicate,
+                  Ctx.mkEq(Ctx.mkAdd(State.read(SymSpace::Register, Left, 8),
+                                     State.read(SymSpace::Register, Right, 8)),
+                           Ctx.mkConst(64, 0)));
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "inverse register predicate node budget exhausted");
   }
   if (Options.EntryFrameBounds) {
     const auto &Bounds = *Options.EntryFrameBounds;
@@ -3877,7 +4180,7 @@ bool Specializer::evaluate(int Id) {
                 ? Ctx.mkConst(64, *KnownUnrootedReturnTarget)
                 : State.load(ReturnAddress, Stack.Size);
         auto Targets = enumerate(Ctx, Exec.pathPredicate(), {ReturnValue},
-                                 Options.MaxIndirectTargets);
+                                 Options.nativeReturnTargetLimit());
         if (Failed)
           return false;
         if (Targets.Status == FiniteValueStatus::Unknown)
@@ -4066,8 +4369,38 @@ bool Specializer::evaluate(int Id) {
                              Policy.ReturnedObject->Size.Offset,
                              Policy.ReturnedObject->Size.Size)
                 : SymRef();
+        std::vector<ReturningCallFrameOutput> Outputs;
+        Outputs.reserve(Policy.FrameOutputs.size());
+        for (const auto &Output : Policy.FrameOutputs) {
+          if (!Output.Pointer.isReg() || Output.Pointer.Size != 8 ||
+              !Output.Bytes)
+            return fail(SpecializationStatus::InvalidInput,
+                        "invalid returning-call frame output location");
+          const SymRef Pointer =
+              State.read(SymSpace::Register, Output.Pointer.Offset, 8);
+          const auto Offset =
+              frameOffset(Ctx, Exec.pathPredicate(), Pointer, FrameRoot,
+                          FrameOffsetProof::Required);
+          if (Failed)
+            return false;
+          if (!Offset) {
+            discover(State, Pointer, FrameRoot, ControlDemand::Memory);
+            Refinement.PrecisionFailure = true;
+            return fail(SpecializationStatus::Unsupported,
+                        "returning-call frame output requires an exact "
+                        "entry-relative pointer");
+          }
+          const int64_t Begin = static_cast<int64_t>(*Offset);
+          const auto &Bounds = *Options.EntryFrameBounds;
+          if (Begin < Bounds.Begin || Begin >= Bounds.End ||
+              Output.Bytes > static_cast<uint64_t>(Bounds.End) - *Offset)
+            return fail(SpecializationStatus::InvalidInput,
+                        "returning-call frame output exceeds entry bounds");
+          Outputs.push_back({*Offset, Output.Bytes});
+        }
         if (!applyReturningCall(State, FrameRoot, CallerStack, PreservedBegin,
-                                *ReturningCall, Policy, Origins, Frame))
+                                *ReturningCall, Policy, Outputs, Origins,
+                                Frame))
           return false;
         if (!applyReturningResultObject(Exec, State, FrameRoot, ObjectRoots,
                                         *ReturningCall, Policy, ResultSize,
@@ -5374,9 +5707,9 @@ bool Specializer::evaluate(int Id) {
         }
       } else {
         bool TrackNativeReturnWithoutPreservation = false;
-        const bool MayTrackNativeReturn =
-            FrameRoot && Original.Opcode == NdOp::STORE &&
-            !Frame.NativeReturnSlots.empty();
+        const bool MayTrackNativeReturn = FrameRoot &&
+                                          Original.Opcode == NdOp::STORE &&
+                                          !Frame.NativeReturnSlots.empty();
         const auto ConditionalAddress =
             MayTrackNativeReturn && !StorePreservation &&
                     Options.ProveStoreReturnSlotSeparation
@@ -6275,6 +6608,7 @@ SpecializationResult Specializer::run() {
       !Options.MaxNodes || !Options.MaxContextsPerAddress ||
       !Options.MaxOperations || !Options.MaxNodeEvaluations ||
       !Options.MaxIndirectTargets || !Options.MaxNativeReturnSlots ||
+      (Options.MaxNativeReturnTargets && !*Options.MaxNativeReturnTargets) ||
       !Options.MaxImmutableReadAddresses || !Options.MaxControlTuples ||
       !Options.MaxControlFields || !Options.MaxSolverQueries ||
       !Options.MaxSolverGates ||
@@ -6646,13 +6980,48 @@ specializeInterpreter(SpecializationProvider &Provider,
           limits::analysis::kMaxControlProducerHints ||
       Options.ControlPartitionHints.size() >
           limits::analysis::kMaxControlPartitionHints ||
+      Options.ControlTargetHints.size() >
+          limits::analysis::kMaxControlTargetHintSites ||
+      Options.ControlFramePartitionHints.size() >
+          limits::analysis::kMaxControlPartitionHints -
+              Options.ControlPartitionHints.size() ||
       Options.ControlProducerHints.size() > Options.MaxDiscoveryVisits ||
       Options.ControlPartitionHints.size() >
-          Options.MaxDiscoveryVisits - Options.ControlProducerHints.size()) {
+          Options.MaxDiscoveryVisits - Options.ControlProducerHints.size() ||
+      Options.ControlFramePartitionHints.size() >
+          Options.MaxDiscoveryVisits - Options.ControlProducerHints.size() -
+              Options.ControlPartitionHints.size()) {
     SpecializationResult Limited;
     Limited.Status = SpecializationStatus::BudgetExceeded;
     Limited.Diagnostic = "control precision hint budget exhausted";
     return Limited;
+  }
+  size_t TargetHintValues = 0;
+  for (const auto &Hint : Options.ControlTargetHints) {
+    if (Hint.Targets.size() >
+        limits::analysis::kMaxControlTargetHintValues - TargetHintValues) {
+      SpecializationResult Limited;
+      Limited.Status = SpecializationStatus::BudgetExceeded;
+      Limited.Diagnostic = "control target hint budget exhausted";
+      return Limited;
+    }
+    TargetHintValues += Hint.Targets.size();
+    if (Hint.Cursor.Address == InvalidVA ||
+        !isSingleInstructionMode(Hint.Cursor.Mode) || Hint.Targets.empty() ||
+        Hint.Targets.size() > std::max(Options.MaxIndirectTargets,
+                                       Options.nativeReturnTargetLimit()) ||
+        !std::is_sorted(Hint.Targets.begin(), Hint.Targets.end()) ||
+        std::adjacent_find(Hint.Targets.begin(), Hint.Targets.end()) !=
+            Hint.Targets.end() ||
+        !Refinement.TargetHints
+             .emplace(std::make_pair(Hint.Cursor.Address, Hint.Cursor.Mode),
+                      Hint.Targets)
+             .second) {
+      SpecializationResult Invalid;
+      Invalid.Status = SpecializationStatus::InvalidInput;
+      Invalid.Diagnostic = "invalid control target hint";
+      return Invalid;
+    }
   }
   for (const auto &Hint : Options.ControlProducerHints) {
     if (Hint.Cursor.Address == InvalidVA ||
@@ -6702,6 +7071,25 @@ specializeInterpreter(SpecializationProvider &Provider,
                      Refinement.ContextRegisters.end(), Same))
       Refinement.ContextRegisters.push_back(Range);
   }
+  for (const auto &Hint : Options.ControlFramePartitionHints) {
+    if (Hint.Cursor.Address == InvalidVA || Hint.Cursor == Entry ||
+        !isSingleInstructionMode(Hint.Cursor.Mode) ||
+        !Options.FrameBaseRegister) {
+      SpecializationResult Invalid;
+      Invalid.Status = SpecializationStatus::InvalidInput;
+      Invalid.Diagnostic = "invalid control frame partition hint";
+      return Invalid;
+    }
+    const auto Point = std::make_pair(Hint.Cursor.Address, Hint.Cursor.Mode);
+    const auto [At, Added] =
+        Refinement.FramePartitions.emplace(Point, Hint.Offset);
+    if (!Added && At->second != Hint.Offset) {
+      SpecializationResult Invalid;
+      Invalid.Status = SpecializationStatus::InvalidInput;
+      Invalid.Diagnostic = "conflicting control frame partition hints";
+      return Invalid;
+    }
+  }
   Effective.ControlRegisters = canonicalControlFields(
       Effective.ControlRegisters, Refinement.Registers,
       Options.ControlRegisters.size(), Refinement.ContextRegisters,
@@ -6714,7 +7102,8 @@ specializeInterpreter(SpecializationProvider &Provider,
     return Limited;
   }
   Refinement.Visits = Options.ControlProducerHints.size() +
-                      Options.ControlPartitionHints.size();
+                      Options.ControlPartitionHints.size() +
+                      Options.ControlFramePartitionHints.size();
   if (Options.EntryFrameAlignment && Options.EntryFrameAlignment->valid())
     Refinement.FrameMask = Options.EntryFrameAlignment->Alignment - 1;
   SpecializationResult Result;
@@ -6743,6 +7132,16 @@ specializeInterpreter(SpecializationProvider &Provider,
         break;
       Result.ControlPartitionHints.push_back(
           {{Point.first, Point.second}, Range});
+    }
+    Result.ControlFramePartitionHintsTruncated =
+        Refinement.FramePartitions.size() >
+        limits::analysis::kMaxControlPartitionHints;
+    for (const auto &[Point, Offset] : Refinement.FramePartitions) {
+      if (Result.ControlFramePartitionHints.size() ==
+          limits::analysis::kMaxControlPartitionHints)
+        break;
+      Result.ControlFramePartitionHints.push_back(
+          {{Point.first, Point.second}, Offset});
     }
     // Refinement can exhaust a shared ledger while replaying an earlier
     // prefix. Keep the last semantic failure as context for that limit,

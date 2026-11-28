@@ -114,7 +114,7 @@ Decoder::classifyX86Prefix(llvm::ArrayRef<uint8_t> Bytes, va_t Addr,
 }
 
 va_t Decoder::directX86CallTarget(llvm::ArrayRef<uint8_t> Bytes,
-                                 va_t Addr) const {
+                                  va_t Addr) const {
   va_t Target;
   const uint16_t Length =
       X86_scanCallTarget(Handle, Bytes.data(), Bytes.size(), Addr, &Target);
@@ -185,6 +185,21 @@ bool Decoder::liftX64MemoryCallToLow(
         "instruction has no audited x64 memory-call projection";
   }
   return X86 && X86->liftX64MemoryCall(Insn.Raw, Ops, UndefinedEffects,
+                                       PreservedState);
+}
+
+bool Decoder::liftX64MemoryJumpToLow(
+    const DecodedInsn &Insn, std::vector<LowOp> &Ops,
+    LowInstructionUndefinedEffects *UndefinedEffects,
+    LowInstructionPreservedState *PreservedState) {
+  if (PreservedState)
+    *PreservedState = {};
+  if (UndefinedEffects) {
+    *UndefinedEffects = {};
+    UndefinedEffects->Diagnostic =
+        "instruction has no audited x64 memory-jump projection";
+  }
+  return X86 && X86->liftX64MemoryJump(Insn.Raw, Ops, UndefinedEffects,
                                        PreservedState);
 }
 

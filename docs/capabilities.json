@@ -2905,6 +2905,140 @@
       }
     },
     {
+      "id": "analysis.data-pointer-scan",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "sdk",
+      "targets": [
+        "x86_64",
+        "aarch64",
+        "mips",
+        "mipsel",
+        "mips64",
+        "mips64el",
+        "mips64n32",
+        "mips64n32el",
+        "powerpc",
+        "powerpcle",
+        "powerpc64",
+        "powerpc64le",
+        "powerpc64-elfv1",
+        "powerpc64le-elfv1",
+        "riscv32",
+        "riscv64",
+        "riscv32-ilp32d",
+        "riscv64-lp64d"
+      ],
+      "docs": [
+        "docs/memory-safety-scan.md"
+      ],
+      "limitations": [
+        "Counts distinct instructions with a recovered reference into the data section. Missing function boundaries and unresolved addresses reduce coverage.",
+        "Counts full-width file-backed data slots with relocations into readable, non-executable data. Stripped relocations can reduce the count. MIPS, PowerPC and RISC-V coverage uses linked ELF images."
+      ],
+      "tests": [
+        {
+          "runner": "python-unittest",
+          "target": "NeverDDataPtrScanCLI",
+          "source": "scripts/tests/test_data_ptr_scan_cli.py",
+          "filter": "DataPtrScanCLI.test_object",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "python-unittest",
+          "target": "NeverDDataPtrScanCLI",
+          "source": "scripts/tests/test_data_ptr_scan_cli.py",
+          "filter": "DataPtrScanCLI.test_sdk_and_cancellation",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_session_data_ptr_scan_json"
+        ],
+        "python": [
+          "Session.scan_data_pointers"
+        ],
+        "cli": [
+          "neverd scan --data-ptr"
+        ],
+        "json": [
+          "neverd_session_data_ptr_scan_json"
+        ]
+      }
+    },
+    {
+      "id": "model.offline-artifact-scan",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "model",
+      "targets": [
+        "Local GGUF v2/v3, Safetensors packages, templates and ONNX graph inventory"
+      ],
+      "docs": [
+        "docs/model-scan.md"
+      ],
+      "limitations": [
+        "Explicit local opt-in. Quantization sampling and baseline reads have independent budgets. The report covers static evidence and identifies uninspected areas."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDModelArtifactTests",
+          "source": "unittests/model/ModelArtifactTests.cpp",
+          "filter": "ModelArtifact.MutationDuringInventoryInvalidatesReport",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDModelArtifactTests",
+          "source": "unittests/model/ModelArtifactTests.cpp",
+          "filter": "ModelArtifact.RejectsInvalidOptionsBeforeOpeningInput",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_model_scan_json_v1",
+          "neverd_model_rebuild_gguf_json_v1"
+        ],
+        "python": [],
+        "cli": [
+          "neverd scan --gguf",
+          "neverd scan --baseline",
+          "neverd scan --gap-bytes",
+          "neverd scan --scale-bytes",
+          "neverd scan --compare-bytes",
+          "neverd scan --model-offset",
+          "neverd scan --model-limit",
+          "neverd scan --model-options",
+          "neverd scan --model-text",
+          "neverd scan --onnx-external-data",
+          "neverd scan --rebuild-gguf"
+        ],
+        "json": [
+          "neverd_model_scan_json_v1",
+          "neverd_model_rebuild_gguf_json_v1"
+        ]
+      }
+    },
+    {
       "id": "safety.native-memory-scan",
       "kind": "analysis",
       "status": "experimental",
@@ -15538,7 +15672,9 @@
           "neverd_devirtualize_machine_source_v11",
           "neverd_devirtualize_source_v12",
           "neverd_devirtualize_machine_source_v12",
-          "neverd_x64_continuation_source_v1"
+          "neverd_x64_continuation_source_v1",
+          "neverd_x64_continuation_source_with_observation_v1",
+          "neverd_x64_paged_return_entry_source_v1"
         ],
         "python": [],
         "cli": [
@@ -15569,6 +15705,7 @@
           "neverd decompile --vm-no-control-discovery",
           "neverd decompile --vm-source-abi",
           "neverd decompile --x64-continuation",
+          "neverd decompile --x64-xbegin-observation",
           "neverd decompile --continuation-report"
         ],
         "json": []

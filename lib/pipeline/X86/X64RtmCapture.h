@@ -46,11 +46,17 @@ llvm::Expected<va_t> rtmCaptureImagePC(va_t Rip, std::optional<va_t> LoadBase,
 std::optional<std::string> renderX64RtmFaultStep(const LowFunc &F);
 
 struct X64RtmFaultCapture {
+  static constexpr llvm::StringLiteral Key = "qemu_xbegin_fault_v1";
   analysis::X64XbeginFaultSite Site;
   llvm::json::Object Receipt;
 
   static llvm::Expected<X64RtmFaultCapture>
   read(const llvm::json::Value &Value, va_t ImageBase, unsigned AddressBits);
+
+  /// Bind only the recorded fault. The caller's request owns the selection.
+  static llvm::Expected<X64RtmFaultCapture>
+  bind(llvm::json::Object &Request, llvm::StringRef ObservationJSON,
+       va_t ImageBase, unsigned AddressBits);
 };
 
 } // namespace neverd

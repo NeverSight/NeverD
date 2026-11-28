@@ -42,14 +42,14 @@ class BorrowedSession:
         return handle
 
 
-def sdk_reports(host, path, catalog=None):
+def sdk_reports(host, path, catalog=None, analyzers=("both", "audit", "hunt")):
     handle = host.call("neverd_session_create")
     assert handle
     try:
         session = Session(handle, _native=BorrowedSession(), _host=host)
         session.load(path)
         return {name: session.scan(analyzer=name, sinks=str(catalog) if catalog else None)
-                for name in ("both", "audit", "hunt")}
+                for name in analyzers}
     finally:
         host.call("neverd_session_destroy", handle)
 
@@ -97,6 +97,87 @@ def verify(cli, worker, host, path, expected):
                 assert response["status"] == "ok", response
                 assert response["payload"] == report, (name, response["payload"], report)
             assert client.call("memory_safety_scan", {"analyzer": "typo"})["error"]["code"] == "invalid_request"
+
+
+def verify_direct_read_initialization(cli, worker, host, root):
+    # All three read the caller's scalar field through RCX on Win64.
+    cases = (
+        ("borrowed", "8b 01 c3", 0, 1),                    # load 4
+        ("initialized", "c7 01 07 00 00 00 0f b6 01 c3", 1, 0),  # store 4, load 1
+        ("partial", "c6 01 07 8b 01 c3", 0, 1),            # store 1, load 4
+    )
+    for name, code, written, unresolved in cases:
+        path = root / (name + ".exe")
+        path.write_bytes(pe(bytes.fromhex(code)))
+        report, _ = cli_report(cli, path, "--analyzer=audit")
+        assert report["verdict"] == "SAFE" and report["coverage_complete"], report
+        assert not report["findings"]
+        assert report["analyzers"]["audit"]["direct_read_initialization"] == {
+            "preceding_constant_store": written, "local_stack": 0,
+            "outside_or_unresolved": unresolved,
+        }, report
+        assert "direct_read_initialization" not in report["analyzers"]["hunt"]
+        if written:
+            verify(cli, worker, host, path, "SAFE")
+
+    # Reserve a real Win64 frame and address a slot through RDX.
+    store = bytes.fromhex("c7 02 07 00 00 00")
+    load = bytes.fromhex("0f b6 02")
+    frame = bytes.fromhex("48 83 ec 28 48 8d 54 24 10")
+    leave = bytes.fromhex("48 83 c4 28 c3")
+    for code, expected in ((store + load, "SAFE"), (load + store, "UNSAFE")):
+        path = root / ("frame-" + expected.lower() + ".exe")
+        path.write_bytes(pe(frame + code + leave))
+        report, _ = cli_report(cli, path, "--analyzer=audit")
+        assert report["verdict"] == expected and report["coverage_complete"], report
+        initialized = int(expected == "SAFE")
+        assert report["analyzers"]["audit"]["direct_read_initialization"] == {
+            "preceding_constant_store": initialized, "local_stack": 1 - initialized,
+            "outside_or_unresolved": 0,
+        }, report
+        findings = [(g["property"], g["verdict"]) for g in report["findings"]]
+        assert findings == ([] if initialized else [("uninitialized_read", "UNSAFE")])
+
+
+def verify_indexed_output(cli, worker, host, root):
+    # Compiled Win64 routines on an initialized byte array. In the append
+    # case the destination is the returned cursor, four bytes past the base.
+    store = "c7 01 11 22 33 44 "
+    read = "0f b6 04 11 "
+    cases = (
+        ("return", store + "83 e2 03 " + read + "0f b6 c0 c3", "YES", "YES", "returned_value"),
+        ("append", "f7 d2 " + store + "48 8d 41 04 48 83 ca fc 0f b6 54 11 04 88 51 04 c3",
+         "YES", "YES", "returned_storage"),
+        ("replaced", "4c 89 c0 " + store + "83 e2 03 0f b6 0c 11 41 88 08 41 c6 00 07 c3",
+         "YES", "NO", None),
+        ("partial", store + "83 e2 07 " + read + "0f b6 c0 c3", "UNKNOWN", "UNKNOWN", None),
+        ("transformed", store + "83 e2 03 " + read + "0f b6 c0 83 c0 09 c3", "YES", "UNKNOWN", None),
+        ("discarded", store + "83 e2 03 " + read + "b8 01 00 00 00 c3",
+         "UNKNOWN", "UNKNOWN", "unmatched_native"),
+    )
+    for name, code, written, output, evidence in cases:
+        path = root / ("indexed-" + name + ".exe")
+        path.write_bytes(pe(bytes.fromhex(code)))
+        report, _ = cli_report(cli, path, "--analyzer=audit")
+        proof = report["analyzers"]["audit"]["indexed_read_output"]
+        verdict = "UNKNOWN" if "UNKNOWN" in (written, output) else "SAFE"
+        assert report["coverage_complete"] and not report["findings"], report
+        assert proof["verdict"] == report["verdict"] == verdict, report
+        assert proof["reads"] == 1 and proof["written_before_read"][written] == 1, proof
+        assert proof["reaches_output"][output] == 1, proof
+        assert sum(proof["reaches_output"].values()) == sum(proof["written_before_read"].values()) == 1
+        if evidence:
+            assert proof[evidence] == 1, proof
+        if name in ("append", "partial"):
+            assert sdk_reports(host, path, analyzers=("audit",))["audit"] == report
+            combined, _ = cli_report(cli, path)
+            assert combined["verdict"] == verdict and combined["analyzers"]["audit"] == report["analyzers"]["audit"]
+            if worker:
+                with Client(worker) as client:
+                    opened = client.call("open", {"path": str(path), "analysis": False, "warm": False})
+                    assert opened["status"] == "ok", opened
+                    result = client.call("memory_safety_scan", {"analyzer": "audit"}, timeout=90)
+                    assert result["status"] == "ok" and result["payload"] == report, result
 
 
 def verify_cli_options(cli, clean, output):
@@ -164,6 +245,9 @@ def main():
         assert report["verdict"] == "UNKNOWN" and not report["coverage_complete"]
         for row in report["analyzers"].values():
             assert row["state"] == "unsupported" and "unsupported instruction at 0x140001002" in row["error"], row
+            assert "direct_read_initialization" not in row
+        verify_direct_read_initialization(args.cli, args.worker, host, root)
+        verify_indexed_output(args.cli, args.worker, host, root)
         verify_cli_options(args.cli, clean, root / "report.json")
         verify_shared_catalog_scope(args.cli, host, mixed, root / "catalog.json")
 

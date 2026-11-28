@@ -5,9 +5,8 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// The declaration of a function the user edits with Y, the user's or the
-/// signature the decompiler prints (NeverDCAPIFunctionType.cpp), and where
-/// it passes a parameter, for the C API's other requests.
+/// The declaration a user edits with Y and the parameter locations used by
+/// the C API's other requests (NeverDCAPIFunctionType.cpp).
 ///
 //===----------------------------------------------------------------------===//
 
@@ -16,6 +15,7 @@
 
 #include "SessionImpl.h"
 
+#include "neverd/debug/DebugContext.h"
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/types/TypeParse.h"
 
@@ -24,14 +24,17 @@
 
 namespace neverd::sdk {
 
-/// The declaration of the function at \p Entry: the user's, else the
-/// signature the decompiler prints for it, as \p Library reads it.
+/// A recorded prototype for the exact function entry, when available.
+std::optional<FunctionSym> entryPrototype(Session &S, va_t Entry);
+
+/// The declaration from the user's edit, the printed signature, or the
+/// recorded prototype when the body is unavailable.
 struct CurrentDeclaration {
   std::string Text;
   types::FunctionDeclaration Read;
   bool Stated = false;
 };
-/// None with the session's error when the function prints no signature.
+/// None with the session's error when no declaration is available.
 std::optional<CurrentDeclaration>
 currentDeclaration(neverd_session_t Sess, Session &S, va_t Entry,
                    const types::TypeLibrary &Library);

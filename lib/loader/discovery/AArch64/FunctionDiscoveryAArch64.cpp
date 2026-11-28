@@ -15,17 +15,22 @@
 
 #include "../FunctionDiscoveryDetail.h"
 
+#include "neverd/loader/DirectBranch.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
+#include "neverd/support/ProloguePatterns.h"
 
+#include <algorithm>
 #include <cstring>
 #include <optional>
 
 namespace neverd {
 
-size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
-                               const std::map<va_t, size_t> &Targets,
-                               std::set<va_t> &Existing,
-                               const ImportThunkCandidates &Candidates) {
+static size_t scanVeneers(BinaryImage &Img, const Segment &Seg,
+                          const std::map<va_t, size_t> &Targets,
+                          std::set<va_t> &Existing,
+                          const ImportThunkCandidates &Candidates,
+                          std::optional<size_t> OnlyStart) {
   using namespace aarch64;
   const uint8_t *D = Seg.Data.data();
   const size_t N = Seg.Data.size();
@@ -37,8 +42,11 @@ size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
     return Word;
   };
 
+  if (N < kThunkLen || (OnlyStart && *OnlyStart > N - kThunkLen))
+    return 0;
   size_t Added = 0;
-  for (size_t I = 0; I + kThunkLen <= N; I += kInsnSize) {
+  const size_t Last = OnlyStart.value_or(N - kThunkLen);
+  for (size_t I = OnlyStart.value_or(0); I <= Last; I += kInsnSize) {
     // A BTI build starts each veneer with the landing pad an indirect branch
     // may enter, and calls name the veneer there.
     size_t At = I;
@@ -108,6 +116,84 @@ size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
     ++Added;
   }
   return Added;
+}
+
+size_t scanImportThunksAArch64(BinaryImage &Img, const Segment &Seg,
+                               const std::map<va_t, size_t> &Targets,
+                               std::set<va_t> &Existing,
+                               const ImportThunkCandidates &Candidates) {
+  return scanVeneers(Img, Seg, Targets, Existing, Candidates, std::nullopt);
+}
+
+/// File-backed fallthrough when a PE has no unwind or symbol size for this
+/// entry. Stop at the end of control flow or the next known function.
+static size_t fallthroughBytes(const BinaryImage &Img, va_t Entry) {
+  const Segment *Seg = Img.getSegmentFor(Entry);
+  if (!Seg || Entry - Seg->VA >= Seg->Data.size())
+    return 0;
+  const size_t Offset = Entry - Seg->VA;
+  uint64_t Available = Seg->Data.size() - Offset;
+  if (const Section *Sec = Img.getSectionFor(Entry))
+    Available = std::min(Available, Sec->Size - (Entry - Sec->VA));
+  const va_t Next = Img.nextKnownFunctionEntryAfter(Entry);
+  if (Next != InvalidVA)
+    Available = std::min(Available, Next - Entry);
+  constexpr size_t Width = aarch64::kInsnSize;
+  for (size_t At = 0; Available - At >= Width; At += Width)
+    if (isAArch64BlockEndWord(readLE<uint32_t>(Seg->Data.data() + Offset + At)))
+      return At + Width;
+  return Available;
+}
+
+void scanSelectedImportThunksAArch64(BinaryImage &Img,
+                                     const std::map<va_t, size_t> &Targets) {
+  if (Targets.empty())
+    return;
+  // A direct BL may name a linker veneer outside the caller's unwind range.
+  // Test only the selected entries and the branch targets in their known
+  // bodies, or in their fallthrough when the binary records no extent.
+  std::set<va_t> Starts = Img.LoadOnlyFunctionEntries;
+  for (va_t Entry : Img.LoadOnlyFunctionEntries) {
+    if (!Img.isFunctionEntryCandidateAt(Entry))
+      continue;
+    uint64_t Size;
+    if (const auto *EH = Img.ExceptionMetadata.findFunction(Entry);
+        EH && EH->CodeRange.contains(Entry))
+      Size = EH->CodeRange.End - Entry;
+    else if (const auto *Sym = Img.findSymbolAt(Entry);
+             Sym && Sym->IsFunc && Sym->Size)
+      Size = Sym->Size;
+    else
+      Size = fallthroughBytes(Img, Entry);
+    if (!Img.isCodeRange(Entry, Size))
+      continue;
+    if (const uint8_t *Bytes = Img.readVA(Entry, Size))
+      forEachDirectBranch(Img.Arch, InstructionMode::Default, Bytes, Size,
+                          Entry,
+                          [&](va_t, va_t Target) { Starts.insert(Target); });
+  }
+
+  // Most selected functions have no import veneer among their callees.
+  // Build the image's ownership index only after seeing a possible start.
+  std::optional<ImportThunkCandidates> Candidates;
+  std::set<va_t> Existing;
+  for (va_t Start : Starts) {
+    const uint8_t *Bytes = Img.readVA(Start, aarch64::kInsnSize);
+    if (!Bytes)
+      continue;
+    const uint32_t Word = readLE<uint32_t>(Bytes);
+    if ((Word & aarch64::kADRP_X16_Mask) != aarch64::kADRP_X16_Match &&
+        Word != aarch64::kBTI_C)
+      continue;
+    const Segment *Seg = Img.getSegmentFor(Start);
+    if (!Seg || !Seg->isExecutable() || !Img.isFunctionEntryCandidateAt(Start))
+      continue;
+    if (!Candidates) {
+      Candidates.emplace(Img);
+      Existing = Img.getSymbolAddresses();
+    }
+    scanVeneers(Img, *Seg, Targets, Existing, *Candidates, Start - Seg->VA);
+  }
 }
 
 } // namespace neverd

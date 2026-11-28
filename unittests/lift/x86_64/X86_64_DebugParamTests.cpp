@@ -132,3 +132,68 @@ TEST_F(X86_64_DebugParams, LLVMCNamesArgumentsWhereTheConventionPassesThem) {
             std::string::npos)
       << Source;
 }
+
+// Both paths to each call in test_debug_frame_argument_callers.s set the
+// first argument to the address of the caller's buffer, so the argument
+// register is that frame address and no assignment of its own forwards it
+// into the call.  The callees' -g DWARF declares their parameters.  The call
+// passes the address as every other use of it prints it, as an integer to
+// dfa_sum's `long` and as a pointer to dfa_first's `const char *`, not a
+// local nothing assigns.
+TEST_F(X86_64_DebugParams, CallsPassTheFrameAddressTheirArgumentHolds) {
+  const fs::path Exe = fs::path(TEST_OBJ_DIR) / "test_debug_frame_argument.exe";
+  if (!fs::exists(Exe))
+    GTEST_SKIP() << "ld.lld did not link " << Exe.string();
+  const auto CFile = tmpFile("debug_frame_argument.c");
+  const auto R =
+      exec(ndBin(), {"decompile", "-o", CFile.string(), Exe.string()});
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  std::ifstream Ifs(CFile);
+  const std::string Source((std::istreambuf_iterator<char>(Ifs)),
+                           std::istreambuf_iterator<char>());
+  for (const char *Expected : {"dfa_sum((uintptr_t)&stack_storage.var_m18, ",
+                               "dfa_first((int8_t*)&stack_storage.var_m18, "})
+    EXPECT_NE(Source.find(Expected), std::string::npos) << Expected << "\n"
+                                                        << Source;
+}
+
+static fs::path debugLevelExe(const char *Level) {
+  return fs::path(TEST_OBJ_DIR) / (std::string("test_debug_") + Level + ".exe");
+}
+
+// A unit built with line tables only names the functions that hold inlined
+// code and records the type of none.  That silence is no void return and no
+// empty parameter list: dlt_caller still passes dlt_add both arguments, and
+// dlt_add still returns its sum.  Built with -g, every declaration the DWARF
+// records stays, `void dfs_none(void)` included.
+TEST_F(X86_64_DebugParams, LineTablesOnlyRecordNoSignature) {
+  for (const char *Level : {"line_tables", "full_signatures"})
+    if (!fs::exists(debugLevelExe(Level)))
+      GTEST_SKIP() << "ld.lld did not link " << debugLevelExe(Level).string();
+  const auto Decompile = [&](const char *Level) {
+    const auto CFile = tmpFile(std::string("debug_") + Level + ".c");
+    const auto R = exec(ndBin(), {"decompile", "-o", CFile.string(),
+                                  debugLevelExe(Level).string()});
+    EXPECT_EQ(R.exitCode, 0) << R.err;
+    std::ifstream Ifs(CFile);
+    return std::string((std::istreambuf_iterator<char>(Ifs)),
+                       std::istreambuf_iterator<char>());
+  };
+
+  const std::string LineTables = Decompile("line_tables");
+  for (const char *Expected :
+       {"int64_t dlt_add(int64_t arg0, int64_t arg1)", "dlt_add(arg0, 7)",
+        "int64_t dlt_caller(int64_t arg0)"})
+    EXPECT_NE(LineTables.find(Expected), std::string::npos) << Expected << "\n"
+                                                            << LineTables;
+  EXPECT_EQ(LineTables.find("void dlt_"), std::string::npos) << LineTables;
+  EXPECT_EQ(LineTables.find("no recovered semantics"), std::string::npos)
+      << LineTables;
+
+  const std::string Full = Decompile("full_signatures");
+  for (const char *Expected :
+       {"void dfs_none(void)", "int64_t dfs_add(int64_t a, int64_t b)",
+        "dfs_add(x, 7)"})
+    EXPECT_NE(Full.find(Expected), std::string::npos) << Expected << "\n"
+                                                      << Full;
+}

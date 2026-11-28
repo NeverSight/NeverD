@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../AArch64OriginalMemory.h"
 #include "../../../safety/StackSlotFlow.h"
 #include "../data/MedLLVMFailureSnapshot.h"
 
@@ -1926,6 +1927,30 @@ void MedLLVMEmitter::collectSuppressedTableAddressOps(const MedFunc &Func) {
 
   for (const MedBlock &Block : Func.Blocks)
     for (const MedOp &Load : Block.Ops) {
+      // Source projection retains the AArch64 architectural LOAD itself, but
+      // supplies its base from the recovered original-byte storage. A direct
+      // constant COPY used by that read alone must not first materialize an
+      // independent relocation mirror containing unreachable code labels.
+      if (!Load.Dead && OriginalImageStorageForSource && Img &&
+          Img->isELF() && TargetArch == Arch::AArch64 &&
+          aarch64AddressLoadMedShapeIsValid(Load)) {
+        const MedVar &Address = Load.Inputs[kAddressMemoryBaseOperand + 1];
+        const ValueKey Key{Address.Id, Address.SSAVer};
+        const auto Def = Defs.find(Key);
+        if (!Address.isConst() && Def != Defs.end() && Uses[Key] == 1 &&
+            Def->second.Op->Opcode == NdOp::COPY &&
+            Def->second.Op->NumInputs == 1 &&
+            Def->second.Op->Inputs[0].isConst())
+          if (const auto *Table = recoveredJumpTableForLoad(Load))
+            if (const auto Instruction = aarch64AddressMemoryInstruction(
+                    Load.Inputs[kAddressMemoryWordOperand + 1].ConstVal);
+                Instruction && Instruction->hasRegisterIndex() &&
+                !Instruction->stackBase() &&
+                aarch64OriginalJumpTableMemory(*Img, *Instruction, *Table))
+              SuppressedTableAddressOps.insert(
+                  {Def->second.Block, Def->second.Index});
+      }
+
       if (Load.Dead || Load.Opcode != NdOp::LOAD || Load.NumInputs < 1 ||
           Load.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
           !recoveredJumpTableForLoad(Load))

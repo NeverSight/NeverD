@@ -575,7 +575,7 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   RecordPointerTags.clear();
   HeaderCallRecords.clear();
   HeaderCallRecordTags.clear();
-  DefinitionPointers.clear();
+  DefinitionTypesByFunction.clear();
   prepareFunctionIdentifiers(Mod);
   // Function bodies are written before the globals they name.
   collectLabelTables(Mod);
@@ -2426,8 +2426,7 @@ LLVMCWriter::boundSourceDeclaration(const llvm::Function &Fn) const {
   return Dbg->resolveFunction(static_cast<va_t>(**Entry));
 }
 
-/// A narrowed call result can still supply these observations of its machine
-/// word. Address escapes, full-width stores and comparisons remain wide.
+/// These uses observe only the low bits of a machine word.
 static bool readsOnlyLowBits(const llvm::User &User, unsigned Bits) {
   if (const auto *Trunc = llvm::dyn_cast<llvm::TruncInst>(&User))
     return Trunc->getDestTy()->getIntegerBitWidth() <= Bits;
@@ -2439,6 +2438,22 @@ static bool readsOnlyLowBits(const llvm::User &User, unsigned Bits) {
       if (Mask->getValue().getActiveBits() <= Bits)
         return true;
   return false;
+}
+
+bool LLVMCWriter::canNarrowIntegerParameter(const llvm::Argument &Arg,
+                                            const NdType &Declared) {
+  const auto *Carrier = Arg.getType();
+  if (Declared.Kind != NdTypeKind::Int || !std::has_single_bit(Declared.Size) ||
+      (!Carrier->isIntegerTy(32) && !Carrier->isIntegerTy(64)) ||
+      Arg.use_empty())
+    return false;
+  const unsigned Bits = Declared.Size * 8;
+  return Bits < Carrier->getIntegerBitWidth() &&
+         llvm::all_of(
+             Arg.users(),
+             [Bits](const llvm::User *Use) {
+               return readsOnlyLowBits(*Use, Bits);
+             });
 }
 
 TypeRef LLVMCWriter::boundIntegerResult(const llvm::Function &Fn) const {
@@ -2818,7 +2833,7 @@ std::string LLVMCWriter::callResult(const llvm::CallBase &Call,
     return Undefined;
   if (const auto *Callee = Call.getCalledFunction();
       Callee && Type->isIntegerTy() && !needsCallSiteCType(Call) &&
-      definitionPointerTypes(*Callee).Result.Type)
+      definitionSourceTypes(*Callee).Result.Type)
     return "((" + typeToCLLVM(Type) + ")(uintptr_t)(" + Expr + "))";
   const LibraryCallee Library = libraryCallee(Call);
   if (!Library)
@@ -3038,12 +3053,16 @@ LLVMCWriter::sourceFunctionDeclaration(const llvm::Function &Fn,
   if (Count == 0 && !FT->isVarArg()) {
     Result += "void";
   } else if (Count) {
+    const auto &Integers = definitionSourceTypes(Fn).NarrowIntegers;
     for (unsigned I = 0; I < Count; ++I) {
       if (I)
         Result += ", ";
-      Result += sourceScalarType(
-          FT->getParamType(I),
-          Fn.getAttributes().hasParamAttr(I, LLVMSourceSignedParameter));
+      if (auto It = Integers.find(I); It != Integers.end())
+        Result += typeToC(It->second);
+      else
+        Result += sourceScalarType(
+            FT->getParamType(I),
+            Fn.getAttributes().hasParamAttr(I, LLVMSourceSignedParameter));
     }
     if (FT->isVarArg())
       Result += ", ...";

@@ -1,0 +1,23 @@
+//===- RISCVCounter.def - Zicntr base counter reads ----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// CSRRS with rs1=x0 reads the indicated CSR without writing it. The word
+/// excludes rd. The high half is available only when XLEN is 32.
+///
+/// NEVERD_RISCV_COUNTER(Id, Value, Word, Counter, HighHalf, Mnemonic)
+//===----------------------------------------------------------------------===//
+
+NEVERD_RISCV_COUNTER(RISCVRdcycle, 18016, 0xc0002073, Cycle, false, "rdcycle")
+NEVERD_RISCV_COUNTER(RISCVRdcycleh, 18017, 0xc8002073, Cycle, true, "rdcycleh")
+
+NEVERD_RISCV_COUNTER(RISCVRdtime, 18021, 0xc0102073, Time, false, "rdtime")
+NEVERD_RISCV_COUNTER(RISCVRdtimeh, 18022, 0xc8102073, Time, true, "rdtimeh")
+NEVERD_RISCV_COUNTER(RISCVRdinstret, 18023, 0xc0202073, Instret, false,
+                     "rdinstret")
+NEVERD_RISCV_COUNTER(RISCVRdinstreth, 18024, 0xc8202073, Instret, true,
+                     "rdinstreth")
+
+#undef NEVERD_RISCV_COUNTER

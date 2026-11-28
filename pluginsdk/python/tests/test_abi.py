@@ -25,6 +25,17 @@ class ABIInventoryTests(unittest.TestCase):
         self.assertEqual(spec.argtypes,
                          (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t,
                           ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)))
+        observed = abi.FUNCTION_SPECS["neverd_x64_continuation_source_with_observation_v1"]
+        self.assertIs(observed.ownership, spec.ownership)
+        self.assertIs(observed.restype, spec.restype)
+        self.assertEqual(observed.argtypes,
+                         (*spec.argtypes[:3], ctypes.c_char_p, ctypes.c_size_t,
+                          *spec.argtypes[3:]))
+        entry = abi.FUNCTION_SPECS["neverd_x64_paged_return_entry_source_v1"]
+        self.assertIs(entry.ownership, spec.ownership)
+        self.assertIs(entry.restype, spec.restype)
+        self.assertEqual(entry.argtypes,
+                         (spec.argtypes[0], abi.VirtualAddress, *spec.argtypes[1:]))
         legacy = abi.FUNCTION_SPECS["neverd_x86_legacy_source_v1"]
         self.assertIs(legacy.ownership, abi.Ownership.OWNED_STRING)
         self.assertIs(legacy.restype, ctypes.c_void_p)

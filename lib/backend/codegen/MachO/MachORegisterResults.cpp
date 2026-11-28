@@ -21,6 +21,7 @@
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
+#include "neverd/decode/AArch64/AArch64RegisterCopy.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
@@ -139,6 +140,8 @@ bool independent(const DecodedInsn &I) {
     return D.op_count == unsigned(PCSigning->Authenticate) &&
            (!D.op_count || D.operands[0].type == AARCH64_OP_IMM ||
             D.operands[0].type == AARCH64_OP_REG);
+  if (aarch64::fullWidthRegisterTransfer(I))
+    return true;
   switch (I.Id) {
 #define MACHO_REGISTER_ALU(Name) case AARCH64_INS_##Name:
 #include "MachORegisterResults.def"
@@ -146,6 +149,8 @@ bool independent(const DecodedInsn &I) {
         llvm::ArrayRef(D.operands, D.op_count), [](const cs_aarch64_op &Op) {
           return Op.type == AARCH64_OP_IMM || Op.type == AARCH64_OP_REG;
         });
+#define NEVERD_A64_ACQUIRE_RELEASE(Name, Load, Bytes) case AARCH64_INS_##Name:
+#include "neverd/decode/AArch64/AArch64AcquireRelease.def"
 #define MACHO_REGISTER_MEMORY(Name) case AARCH64_INS_##Name:
 #include "MachORegisterResults.def"
     return llvm::any_of(
@@ -898,8 +903,20 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     while (!Unreached.empty() && Unreached.front().second <= PC)
       Unreached = Unreached.drop_front();
     const bool OutsideCFG = !Unreached.empty() && Unreached.front().first <= PC;
+    // Some register-copy aliases carry an implicit shift or condition outside
+    // the operand list. Preserve that word while leaving ordinary register
+    // moves and immediate operands visible to the native ABI verifier.
+    const bool EncodedCopy =
+        (D.cc != AArch64CC_Invalid ||
+         llvm::any_of(Ops,
+                      [](const auto &Op) {
+                        return Op.type == AARCH64_OP_REG &&
+                               (Op.shift.type != AARCH64_SFT_INVALID ||
+                                Op.ext != AARCH64_EXT_INVALID);
+                      })) &&
+        aarch64::fullWidthRegisterTransfer(I);
     const bool KeepEncoding =
-        OutsideCFG && !PCSigning && !PACM && independent(I);
+        EncodedCopy || (OutsideCFG && !PCSigning && !PACM && independent(I));
     const bool RecoveredCode = OutsideCFG && !Body.RecoveredData.empty();
     const auto *BranchTable = Dispatch.BranchTables.lookup(PC);
     const auto Targets = BranchTable
@@ -1122,9 +1139,13 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
         Sign = Joined->second;
       const va_t Use = NumericPage ? NextPC + Word : NextPC;
       if (Sign.Use == MachOSigningAddress::None && !OutsideCFG &&
-          Joins.SigningPCs.contains(Target) &&
-          machOObservesSigningAddress(Decode, *Source, Start, Use, Reg))
-        Sign.Use = MachOSigningAddress::Observable;
+          Joins.SigningPCs.contains(Target)) {
+        // A previous publication can prepare the same scratch more than
+        // once. An overwritten ADR still refers to the current local signer.
+        Sign.Use = machOSigningRegisterUse(Decode, *Source, Start, Use, Reg);
+        if (Sign.Use == MachOSigningAddress::Local && (NumericPage || Rebased))
+          Sign.Use = MachOSigningAddress::Observable;
+      }
       if (Sign.Use == MachOSigningAddress::None)
         for (auto SigningWord : Joins.RetainedSigningWords)
           if (retainedSigningWord(Image, Functions, Start, Target,
@@ -1151,28 +1172,33 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
         // Changing a register consumer to an immediate requires its sole
         // reaching definition. A branch or exceptional entry at the AUT
         // keeps the incoming register meaningful.
-        if (Joined != Joins.Addresses.end() && Sign.Authentication) {
-          const auto &A = *Sign.Authentication;
-          if (A.Consumer.PrepareAtSource)
+        MachOLiftedSourceAddress Site{PC, Target,
+                                      NumericPage ? MachOAddressForm::PagePair
+                                                  : MachOAddressForm::Single};
+        for (const auto &A : Sign.Authentications)
+          Site.Authentications.push_back(A.Consumer);
+        if (Joined != Joins.Addresses.end()) {
+          for (unsigned R : Site.preparedRegisters())
             OS << kAddress
-               << cs_reg_name(Decode.getHandle(),
-                              AARCH64_REG_X0 + *A.Consumer.ModifierRegister)
-               << kSeparator << kLocal << (A.Signer - Start) / Word << '\n';
-          else if (A.Consumer.Routes.empty())
-            References.push_back({A.Consumer.Instruction, A.Signer, 0});
-        } else if (Sign.Authentication) {
+               << cs_reg_name(Decode.getHandle(), AARCH64_REG_X0 + R)
+               << kSeparator << kLocal << (Target - Start) / Word << '\n';
+          for (const auto &A : Sign.Authentications)
+            if (!A.Consumer.PrepareAtSource && A.Consumer.Routes.empty())
+              References.push_back({A.Consumer.Instruction, A.Signer, 0});
+        } else if (!Sign.Authentications.empty()) {
+          const auto &A = Sign.Authentications.front();
           if (!ControlFlow) {
             OriginalControl = CFGBuilder().build(Image, Decode, Start);
             ControlFlow = &*OriginalControl;
           }
-          const va_t AuthPC = Sign.Authentication->Consumer.Instruction;
+          const va_t AuthPC = A.Consumer.Instruction;
           if (!llvm::any_of(ControlFlow->Blocks, [&](const LowBlock &B) {
                 return B.StartAddr <= PC && AuthPC < B.EndAddr;
               }))
             return std::nullopt;
-          if (!Sign.Authentication->Consumer.ModifierRegister)
+          if (!A.Consumer.ModifierRegister)
             References.push_back({AuthPC, Target, 0});
-          NextAuthentication = Sign.Authentication;
+          NextAuthentication = A;
         }
         Body.HasObservableSigningAddress |=
             Sign.Use == MachOSigningAddress::Observable;
@@ -1194,13 +1220,8 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
                                          Reg))
             return std::nullopt;
         }
-        Body.SourceAddresses.push_back(
-            {PC, Target,
-             NumericPage ? MachOAddressForm::PagePair
-                         : MachOAddressForm::Single,
-             OS.tell(), true,
-             Sign.Authentication ? std::optional(Sign.Authentication->Consumer)
-                                 : std::nullopt});
+        Site.AssemblyOffset = OS.tell();
+        Body.SourceAddresses.push_back(std::move(Site));
         if (Rebased)
           Body.SourcePointerSlots.push_back(
               aarch64::decodeLiteralLoad(Encoding, PC)->Address);
@@ -1296,12 +1317,24 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
               OS << kInstructionWord << readLE<uint32_t>(Code + At - Start)
                  << '\n';
           }
-          References.push_back({PC, Route.Signer, 0,
-                                -int64_t(Index * Auth.routeWords() * Word),
-                                PCSigning->Id});
-          OS << llvm::formatv(kSigningRouteWord, Base, kLocal,
-                              (Route.Signer - Start) / Word,
-                              kAArch64PAuthLRScale, kAArch64PAuthLRImmShift);
+          if (Route.IslandWord) {
+            References.push_back({PC, Route.Signer, aarch64::kB_Op,
+                                  (int64_t(Route.IslandWord) -
+                                   int64_t(Index * Auth.routeWords())) *
+                                      int64_t(Word)});
+            OS << kTail << kLocal << (PC - Start) / Word << kSigningIslandSuffix
+               << Index << '\n';
+            if (!Auth.Returns)
+              OS << kLocal << (PC - Start) / Word << kSigningResumeSuffix
+                 << Index << kEndLabel;
+          } else {
+            References.push_back({PC, Route.Signer, 0,
+                                  -int64_t(Index * Auth.routeWords() * Word),
+                                  PCSigning->Id});
+            OS << llvm::formatv(kSigningRouteWord, Base, kLocal,
+                                (Route.Signer - Start) / Word,
+                                kAArch64PAuthLRScale, kAArch64PAuthLRImmShift);
+          }
           if (!Auth.Returns && Index + 1 != Auth.Routes.size())
             OS << kTail << kLocal << (NextPC - Start) / Word << '\n';
         }
@@ -1352,6 +1385,24 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       if (I.Id != AARCH64_INS_PACIBSPPC)
         return std::nullopt;
       OS << kSignWithPC;
+    }
+    if (auto It = Joins.Islands.find(PC); It != Joins.Islands.end()) {
+      OS << kTail << kLocal << (NextPC - Start) / Word << '\n';
+      for (const auto &Island : It->second) {
+        const auto &Auth = Joins.Dispatches.at(Island.Consumer);
+        OS << kLocal << (Island.Consumer - Start) / Word << kSigningIslandSuffix
+           << Island.Route << kEndLabel << kInstructionWord << Island.Encoding
+           << '\n';
+        if (!Auth.Returns) {
+          References.push_back(
+              {PC, Island.Consumer, aarch64::kB_Op,
+               (int64_t(Island.Route * Auth.routeWords()) -
+                int64_t(Auth.Routes[Island.Route].IslandWord)) *
+                   int64_t(Word)});
+          OS << kTail << kLocal << (Island.Consumer - Start) / Word
+             << kSigningResumeSuffix << Island.Route << '\n';
+        }
+      }
     }
   }
   // A classic compact recipe can carry a live PC-signed LR across a
@@ -1407,9 +1458,8 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     };
     llvm::SmallVector<va_t> Insertions;
     for (const auto &Site : Sites)
-      if (Site.expandsAuthentication())
-        Insertions.append(Site.Authentication->insertedWords(),
-                          Site.signingExpansionSite());
+      Site.forEachSigningExpansion(
+          [&](va_t At, unsigned Words) { Insertions.append(Words, At); });
     llvm::sort(Insertions);
     for (const auto &[From, To, Branch, Within, Authentication] : References) {
       const auto [Low, High] = std::minmax(From, To);

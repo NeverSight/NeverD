@@ -13,6 +13,8 @@
 #define NEVERD_LIB_BACKEND_AARCH64ORIGINALMEMORY_H
 
 #include "neverd/Limits.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
+#include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -61,6 +63,25 @@ aarch64OriginalMemoryStorage(const BinaryImage &Image, va_t Base) {
       Base,
       llvm::ArrayRef<uint8_t>(Segment->Data).slice(Base - Segment->VA, Bytes),
       Pad};
+}
+
+/// Bounds the preserved architectural read for a terminal-exclusive table.
+/// The caller must already have proved the read and its complete use closure.
+inline std::optional<AArch64OriginalMemoryStorage>
+aarch64OriginalJumpTableMemory(const BinaryImage &Image,
+                              const AArch64AddressMemoryInstruction &Instruction,
+                              const JumpTable &Table) {
+  if (!Table.HasBaseAddr || !Table.HasDispatchSlotMap ||
+      Table.SlotIndices.empty())
+    return std::nullopt;
+  const uint32_t Last =
+      *std::max_element(Table.SlotIndices.begin(), Table.SlotIndices.end());
+  const auto Span = Instruction.controlIndependentSpan(Table.BaseAddr, Last);
+  const auto Storage =
+      Span ? aarch64OriginalMemoryStorage(Image, Span->Begin) : std::nullopt;
+  if (!Storage || Span->Bytes > Storage->Bytes.size())
+    return std::nullopt;
+  return Storage;
 }
 
 } // namespace neverd

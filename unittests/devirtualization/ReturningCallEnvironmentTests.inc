@@ -229,6 +229,88 @@ TEST_F(PEFixedImageTest, ReturningCallKeepsOnlyCurrentCompleteSuffixFacts) {
   }
 }
 
+TEST_F(PEFixedImageTest, ReturningCallFrameOutputReplacesPreservedBytes) {
+  // The caller initializes an output word, passes its address in RCX, and
+  // branches on the word after the physical call. A V2 relation preserves
+  // the old zero; the declared output relation must keep both outcomes.
+  const std::vector<uint8_t> Code{
+      0x48, 0xc7, 0x44, 0x24, 0x40, 0, 0, 0, 0, // mov qword [rsp+64],0
+      0x48, 0x8d, 0x4c, 0x24, 0x40,             // lea rcx,[rsp+64]
+      0x48, 0x83, 0xec, 0x40,                   // sub rsp,64
+      0xff, 0xd0,                               // call rax
+      0x48, 0x83, 0xc4, 0x40,                   // add rsp,64
+      0x48, 0x83, 0x7c, 0x24, 0x40, 0,          // cmp qword [rsp+64],0
+      0x74, 0x01,                               // je second return
+      0xc3, 0xc3};                              // two physical RET sites
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x1012, Base + 0x1020);
+  O.X64MachineExits.push_back({1, Base + 0x1021, MachineExitKind::Return});
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 5;
+  Call.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnFrameOutputsV5;
+  Call.PreservedFrameRanges = {{-112, -104}};
+  Call.FrameOutputs = {{x86reg::RCX, 8}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  ASSERT_EQ(R.ReturningCalls.size(), 1U);
+  EXPECT_EQ(R.ExternalExits.size(), 2U);
+  unsigned Branches = 0;
+  for (const auto &Block : R.Residual.Blocks)
+    for (const auto &Op : Block.Ops)
+      Branches += Op.Opcode == NdOp::COND_BR;
+  EXPECT_GE(Branches, 1U);
+  auto Valid = validateSpecializationRawEnvironment(R, O);
+  EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
+
+  auto WithoutOutput = O;
+  auto &Earlier = WithoutOutput.X64ReturningCalls.front();
+  Earlier.Version = 2;
+  Earlier.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnFrameSpansV2;
+  Earlier.FrameOutputs.clear();
+  const auto Old =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, WithoutOutput);
+  ASSERT_TRUE(Old.complete()) << Old.Diagnostic;
+  EXPECT_EQ(Old.ExternalExits.size(), 1U);
+
+  auto Stale = O;
+  Stale.X64ReturningCalls.front().FrameOutputs.front().Bytes = 16;
+  auto Mismatch = validateSpecializationRawEnvironment(R, Stale);
+  EXPECT_TRUE(bool(Mismatch));
+  llvm::consumeError(std::move(Mismatch));
+  for (const auto Bad : std::array<SpecializationCallFrameOutput, 3>{
+           {{x86reg::RCX, 0}, {x86reg::RCX, 65}, {x86reg::RSP, 8}}}) {
+    auto Invalid = O;
+    Invalid.X64ReturningCalls.front().FrameOutputs = {Bad};
+    const auto Refused =
+        specializeBinaryInterpreter(*Loaded, Base + 0x1000, Invalid);
+    EXPECT_FALSE(Refused.complete());
+    EXPECT_TRUE(Refused.Residual.Blocks.empty());
+  }
+  auto OutOfFrame = Code;
+  OutOfFrame[13] = 0x7c; // lea rcx,[rsp+124], 8-byte output exceeds bounds
+  auto OutsideLoaded = load(machineExitFixture(OutOfFrame));
+  ASSERT_TRUE(bool(OutsideLoaded)) << llvm::toString(OutsideLoaded.takeError());
+  const auto Outside =
+      specializeBinaryInterpreter(*OutsideLoaded, Base + 0x1000, O);
+  EXPECT_FALSE(Outside.complete());
+  EXPECT_TRUE(Outside.Residual.Blocks.empty());
+
+  auto UnknownPointer = Code;
+  const std::array<uint8_t, 5> UnknownArgument{0x48, 0x89, 0xc1, 0x90,
+                                               0x90}; // mov rcx,rax; nop; nop
+  std::copy(UnknownArgument.begin(), UnknownArgument.end(),
+            UnknownPointer.begin() + 9);
+  auto UnknownLoaded = load(machineExitFixture(UnknownPointer));
+  ASSERT_TRUE(bool(UnknownLoaded)) << llvm::toString(UnknownLoaded.takeError());
+  const auto Unproved =
+      specializeBinaryInterpreter(*UnknownLoaded, Base + 0x1000, O);
+  EXPECT_FALSE(Unproved.complete());
+  EXPECT_TRUE(Unproved.Residual.Blocks.empty());
+}
+
 TEST_F(PEFixedImageTest, ReturningCallFreshResultKeepsBothFeasibleBranches) {
   const std::vector<uint8_t> Code{0xff, 0xd0, 0x85, 0xc0, 0x74, 1, 0xc3, 0xc3};
   auto Loaded = load(machineExitFixture(Code));
@@ -403,6 +485,64 @@ TEST_F(PEFixedImageTest, ReturningCallObjectPointerRangeSurvivesJoin) {
     EXPECT_TRUE(Outside.Residual.Blocks.empty());
     EXPECT_FALSE(Outside.RawEnvironment);
   }
+}
+
+TEST_F(PEFixedImageTest, ReturningCallEqualObjectOffsetsPreserveAlignment) {
+  // The joined destination has a bounded but unknown object offset. Copying
+  // it to a second register preserves equality across a physical transfer;
+  // the alignment prefix must then be derived from that same destination.
+  std::vector<uint8_t> Code{0xba, 0x80, 0,    0,    0, // mov edx,128
+                            0x48, 0x83, 0xec, 0x40,    // sub rsp,64
+                            0xff, 0xd7,                // call rdi
+                            0x48, 0x83, 0xc4, 0x40,    // add rsp,64
+                            0x48, 0x85, 0xc0,          // test rax,rax
+                            0x74, 0x26,                // je ret
+                            0x48, 0x89, 0xc3,          // mov rbx,rax
+                            0x48, 0x85, 0xf6,          // test rsi,rsi
+                            0x74, 0x06,                // je second offset
+                            0x48, 0x83, 0xc3, 0x08,    // add rbx,8
+                            0xeb, 0x04,                // jmp join
+                            0x48, 0x83, 0xc3, 0x28,    // add rbx,40
+                            0x48, 0x89, 0xd9,          // mov rcx,rbx
+                            0x49, 0x89, 0xcb,          // mov r11,rcx
+                            0xeb, 0x00,                // jmp alignment
+                            0xf7, 0xd9,                // neg ecx
+                            0x83, 0xe1, 0x0f,          // and ecx,15
+                            0x49, 0x03, 0xcb,          // add rcx,r11
+                            0x66, 0x0f, 0x7f, 0x01,    // movdqa [rcx],xmm0
+                            0xc3};                     // ret
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x1009, Base + 0x103a);
+  O.X64MachineExits = {{1, Base + 0x103a, MachineExitKind::Return}};
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+  O.EntryReturnSlot = SpecializationFrameSlot{0, 8};
+  O.ProveStoreFrameSeparation = true;
+  O.ProveStoreReturnSlotSeparation = true;
+  O.MaxChainedTransfers = 0;
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 3;
+  Call.Profile =
+      SpecializationX64CallProfile::ConditionalNormalReturnResultObjectV3;
+  Call.PreservedFrameRanges = {{-112, -104}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  EXPECT_EQ(R.ReturningCalls.size(), 1U);
+  auto Valid = validateSpecializationRawEnvironment(R, O);
+  EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
+
+  // A same-width copy from the original result instead of the selected
+  // destination breaks the equality. The vector store has no proved
+  // alignment and must publish no partial result.
+  Code[43] = 0xc3; // mov r11,rax
+  auto DifferentLoaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(DifferentLoaded))
+      << llvm::toString(DifferentLoaded.takeError());
+  const auto Different =
+      specializeBinaryInterpreter(*DifferentLoaded, Base + 0x1000, O);
+  EXPECT_FALSE(Different.complete());
+  EXPECT_TRUE(Different.Residual.Blocks.empty());
+  EXPECT_FALSE(Different.RawEnvironment);
 }
 
 TEST_F(PEFixedImageTest,
@@ -618,6 +758,43 @@ TEST_F(PEFixedImageTest,
     EXPECT_FALSE(Refused.complete());
     EXPECT_TRUE(Refused.Residual.Blocks.empty());
   }
+}
+
+TEST_F(PEFixedImageTest, ReturningCallV4NeedsNoEarlierFrameSpan) {
+  // The call consumes its own return slot and outgoing arguments. No older
+  // frame byte is required after the call; the current-frame suffix remains.
+  const std::vector<uint8_t> Code{0xba, 0x08, 0,    0,    0, // mov edx,8
+                                  0x48, 0x83, 0xec, 0x40,    // sub rsp,64
+                                  0xff, 0xd7,                // call rdi
+                                  0x48, 0x83, 0xc4, 0x40,    // add rsp,64
+                                  0x48, 0x85, 0xc0,          // test rax,rax
+                                  0x74, 0x03,                // je ret
+                                  0xc6, 0x00, 0x00, // mov byte ptr [rax],0
+                                  0xc3};            // ret
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x1009, Base + 0x1017);
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+  O.EntryReturnSlot = SpecializationFrameSlot{0, 8};
+  O.ProveStoreFrameSeparation = true;
+  O.ProveStoreReturnSlotSeparation = true;
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 4;
+  Call.Profile = SpecializationX64CallProfile::
+      ConditionalNormalReturnResultObjectExcludedV4;
+  Call.ResultObjectExclusions = {{Base, Base + 0x4000}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  ASSERT_EQ(R.ReturningCalls.size(), 1U);
+  auto Valid = validateSpecializationRawEnvironment(R, O);
+  EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
+
+  auto Overlap = O;
+  Overlap.X64ReturningCalls.front().PreservedFrameRanges = {{-72, -64}};
+  const auto Refused =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, Overlap);
+  EXPECT_FALSE(Refused.complete());
+  EXPECT_TRUE(Refused.Residual.Blocks.empty());
 }
 
 TEST_F(PEFixedImageTest, ReturningCallResultObjectBoundsSymbolicOffset) {

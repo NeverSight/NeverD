@@ -20,6 +20,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 
@@ -93,6 +94,10 @@ enum class MachOAddressForm { Single, PagePair, Expanded };
 struct MachOSigningRoute {
   va_t Signer;
   llvm::SmallVector<va_t, 1> Branches;
+  /// Word offset of a distant route's authenticator from its installed signer.
+  unsigned IslandWord = 0;
+  /// Added words at the signer, including its shared fallthrough branch once.
+  unsigned IslandWords = 0;
 };
 
 /// An AUT or authenticated return which must consume the installed signing PC.
@@ -134,15 +139,34 @@ struct MachOLiftedSourceAddress {
   uint64_t AssemblyOffset = 0;
   /// Inserting a word here preserves the body's local PC-relative encodings.
   bool CanExpand = true;
-  std::optional<MachOSigningConsumer> Authentication;
+  llvm::SmallVector<MachOSigningConsumer, 0> Authentications{};
 
-  va_t signingExpansionSite() const {
-    return Authentication->PrepareAtSource ? Instruction
-                                           : Authentication->Instruction;
+  /// Each live modifier is prepared once here, even if two exits use it.
+  llvm::SmallVector<unsigned, 1> preparedRegisters() const {
+    llvm::SmallVector<unsigned, 1> Result;
+    for (const auto &Auth : Authentications)
+      if (Auth.PrepareAtSource &&
+          !llvm::is_contained(Result, *Auth.ModifierRegister))
+        Result.push_back(*Auth.ModifierRegister);
+    return Result;
+  }
+
+  template <typename Fn> void forEachSigningExpansion(Fn Visit) const {
+    if (const auto Count = preparedRegisters().size())
+      Visit(Instruction, Count);
+    for (const auto &Auth : Authentications) {
+      if (!Auth.PrepareAtSource && Auth.insertedWords())
+        Visit(Auth.Instruction, Auth.insertedWords());
+      for (const auto &Route : Auth.Routes)
+        if (Route.IslandWords)
+          Visit(Route.Signer, Route.IslandWords);
+    }
   }
 
   bool expandsAuthentication() const {
-    return Authentication && Authentication->insertedWords() != 0;
+    return llvm::any_of(Authentications, [](const auto &Auth) {
+      return Auth.insertedWords() || !Auth.Routes.empty();
+    });
   }
 };
 

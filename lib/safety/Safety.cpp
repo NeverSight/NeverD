@@ -117,6 +117,15 @@ std::optional<std::string> checkPipelineCoverage(const PipelineResult &Result,
       Error += " " + llvm::json::fixUTF8(Audit.Diagnostic);
     return Error;
   }
+  if (Img && isMIPSN32(Img->Arch) &&
+      llvm::any_of(
+          Result.MedFuncs,
+          [](const MedFunc &F) { return F.UsesStaticAllocatorBinding; }) &&
+      !llvm::all_of(Result.MedFuncs, [](const MedFunc &F) {
+        return F.PreservesStaticAllocationBindings;
+      }))
+    return "MIPS versioned allocator binding may have been changed by image "
+           "code";
   std::set<va_t> LowEntries;
   for (const LowFunc &F : Result.LowFuncs) {
     if (!LowEntries.insert(F.Entry).second)
@@ -377,7 +386,8 @@ void analyzeTrack(AnalyzerResult &Result, const AnalysisInput &In,
     for (const SinkSite &Site : Sites)
       if (Site.Kind == SinkKind::Alloc || Site.Kind == SinkKind::Realloc)
         ++R.Scanned;
-    R.Findings = auditMemory(In, Cat, Budgets, stopped);
+    R.Findings =
+        auditMemory(In, Cat, Budgets, stopped, Result.DirectReads.emplace());
     for (Finding &F : R.Findings) {
       Interproc.annotate(F);
       R.BudgetHit |= F.BudgetHit;

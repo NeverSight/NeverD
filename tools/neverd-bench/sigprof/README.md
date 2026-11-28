@@ -119,7 +119,8 @@ python3 tools/neverd-bench/sigprof/macos_warm_report.py \
 ```
 
 Each round interleaves the stock CLI, a privately relinked CLI that timestamps
-entry to and return from `main`, and a second baseline copy for the A/A control.
+entry to and return from `main`, and an A/A control. The control uses two
+additional baseline copies so both primary SDK inodes see the same number of launches.
 The probe writes both timestamps after `main` returns. The parent reads kernel
 birth and exit times before reaping the child. This separates startup, work
 inside `main`, teardown and the delay before the parent observes exit. Both
@@ -137,18 +138,37 @@ rank complete launches by wall time and compare their component times on those
 same launches. The pre-main breakdown uses the kernel's process birth timestamp
 to separate time before the child exists from time spent reaching `main`.
 
-If a build or other background work is occupying the machine, use a separate
-measurement host. Add `--quiet-wait 100` to wait for three consecutive
+When background work occupies the measurement host, add `--quiet-wait 100`
+to wait for three consecutive
 three-second quiet windows before each unpressured round and observe a fixed
 seven-second window after it. A timeout keeps the round in the raw data.
-The report requires a successful wait to label that round quiet.
+The report requires a successful wait to label that round quiet. Report measurements
+from a different machine in a separate group.
+
+Add `--entry-counters` to investigate the interval from process birth to
+`main`. The private executable samples CPU and runnable time at entry and
+blocks its initial thread on a socket. The parent reads the process's scheduling
+and VM counters, then acknowledges the entry marker. The report ranks these launches by
+birth-to-entry time and reports bounds on the excess CPU time, runnable time
+spent waiting for a CPU, and remaining wall time. A delayed observation widens
+the bounds. The remaining time includes waits such as page faults and process
+setup. Process-wide fault, page-in and disk-read counts describe the same
+launches. Specific SDK operations require a separate loader measurement.
+The stock CLI provides the full-command P95 in both modes. The accounting
+probe requires a single thread throughout initialization.
+
+A separate `DYLD_PRINT_SEGMENTS` trace can time the SDK's segment mappings.
+In Apple's dyld, the SDK's `Mapping` line follows library validation and each
+segment line follows its mapping. Verbose logging changes launch time, so
+measure full-command P95 with logging disabled. [dyld segment mapping](https://github.com/apple-oss-distributions/dyld/blob/dyld-1286.10/dyld/Loader.cpp#L1541-L1655)
 
 ### Warm launch qualification
 
 The stock HighC measurements compare the SDK at `b185e8f` with `035a081`.
 The M4 Max used the original signed images. The M1 VM ran the same public
 revisions built on a separate machine. Both used the same n32 machine
-instructions and emitted identical C.
+instructions and emitted identical C. These runs shared the A/B baseline inode
+with the A/A control, giving the baseline additional warm launches.
 
 | Host and measured load | A/B pairs | Before P95 (ms) | After P95 (ms) | 95% interval for change (ms) | Extra time before `main` (ms) | Extra time inside `main` (ms) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -185,7 +205,7 @@ Compare direct `dlopen` with `staged_total` on the same file state. The latter
 includes native Mach-O slice inspection, registration of its embedded signature,
 library validation, and the subsequent ordinary `dlopen`. Moving validation
 earlier can make that last call appear much faster. The total includes the
-cost of moving it. [Apple's dyld loader](https://github.com/apple-oss-distributions/dyld/blob/dyld-1285.19/dyld/Loader.cpp#L1535-L1555)
+cost of moving it. [Apple's dyld loader](https://github.com/apple-oss-distributions/dyld/blob/dyld-1286.10/dyld/Loader.cpp#L1535-L1555)
 
 The probe records wall time for each operation. A separate process samples
 the single loader thread's process counters while the thread waits on a pipe.

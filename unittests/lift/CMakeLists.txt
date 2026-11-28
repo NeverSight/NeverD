@@ -4626,6 +4626,18 @@ if(LLD_LINK_EXEC)
     COMMENT "Linking MinGW-style x64 SEH startup fixture")
   list(APPEND TEST_OBJECTS ${mingw_startup_seh_obj} ${mingw_startup_seh_exe})
 
+  set(own_label_win64_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_jumptable_own_label_win64.s")
+  set(own_label_win64_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_own_label_win64.obj")
+  add_custom_command(
+    OUTPUT ${own_label_win64_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${own_label_win64_src} -o ${own_label_win64_obj}
+    DEPENDS ${own_label_win64_src}
+    COMMENT "Compiling Win64 own-label table dispatch fixture")
+  list(APPEND TEST_OBJECTS ${own_label_win64_obj})
+
   set(coff_cxx_fh3_src
       "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff_cxx_fh3.s")
   set(coff_cxx_fh3_obj
@@ -5012,6 +5024,93 @@ if(LLD_EXEC)
     COMMENT "Linking x86-64 withdrawn scalar dispatch fixture")
   list(APPEND ELF_EXECUTABLES ${scalar_retracted_x64_obj}
                               ${scalar_retracted_x64_so})
+
+  # A constant index into an absolute table, linked as a static executable
+  # that runs at its link address, so the table holds plain addresses.
+  set(fixed_const_index_x64_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_jumptable_fixed_constant_index.s")
+  set(fixed_const_index_x64_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_fixed_constant_index.o")
+  set(fixed_const_index_x64_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_fixed_constant_index.exe")
+  add_custom_command(
+    OUTPUT ${fixed_const_index_x64_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -c
+            ${fixed_const_index_x64_src} -o ${fixed_const_index_x64_obj}
+    DEPENDS ${fixed_const_index_x64_src}
+    COMMENT "Compiling x86-64 fixed-image constant-index fixture")
+  add_custom_command(
+    OUTPUT ${fixed_const_index_x64_exe}
+    COMMAND ${LLD_EXEC} -static -e _start -o ${fixed_const_index_x64_exe}
+            ${fixed_const_index_x64_obj}
+    DEPENDS ${fixed_const_index_x64_obj}
+    COMMENT "Linking x86-64 fixed-image constant-index fixture")
+  list(APPEND ELF_EXECUTABLES ${fixed_const_index_x64_obj}
+                              ${fixed_const_index_x64_exe})
+
+  # A static executable whose build ID authenticates the -g DWARF of two
+  # callees, called with the address of their caller's buffer merged from
+  # two paths into the argument register.
+  set(frame_argument_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_debug_frame_argument.c")
+  set(frame_argument_callers_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_debug_frame_argument_callers.s")
+  set(frame_argument_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_debug_frame_argument_exe.o")
+  set(frame_argument_callers_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_debug_frame_argument_callers.o")
+  set(frame_argument_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_debug_frame_argument.exe")
+  add_custom_command(
+    OUTPUT ${frame_argument_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -O1 -fno-pic -g -c
+            ${frame_argument_src} -o ${frame_argument_obj}
+    DEPENDS ${frame_argument_src}
+    COMMENT "Compiling x86-64 debug frame argument callees")
+  add_custom_command(
+    OUTPUT ${frame_argument_callers_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -c
+            ${frame_argument_callers_src} -o ${frame_argument_callers_obj}
+    DEPENDS ${frame_argument_callers_src}
+    COMMENT "Assembling x86-64 debug frame argument callers")
+  add_custom_command(
+    OUTPUT ${frame_argument_exe}
+    COMMAND ${LLD_EXEC} --build-id -static -e _start -o ${frame_argument_exe}
+            ${frame_argument_callers_obj} ${frame_argument_obj}
+    DEPENDS ${frame_argument_obj} ${frame_argument_callers_obj}
+    COMMENT "Linking x86-64 debug frame argument fixture")
+  list(APPEND ELF_EXECUTABLES ${frame_argument_obj}
+       ${frame_argument_callers_obj} ${frame_argument_exe})
+
+  # Two static executables whose build ID authenticates their DWARF: one
+  # built with line tables only, which records no signature, and one built
+  # with -g, which records every one, `void dfs_none(void)` included.
+  foreach(debug_level line_tables full_signatures)
+    set(debug_src
+        "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_debug_${debug_level}.c")
+    set(debug_obj "${CMAKE_CURRENT_BINARY_DIR}/test_debug_${debug_level}_exe.o")
+    set(debug_exe "${CMAKE_CURRENT_BINARY_DIR}/test_debug_${debug_level}.exe")
+    if(debug_level STREQUAL "line_tables")
+      set(debug_flag -gline-tables-only)
+      set(debug_entry dlt_caller)
+    else()
+      set(debug_flag -g)
+      set(debug_entry dfs_caller)
+    endif()
+    add_custom_command(
+      OUTPUT ${debug_obj}
+      COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -O1 -fno-pic
+              ${debug_flag} -c ${debug_src} -o ${debug_obj}
+      DEPENDS ${debug_src}
+      COMMENT "Compiling x86-64 ${debug_level} debug fixture")
+    add_custom_command(
+      OUTPUT ${debug_exe}
+      COMMAND ${LLD_EXEC} --build-id -static -e ${debug_entry}
+              -o ${debug_exe} ${debug_obj}
+      DEPENDS ${debug_obj}
+      COMMENT "Linking x86-64 ${debug_level} debug fixture")
+    list(APPEND ELF_EXECUTABLES ${debug_obj} ${debug_exe})
+  endforeach()
 
   # Functions that never return, and callers whose compiler knew it, linked
   # and stripped.

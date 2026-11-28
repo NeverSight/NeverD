@@ -10,14 +10,18 @@
 
 #include "JVMRecoveryDialog.h"
 
+#include "../Config.h"
+
 #include "neverd/analysis/JVMVersions.h"
 
 #include <QApplication>
+#include <QCache>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
 #include <QFile>
 #include <QFileDialog>
+#include <QFont>
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -25,12 +29,18 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPlainTextDocumentLayout>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QStringTokenizer>
+#include <QStringView>
 #include <QTabWidget>
 #include <QTextBlock>
+#include <QTextCursor>
+#include <QTextDocument>
 #include <QVBoxLayout>
 #include <algorithm>
 
@@ -56,6 +66,11 @@ QString diagnostics(QJsonObject R) {
   }
   return L.join(QStringLiteral("\n"));
 }
+QFont literalFont(QFont Font) {
+  Font.setStyleStrategy(static_cast<QFont::StyleStrategy>(
+      Font.styleStrategy() | QFont::PreferNoShaping));
+  return Font;
+}
 // Measuring and painting reuse the first screen's glyphs. Keep the cache
 // proportional to the viewport even when a single JSON string is very long.
 void cacheFirstScreen(QPlainTextEdit &View) {
@@ -68,29 +83,113 @@ void cacheFirstScreen(QPlainTextEdit &View) {
     if (Block.length() <= Columns)
       Block.layout()->setCacheEnabled(true);
 }
+// An ASCII JSON line occupies one document block. Replace the text within
+// changed blocks so the matching rows keep their native layouts.
+void updateJSONLines(QTextDocument &Document, const QString &Text,
+                     QStringView SavedText) {
+  QTextCursor Edit(&Document);
+  Edit.beginEditBlock();
+  auto Block = Document.begin();
+  qsizetype Offset = 0;
+  for (QStringView Line : QStringView(Text).tokenize(u'\n')) {
+    const int Length = Block.length() - 1;
+    const bool Matches = SavedText.isNull()
+                             ? Line == Block.text()
+                             : Line == SavedText.sliced(Offset, Length);
+    if (!Matches) {
+      Edit.setPosition(Block.position());
+      Edit.setPosition(Block.position() + Length, QTextCursor::KeepAnchor);
+      Edit.insertText(Line.toString());
+    }
+    Offset += Length + 1;
+    Block = Block.next();
+  }
+  Edit.endEditBlock();
+  Document.setModified(false);
+}
+
+using DocumentCache = QCache<int, QTextDocument>;
+
+void setDocumentFont(QTextDocument &Document, const QFont &Font) {
+  if (Document.defaultFont() != Font)
+    Document.setDefaultFont(Font);
+}
+
+// The block count selects a document with reusable paragraphs. The incoming
+// report still supplies every line, including when a different method fits.
+bool updateJSONDocument(QPlainTextEdit &View, DocumentCache &Inactive,
+                        const QString &Text, const QFont &Font) {
+  auto *Current = View.document();
+  if (Current->isEmpty() || Text.isEmpty())
+    return false;
+  const int Blocks = int(Text.count(u'\n')) + 1;
+  auto *Next = Current;
+  if (Blocks != Current->blockCount()) {
+    if (Text.size() + 1 > Inactive.maxCost())
+      return false;
+    Next = Inactive.take(Blocks);
+    if (!Next) {
+      if (Current->characterCount() > Inactive.maxCost())
+        return false;
+      Next = new QTextDocument(&View);
+      Next->setDocumentLayout(new QPlainTextDocumentLayout(Next));
+      Next->setDocumentMargin(Current->documentMargin());
+      Next->setDefaultTextOption(Current->defaultTextOption());
+      Next->setUndoRedoEnabled(false);
+    }
+  }
+  setDocumentFont(*Next, Font);
+  if (Next->isEmpty()) {
+    Next->setPlainText(Text);
+    Next->setModified(false);
+  } else {
+    // A detached document fits the per-pane budget. Read its underlying text
+    // once before editing. The active document can be arbitrarily larger.
+    const QString SavedText = Next == Current ? QString{} : Next->toRawText();
+    updateJSONLines(*Next, Text, SavedText);
+  }
+  if (Next != Current) {
+    // The editor owns the installed document and the cache owns detached ones.
+    Current->setParent(nullptr);
+    Next->setParent(&View);
+    View.setDocument(Next);
+    Inactive.insert(Current->blockCount(), Current, Current->characterCount());
+  }
+  View.setTextCursor(QTextCursor(Next));
+  View.horizontalScrollBar()->setValue(View.horizontalScrollBar()->minimum());
+  View.verticalScrollBar()->setValue(View.verticalScrollBar()->minimum());
+  return true;
+}
+
+void setCodeText(QPlainTextEdit &View, const QString &Text,
+                 DocumentCache *Inactive = nullptr) {
+  const bool ASCII = std::all_of(Text.cbegin(), Text.cend(),
+                                 [](QChar C) { return C.unicode() < 0x80; });
+  const QFont Font = ASCII ? literalFont(View.font()) : View.font();
+  if (!Inactive || !ASCII || !updateJSONDocument(View, *Inactive, Text, Font)) {
+    setDocumentFont(*View.document(), Font);
+    View.setPlainText(Text);
+  }
+  cacheFirstScreen(View);
+}
 } // namespace
 
 class JVMRecoveryDialog::DetailView final : public QPlainTextEdit {
 public:
-  explicit DetailView(JVMRecoveryDialog &Dialog) : Dialog(Dialog) {}
+  explicit DetailView(JVMRecoveryDialog &Dialog) : Dialog(Dialog) {
+    setUndoRedoEnabled(false);
+  }
 
+  void clearReport() {
+    Inactive.clear();
+    clear();
+  }
   void invalidate() { Dirty = true; }
   void prepare() {
     if (!Dirty)
       return;
     Dirty = false;
-    const QString Text = Dialog.detailText(this);
-    // ASCII JSON can display each character literally. Keep the normal font
-    // shaping for reports containing Unicode names, strings or diagnostics.
-    QFont TextFont = font();
-    if (std::all_of(Text.cbegin(), Text.cend(),
-                    [](QChar C) { return C.unicode() < 0x80; }))
-      TextFont.setStyleStrategy(static_cast<QFont::StyleStrategy>(
-          TextFont.styleStrategy() | QFont::PreferNoShaping));
-    if (document()->defaultFont() != TextFont)
-      document()->setDefaultFont(TextFont);
-    setPlainText(Text);
-    cacheFirstScreen(*this);
+    setCodeText(*this, Dialog.detailText(this), &Inactive);
   }
   void setVisible(bool Visible) override {
     // Showing a plain-text editor lays out its document to size the scrollbars.
@@ -101,6 +200,8 @@ public:
   }
 
 private:
+  DocumentCache Inactive{
+      neverd::limits::gui_config::kJVMDetailInactiveCharacters};
   JVMRecoveryDialog &Dialog;
   bool Dirty = false;
 };
@@ -184,8 +285,19 @@ JVMRecoveryDialog::JVMRecoveryDialog(const QString &Worker, QWidget *Parent)
   Evidence = pane(new DetailView(*this), tr("Evidence"), "jvmEvidence");
   Mappings = new QListWidget;
   Mappings->setObjectName("jvmMappings");
+  // Each row contains a decimal PC, a hex offset and an ASCII JVM mnemonic.
+  Mappings->setFont(literalFont(Mappings->font()));
   Mappings->setAccessibleName(tr("Bytecode mappings"));
-  Split->addWidget(Tabs);
+  // The splitter asks for its children's minimum sizes on each page switch.
+  // Let a layout cache the tab widget's size hints between geometry changes.
+  auto *TabPane = new QWidget;
+  TabPane->setSizePolicy(Tabs->sizePolicy());
+  // The inherited window background lets Qt clip ancestor paints at the pane.
+  TabPane->setAutoFillBackground(true);
+  auto *TabLayout = new QVBoxLayout(TabPane);
+  TabLayout->setContentsMargins(0, 0, 0, 0);
+  TabLayout->addWidget(Tabs);
+  Split->addWidget(TabPane);
   Split->addWidget(Mappings);
   Split->setStretchFactor(0, 3);
   Split->setStretchFactor(1, 1);
@@ -295,7 +407,7 @@ void JVMRecoveryDialog::resetIndex() {
   Index = {};
   Report = {};
   for (auto *View : {Bytecode, IR, Evidence})
-    View->clear();
+    View->clearReport();
   Results->clear();
   classes();
   select();
@@ -389,8 +501,7 @@ void JVMRecoveryDialog::select(bool ChooseTab) {
   for (auto *View : {Bytecode, IR, Evidence})
     View->invalidate();
   QSignalBlocker Guard(Java);
-  Java->setPlainText(F["source"].toString());
-  cacheFirstScreen(*Java);
+  setCodeText(*Java, F["source"].toString());
   const auto Instructions = F["instructions"].toArray();
   Mappings->clear();
   for (auto V : Instructions) {

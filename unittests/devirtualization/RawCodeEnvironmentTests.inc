@@ -17,6 +17,33 @@ SpecializationOptions rawOptions(va_t Address = 0x400000) {
   return O;
 }
 
+TEST_F(PEFixedImageTest, RawImportThunkJumpsToLoadedTarget) {
+  auto Bytes = terminalImportFixture();
+  // jmp qword ptr [rip + 0x207a] through the named import slot. The slot is
+  // data; its explicit binding points to independently supplied code.
+  Bytes[Text + 1] = 0x25;
+  auto Loaded = load(Bytes);
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = rawOptions();
+  O.X64CodeRegions[0].Bytes = {0xb8, 42, 0, 0, 0, 0xc3};
+  O.X64ImportBindings.push_back({1, Base + 0x3080, "example.dll", "StopFixture",
+                                 0x400000,
+                                 "independent stable import fixture v1"});
+  const auto Recovery = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(Recovery.complete()) << Recovery.Diagnostic;
+  ASSERT_TRUE(Recovery.RawEnvironment);
+  auto Error = validateSpecializationRawEnvironment(Recovery, O);
+  EXPECT_FALSE(bool(Error));
+  if (Error)
+    llvm::consumeError(std::move(Error));
+
+  O.X64ImportBindings.clear();
+  const auto Unbound = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  EXPECT_FALSE(Unbound.complete());
+  EXPECT_EQ(Unbound.Diagnostic.find("at 0x140003080"), std::string::npos)
+      << Unbound.Diagnostic;
+}
+
 std::vector<uint8_t> returningImportFixture() {
   auto B = terminalImportFixture();
   const uint8_t Caller[] = {
@@ -736,6 +763,17 @@ TEST_F(PEFixedImageTest, RawCodeProviderMustSupplyMatchingPreparedDomain) {
   auto Stale = specializeInterpreter(P, {Base + 0x1000}, Changed);
   EXPECT_EQ(Stale.Status, SpecializationStatus::InvalidInput);
   EXPECT_EQ(P.Fetches, 0u);
+  Changed = Options;
+  Changed.MaxNativeReturnTargets = 2;
+  Stale = specializeInterpreter(P, {Base + 0x1000}, Changed);
+  EXPECT_EQ(Stale.Status, SpecializationStatus::InvalidInput);
+  EXPECT_EQ(P.Fetches, 0u);
+  const auto WithReturnLimit =
+      specializeBinaryInterpreter(Image, Base + 0x1000, Changed);
+  ASSERT_TRUE(WithReturnLimit.complete()) << WithReturnLimit.Diagnostic;
+  ASSERT_TRUE(WithReturnLimit.RawEnvironment);
+  EXPECT_NE(WithReturnLimit.RawEnvironment->Domain->DomainDigest,
+            Good.RawEnvironment->Domain->DomainDigest);
   auto Valid = specializeInterpreter(P, {Base + 0x1000}, Options);
   EXPECT_EQ(Valid.Status, SpecializationStatus::Unsupported);
   EXPECT_EQ(P.Fetches, 1u);

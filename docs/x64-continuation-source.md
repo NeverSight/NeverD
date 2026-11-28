@@ -419,6 +419,52 @@ no additional per-instruction work. Omitting `function_calls` retains the
 previous source and manifest. The owner is
 [`X64FunctionCalls.cpp`](../lib/pipeline/X86/X64FunctionCalls.cpp).
 
+### Paged entries with a changing return stack
+
+An ordinary C caller can enter an interrupt or stack-switching routine using
+its current offline V6 register state, the embedding caller's
+`X64PagedExecution` over owned guest RAM, and an instruction budget. Use
+`--func` with a continuation request declaring the captured CPU's
+`profile`, `mxcsr_mask` and `paging_address_bits`.
+
+```sh
+neverd decompile input.exe --func 0x140001000 --x64-continuation=cpu.json \
+  --continuation-report=entry.json -o entry.c
+```
+
+Adding `--llvm` selects the LLVM-to-C route. The single-entry SDK export is
+`neverd_x64_paged_return_entry_source_v1`. To put multiple entry points in one
+C file, select `entries`, `paged_memory: true` and `return_stack_events: true`
+in the general continuation request. All entries share one instruction switch.
+The generated C invocation for the example is
+
+```c
+uint64_t exit = neverd_x64_enter_paged_140001000_v6(state, context, &budget);
+```
+
+The named entry requires the guest PC to match. Each original instruction
+reads its operands using its current registers, page tables and guest RAM.
+A near RET reads the word at the RSP it actually consumes, including after a
+stack switch. The caller receives the instruction's status and updated state.
+CALL (1), audited unproved JMP (2), RET (3) and privilege return (6) stop even
+at selected targets. The manifest lists the exact jump stops. Other branches
+retain bounded dispatch. Exceptions, missing backing, changed bytes and native
+requests retain their paged status and budget rules. To continue at the
+current PC, call `neverd_x64_resume_paged_transfers_v6(state, context, &budget)`
+with the same working context. Link the matching paged execution bridge from
+the NeverD analysis component into the embedding program. An instruction or
+event with a separate pending
+delivery uses its existing paged resumption contract.
+
+For the non-debug SWAPGS/SYSRETQ epilogue the executor authenticates the
+instruction bytes, tests the original CPL and reads EFER.SCE from the guest
+paging controls. SWAPGS exchanges the two captured GS bases. A successful
+SYSRETQ installs the RCX/R11/STAR return context and preserves RSP. Disabled
+SCE delivers #UD, and an enabled SYSRETQ at nonzero CPL delivers #GP(0).
+A noncanonical supervisor target exposes a native request because the fault
+context depends on the original CPU. Debug-profile exports retain their
+existing native boundaries at these two encodings.
+
 ### Paged entry call views
 
 With `"paged_memory": true` and instruction debug disabled, function activation uses
@@ -1357,12 +1403,20 @@ The exporter verifies it against the image and the V6 request.
 
 Pass the observed load base as a second argument when the image was relocated.
 Use `neverd-xbegin-capture cancel` to disarm before resuming. The destination
-file must be new. The resulting fragment can be reused in an existing request
-without a debugger connection.
+file must be new. To reuse the observation offline, pass the GDB fragment or
+the complete request saved by the QEMU probe alongside the target request.
 
 ```sh
-jq --slurpfile capture /tmp/xbegin.json '. + $capture[0]' request.json > bound-request.json
+neverd decompile image.exe --x64-continuation=request.json \
+  --x64-xbegin-observation=/tmp/xbegin.json --continuation-report=report.json -o state.c
 ```
+
+The target request selects the instructions or entries, dispatch and RTM
+options. Only the saved `qemu_xbegin_fault_v1` field is imported. An identical
+inline record can be supplied again. Conflicting records fail before output.
+The report embeds the complete bound request for subsequent offline exports.
+SDK clients can pass the two buffers to
+`neverd_x64_continuation_source_with_observation_v1`.
 
 | Capture field | Contents |
 | --- | --- |
@@ -1599,10 +1653,11 @@ compiler frame; it does not return a dispatcher status.
 
 ## Native SGX input transfer
 
-`native-sgx-v13` exports a 2464-byte state and canonical ENCLU leaves 2/3/4
-through `llvm.x86.enclu.transfer.at.context` and its NeverC builtin. It imports
-the complete represented input bank and jumps to the original executable
-instruction site, preserving EENTER's PC-dependent RCX result. Native
+`native-sgx-v13` exports a 2464-byte state and ENCLU leaves 2/3/4 through
+`llvm.x86.enclu.transfer.at.context` and its NeverC builtin. It imports the
+represented registers and jumps to the original executable instruction.
+A segment override, address-size override and final REX can accompany ENCLU.
+EENTER's RCX points past the entire original instruction. Native
 enclave/AEP/continuation code owns execution thereafter; no ordinary C return
 survives. See [the SGX contract](x86-sgx-transfer.md) for admission, native
 environment requirements and the distinction between input-state validation

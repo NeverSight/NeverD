@@ -24,7 +24,7 @@ class CallInst;
 namespace neverd {
 bool isX64CallRCX(Arch A, const llvm::CallInst &Call);
 std::string renderX64CallRCXExpression(
-    Arch A, const HighExpr &E,
+    Arch A, const HighExpr &E, bool ResultLive,
     const std::function<std::string(const HighExpr &)> &Expr,
     const std::function<std::string(const MedVar &)> &Var,
     const std::function<bool(const MedVar &)> &Alive);

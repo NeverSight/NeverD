@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Model Security Scan...</source>
+        <translation>模型安全掃描...</translation>
+    </message>
+    <message>
+        <source>Inspect local model files and package templates</source>
+        <translation>檢查本機模型檔案與隨附範本</translation>
+    </message>
+    <message>
         <source>Inspect JVM classes and JARs…</source>
         <translation>檢視 JVM 類別與 JAR 檔案…</translation>
     </message>
@@ -11552,6 +11560,193 @@ Your previous graph is still available.</source>
     <message>
         <source>Save native component to a new file</source>
         <translation>將原生元件儲存為新檔案</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ModelScanDialog</name>
+    <message>
+        <source>Inferred projection layouts</source>
+        <translation>從張量推斷的投影結構</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>關閉</translation>
+    </message>
+    <message>
+        <source>&amp;Quantization sample (KiB)</source>
+        <translation>量化抽樣（KiB）(&amp;Q)</translation>
+    </message>
+    <message>
+        <source>Model Security Scan</source>
+        <translation>模型安全掃描</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>資料夾…</translation>
+    </message>
+    <message>
+        <source>File…</source>
+        <translation>檔案…</translation>
+    </message>
+    <message>
+        <source>Select model package</source>
+        <translation>選取模型套件</translation>
+    </message>
+    <message>
+        <source>Select model file</source>
+        <translation>選取模型檔案</translation>
+    </message>
+    <message>
+        <source>&amp;Model</source>
+        <translation>模型(&amp;M)</translation>
+    </message>
+    <message>
+        <source>&amp;Baseline (optional)</source>
+        <translation>基準（選用）(&amp;B)</translation>
+    </message>
+    <message>
+        <source>Scan</source>
+        <translation>掃描</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>取消掃描</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>正在啟動分析工作程序…</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>證據</translation>
+    </message>
+    <message>
+        <source>Status or type</source>
+        <translation>狀態或類型</translation>
+    </message>
+    <message>
+        <source>Selected evidence</source>
+        <translation>所選證據</translation>
+    </message>
+    <message>
+        <source>Previous page</source>
+        <translation>上一頁</translation>
+    </message>
+    <message>
+        <source>Next page</source>
+        <translation>下一頁</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>匯出報告…</translation>
+    </message>
+    <message>
+        <source>Save report to a new file</source>
+        <translation>將報告儲存至新檔案</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>分析工作程序已停止。</translation>
+    </message>
+    <message>
+        <source>Reading model artifacts…</source>
+        <translation>正在讀取模型檔案…</translation>
+    </message>
+    <message>
+        <source>Model scanning is unavailable in this worker.</source>
+        <translation>此分析程序不支援模型掃描。</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>已取消</translation>
+    </message>
+    <message>
+        <source>%1 tensors</source>
+        <translation>%1 個張量</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>發現項目</translation>
+    </message>
+    <message>
+        <source>Coverage gaps</source>
+        <translation>未涵蓋的範圍</translation>
+    </message>
+    <message>
+        <source>Artifacts</source>
+        <translation>模型檔案</translation>
+    </message>
+    <message>
+        <source>Templates</source>
+        <translation>範本</translation>
+    </message>
+    <message>
+        <source>Tensors</source>
+        <translation>張量</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>中繼資料</translation>
+    </message>
+    <message>
+        <source>Exported graphs</source>
+        <translation>匯出的計算圖</translation>
+    </message>
+    <message>
+        <source>Layers inferred from names</source>
+        <translation>依名稱推斷的層</translation>
+    </message>
+    <message>
+        <source>Baseline comparison</source>
+        <translation>基準比較</translation>
+    </message>
+    <message>
+        <source>Tensor comparison</source>
+        <translation>張量比較</translation>
+    </message>
+    <message>
+        <source>Component changes</source>
+        <translation>元件差異</translation>
+    </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>進階選項（JSON）</translation>
+    </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>搜尋張量或運算子</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>計算圖作用域</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>宣告</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>重建 GGUF…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>請在進階選項將 template_policy 設為 keep、remove 或 replace。</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>相依項目</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>來源證據</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>配接器矩陣</translation>
     </message>
 </context>
 </TS>

@@ -69,8 +69,8 @@ constexpr bool intrinsicHasOnlyValueEffects(Intrinsic Id, uint8_t NumInputs,
 /// so these stay out of intrinsicHasOnlyValueEffects.
 constexpr bool intrinsicWritesOnlyItsOutput(Intrinsic Id) {
   switch (Id) {
-#define NEVERD_RISCV_CYCLE(Id, ...) case Intrinsic::Id:
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+#define NEVERD_RISCV_COUNTER(Id, ...) case Intrinsic::Id:
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.def"
   case Intrinsic::Mrs:
   case Intrinsic::ArmMrs:
   case Intrinsic::ArmMrc:
@@ -113,8 +113,8 @@ constexpr bool intrinsicHasDiscardableStateRead(Intrinsic Id, uint8_t NumInputs,
 /// instruction has side effects or no C name of its own.
 constexpr bool intrinsicReadsSystemRegister(Intrinsic Id) {
   switch (Id) {
-#define NEVERD_RISCV_CYCLE(Name, ...) case Intrinsic::Name:
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+#define NEVERD_RISCV_COUNTER(Name, ...) case Intrinsic::Name:
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.def"
   case Intrinsic::Mrs:
   case Intrinsic::ArmMrs:
   case Intrinsic::ArmMrc:

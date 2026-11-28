@@ -3054,9 +3054,9 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
   for (const auto &Site : Addresses) {
     if (Site.Form == MachOAddressForm::Expanded)
       Growth.emplace_back(Site.Instruction, kInsnSize);
-    if (Site.expandsAuthentication())
-      Growth.emplace_back(Site.signingExpansionSite(),
-                          Site.Authentication->insertedWords() * kInsnSize);
+    Site.forEachSigningExpansion([&](va_t At, unsigned Words) {
+      Growth.emplace_back(At, uint64_t(Words) * kInsnSize);
+    });
   }
   llvm::sort(Growth);
   uint64_t Size = 0;
@@ -3079,11 +3079,8 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
       return At - Entry.OriginalVA + BeforeSite(At) -
              BeforeSite(Entry.OriginalVA);
     };
-    const uint64_t Offset =
-        InstalledOffset(Fixup.Instruction) +
-        (Fixup.Authentication && Fixup.Authentication->PrepareAtSource
-             ? kInsnSize
-             : 0);
+    const uint64_t Offset = InstalledOffset(Fixup.Instruction) +
+                            Fixup.preparedRegisters().size() * kInsnSize;
     const bool Pair = Fixup.Form == MachOAddressForm::PagePair;
     const bool Expanded = Fixup.Form == MachOAddressForm::Expanded;
     const auto *Before =
@@ -3103,8 +3100,9 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
     const va_t PC = Plan.TextVA + At;
     const va_t Target = Fixup.Target + Slide;
     const uint32_t Rd = Word & kRdMask;
-    if (Fixup.Authentication && Fixup.Authentication->RestoreSource) {
-      const auto &Auth = *Fixup.Authentication;
+    for (const auto &Auth : Fixup.Authentications) {
+      if (!Auth.RestoreSource)
+        continue;
       // The original register can be live on both sides of AUT. Its
       // restoration begins after the local ADR and AUT, independent of
       // the opcode or destination of the original address producer.

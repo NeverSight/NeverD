@@ -14,6 +14,7 @@
 #include "llvm/Support/Error.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace neverd {
@@ -121,6 +122,24 @@ struct X64ContinuationExport {
 llvm::Expected<X64ContinuationExport>
 exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                       bool UseLLVM, DebugContext *Debug = nullptr);
+
+/// Read a separately saved observation from the supplied JSON buffer.
+llvm::Expected<X64ContinuationExport> exportX64ContinuationWithObservation(
+    const BinaryImage &Image, llvm::StringRef RequestJSON, bool UseLLVM,
+    DebugContext *Debug, llvm::StringRef XbeginObservationJSON);
+
+/// Select an entry in the V6 paged return_stack_events protocol. The generated
+/// C caller supplies the current guest registers, offline paged execution
+/// context and budget. Each instruction uses its own effective address. CALL,
+/// RET, audited tail jumps and privilege transitions expose the original exit
+/// and post-transfer state even if their destination is selected. The caller
+/// resumes at the current guest PC. Entry does not read or own a return cell.
+/// An optional request entries list must contain Entry. Both source backends
+/// use exactly the same selection, exit policy and paged instruction bodies.
+llvm::Expected<X64ContinuationExport>
+exportX64PagedReturnEntry(const BinaryImage &Image, uint64_t Entry,
+                          llvm::StringRef RequestJSON, bool UseLLVM,
+                          DebugContext *Debug);
 
 } // namespace neverd
 

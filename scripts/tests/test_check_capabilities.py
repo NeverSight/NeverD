@@ -3219,6 +3219,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
             {row["id"]: row["status"] for row in document["capabilities"]},
             {
                 **expected_mips,
+                "analysis.data-pointer-scan": "experimental",
                 "analysis.ir-view.instruction-anchors": "experimental",
                 "analysis.materialized-image-sections": "experimental",
                 "analysis.external-bytecode-recovery": "experimental",
@@ -3245,6 +3246,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "jvm.source-recovery": "experimental",
                 "lua.source-recovery": "experimental",
                 "mobile.source-recovery": "experimental",
+                "model.offline-artifact-scan": "experimental",
                 "python.source-recovery": "experimental",
                 "translation.executable-engine": "experimental",
                 "translation.runtime-contract": "experimental",
@@ -3255,6 +3257,30 @@ class RepositoryCapabilityTests(unittest.TestCase):
         no_surfaces = {"c": [], "python": [], "cli": [], "json": []}
         expected_surfaces = {
             **dict.fromkeys(expected_mips, no_surfaces),
+            "model.offline-artifact-scan": {
+                "c": [
+                    "neverd_model_scan_json_v1",
+                    "neverd_model_rebuild_gguf_json_v1",
+                ],
+                "python": [],
+                "cli": [
+                    "neverd scan --gguf",
+                    "neverd scan --baseline",
+                    "neverd scan --gap-bytes",
+                    "neverd scan --scale-bytes",
+                    "neverd scan --compare-bytes",
+                    "neverd scan --model-offset",
+                    "neverd scan --model-limit",
+                    "neverd scan --model-options",
+                    "neverd scan --model-text",
+                    "neverd scan --onnx-external-data",
+                    "neverd scan --rebuild-gguf",
+                ],
+                "json": [
+                    "neverd_model_scan_json_v1",
+                    "neverd_model_rebuild_gguf_json_v1",
+                ],
+            },
             "rewrite.interactive-byte-overlay": {
                 "c": [
                     "neverd_assemble_json",
@@ -3439,7 +3465,9 @@ class RepositoryCapabilityTests(unittest.TestCase):
                       "neverd_devirtualize_machine_source_v11",
                       "neverd_devirtualize_source_v12",
                       "neverd_devirtualize_machine_source_v12",
-                      "neverd_x64_continuation_source_v1"],
+                      "neverd_x64_continuation_source_v1",
+                      "neverd_x64_continuation_source_with_observation_v1",
+                      "neverd_x64_paged_return_entry_source_v1"],
                 "python": [],
                 "cli": [
                     "neverd decompile --devirtualize",
@@ -3469,6 +3497,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
                     "neverd decompile --vm-no-control-discovery",
                     "neverd decompile --vm-source-abi",
                     "neverd decompile --x64-continuation",
+                    "neverd decompile --x64-xbegin-observation",
                     "neverd decompile --continuation-report",
                 ],
                 "json": [],
@@ -3478,6 +3507,12 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "python": [],
                 "cli": ["neverd decompile --x86-legacy-source"],
                 "json": [],
+            },
+            "analysis.data-pointer-scan": {
+                "c": ["neverd_session_data_ptr_scan_json"],
+                "python": ["Session.scan_data_pointers"],
+                "cli": ["neverd scan --data-ptr"],
+                "json": ["neverd_session_data_ptr_scan_json"],
             },
             "analysis.ir-view.instruction-anchors": {
                 "c": ["neverd_ir_view_json"],

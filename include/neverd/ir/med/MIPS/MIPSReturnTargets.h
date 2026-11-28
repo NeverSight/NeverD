@@ -12,6 +12,8 @@
 
 #include "neverd/Common.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 namespace neverd {
 struct LowFunc;
 struct MedFunc;
@@ -24,9 +26,11 @@ struct MedFunc;
 /// argument definition. Frame escapes (even before the save), partial links,
 /// unknown SP and opaque effects fail closed. A bound source entry carries
 /// its result operands before the captured jump target until this check.
-bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
-                                Arch Target, BinaryFormat Format,
-                                unsigned SourceResultOperands = 0);
+bool hasMIPSSourceReturnTargets(
+    const LowFunc &Low, const MedFunc &Function, Arch Target,
+    BinaryFormat Format, unsigned SourceResultOperands = 0,
+    llvm::ArrayRef<uint32_t> StaticAllocatorCalls = {},
+    bool *UsedAllocator = nullptr, bool *PrivateStores = nullptr);
 
 } // namespace neverd
 

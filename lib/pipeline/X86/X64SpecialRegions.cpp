@@ -18,6 +18,7 @@
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/decode/X86/X86TransactionEncoding.h"
+#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 #include "neverd/lift/X86/X86HleEncoding.h"
 #include "neverd/lift/X86/X86HypercallEncoding.h"
 #include "neverd/lift/X86/X86MpxEncoding.h"
@@ -28,6 +29,7 @@
 #include "neverd/pipeline/X64ContinuationExport.h"
 #include "neverd/support/SortedSearch.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Errc.h"
@@ -60,7 +62,7 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const analysis::X64ContinuationSourceOptions &SourceOptions,
     unsigned CalleeDepth, bool FollowDirectJumps, bool NativeRtmAbortRegions,
     const X64RtmAbortSelection &RtmSteps, bool NativeRtmRegions,
-    DebugContext *Debug) {
+    DebugContext *Debug, bool CollectUnprovedJumps) {
   X64SpecialRegionSelection Selection;
   const bool FollowImmediateAborts =
       NativeRtmAbortRegions || RtmSteps.Kind != X64RtmAbortSelection::Off;
@@ -85,7 +87,8 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     return Selection;
   }
   Decoder Decode;
-  if ((CalleeDepth || FollowDirectJumps) && !Decode.init(Image))
+  if ((CalleeDepth || FollowDirectJumps || CollectUnprovedJumps) &&
+      !Decode.init(Image))
     return invalid("selected CFG transfer decoder initialization failed");
   const uint64_t MaxInstructions = SourceOptions.MaxInstructions;
   std::map<unsigned, std::set<va_t>> Frontier;
@@ -127,10 +130,19 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     for (const auto &Audit : Result.FunctionAudits) {
       if (!Pending.count(Audit.Entry))
         continue;
-      if (!Audit.DecodeFailures.empty())
-        return invalid("selected entry " + hex(Audit.Entry) +
-                       " contains an undecodable instruction at " +
-                       hex(Audit.DecodeFailures.front()));
+      for (va_t Address : Audit.DecodeFailures) {
+        const auto Bytes = bytesAt(Image, Address);
+        // Only the CFG owner can retain an undecodable, fully owned terminal
+        // span among the native sites. Other decode failures still reject.
+        if (!SourceOptions.PagedMemory ||
+            !sorted::contains64(Audit.NativeInstructionAddresses.data(),
+                                Audit.NativeInstructionAddresses.size(),
+                                Address) ||
+            !x86PagedCode64FaultEncoding(Bytes.data(), Bytes.size()))
+          return invalid("selected entry " + hex(Audit.Entry) +
+                         " contains an undecodable instruction at " +
+                         hex(Address));
+      }
       if (Audit.NativeInstructionAddresses.empty())
         return invalid("selected entry " + hex(Audit.Entry) +
                        " has no decoded region: " +
@@ -138,27 +150,32 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
       Found.insert(Audit.Entry);
       llvm::json::Array PCs;
       llvm::json::Array DirectJumps;
-      std::vector<va_t> RegionAddresses;
-      if (FollowDirectJumps) {
-        RegionAddresses = Audit.NativeInstructionAddresses;
-        std::sort(RegionAddresses.begin(), RegionAddresses.end());
-      }
       for (va_t Address : Audit.NativeInstructionAddresses) {
         Unique.insert(Address);
         PCs.push_back(hex(Address));
         if (Unique.size() > MaxInstructions)
           return invalid("selected CFG instruction budget exceeded");
-        if (Depth < CalleeDepth || FollowDirectJumps) {
+        const bool CheckUnproved =
+            CollectUnprovedJumps &&
+            llvm::is_contained(Audit.UnprovenReturns, Address);
+        if (Depth < CalleeDepth || FollowDirectJumps || CheckUnproved) {
           // Rejected bodies retain audited instruction starts but no LowFunc.
           // Use the decoder's original direct-call classification, never an
           // optimized CALL or a register constant propagated across VMEXIT.
           const auto Bytes = bytesAt(Image, Address);
+          if (SourceOptions.PagedMemory &&
+              x86PagedCode64FaultEncoding(Bytes.data(), Bytes.size()))
+            continue;
           DecodedInsn Instruction;
           if (!Decode.selectMode(Image, Address) ||
               !Decode.decodeOneForLift(Bytes.data(), Bytes.size(), Address,
                                        Instruction))
             return invalid("selected transfer decoding failed at " +
                            hex(Address));
+          // The audit can also name a RET or an aliased frame read. Only an
+          // original JMP with this diagnostic needs a separate transfer stop.
+          if (CheckUnproved && Instruction.Id == X86_INS_JMP)
+            Selection.UnprovedJumps.insert(Address);
           if (Depth < CalleeDepth) {
             const va_t Target = Decode.directCallTarget(Instruction);
             if (Target != InvalidVA && !Image.findImportAt(Target) &&
@@ -176,8 +193,9 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
               if (Op.Opcode == NdOp::BRANCH && Op.NumInputs == 1 &&
                   Op.Inputs[0].isConst()) {
                 const va_t Target = Op.Inputs[0].Offset;
-                if (!sorted::contains64(RegionAddresses.data(),
-                                        RegionAddresses.size(), Target) &&
+                if (!sorted::contains64(Audit.NativeInstructionAddresses.data(),
+                                        Audit.NativeInstructionAddresses.size(),
+                                        Target) &&
                     !Image.findImportAt(Target) &&
                     Image.isCodeAddress(Target)) {
                   if (auto Error = Enqueue(Target, Depth))

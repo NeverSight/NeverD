@@ -46,7 +46,8 @@ extern "C" {
 /// hardware consumes the ambient SMI save image. Invalid state returns 5.
 /// This does not emulate SMI entry or supply SMRAM, other MSRs or devices.
 /// native-sgx-v13 extends V4 to 2464 bytes and transports GPR/flags/x87/SIMD
-/// state to canonical ENCLU leaves 2/3/4 at the original executable address.
+/// state to ENCLU leaves 2/3/4 at the original executable address, including
+/// segment, address-size and final REX prefixes.
 /// It requires mxcsr_mask and native CPL3 code64 SGX, XCR0=7, IF=1, IOPL=0,
 /// CET disabled and the documented original enclave/runtime/memory domain.
 /// The terminal jump preserves EENTER's observable next PC; original native
@@ -99,6 +100,31 @@ NEVERD_API const char *
 neverd_x64_continuation_source_v1(neverd_session_t Sess,
                                   const char *RequestJSON, size_t RequestSize,
                                   int UseLLVM, const char **ManifestJSON);
+
+/// Export the same request with a separately saved GDB or QEMU observation.
+/// Only the qemu_xbegin_fault_v1 field is imported from ObservationJSON.
+/// An existing binding must match. The two JSON buffers are size-delimited.
+/// Passing NULL and zero for the observation uses the request alone.
+/// Source and ManifestJSON follow the ownership rules above.
+NEVERD_API const char *neverd_x64_continuation_source_with_observation_v1(
+    neverd_session_t Sess, const char *RequestJSON, size_t RequestSize,
+    const char *ObservationJSON, size_t ObservationSize, int UseLLVM,
+    const char **ManifestJSON);
+
+/// Select a named C entry using the V6 paged return_stack_events contract.
+/// RequestJSON declares the CPU profile, MXCSR mask and paging width. An
+/// optional entries list must include Entry. PE recovery uses full image
+/// metadata. Each generated entry accepts the
+/// guest state, the embedding caller's X64PagedExecution and a step budget.
+/// The manifest names the entry and resume functions. Retain the same working
+/// RAM and execution context across stops. CALL, RET and audited tail jumps
+/// return instruction events even when their destination is selected. Guest
+/// faults, backing stops and privilege transitions retain their paged status.
+/// The general continuation exporter accepts return_stack_events for multiple
+/// explicit paged entries. Source and ManifestJSON have the same ownership.
+NEVERD_API const char *neverd_x64_paged_return_entry_source_v1(
+    neverd_session_t Sess, neverd_va_t Entry, const char *RequestJSON,
+    size_t RequestSize, int UseLLVM, const char **ManifestJSON);
 
 /// Export an i386 image's selected protected 16/32-bit original instructions.
 /// RequestJSON declares profile protected-legacy-v1 and instructions containing

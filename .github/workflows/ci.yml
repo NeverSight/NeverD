@@ -285,7 +285,14 @@ jobs:
           echo 'deb [signed-by=/usr/share/keyrings/neverd-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main' \
             | sudo tee /etc/apt/sources.list.d/neverd-llvm.list > /dev/null
           sudo apt-get update
-          sudo apt-get install --yes clang clang-23 cmake libclang-rt-23-dev lld-23 llvm-23 ninja-build gcc-multilib
+          # The cross GCC layout lets Clang find AArch64 libc headers before
+          # x86 multilib headers when it recompiles decompiled C.
+          sudo apt-get install --yes clang clang-23 cmake libclang-rt-23-dev lld-23 llvm-23 ninja-build gcc-multilib \
+            libc6-dev-arm64-cross libgcc-13-dev-arm64-cross
+          /usr/lib/llvm-23/bin/clang -target aarch64-linux-gnu -x c -fsyntax-only - <<'C'
+          #include <stdint.h>
+          _Static_assert(sizeof(uintptr_t) == sizeof(void *), "AArch64 libc pointer width");
+          C
           # The unversioned clang and linkers tests and CMake find, the Mach-O one included.
           printf '%s\n' /usr/lib/llvm-23/bin >> "$GITHUB_PATH"
 

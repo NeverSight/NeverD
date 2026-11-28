@@ -1440,6 +1440,8 @@ TEST_P(X86LegacySourceTest, BranchDebugMatchesOriginalProtectedInstructions) {
     using Mode = neverd::test::X86BranchDebugOracle::Mode;
     ASSERT_NO_FATAL_FAILURE(
         CPU.initialize(Code16 ? Mode::Code16 : Mode::Code32));
+    if (!CPU.tracePermitted())
+      GTEST_SKIP() << CPU.TracePermissionDeniedReason;
     BlockSteps = CPU.stepsByBlocks();
     ASSERT_FALSE(HasFatalFailure());
     for (unsigned I = 0; I != Cases.size(); ++I)
@@ -1588,11 +1590,12 @@ TEST_P(X86LegacySourceTest,
   EXPECT_EQ(readSourceArtifact(Report), Expected.Manifest);
   for (const auto &Extra :
        {std::string("--llvm"), "--x64-continuation=" + Settings.string(),
-        std::string("--func=0x1000")}) {
+        std::string("--func=0x1000"), std::string("--check-all")}) {
     auto Bad = Args;
     Bad.push_back(Extra);
     EXPECT_FALSE(exec(ndBin(), Bad).ok());
     EXPECT_EQ(readSourceArtifact(Output), Expected.Source);
+    EXPECT_EQ(readSourceArtifact(Report), Expected.Manifest);
   }
   Args.back() = "--continuation-report=" + Output.string();
   EXPECT_FALSE(exec(ndBin(), Args).ok());

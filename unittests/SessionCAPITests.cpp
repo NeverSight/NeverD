@@ -5391,6 +5391,44 @@ TEST_F(SessionCAPITest, WarmingScansTheDataAccessWidthsTheFirstViewReads) {
   EXPECT_EQ(&*State.AccessWidths->begin(), Storage);
 }
 
+TEST_F(SessionCAPITest, InitialViewWarmsDependenciesAndLeavesPagingInOrder) {
+  // A leaf, a caller that reaches both leaves, and the other leaf.
+  constexpr size_t Stride = 0x20;
+  std::string Code(3 * Stride, '\xcc');
+  Code[0] = Code[2 * Stride] = '\xc3';
+  static constexpr char Calls[] =
+      "\xe8\xdb\xff\xff\xff\xe8\x16\x00\x00\x00\xc3";
+  Code.replace(Stride, sizeof(Calls) - 1, Calls, sizeof(Calls) - 1);
+  const auto Path = write("initial-views.elf", makeDataELF("data", Code));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  auto &State = *neverd::sdk::toSession(Session);
+  for (size_t I = 0; I != 3; ++I)
+    State.Img.Symbols.push_back(
+        neverd::Symbol::makeFunc(DataELFEntry + I * Stride, Stride));
+  neverd::sdk::SessionTestAccess::resetFunctions(State);
+  const auto checkNext = [&](const char *Raw, neverd_va_t Expected,
+                             std::optional<neverd_va_t> Initial) {
+    auto Page = llvm::json::parse(takeString(Raw));
+    ASSERT_TRUE(bool(Page)) << llvm::toString(Page.takeError());
+    ASSERT_NE(Page->getAsObject(), nullptr);
+    const auto Next = Page->getAsObject()->getString("next_entry");
+    ASSERT_TRUE(Next);
+    uint64_t Address;
+    ASSERT_FALSE(Next->getAsInteger(0, Address));
+    EXPECT_EQ(Address, Expected);
+    const auto Chosen = Page->getAsObject()->getString("initial_entry");
+    ASSERT_EQ(Chosen.has_value(), Initial.has_value());
+    if (Initial) {
+      ASSERT_FALSE(Chosen->getAsInteger(0, Address));
+      EXPECT_EQ(Address, *Initial);
+    }
+  };
+  checkNext(neverd_warm_initial_view_json(Session), DataELFEntry + 2 * Stride,
+            DataELFEntry + Stride);
+  checkNext(neverd_warm_functions_json(Session, 0, 1), DataELFEntry + Stride,
+            std::nullopt);
+}
+
 TEST_F(SessionCAPITest, PreparedCallSummariesAgreeWithEachAnalysisClosure) {
   // caller -> f1 -> ... -> fN, each passing its argument registers on, and
   // fN reads RDX, beyond the former four-call cutoff. Both the selected
@@ -5648,6 +5686,45 @@ TEST_F(SessionCAPITest, ThePrintedSignatureOfAHeadersLongReadsBack) {
           .str();
   EXPECT_EQ(neverd_func_edit(Session, Entry, Edit.c_str()), 0)
       << takeString(neverd_last_error(Session));
+}
+
+TEST_F(SessionCAPITest, ARecordedPrototypeSurvivesAnUnavailableBody) {
+  constexpr unsigned Stride = 0x10;
+  std::string Code(2 * Stride, '\xcc');
+  // Both functions have a valid first instruction and an invalid encoding.
+  for (unsigned Offset : {0u, Stride})
+    Code.replace(Offset, 5, "\x89\xc8\x0f\x04\xc3", 5);
+  const auto Path = write("unavailable-body.exe", makePE64(Code));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  auto &State = *neverd::sdk::toSession(Session);
+  const auto Entry = neverd_session_entry_addr(Session);
+  auto Known = neverd::Symbol::makeFunc(Entry, Stride);
+  Known.Name = "CloseHandle";
+  Known.Origin = neverd::NameOrigin::Stated;
+  State.Img.Symbols.push_back(Known);
+  State.Img.Symbols.push_back(neverd::Symbol::makeFunc(Entry + Stride, Stride));
+  neverd::sdk::SessionTestAccess::resetFunctions(State);
+
+  ASSERT_TRUE(takeString(neverd_decompile(Session, Entry)).empty());
+  ASSERT_FALSE(takeString(neverd_last_error(Session)).empty());
+  auto Type = llvm::json::parse(
+      takeString(neverd_func_type_json(Session, Entry, nullptr)));
+  ASSERT_TRUE(bool(Type)) << llvm::toString(Type.takeError());
+  ASSERT_NE(Type->getAsObject(), nullptr);
+  const auto &Reply = *Type->getAsObject();
+  EXPECT_EQ(Reply.getBoolean("stated"), false);
+  EXPECT_EQ(Reply.getString("declaration"),
+            "WINBOOL CloseHandle(HANDLE hObject)");
+  const auto *Parameters = Reply.getArray("parameters");
+  ASSERT_TRUE(Parameters && Parameters->size() == 1);
+  ASSERT_NE(Parameters->front().getAsObject(), nullptr);
+  EXPECT_EQ(Parameters->front().getAsObject()->getString("location"), "rcx");
+  EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+  EXPECT_TRUE(takeString(neverd_decompile(Session, Entry)).empty());
+  EXPECT_FALSE(takeString(neverd_last_error(Session)).empty());
+
+  EXPECT_EQ(neverd_func_type_json(Session, Entry + Stride, nullptr), nullptr);
+  EXPECT_FALSE(takeString(neverd_last_error(Session)).empty());
 }
 
 TEST_F(SessionCAPITest, ADeclarationThatHidesAPrototypeKeepsTheContext) {

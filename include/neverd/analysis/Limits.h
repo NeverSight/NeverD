@@ -28,6 +28,8 @@ namespace neverd::limits::analysis {
 // include/neverd/analysis/InterpreterSpecialization.h
 inline constexpr size_t kMaxControlProducerHints = 4096;
 inline constexpr size_t kMaxControlPartitionHints = 256;
+inline constexpr size_t kMaxControlTargetHintSites = 256;
+inline constexpr size_t kMaxControlTargetHintValues = 8192;
 
 // Read-only scalar model construction and equivalence queries.
 inline constexpr uint64_t kLLVMScalarStopPollWork = 1024;
@@ -73,6 +75,8 @@ inline constexpr int
 // lib/analysis/arch/x86_64/X64CallContinuation.cpp
 inline constexpr size_t kX64ReturningCallPreservedFrameRangesLimit = 64;
 inline constexpr size_t kX64ReturningCallObjectExclusionsLimit = 64;
+inline constexpr size_t kX64ReturningCallFrameOutputsLimit = 4;
+inline constexpr uint16_t kX64ReturningCallFrameOutputBytesLimit = 64;
 
 // lib/analysis/bytecode/BytecodeDecoder.cpp
 inline constexpr int kMaxBytecodeLookupValues = 65536;

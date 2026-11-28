@@ -175,18 +175,14 @@ static std::vector<RoundTripTC> makeCGotoConstTC(const char *prefix,
 // Local (non-`static`) label table: the computed-goto table is a stack-local
 // array, so clang materialises it on the stack at -O0 by copying the read-only
 // initializer run (which holds the absolute code-pointer rebases) into a frame
-// slot, then dispatches `ldr xT,[sp+slot, idx, scale]`.  The table-base register
-// folds to a stack address rather than a data segment, so the jump-table
-// resolver must trace the slot back to its constant init source
-// (resolveStackMaterializedTableSource) to recover the targets.  Covered on all
-// four targets at small (<=4-entry) shapes whose initializer clang inlines as a
-// direct copy: AArch64 (adrp/add __const base), x86-64 (RIP-relative scalar
-// copy, frame offset in the dispatch load disp), i386 (PIC GOTOFF GOT-base-0),
-// ARM32 (PC-relative literal-pool base + scaled index folded into the frame
-// base).  Larger x86 tables use the authenticated memcpy/staged-initializer
-// path covered by the required loc8 case below.
-static std::vector<RoundTripTC> makeCGotoLocalTC(const char *prefix,
-                                                 const char *T) {
+// slot, then loads a label through the selected slot. On AArch64 the indexed
+// load retains its machine semantics and the branch dispatches on the loaded
+// label. On x86 and ARM32 the resolver traces a stack copy to its initializer
+// and recovers the table index. The eight-entry x86 case also exercises
+// memcpy and staged initialization.
+static std::vector<RoundTripTC> makeCGotoLocalTC(
+    const char *prefix, const char *T,
+    RecoveredSwitchExpectation Expectation = RecoveredSwitchExpectation::Required) {
   std::string p = prefix, t = T;
   std::vector<RoundTripTC> Cases = {
     {p+"_loc4",
@@ -227,7 +223,7 @@ static std::vector<RoundTripTC> makeCGotoLocalTC(const char *prefix,
      /*ClangTargetOverride=*/"", /*UcCpuModel=*/-1, /*LinkMemBuiltins=*/true},
   };
   for (RoundTripTC &TC : Cases)
-    TC.RecoveredSwitch = RecoveredSwitchExpectation::Required;
+    TC.RecoveredSwitch = Expectation;
   return Cases;
 }
 
@@ -318,10 +314,10 @@ static const std::vector<RoundTripTC> kX86O0 =
     appendConst(appendConst(makeCGotoTC("x86cgo0", "int", 0),
                             makeCGotoConstTC("x86cgo0", "int")),
                 makeCGotoLocalTC("x86cgo0", "int"));
-static const std::vector<RoundTripTC> kA64O0 =
-    appendConst(appendConst(makeCGotoTC("a64cgo0", "long", 0),
-                            makeCGotoConstTC("a64cgo0", "long")),
-                makeCGotoLocalTC("a64cgo0", "long"));
+static const std::vector<RoundTripTC> kA64O0 = appendConst(
+    appendConst(makeCGotoTC("a64cgo0", "long", 0),
+                makeCGotoConstTC("a64cgo0", "long")),
+    makeCGotoLocalTC("a64cgo0", "long", RecoveredSwitchExpectation::ByValue));
 static const std::vector<RoundTripTC> kARMO0 =
     appendConst(appendConst(makeCGotoTC("armcgo0", "int", 0),
                             makeCGotoConstTC("armcgo0", "int")),
@@ -366,7 +362,7 @@ static const std::vector<RoundTripTC> kX64Local =
 static const std::vector<RoundTripTC> kX86Local =
     makeCGotoLocalTC("x86cgo0", "int");
 static const std::vector<RoundTripTC> kA64Local =
-    makeCGotoLocalTC("a64cgo0", "long");
+    makeCGotoLocalTC("a64cgo0", "long", RecoveredSwitchExpectation::ByValue);
 static const std::vector<RoundTripTC> kARMLocal =
     makeCGotoLocalTC("armcgo0", "int");
 

@@ -31,8 +31,8 @@ struct MachOAuthenticationReplacement {
 };
 
 struct MachOSigningAddress {
-  enum { None, Local, Observable } Use = None;
-  std::optional<MachOAuthenticationReplacement> Authentication;
+  enum Usage { None, Local, Observable } Use = None;
+  llvm::SmallVector<MachOAuthenticationReplacement, 0> Authentications{};
   /// Retained instruction identity in a previously published image.
   std::optional<uint32_t> InstalledSigner;
   /// A following published address pair restores the authenticated register.
@@ -53,8 +53,10 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
                                         llvm::ArrayRef<va_t> Consumers = {});
 
 llvm::ArrayRef<aarch64_reg> machOSigningScratchRegisters();
-bool machODeadSigningScratch(Decoder &Decode, const MachOLiftedSource &Source,
-                             va_t Start, va_t At, aarch64_reg Reg);
+/// Follow a register until all paths overwrite, expose or lose its value.
+MachOSigningAddress::Usage
+machOSigningRegisterUse(Decoder &Decode, const MachOLiftedSource &Source,
+                        va_t Start, va_t After, aarch64_reg Reg);
 std::optional<uint32_t> machOPCRelativeAuthentication(Intrinsic Op, va_t PC,
                                                       va_t Sign);
 
@@ -83,9 +85,6 @@ inline MachOAuthenticationForm machOPCAuthenticationForm(uint32_t Bits) {
 
 /// An ordinary reference to a proved signer can escape independently of the
 /// reaching definition used by AUT. Follow its aliases through their uses.
-bool machOObservesSigningAddress(Decoder &Decode,
-                                 const MachOLiftedSource &Source, va_t Start,
-                                 va_t After, aarch64_reg Reg);
 
 /// Check both register operands and the address of a published restore pair.
 bool machORestoresSigningAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes,

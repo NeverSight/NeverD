@@ -264,7 +264,9 @@ cl::SubCommand DashboardCmd("dashboard", "Show binary overview dashboard");
 cl::SubCommand SigsCmd("sigs", "Apply FLIRT signatures to binary");
 cl::SubCommand SymbolicCmd("sym-explore",
                            "Explore bounded symbolic paths through a function");
-cl::SubCommand ScanCmd("scan", "Run the native memory-safety scan");
+cl::SubCommand ScanCmd(
+    "scan",
+    "Scan native memory safety, data references or local model artifacts");
 cl::SubCommand
     ConcolicCmd("concolic",
                 "Generate replay-verified LowIR conditional-branch seeds");
@@ -852,7 +854,13 @@ cl::opt<bool>
 
 cl::opt<std::string> X64Continuation(
     "x64-continuation",
-    cl::desc("Export explicit x64 state C using a declared request JSON"),
+    cl::desc("Export explicit x64 state C from a request JSON; --func selects "
+             "one paged return-stack entry"),
+    cl::value_desc("path"), cl::sub(DecompileCmd));
+cl::opt<std::string> X64XbeginObservation(
+    "x64-xbegin-observation",
+    cl::desc(
+        "Use a saved GDB or QEMU XBEGIN observation with --x64-continuation"),
     cl::value_desc("path"), cl::sub(DecompileCmd));
 cl::opt<std::string> X86LegacySource(
     "x86-legacy-source",
@@ -1403,6 +1411,45 @@ cl::opt<bool> SymbolicExpressions(
 //===----------------------------------------------------------------------===//
 // Memory-safety scan options
 //===----------------------------------------------------------------------===//
+
+cl::opt<bool> ModelGGUF(
+    "gguf", cl::desc("Inspect local GGUF models, model packages and templates"),
+    cl::sub(ScanCmd));
+cl::opt<std::string> ModelBaseline(
+    "baseline", cl::desc("Compare against an explicitly selected local model"),
+    cl::sub(ScanCmd));
+cl::opt<uint64_t> ModelGap("gap-bytes",
+                           cl::desc("Byte budget for unreferenced GGUF ranges"),
+                           cl::sub(ScanCmd));
+cl::opt<std::string>
+    ModelOptions("model-options",
+                 cl::desc("Advanced local model options as a JSON object"),
+                 cl::value_desc("json"), cl::sub(ScanCmd));
+cl::opt<bool>
+    ModelExternalData("onnx-external-data",
+                      cl::desc("Admit validated local external initializer "
+                               "ranges for model inspection"),
+                      cl::sub(ScanCmd));
+cl::opt<uint64_t> ModelScales(
+    "scale-bytes",
+    cl::desc("Inspect supported quantization blocks up to this byte budget"),
+    cl::sub(ScanCmd));
+cl::opt<uint64_t>
+    ModelCompare("compare-bytes",
+                 cl::desc("Total weight bytes to read across both inputs"),
+                 cl::sub(ScanCmd));
+cl::opt<uint64_t> ModelOffset("model-offset",
+                              cl::desc("First tensor or graph node to report"),
+                              cl::sub(ScanCmd));
+cl::opt<unsigned> ModelLimit("model-limit",
+                             cl::desc("Maximum rows per model view"),
+                             cl::sub(ScanCmd));
+
+cl::opt<bool>
+    ScanDataPtr("data-ptr",
+                cl::desc("Count code references to the data section and "
+                         "its relocated pointers to non-executable data"),
+                cl::sub(ScanCmd));
 
 cl::opt<neverd_scan_analyzers>
     ScanAnalyzers("analyzer", cl::desc("Memory-safety analyses to run"),

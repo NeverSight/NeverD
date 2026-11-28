@@ -29,7 +29,13 @@ constexpr unsigned Primary = 16, Unary = 15, Multiply = 13, Add = 12,
 
 std::string operand(const ScalarExpression &E, unsigned Prec,
                     bool Right = false) {
-  return E.Precedence < Prec || (Right && E.Precedence == Prec)
+  // C binds comparisons before bitwise operators. Group the predicate
+  // explicitly when its integer result is used as a mask operand.
+  const bool BitwiseComparison =
+      Prec >= BitOr && Prec <= BitAnd &&
+      (E.Precedence == Relational || E.Precedence == Equality);
+  return E.Precedence < Prec || (Right && E.Precedence == Prec) ||
+                 BitwiseComparison
              ? "(" + E.Text + ")"
              : E.Text;
 }

@@ -174,6 +174,10 @@ struct PipelineOptions {
   /// A native lift may return the fully prepared machine MedIR without
   /// emitting its LLVM module. Lift admission and ABI recovery still apply.
   bool EmitLiftedLLVM = true;
+  /// Versioned allocation and release imports accepted by the static scan.
+  /// Source emission and native rewriting do not consume this model.
+  std::set<va_t> StaticAllocatorSlots;
+  std::set<va_t> StaticReleaseSlots;
   /// Retain native emission observations through LLVM replacement/deletion.
   /// This sidecar does not enable source-only transformations or infer origins
   /// for optimizer-created values.

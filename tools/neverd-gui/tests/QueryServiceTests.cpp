@@ -2076,6 +2076,47 @@ private slots:
     QCOMPARE(h.sent.size(), 2);
   }
 
+  void listedSourcePageAnswersOnlyTheSameEntryAndGeneration() {
+    Harness h;
+    establish(h);
+    const auto page = text("0x2a", "source");
+    auto listed = page;
+    listed.payload["listed_entry_only"] = true;
+    QList<QString> seen;
+    auto read = [&](const Spec &spec) {
+      h.service.subscribe(spec, &h.owner, [&](const QJsonObject &r) {
+        seen.append(r.value("payload").toObject().value("text").toString());
+      });
+    };
+    read(listed);
+    QTRY_COMPARE(h.sent.size(), 1);
+    read(page); // The visible read arrives while navigation is still in flight.
+    h.reply(0, {{"address", "0x2A"}, {"text", "navigation"}});
+    QTRY_COMPARE(seen.size(), 2);
+    QCOMPARE(seen.back(), "navigation");
+    QCOMPARE(h.sent.size(), 1);
+
+    auto forced = page;
+    forced.payload["refresh"] = true;
+    read(forced);
+    QTRY_COMPARE(h.sent.size(), 2);
+    h.reply(1, {{"address", "0x2a"}, {"text", "regenerated"}});
+    read(page);
+    QTRY_COMPARE(seen.size(), 4);
+    QCOMPARE(seen.back(), "regenerated");
+    QCOMPARE(h.sent.size(), 2);
+
+    h.service.listingChanged();
+    read(listed);
+    QTRY_COMPARE(h.sent.size(), 3);
+    h.reply(2, {{"address", "0x29"}, {"text", "different entry"}});
+    read(page);
+    QTRY_COMPARE(h.sent.size(), 4);
+    h.reply(3, {{"address", "0x2a"}, {"text", "current"}});
+    QTRY_COMPARE(seen.size(), 6);
+    QCOMPARE(seen.back(), "current");
+  }
+
   void cancellingQueuedReadsSendsNoCancellationAndReclaimsCapacity() {
     QueryService::Limits limits;
     limits.maxJobs = 2;

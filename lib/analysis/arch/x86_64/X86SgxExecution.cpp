@@ -13,6 +13,7 @@
 #include "X86ModeState.h"
 
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Errc.h"
@@ -24,7 +25,7 @@ namespace neverd::analysis::detail {
 using namespace translate;
 namespace {
 namespace le = llvm::support::endian;
-constexpr unsigned PageSize = 4096, GprOffset = PageSize - 184;
+constexpr unsigned PageSize = X86SgxPage::Size, GprOffset = PageSize - 184;
 constexpr unsigned FlagsOffset = 128, IpOffset = 136, UserSPOffset = 144,
                    UserBPOffset = 152;
 constexpr unsigned ExitInfoOffset = 160, FSOffset = 168, GSOffset = 176;
@@ -79,11 +80,14 @@ uint32_t saveExitInfo(uint8_t *GPR, bool ExInfo,
   return 0;
 }
 
-llvm::Expected<bool> walkSgxWrite(X86PagedMemory &M, uint64_t Address,
-                                  X86ModeExecutionResult &Out,
-                                  uint64_t &Physical) {
-  auto Walk = walkX86PageTables(M.physicalMemory(), M.features(), M.controls(),
-                                {Address, MemoryAccessKind::Write, 3});
+} // namespace
+
+llvm::Expected<bool> X86SgxExecution::walkOperand(X86PagedMemory &M,
+                                                  const X86LinearAccess &Access,
+                                                  X86ModeExecutionResult &Out,
+                                                  uint64_t &Physical) {
+  auto Walk =
+      walkX86PageTables(M.physicalMemory(), M.features(), M.controls(), Access);
   if (!Walk)
     return Walk.takeError();
   Out.SelfModifications.insert(Out.SelfModifications.end(),
@@ -96,7 +100,6 @@ llvm::Expected<bool> walkSgxWrite(X86PagedMemory &M, uint64_t Address,
   Physical = Walk->PhysicalAddress;
   return !Out.Exception && !Out.BackingFault;
 }
-} // namespace
 
 llvm::Expected<bool>
 X86SgxExecution::bindFrame(X86PagedMemory &M, const X86SgxEnclave &Enclave,
@@ -118,7 +121,8 @@ X86SgxExecution::bindFrame(X86PagedMemory &M, const X86SgxEnclave &Enclave,
     if (Saved)
       return true;
     uint64_t Physical = 0;
-    auto Ready = walkSgxWrite(M, Address, Out, Physical);
+    auto Ready =
+        walkOperand(M, {Address, MemoryAccessKind::Write, 3}, Out, Physical);
     if (!Ready)
       return Ready.takeError();
     if (!*Ready)
@@ -148,11 +152,16 @@ X86SgxExecution::bindFrame(X86PagedMemory &M, const X86SgxEnclave &Enclave,
   return BindPage(SSA + FrameSize - PageSize + GprOffset, Progress.GprPage);
 }
 
-llvm::Expected<std::optional<uint8_t>>
-X86SgxExecution::instructionException(llvm::ArrayRef<uint8_t> Bytes,
-                                      uint64_t PC, const X86SgxMemory &Memory) {
+llvm::Expected<std::optional<uint8_t>> X86SgxExecution::instructionException(
+    llvm::ArrayRef<uint8_t> Bytes, uint64_t PC, const X86PagedMemory &Pages) {
+  const auto &Memory = *Pages.sgxMemory();
   if (!Memory.Running)
     return invalid("enclave instruction admission requires a running thread");
+  // These spans fault during ordinary code64 execution. The paged owner
+  // authenticates the bytes and resolves fetch faults before enclave exit.
+  const auto Fault = x86PagedCode64FaultEncoding(Bytes.data(), Bytes.size());
+  if (Fault && Fault->Size == Bytes.size())
+    return std::optional<uint8_t>{};
   const uint64_t XFRM = Memory.Running->XFRM;
   Decoder D;
   if (!D.init(Arch::X64))
@@ -186,6 +195,13 @@ X86SgxExecution::instructionException(llvm::ArrayRef<uint8_t> Bytes,
         return uint8_t{6};
     }
   switch (I.Id) {
+  case X86_INS_RDTSC:
+  case X86_INS_RDTSCP:
+    if (!Memory.Features.SGX2)
+      return uint8_t{6};
+    if (Pages.controls().CR4 & 4) // CR4.TSD in a CPL3 enclave.
+      return uint8_t{13};
+    return std::optional<uint8_t>{};
   case X86_INS_CPUID:
   case X86_INS_GETSEC:
   case X86_INS_RDPMC:
@@ -241,6 +257,19 @@ X86SgxExecution::instructionException(llvm::ArrayRef<uint8_t> Bytes,
   }
 }
 
+void X86SgxExecution::retireEnclaveLeaf(X86ModeState &S, unsigned Size,
+                                        X86ModeExecutionResult &Out) {
+  auto &R = modeRegisters(S);
+  R.PC += Size;
+  R.RFlags &= ~uint64_t{0x10000};
+  Out.InstructionCompleted = true;
+  if (x86InstructionDebugStep(R.RFlags & 0x100, S.Debug ? S.Debug->DebugCTL : 0,
+                              false)) {
+    x86PublishInstructionDebug(*S.Debug, true);
+    Out.Exception = X86MemoryException{1, 0, {}};
+  }
+}
+
 llvm::Expected<X86ModeExecutionResult>
 X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
                              llvm::ArrayRef<uint8_t> ExpectedBytes,
@@ -262,17 +291,8 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   if ((R.RFlags & 0x100) && !S.Debug)
     return invalid("software enclave transfer with TF requires its debug bank");
   if (!Fetched) {
-    if (S.Debug && EPC.instructionBreakpointsAt(R.PC)) {
-      const auto Matches = x86ExecutionBreakpoints(S.Debug->DR, S.Debug->DR7,
-                                                   R.PC, R.RFlags, S.SSBlocked);
-      if (Matches) {
-        x86PublishInstructionDebug(*S.Debug, false, Matches);
-        FaultKind = X86EventKind::InstructionBreakpoint;
-        Out.InstructionAttempted = true;
-        return Fault(1);
-      }
-    }
-    auto OK = fetchX86SystemInstruction(S, M, ExpectedBytes, {}, Out);
+    auto OK =
+        fetchX86SystemInstruction(S, M, ExpectedBytes, {}, Out, FaultKind);
     if (!OK)
       return OK.takeError();
     if (!*OK)
@@ -336,22 +356,21 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
     T.XSavePage = *Progress.Frame.XSavePage;
     T.GprPage = *Progress.Frame.GprPage;
     le::write32le(TCS.Bytes.data() + 24, CSSA - 1);
-    if (x86InstructionDebugStep(R.RFlags & 0x100,
-                                S.Debug ? S.Debug->DebugCTL : 0, false)) {
-      x86PublishInstructionDebug(*S.Debug, true);
-      Out.Exception = X86MemoryException{1, 0, {}};
-    }
-    R.PC += ExpectedBytes.size();
-    R.RFlags &= ~uint64_t(0x10000);
     ++EPC.Generation;
-    Out.InstructionCompleted = true;
+    retireEnclaveLeaf(S, ExpectedBytes.size(), Out);
     return Out;
   }
+  if (Leaf >= 5 && Leaf <= 7 && EPC.Features.SGX2)
+    return dynamicMemory(S, M, Progress, ExpectedBytes.size(), std::move(Out));
+  const auto Op = static_cast<KeyReportLeaf>(Leaf);
+  if (Op == KeyReportLeaf::Report || Op == KeyReportLeaf::Key ||
+      (Op == KeyReportLeaf::VerifyReport2 && EPC.Features.VerifyReport2) ||
+      (EPC.Features.SGX256 &&
+       (Op == KeyReportLeaf::Report2 || Op == KeyReportLeaf::Key256)))
+    return keyOrReport(Op, S, M, Progress, ExpectedBytes.size(),
+                       std::move(Out));
   if (Leaf > 4)
     return Fault(13);
-  if (Leaf != 2 && Leaf != 3)
-    return invalid(
-        "software enclave owner requires an EENTER, ERESUME or EEXIT leaf");
   if (EPC.Active)
     return Fault(13);
   if (!EPC.X87)
@@ -365,7 +384,8 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   if (Progress.TCSPhysical)
     TCSPhysical = *Progress.TCSPhysical;
   else {
-    auto Ready = walkSgxWrite(M, TCSLinear, Out, TCSPhysical);
+    auto Ready = walkOperand(M, {TCSLinear, MemoryAccessKind::Write, 3}, Out,
+                             TCSPhysical);
     if (!Ready)
       return Ready.takeError();
     if (!*Ready)
@@ -406,10 +426,8 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
       (XFRM != 3 && !(C.CR4 & (1u << 18))))
     return Fault(13);
   const auto MiscSelect = le::read32le(SECS + 20);
-  constexpr uint64_t AEXNotifyAttribute = uint64_t{1} << 10;
   if (!FramePages || (MiscSelect & ~1u) ||
-      (Attributes &
-       ~(uint64_t(7) | (EPC.Features.AEXNotify ? AEXNotifyAttribute : 0))))
+      (Attributes & ~EPC.Features.allowedAttributes()))
     return invalid("unsupported initialized SECS attributes or SSA geometry");
   if (!std::has_single_bit(Enclave.Size) || Enclave.Size < 2 * PageSize ||
       (Enclave.Base & (Enclave.Size - 1)) || !Enclave.contains(TCSLinear))
@@ -423,7 +441,7 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
     return invalid("a debug opt-in TCS requires an imported debug enclave");
   const bool NotifyThread = TcsFlags & 2;
   if ((NotifyThread && !EPC.Features.AEXNotify) ||
-      (!DebugOptIn && NotifyThread != bool(Attributes & AEXNotifyAttribute)))
+      (!DebugOptIn && NotifyThread != bool(Attributes & X86SgxFeatures::Notify)))
     return Fault(13);
   const bool Resume = Leaf == 3;
   const auto CSSA = le::read32le(Thread + 24), NSSA = le::read32le(Thread + 28);
@@ -512,7 +530,7 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   } else {
     le::write64le(GPR + UserSPOffset, R.GPR[4]);
     le::write64le(GPR + UserBPOffset, R.GPR[5]);
-    R.GPR[1] = R.PC + 3;
+    R.GPR[1] = R.PC + ExpectedBytes.size();
     R.GPR[0] = CSSA;
     R.RFlags &= ~uint64_t(DebugOptIn ? 0x10000 : 0x10100);
     if (DebugOptIn && (R.RFlags & 0x100)) {

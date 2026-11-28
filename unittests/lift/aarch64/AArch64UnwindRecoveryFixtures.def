@@ -71,13 +71,31 @@ UNWIND_PROOF_WORD(JoinedRightSigner, 4)
 UNWIND_PROOF_WORD(JoinedAuthBlock, 6)
 UNWIND_PROOF_WORD(JoinedAuthenticator, 8)
 UNWIND_PROOF_WORD(JoinedAfterAuth, 9)
+UNWIND_PROOF_WORD(StoreModifierX11, 0xf90007eb) // str x11, [sp, #8]
+UNWIND_PROOF_WORD(LoadModifierX11, 0xf94007eb)  // ldr x11, [sp, #8]
+UNWIND_PROOF_WORD(ReleaseStack, 0x910043ff)     // add sp, sp, #16
+UNWIND_PROOF_WORD(JoinedSpillReload, 10)
 UNWIND_PROOF_WORD(ClearModifierX11, 0xaa1f03eb)
 UNWIND_PROOF_WORD(BranchToSecondSigner, 0xb4000080) // cbz x0, .+16
-UNWIND_PROOF_WORD(BranchToSharedAuth, 0x14000003) // b .+12
+UNWIND_PROOF_WORD(BranchToSharedAuth, 0x14000003)   // b .+12
 UNWIND_PROOF_WORD(CopyX11ToX12, 0xaa0b03ec)
 UNWIND_PROOF_WORD(AddZeroX11ToX12, 0x9100016c)
 UNWIND_PROOF_WORD(SubZeroX11ToX12, 0xd100016c)
 UNWIND_PROOF_WORD(ShiftedZeroX11ToX12, 0x9140016c)
+UNWIND_PROOF_WORD(OrZeroX11ToX12, 0xaa1f016c)       // orr x12, x11, xzr
+UNWIND_PROOF_WORD(XorLeftZeroX11ToX12, 0xca0b03ec)  // eor x12, xzr, x11
+UNWIND_PROOF_WORD(AndSelfX11ToX12, 0x8a0b016c)      // and x12, x11, x11
+UNWIND_PROOF_WORD(ExtendedZeroX11ToX12, 0xcb3fc16c) // sub x12, x11, wzr, sxtw
+UNWIND_PROOF_WORD(ShiftZeroX11ToX12, 0x9340fd6c)    // asr x12, x11, #0
+UNWIND_PROOF_WORD(RotateZeroX11ToX12, 0x93cb016c)   // ror x12, x11, #0
+UNWIND_PROOF_WORD(RegisterShiftZeroX11ToX12, 0x9adf256c) // lsrv x12, x11, xzr
+UNWIND_PROOF_WORD(SelectSameX11ToX12, 0x9a8b116c)      // csel x12, x11, x11, ne
+UNWIND_PROOF_WORD(ExtractLowX11ToX12, 0x93cb01ac)      // extr x12, x13, x11, #0
+UNWIND_PROOF_WORD(DifferentSelectX11ToX12, 0x9a8d116c) // csel x12, x11, x13, ne
+UNWIND_PROOF_WORD(ShiftedSelfX11ToX12, 0x8a4b056c) // and x12, x11, x11, lsr #1
+UNWIND_PROOF_WORD(VariableShiftX11ToX12, 0x9acd2d6c) // rorv x12, x11, x13
+UNWIND_PROOF_WORD(DifferentExtractX11ToX12,
+                  0x93cb05ac) // extr x12, x13, x11, #1
 UNWIND_PROOF_WORD(MoveLRToLR, 0xaa1e03fe)
 UNWIND_PROOF_WORD(AddZeroToLR, 0x910003de)
 UNWIND_PROOF_WORD(SubZeroFromLR, 0xd10003de)

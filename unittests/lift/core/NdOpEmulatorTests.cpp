@@ -11,6 +11,10 @@
 #include "neverd/symbolic/SymExec.h"
 #include "neverd/symbolic/SymExplore.h"
 
+#include "llvm/ADT/APInt.h"
+
+#include <algorithm>
+#include <array>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -56,6 +60,104 @@ TEST_F(NdOpEmulatorTest, BasicArithmetic) {
   LowOp Add = makeArith(NdOp::INT_ADD, 8, 0, 5);
   ASSERT_TRUE(Emu.step(Add));
   EXPECT_EQ(Emu.getRegister(8).value_or(0), 15u);
+}
+
+TEST_F(NdOpEmulatorTest,
+       ScalarArithmeticDistinguishesMissingRegistersFromZero) {
+  const LowOp Add = makeArith(NdOp::INT_ADD, 8, 0, 5);
+  for (bool Strict : {false, true}) {
+    NdOpEmulator Emu(Img);
+    Emu.setStrictMode(Strict);
+    Emu.setRegister(Add.Output.Offset, 42);
+    EXPECT_EQ(Emu.step(Add), !Strict);
+    EXPECT_EQ(Emu.getRegister(Add.Output.Offset), Strict ? 42u : 5u);
+
+    Emu.setRegister(Add.Inputs[0].Offset, 0);
+    ASSERT_TRUE(Emu.step(Add));
+    EXPECT_EQ(Emu.getRegister(Add.Output.Offset), 5u);
+  }
+}
+
+TEST_F(NdOpEmulatorTest, ScalarCopiesRespectSourceAndDestinationViews) {
+  for (bool Strict : {false, true})
+    for (NdOp Opcode : {NdOp::COPY, NdOp::INT_ZEXT}) {
+      NdOpEmulator Emu(Img);
+      Emu.setStrictMode(Strict);
+      LowOp Op = makeCopy(8, 0);
+      Op.Opcode = Opcode;
+      const auto Src = Op.Inputs[0].Offset, Dst = Op.Output.Offset;
+      Emu.setRegister(Dst, UINT64_MAX);
+      ASSERT_TRUE(Emu.step(Op));
+      EXPECT_FALSE(Emu.getRegister(Dst));
+
+      Emu.setRegister(Src, 0x123480);
+      Op.Inputs[0].Size = 1;
+      ASSERT_TRUE(Emu.step(Op));
+      EXPECT_EQ(Emu.getRegister(Dst), 0x80u);
+
+      Op.Output.Size = 1;
+      Emu.setRegister(Dst, 0xabcd);
+      ASSERT_TRUE(Emu.step(Op));
+      EXPECT_EQ(Emu.getRegister(Dst), 0xab80u);
+
+      Emu.setRegisterBytes(Src, {0x80});
+      Op.Inputs[0].Size = Op.Output.Size = 2;
+      ASSERT_TRUE(Emu.step(Op));
+      EXPECT_FALSE(Emu.getRegister(Dst));
+    }
+}
+
+TEST_F(NdOpEmulatorTest, PureScalarOpsCheckAddressSpaceBeforeWriting) {
+  for (const bool Strict : {false, true}) {
+    for (LowOp Op : {makeCopy(8, 0), makeArith(NdOp::INT_ADD, 8, 0, 5)}) {
+      NdOpEmulator Emu(Img);
+      Emu.setStrictMode(Strict);
+      Emu.setRegister(0, 10);
+      Emu.setRegister(8, 43);
+      for (const auto Space :
+           {NdMemoryAddressSpace::X86FS, NdMemoryAddressSpace::X86GS,
+            static_cast<NdMemoryAddressSpace>(UINT8_MAX)}) {
+        Op.MemoryAddressSpace = Space;
+        EXPECT_FALSE(Emu.step(Op));
+        EXPECT_EQ(Emu.run(std::vector<LowOp>{Op}), 0u);
+        EXPECT_EQ(Emu.getRegister(8), 43u);
+      }
+      Op.MemoryAddressSpace = NdMemoryAddressSpace::Default;
+      EXPECT_EQ(Emu.run(std::vector<LowOp>{Op}), 1u);
+      EXPECT_EQ(Emu.getRegister(8), Op.Opcode == NdOp::COPY ? 10u : 15u);
+    }
+  }
+}
+
+TEST_F(NdOpEmulatorTest, LogicalShiftsUseInputWidthBeforeOutputWidth) {
+  constexpr uint64_t Input = UINT64_C(0x9badf00dcafeba93);
+  NdOpEmulator Emu(Img);
+  Emu.setStrictMode(true);
+  Emu.setRegister(0x70, Input);
+  for (uint16_t SourceBytes = 0; SourceBytes <= sizeof(Input); ++SourceBytes) {
+    const unsigned Bits = SourceBytes ? SourceBytes * 8 : 64;
+    const llvm::APInt Value(Bits, Input);
+    const std::array<uint64_t, 9> Counts = {
+        0, 1, Bits - 1, Bits, Bits + 1, 63, 64, 65, UINT64_MAX};
+    for (uint16_t DestBytes = 1; DestBytes <= sizeof(Input); ++DestBytes)
+      for (const uint64_t Count : Counts)
+        for (NdOp Opcode : {NdOp::INT_LEFT, NdOp::INT_RIGHT}) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Opcode) << "/" << SourceBytes << "/"
+                       << DestBytes << "/" << Count);
+          LowOp Op;
+          Op.Opcode = Opcode;
+          Op.Output = NdVar::tmp(0x80, DestBytes);
+          Op.addInput(NdVar::reg(0x70, SourceBytes));
+          Op.addInput(NdVar::scalar(Count, sizeof(Count)));
+          ASSERT_TRUE(Emu.step(Op));
+          const unsigned Amount = std::min<uint64_t>(Count, Bits);
+          const auto Expected =
+              Opcode == NdOp::INT_LEFT ? Value.shl(Amount) : Value.lshr(Amount);
+          EXPECT_EQ(Emu.getRegister(Op.Output.Offset),
+                    Expected.zextOrTrunc(DestBytes * 8).getZExtValue());
+        }
+  }
 }
 
 TEST_F(NdOpEmulatorTest, ScalarWritesPreserveRegisterViewsAndReplaceTemps) {

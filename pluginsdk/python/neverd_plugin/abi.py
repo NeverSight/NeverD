@@ -1256,6 +1256,18 @@ _declare("neverd_session_load", "int", ["neverd_session_t", "const char *"])
 _declare("neverd_session_load_cancellable", "int",
          ["neverd_session_t", "const char *", "neverd_cancel_probe_fn", "void *"])
 _declare(
+    "neverd_model_scan_json_v1",
+    "const char *",
+    ["const char *", "const char *", "neverd_cancel_probe_fn", "void *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_model_rebuild_gguf_json_v1",
+    "const char *",
+    ["const char *", "const char *", "const char *", "neverd_cancel_probe_fn", "void *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_jvm_recover_json_v1",
     "const char *",
     ["const char *", "const char *", "neverd_cancel_probe_fn", "void *"],
@@ -2011,6 +2023,11 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
+    "neverd_session_data_ptr_scan_json", "const char *",
+    ["neverd_session_t", "neverd_cancel_probe_fn", "void *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_sanitize_status_name",
     "const char *",
     ["neverd_sanitize_status_t"],
@@ -2436,6 +2453,20 @@ _declare(
     "neverd_x64_continuation_source_v1",
     "const char *",
     ["neverd_session_t", "const char *", "size_t", "int", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_x64_continuation_source_with_observation_v1",
+    "const char *",
+    ["neverd_session_t", "const char *", "size_t", "const char *",
+     "size_t", "int", "const char * *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_x64_paged_return_entry_source_v1",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t", "const char *", "size_t", "int",
+     "const char * *"],
     ownership=Ownership.OWNED_STRING,
 )
 _declare(

@@ -1,4 +1,5 @@
-//===- SHA512.cpp - Streaming package digests --------------------------===//
+//===- SHA512.cpp - Streaming SHA-384 and SHA-512
+//--------------------------===//
 //
 // NeverD Decompiler
 //
@@ -6,20 +7,16 @@
 ///
 /// \file
 /// SHA-384/512 from FIPS 180-4 sections 4.1.3, 4.2.3, 5 and 6.4/6.5.
-/// This implementation is bounded by the captured-input byte limit.
 ///
 //===----------------------------------------------------------------------===//
 
-#include "SHA512.h"
-
-#include "neverd/web/Error.h"
-#include "neverd/web/Limits.h"
+#include "neverd/support/SHA512.h"
 
 #include <algorithm>
 #include <bit>
 #include <cstring>
 
-namespace neverd::web {
+namespace neverd {
 namespace {
 // FIPS 180-4, section 4.2.3: fractional cube roots of the first 80 primes.
 constexpr std::array<uint64_t, 80> RoundConstants{
@@ -102,9 +99,8 @@ void SHA512::block(const uint8_t *Data) {
 }
 
 void SHA512::update(std::string_view Data) {
-  if (Data.size() > Limits::HardInputBytes - Bytes)
-    throw Error("integrity_byte_budget_exceeded");
   Bytes += Data.size();
+  HighBytes += Bytes < Data.size();
   while (!Data.empty()) {
     if (!Used && Data.size() >= Pending.size()) {
       block(reinterpret_cast<const uint8_t *>(Data.data()));
@@ -130,7 +126,7 @@ std::string SHA512::result() const {
     Copy.block(Copy.Pending.data());
     Copy.Pending.fill(0);
   }
-  // The 512 MiB admission bound leaves the high 64 length bits zero.
+  writeWord(Copy.Pending.data() + 112, (HighBytes << 3) | (Bytes >> 61));
   writeWord(Copy.Pending.data() + 120, Bytes * 8);
   Copy.block(Copy.Pending.data());
   std::string Out(Use384 ? 48 : 64, '\0');
@@ -138,4 +134,4 @@ std::string SHA512::result() const {
     writeWord(reinterpret_cast<uint8_t *>(Out.data()) + 8 * I, Copy.State[I]);
   return Out;
 }
-} // namespace neverd::web
+} // namespace neverd

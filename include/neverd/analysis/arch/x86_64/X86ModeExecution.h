@@ -14,6 +14,7 @@
 #include "neverd/translate/X86/X86LegacyExecution.h"
 #include "neverd/translate/X86/X86LocalApic.h"
 #include "neverd/translate/X86/X86MachineCheck.h"
+#include "neverd/translate/X86/X86TscDeadlineTimer.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
@@ -67,6 +68,7 @@ struct X86ModeState {
   std::optional<X86SmmState> SMM;
   std::optional<translate::X86MachineCheckState> MCA;
   std::optional<X86StartupState> Startup;
+  std::optional<translate::X86TscDeadlineTimer> DeadlineTimer;
   /// The first protected far transfer replaces the pre-PE code cache.
   bool RetainedRealCS = false;
   bool STIBlocked = false;
@@ -96,6 +98,9 @@ struct X86ModeExecutionOptions {
   unsigned PagingAddressBits = 0;
   std::optional<X86ModeUndefinedState> Undefined;
   bool EFERSystemCall = false;
+  /// Whether this CPU counts a retired RSM as a taken branch under TF+BTF.
+  /// Ordinary single stepping and an RSM that shuts down do not use this.
+  std::optional<bool> RsmCountsAsBranch{};
 };
 
 /// The full address and mode jointly identify an original instruction.
@@ -124,6 +129,9 @@ struct X86ModeInterrupts {
   std::optional<uint8_t> StartupVector;
   /// Imported local APIC CMCI LVT delivery mode, vector and mask.
   std::optional<uint32_t> LocalVectorCMCI;
+  /// Absolute guest TSC at this observation. The caller selects timed
+  /// boundaries, including while the processor is halted.
+  std::optional<uint64_t> SampledTSC;
 };
 
 struct X86ModeExecutionResult : translate::X86LegacyExecutionResult {

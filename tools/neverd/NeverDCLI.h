@@ -384,6 +384,7 @@ extern llvm::cl::opt<bool> DumpHigh;
 // Decompile.
 extern llvm::cl::opt<bool> LlvmRoute;
 extern llvm::cl::opt<std::string> X64Continuation;
+extern llvm::cl::opt<std::string> X64XbeginObservation;
 extern llvm::cl::opt<std::string> X86LegacySource;
 extern llvm::cl::opt<std::string> ContinuationReport;
 extern llvm::cl::opt<bool> SourceSymbolic;
@@ -468,6 +469,16 @@ extern llvm::cl::opt<bool> SymbolicExpressions;
 extern llvm::cl::opt<std::string> SafetySinks;
 extern llvm::cl::opt<std::string> SafetySources;
 extern llvm::cl::opt<neverd_scan_analyzers> ScanAnalyzers;
+extern llvm::cl::opt<bool> ModelGGUF;
+extern llvm::cl::opt<std::string> ModelBaseline;
+extern llvm::cl::opt<uint64_t> ModelGap;
+extern llvm::cl::opt<std::string> ModelOptions;
+extern llvm::cl::opt<bool> ModelExternalData;
+extern llvm::cl::opt<uint64_t> ModelScales;
+extern llvm::cl::opt<uint64_t> ModelCompare;
+extern llvm::cl::opt<uint64_t> ModelOffset;
+extern llvm::cl::opt<unsigned> ModelLimit;
+extern llvm::cl::opt<bool> ScanDataPtr;
 extern llvm::cl::opt<unsigned> SafetyMaxPaths;
 extern llvm::cl::opt<unsigned> SafetyMaxSteps;
 extern llvm::cl::opt<unsigned> SafetyMaxLoop;
@@ -787,6 +798,8 @@ int runCallTree(neverd_session_t Sess);
 int runSymbolicExplore(neverd_session_t Sess);
 
 // NeverDCmdSafety.cpp — native memory-safety scan.
+bool modelScanRequested();
+int runModelScan();
 int runScan(neverd_session_t Sess);
 
 // NeverDCmdConcolic.cpp — dedicated versioned JSON command.  It owns its
@@ -856,6 +869,8 @@ bool configureAnalysisSession(neverd_session_t Sess);
 int runPlugins(const char *Argv0);
 int runLift(neverd_session_t Sess);
 int runDecompile(neverd_session_t Sess);
+std::optional<uint64_t> resolveDecompileEntry(neverd_session_t Sess,
+                                              const std::string &Name);
 int runContinuation(neverd_session_t Sess);
 int runPatch(neverd_session_t Sess);
 std::string patchOutputPath();

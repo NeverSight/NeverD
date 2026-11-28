@@ -8,6 +8,7 @@
 
 #include "CallEffects.h"
 #include "CopySemantics.h"
+#include "IndexedReadOutput.h"
 #include "SourceSemantics.h"
 #include "StackSlotFlow.h"
 
@@ -15,6 +16,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/loader/BinaryImageModel.h"
 #include "neverd/safety/Limits.h"
@@ -40,11 +42,13 @@ using namespace neverd::safety;
 
 namespace {
 
-using ValueKey = std::tuple<uint8_t, int, int>;
-
-ValueKey keyOf(const MedVar &V) {
-  return {static_cast<uint8_t>(V.Kind), V.Id, V.SSAVer};
-}
+using detail::IndexedEffects;
+using detail::IndexedReadBlock;
+using detail::keyOf;
+using detail::nativeIndexedLoad;
+using detail::preservesIndexedWrite;
+using detail::unsignedConstant;
+using detail::ValueKey;
 
 enum class StringDuplicationKind : uint8_t {
   None,
@@ -75,16 +79,6 @@ minimumStringDuplicationReadBytes(StringDuplicationKind Kind,
   default:
     return std::nullopt;
   }
-}
-
-std::optional<uint64_t> unsignedConstant(const MedVar &Value) {
-  if (!Value.isConst() || Value.Size == 0 || Value.Size > sizeof(uint64_t) ||
-      isAddressProvenance(Value.Provenance))
-    return std::nullopt;
-  const unsigned Bits = static_cast<unsigned>(Value.Size) * 8;
-  const uint64_t Mask = Bits == 64 ? std::numeric_limits<uint64_t>::max()
-                                   : (uint64_t{1} << Bits) - 1;
-  return Value.ConstVal & Mask;
 }
 
 bool mayForwardPointerInput(NdOp Op, unsigned Input) {
@@ -975,6 +969,7 @@ struct ReturnContract {
   AuthenticatedReturnKind Kind = AuthenticatedReturnKind::Unknown;
   uint16_t Size = 0;
   bool HasValueWithoutCarrier = false;
+  bool Conflicting = false;
 
   bool isPointerKind() const {
     return Kind == AuthenticatedReturnKind::Pointer;
@@ -1069,9 +1064,13 @@ bool containsForbiddenAfter(const symbolic::SymPath &Path,
 class Auditor {
 public:
   Auditor(const AnalysisInput &In, const SinkCatalog &Cat,
-          const SafetyBudgets &Budgets, bool IncludeStackReads)
-      : In(In), Cat(Cat), Budgets(Budgets),
-        IncludeStackReads(IncludeStackReads) {
+          const SafetyBudgets &Budgets, DirectReadInitialization *DirectReads)
+      : In(In), Cat(Cat), Budgets(Budgets), DirectReads(DirectReads) {
+    if (In.LowFuncs) {
+      LowByEntry.reserve(In.LowFuncs->size());
+      for (const LowFunc &F : *In.LowFuncs)
+        LowByEntry.try_emplace(F.Entry, &F);
+    }
     buildSummaries();
   }
 
@@ -1115,7 +1114,8 @@ private:
   const AnalysisInput &In;
   const SinkCatalog &Cat;
   const SafetyBudgets &Budgets;
-  bool IncludeStackReads = false;
+  DirectReadInitialization *DirectReads;
+  llvm::DenseMap<va_t, const LowFunc *> LowByEntry;
   llvm::DenseMap<va_t, Summary> Summaries;
   bool SummaryFixpointComplete = true;
 
@@ -1187,10 +1187,16 @@ private:
     const MedVar &Arg = CI.Args[Index];
     const auto &TRI = getTargetRegInfo(In.Img->Arch);
     const auto Registers = TRI.integerParamRegs(In.Img->abiFormat());
+    if (static_cast<size_t>(Index) >= Registers.size() ||
+        Arg.Size != TRI.addressRegisterBytes())
+      return false;
+    // SSA can propagate a full-register literal NULL from a call delay slot.
+    if (Arg.isConst())
+      return Arg.ConstVal == 0 &&
+             Arg.Provenance == ConstantAddressProvenance::Scalar;
     // SSA may retain the ABI argument register or propagate v0 directly
     // into it. Release still needs the allocation's exact alias at the call.
-    return static_cast<size_t>(Index) < Registers.size() &&
-           Arg.Kind == MedVar::Reg && Arg.Size == TRI.addressRegisterBytes() &&
+    return Arg.Kind == MedVar::Reg &&
            (Arg.RegOff == Registers[Index] || Arg.RegOff == TRI.IntReturnReg);
   }
 
@@ -1277,13 +1283,13 @@ private:
     // result is more convenient for the analysis.  Preserve the uncertainty.
     if (Declared.Kind == AuthenticatedReturnKind::NoValue &&
         Explicit.HasValueWithoutCarrier)
-      return {};
+      return {.Conflicting = true};
     if (Declared.Kind != AuthenticatedReturnKind::Unknown &&
         Explicit.Kind != AuthenticatedReturnKind::Unknown &&
         (Declared.Kind != Explicit.Kind ||
          (Declared.Size != 0 && Explicit.Size != 0 &&
           Declared.Size != Explicit.Size)))
-      return {};
+      return {.Conflicting = true};
     if (Declared.Kind != AuthenticatedReturnKind::Unknown)
       return Declared;
     return Explicit;
@@ -2272,7 +2278,7 @@ private:
         Fn.RequireNonNullCallVA != 0 && !Fn.RequiredPathEvents.empty();
     if (!ConfirmUnsafe && !FilterUnknownLeakPath)
       return true;
-    const LowFunc *LF = In.findLowFunc(Fn.FuncEntry);
+    const LowFunc *LF = LowByEntry.lookup(Fn.FuncEntry);
     auto failClosed = [&](llvm::StringRef Reason, bool Budget = false) {
       if (ConfirmUnsafe) {
         Fn.TheVerdict = Verdict::Unknown;
@@ -2485,7 +2491,7 @@ private:
       }
     }
 
-    if (IncludeStackReads)
+    if (DirectReads)
       auditUninitializedStackReads(F, Mem, Out);
 
     std::optional<ReturnContract> Contract;
@@ -2800,28 +2806,190 @@ private:
     }
   }
 
+  // A completed ordinary store of literal bytes initializes a following
+  // ordinary load on the same path. Keep this write proof separate from
+  // reaching-value recovery, which needs the exact value and width.
+  bool precedingStoreInitializes(const MedOp &Store, const MedOp &Load,
+                                 const MedVar &Addr,
+                                 std::optional<int64_t> ReadOffset,
+                                 const MemModel &Mem) const {
+    if (Store.Opcode != NdOp::STORE || Load.Opcode != NdOp::LOAD ||
+        Store.MemoryOrdering != NdMemoryOrdering::None ||
+        Load.MemoryOrdering != NdMemoryOrdering::None)
+      return false;
+    const MedVar *Value = detail::storedValue(Store);
+    const MedVar *Dest = detail::memoryAddress(Store);
+    // Address provenance describes how to interpret a constant. Its stored
+    // bytes are defined even when the lifter has not classified their use.
+    if (!Value || !Value->isConst() || Value->Size > sizeof(Value->ConstVal) ||
+        Value->Size < Load.Output.Size || !Dest || Dest->Size != Addr.Size)
+      return false;
+    if (ReadOffset) {
+      const auto Written = Mem.stackOffsetThroughReloads(*Dest);
+      return Written && *Written <= *ReadOffset &&
+             uint64_t(*ReadOffset) - uint64_t(*Written) <=
+                 unsigned(Value->Size - Load.Output.Size);
+    }
+    return !Mem.AmbiguousDefs.count(keyOf(Addr)) &&
+           detail::sameReadValue(Addr, *Dest);
+  }
+
+  void finishIndexedReads(const MedFunc &F, const IndexedReadBlock &Proof,
+                          llvm::ArrayRef<int> Written,
+                          const IndexedEffects &Effects) const {
+    if (Written.empty())
+      return;
+    IndexedReadOutput &Result = DirectReads->Indexed;
+    const MedBlock &B = Proof.Block;
+    const MedOp &Ret = B.Ops.back();
+    // On link-register ISAs the RETURN operand may be the control target.
+    // Only an explicit machine result can establish an output here.
+    if (!In.Img || !B.Succs.empty() || !B.ExceptionalSuccs.empty() ||
+        F.ReturnsNoValue || !F.MultiReturn.empty() ||
+        !hasExplicitIntegerReturnValue(Ret, In.Img->Arch, 1)) {
+      Result.OutputUnknown += Written.size();
+      return;
+    }
+    const ReturnContract Contract = returnContract(F);
+    if (Contract.Conflicting || Contract.hasNoValue() ||
+        Contract.Kind == AuthenticatedReturnKind::FloatingPoint ||
+        Contract.Kind == AuthenticatedReturnKind::Aggregate) {
+      Result.OutputUnknown += Written.size();
+      return;
+    }
+    const MedVar &Value = Ret.Inputs[0];
+    const int ReturnIdx = static_cast<int>(B.Ops.size()) - 1;
+    const uint16_t Width =
+        Contract.Size ? std::min(Contract.Size, Value.Size) : Value.Size;
+    const MedOp *Returned = Proof.loadOrigin(Value, ReturnIdx, Width);
+    const MedOp *Stored = nullptr, *Replaced = nullptr;
+    const int LastStore = Effects.lastStore();
+    if (LastStore >= 0 &&
+        (Contract.Kind == AuthenticatedReturnKind::Unknown ||
+         Contract.isPointerKind()) &&
+        valueHasPointerWidth(Value) && Width == Value.Size) {
+      const MedOp &Store = B.Ops[LastStore];
+      const MedVar *Dest = detail::memoryAddress(Store);
+      const MedVar *Bytes = detail::storedValue(Store);
+      if (Bytes && Dest &&
+          Proof.sameAddress(*Dest, LastStore, Value, ReturnIdx)) {
+        Stored = Proof.loadOrigin(*Bytes, LastStore, Bytes->Size);
+        if (Bytes->isConst() && Bytes->Size <= sizeof(Bytes->ConstVal) &&
+            Effects.Previous > Effects.Barrier) {
+          const MedOp &Prior = B.Ops[Effects.Previous];
+          const MedVar *PriorDest = detail::memoryAddress(Prior);
+          const MedVar *PriorValue = detail::storedValue(Prior);
+          if (PriorDest && PriorValue && PriorValue->Size <= Bytes->Size &&
+              Proof.sameAddress(*PriorDest, Effects.Previous, *Dest, LastStore))
+            Replaced = Proof.loadOrigin(*PriorValue, Effects.Previous,
+                                        PriorValue->Size);
+        }
+      }
+    }
+    const auto PointerBase =
+        Replaced ? Proof.pointerBaseDefinition(Value, ReturnIdx) : std::nullopt;
+    for (int Index : Written) {
+      if (Index <= Effects.Barrier)
+        ++Result.OutputUnknown;
+      else if (&B.Ops[Index] == Returned)
+        ++Result.ReturnedValue;
+      else if (&B.Ops[Index] == Stored)
+        ++Result.ReturnedStorage;
+      else if ((Value.isConst() && Index > Effects.Last) ||
+               (&B.Ops[Index] == Replaced && Index > Effects.BeforePrevious &&
+                PointerBase && Index > *PointerBase))
+        ++Result.NoOutput;
+      else
+        ++Result.OutputUnknown;
+    }
+  }
+
   void auditUninitializedStackReads(const MedFunc &F, const MemModel &Mem,
                                     std::vector<Finding> &Out) const {
-    for (const MedBlock &B : F.Blocks)
+    // A dead source load may disappear from machine MedIR. Preserve the
+    // native indexed occurrence as a coverage gap, using its exact origin.
+    llvm::SmallDenseSet<std::pair<va_t, int>, 4> NativeIndexed;
+    if (const LowFunc *Low = LowByEntry.lookup(F.Entry)) {
+      for (const LowBlock &B : Low->Blocks) {
+        for (size_t I = 1; I < B.Ops.size(); ++I) {
+          const LowOp &Load = B.Ops[I];
+          if (Load.Opcode == NdOp::LOAD && nativeIndexedLoad(B, I))
+            NativeIndexed.insert({Load.Addr, Load.Seq});
+        }
+      }
+    }
+    for (const MedBlock &B : F.Blocks) {
+      IndexedReadBlock Proof{F, B, Mem.OpDef, Mem.AmbiguousDefs};
+      llvm::SmallVector<int, 4> Written;
+      IndexedEffects Effects;
       for (int Oi = 0; Oi < static_cast<int>(B.Ops.size()); ++Oi) {
         const MedOp &Op = B.Ops[Oi];
-        if (!detail::isStackMemoryRead(Op.Opcode) || Op.Output.Size == 0)
+        const int PriorStore = Effects.lastStore();
+        if (Op.Opcode == NdOp::STORE ||
+            ((PriorStore >= 0 || !Written.empty()) &&
+             !preservesIndexedWrite(Op)))
+          Effects.record(Oi, Op.Opcode == NdOp::STORE &&
+                                 Op.MemoryOrdering == NdMemoryOrdering::None &&
+                                 Op.MemoryAddressSpace ==
+                                     NdMemoryAddressSpace::Default);
+        if (!detail::isStackMemoryRead(Op.Opcode))
           continue;
+        const bool NativeIndex = Op.Opcode == NdOp::LOAD &&
+                                 !NativeIndexed.empty() &&
+                                 NativeIndexed.erase({Op.Addr, Op.OriginSeq});
         const MedVar *Addr = detail::memoryAddress(Op);
-        if (!Addr)
+        if (!Addr || Op.Output.Size == 0) {
+          const MedVar *Raw = detail::rawMemoryAddress(Op);
+          const auto Shape = Op.Opcode == NdOp::LOAD && Raw
+                                 ? Proof.address(*Raw, Oi, /*Inventory=*/true)
+                                 : std::nullopt;
+          DirectReads->Indexed.WriteUnknown +=
+              NativeIndex || (Shape && Shape->Index);
+          ++DirectReads->OutsideOrUnresolved;
           continue;
+        }
         const std::optional<int64_t> Offset =
             Mem.stackOffsetThroughReloads(*Addr);
-        // Positive entry-SP offsets are caller-owned argument/ABI storage.
-        // This audit only claims local frame bytes below the entry SP.
-        if (!Offset || *Offset >= 0)
-          continue;
         // In a mixed-width frame a memory operation can address through
         // the full GPR that carries the ABI's four-byte pointer.
         const bool FullAddressRegister =
             Mem.MixedWidthStack &&
             Addr->Size == getTargetRegInfo(In.Img->Arch).addressRegisterBytes();
-        if (!valueHasPointerWidth(*Addr) && !FullAddressRegister) {
+        const bool ValidWidth = valueHasPointerWidth(*Addr) ||
+                                (Offset && *Offset < 0 && FullAddressRegister);
+        const bool Adjacent =
+            ValidWidth && Oi > 0 &&
+            precedingStoreInitializes(B.Ops[Oi - 1], Op, *Addr, Offset, Mem);
+        if (Op.Opcode == NdOp::LOAD && (!Offset || NativeIndex)) {
+          const auto Shape = Proof.address(*Addr, Oi, /*Inventory=*/true);
+          if (NativeIndex ||
+              (Shape &&
+               (Shape->Index || Mem.PhiDef.count(keyOf(Shape->Base))))) {
+            const bool Covered =
+                ValidWidth && Shape &&
+                Op.MemoryOrdering == NdMemoryOrdering::None &&
+                Proof.written(*Shape, Op.Output.Size, PriorStore);
+            if (Adjacent || Covered)
+              Written.push_back(Oi);
+            else
+              ++DirectReads->Indexed.WriteUnknown;
+            if (Covered && !Adjacent) {
+              ++DirectReads->BoundedIndexStore;
+              continue;
+            }
+          }
+        }
+        if (Adjacent) {
+          ++DirectReads->PrecedingConstantStore;
+          continue;
+        }
+        if (!Offset || *Offset >= 0) {
+          ++DirectReads->OutsideOrUnresolved;
+          continue;
+        }
+        // Bytes at or above the entry SP belong to the caller.
+        if (!ValidWidth || Op.Output.Size > uint64_t{0} - uint64_t(*Offset)) {
+          ++DirectReads->OutsideOrUnresolved;
           Finding Fn;
           Fn.Origin = Track::Audit;
           Fn.Class = VulnClass::UninitializedRead;
@@ -2834,7 +3002,10 @@ private:
           Fn.CallVA = Op.Addr;
           Fn.Source = NameSource::Synthetic;
           Fn.Flow = ArgFlow::Unknown;
-          Fn.Detail = "memory address has incompatible target pointer width";
+          Fn.Detail =
+              ValidWidth
+                  ? "read extends into caller-owned stack storage"
+                  : "memory address has incompatible target pointer width";
           if (In.Dbg)
             if (auto Loc = In.Dbg->sourceLocation(Op.Addr);
                 Loc && !Loc->File.empty())
@@ -2842,6 +3013,7 @@ private:
           Out.push_back(std::move(Fn));
           continue;
         }
+        ++DirectReads->LocalStack;
         const detail::ReachingStackValues Reaching =
             Mem.reachingRead(B, Oi, *Addr, Op.Output.Size);
         if (!Reaching.Reachable ||
@@ -2874,6 +3046,10 @@ private:
             Fn.SourceLoc = Loc->File + ":" + std::to_string(Loc->Line);
         Out.push_back(std::move(Fn));
       }
+
+      finishIndexedReads(F, Proof, Written, Effects);
+    }
+    DirectReads->Indexed.UnmatchedNative += NativeIndexed.size();
 
     auto auditCallStackSource = [&](const MedCallInfo &CI, int SourceArg,
                                     std::optional<uint64_t> Bytes,
@@ -2910,13 +3086,19 @@ private:
         Out.push_back(std::move(Fn));
         return;
       }
-      if (!Bytes || *Bytes > std::numeric_limits<uint16_t>::max()) {
+      const bool CrossesEntry =
+          Bytes && *Bytes > uint64_t{0} - uint64_t(*Offset);
+      if (CrossesEntry || !Bytes ||
+          *Bytes > std::numeric_limits<uint16_t>::max()) {
         Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
                                  callName(CI), CI.TargetAddr, CI.IsIndirect);
         Fn.ArgIndex = SourceArg;
         Fn.TheVerdict = Verdict::Unknown;
         Fn.TheConfidence = Confidence::Low;
-        Fn.Detail = UnknownDetail.str();
+        Fn.Detail =
+            CrossesEntry
+                ? "call source read extends into caller-owned stack storage"
+                : UnknownDetail.str();
         Out.push_back(std::move(Fn));
         return;
       }
@@ -3337,7 +3519,7 @@ private:
 std::vector<Finding> neverd::safety::auditHeap(const AnalysisInput &In,
                                                const SinkCatalog &Cat,
                                                const SafetyBudgets &Budgets) {
-  Auditor A(In, Cat, Budgets, /*IncludeStackReads=*/false);
+  Auditor A(In, Cat, Budgets, nullptr);
   return A.run();
 }
 
@@ -3351,6 +3533,16 @@ std::vector<Finding>
 neverd::safety::auditMemory(const AnalysisInput &In, const SinkCatalog &Cat,
                             const SafetyBudgets &Budgets,
                             llvm::function_ref<bool()> Canceled) {
-  Auditor A(In, Cat, Budgets, /*IncludeStackReads=*/true);
+  DirectReadInitialization DirectReads;
+  return auditMemory(In, Cat, Budgets, Canceled, DirectReads);
+}
+
+std::vector<Finding>
+neverd::safety::auditMemory(const AnalysisInput &In, const SinkCatalog &Cat,
+                            const SafetyBudgets &Budgets,
+                            llvm::function_ref<bool()> Canceled,
+                            DirectReadInitialization &DirectReads) {
+  DirectReads = {};
+  Auditor A(In, Cat, Budgets, &DirectReads);
   return A.run(Canceled);
 }

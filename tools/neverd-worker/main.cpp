@@ -136,6 +136,53 @@ struct Request {
   Request(Json Value, std::size_t Bytes)
       : value(std::move(Value)), bytes(Bytes) {}
 };
+auto modelScanner() {
+  static auto Scan = engineSymbol<decltype(&neverd_model_scan_json_v1)>(
+      "neverd_model_scan_json_v1");
+  return Scan;
+}
+auto modelRebuilder() {
+  static auto Build =
+      engineSymbol<decltype(&neverd_model_rebuild_gguf_json_v1)>(
+          "neverd_model_rebuild_gguf_json_v1");
+  return Build;
+}
+Engine::Reply scanModel(bool Rebuild, const Json &Input,
+                        std::atomic<bool> &Cancelled) {
+  if (Rebuild ? !modelRebuilder() : !modelScanner())
+    throw Error("unsupported", "This engine does not provide model scanning");
+  auto Path = stringField(Input, "path");
+  if (Path.empty() || Path.find(char(0)) != Path.npos)
+    throw Error("invalid_request", "Invalid local model path");
+  auto Options = Input.value("options", Json::object());
+  if (!Options.is_object())
+    throw Error("invalid_request", "Model options must be an object");
+  auto Stop = [](void *Context) -> int {
+    return static_cast<std::atomic<bool> *>(Context)->load();
+  };
+  std::string Destination;
+  if (Rebuild) {
+    Destination = stringField(Input, "output");
+    if (Destination.empty() || Destination.find(char(0)) != Destination.npos)
+      throw Error("invalid_request", "Invalid new GGUF output path");
+  }
+  auto Settings = Options.dump();
+  std::unique_ptr<const char, decltype(&neverd_free_string)> Report(
+      Rebuild
+          ? modelRebuilder()(Path.c_str(), Destination.c_str(),
+                             Settings.c_str(), Stop, &Cancelled)
+          : modelScanner()(Path.c_str(), Settings.c_str(), Stop, &Cancelled),
+      neverd_free_string);
+  if (!Report)
+    throw Error("engine_error", "Model scan returned no report");
+  if (Input.value("serialized_report", false)) {
+    Json Payload = {{"report_json", Report.get()}};
+    if (Cancelled.load())
+      Payload["status"] = parseJson(Report.get()).at("status");
+    return {std::move(Payload), {}};
+  }
+  return {parseJson(Report.get()), {}};
+}
 auto jvmRecovery() {
   static auto Recover = engineSymbol<decltype(&neverd_jvm_recover_json_v1)>(
       "neverd_jvm_recover_json_v1");
@@ -325,6 +372,7 @@ Json hello() {
                 "analysis_snapshot",
                 "analysis_restore",
                 "prepare_analysis_views",
+                "defer_view_preparation",
                 "analysis_update_names",
                 "analysis_virtual_calls",
                 "prepare_call_summaries",
@@ -446,6 +494,10 @@ Json hello() {
          {"patch_context", "patch_preview", "patch_apply", "patch_revert",
           "patches", "patch_export"})
       result["capabilities"].push_back(operation);
+  if (modelRebuilder())
+    result["capabilities"].push_back("model_rebuild_gguf");
+  if (modelScanner())
+    result["capabilities"].push_back("model_scan");
   if (Engine::keepsSourcePatches())
     for (const char *operation : {"source_patch", "source_patch_context"})
       result["capabilities"].push_back(operation);
@@ -704,7 +756,10 @@ void executeLoop(State &state, Transport &transport) {
         if (scriptOperation(op))
           transport.send(response(value, revision(), project(), "progress",
                                   {{"phase", "reading"}}));
-        auto reply = scriptOperation(op)
+        auto reply = (op == "model_scan" || op == "model_rebuild_gguf")
+                         ? scanModel(op == "model_rebuild_gguf", input,
+                                     request->cancelled)
+                     : scriptOperation(op)
                          ? recoverScript(op, input, request->cancelled)
                      : webRequest ? Engine::Reply{web.execute(op, input), {}}
                                   : engine.executeResponse(op, input);
@@ -753,7 +808,9 @@ void executeLoop(State &state, Transport &transport) {
           }
           result["completed_before_cancellation"] =
               !ComparisonStopped && !scanStopped &&
-              !(scriptOperation(op) && result["status"] == "ok" &&
+              !((scriptOperation(op) || op == "model_scan" ||
+                 op == "model_rebuild_gguf") &&
+                result["status"] == "ok" &&
                 result["payload"].value("status", std::string()) ==
                     "cancelled");
           if (ComparisonOperation)

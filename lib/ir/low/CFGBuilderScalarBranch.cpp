@@ -139,7 +139,10 @@ bool CFGBuilder::recoverScalarConstantBranches(const BinaryImage &Img,
     return true;
   };
   // Numeric and symbolic walks borrow only the same authenticated image
-  // bytes. The cache is scoped to this unchanged-image CFG construction.
+  // bytes. The cache is scoped to this unchanged-image CFG construction. The
+  // walk only follows values to the code they name, so an image that runs at
+  // its link address also yields the addresses it stores (a Go table read
+  // with a constant index).
   auto ReadImage = [&](const LowOp &Op,
                        uint64_t Address) -> std::optional<uint64_t> {
     // The image's own headers describe the image that runs, not this file:
@@ -154,8 +157,8 @@ bool CFGBuilder::recoverScalarConstantBranches(const BinaryImage &Img,
     const auto Key = std::make_pair(Address, Op.Output.Size);
     auto [It, Inserted] = ImageScalars.try_emplace(Key);
     if (Inserted)
-      It->second = readImmutableImageScalar(Img, Address, Op.Output.Size,
-                                            &RemainingWork);
+      It->second = readImmutableBranchScalar(Img, Address, Op.Output.Size,
+                                             &RemainingWork);
     return It->second;
   };
   auto Restore = [&](InsnRecord &Rec) {

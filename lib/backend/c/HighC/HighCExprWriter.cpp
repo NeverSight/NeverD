@@ -43,7 +43,8 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
-#include "neverd/backend/RISCV/RISCVCycleSource.h"
+#include "neverd/backend/RISCV/RISCVCounterSource.h"
+#include "neverd/backend/RISCV/RISCVFloatingSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthLoadC.h"
@@ -2229,7 +2230,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         });
   if (E.IntrinsicId == Intrinsic::X64CallRCX)
     return renderX64CallRCXExpression(
-        Opts.TheArch, E,
+        Opts.TheArch, E, &E != StatementCall,
         [this](const HighExpr &V) { return intrinsicOperandStr(V); },
         [this](const MedVar &V) { return varName(V); },
         [this](const MedVar &V) {
@@ -2357,18 +2358,57 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   std::string Name = resolvedCallTarget(E);
 
   if (E.IntrinsicId != Intrinsic::None) {
-    if (E.IntrinsicId == Intrinsic::PPCVaddubm) {
+    if (auto Form = ppc::vmxBinaryForm(E.IntrinsicId)) {
       if (!isPowerPC(Opts.TheArch) || E.Operands.size() != 2)
-        throw std::runtime_error("invalid PowerPC vector byte addition");
+        throw std::runtime_error("invalid PowerPC vector arithmetic");
       static const std::string Bytes = typeToC(ppc::byteVectorType());
-      return "(__builtin_bit_cast(" + Bytes + ", " + exprStr(*E.Operands[0]) +
-             ") + __builtin_bit_cast(" + Bytes + ", " +
-             exprStr(*E.Operands[1]) + "))";
+      auto Binary = [&](const std::string &Lanes) {
+        const char *Operator =
+            Form->Operation == ppc::VMXOperation::Sub ? " - " : " + ";
+        return "(__builtin_bit_cast(" + Lanes + ", " + exprStr(*E.Operands[0]) +
+               ")" + Operator + "__builtin_bit_cast(" + Lanes + ", " +
+               exprStr(*E.Operands[1]) + "))";
+      };
+      if (Form->LaneBytes == 1)
+        return Binary(Bytes);
+      return "__builtin_bit_cast(" + Bytes + ", " +
+             Binary(typeToC(ppc::vmxVectorType(Form->LaneBytes))) + ")";
     }
-    if (const auto *Read = riscv::cycleRead(E.IntrinsicId)) {
+    if (E.IntrinsicId == Intrinsic::RISCVFloating ||
+        E.IntrinsicId == Intrinsic::RISCVFPControl) {
+      const unsigned XLen = getTargetRegInfo(Opts.TheArch).PointerSize;
+      if (!isRISCV(Opts.TheArch) || E.Operands.empty() ||
+          E.Operands.front()->Kind != ExprKind::Const)
+        throw std::runtime_error("invalid RISC-V FP selector");
+      auto Asm = riscv::fpAssembly(E.IntrinsicId, E.Operands.front()->ConstVal,
+                                   XLen, '%');
+      if (!Asm || E.Operands.size() != 1 + Asm->Count)
+        throw std::runtime_error("invalid RISC-V FP operands");
+      std::vector<std::string> Args;
+      for (unsigned I = 0; I < Asm->Count; ++I) {
+        const auto &V = *E.Operands[1 + I];
+        std::string Arg = exprStr(V);
+        if (riscv::fpRegister(Asm->Inputs[I]) &&
+            (!V.Type || V.Type->Kind != NdTypeKind::Float))
+          Arg = "__builtin_bit_cast(" +
+                std::string(riscv::fpNativeC(Asm->Inputs[I], XLen)) + ", (" +
+                riscv::fpIntegerC(riscv::fpBytes(Asm->Inputs[I], XLen)) + ")(" +
+                Arg + "))";
+        Args.push_back(std::move(Arg));
+      }
+      std::string Result = riscv::fpSource(*Asm, Args, XLen);
+      if (riscv::fpRegister(Asm->Result) &&
+          (!E.Type || E.Type->Kind != NdTypeKind::Float))
+        return "__builtin_bit_cast(" +
+               std::string(
+                   riscv::fpIntegerC(riscv::fpBytes(Asm->Result, XLen))) +
+               ", " + Result + ")";
+      return Result;
+    }
+    if (const auto *Read = riscv::counterRead(E.IntrinsicId)) {
       if (!Read->admits(Opts.TheArch) || !E.Operands.empty())
-        throw std::runtime_error("invalid RISC-V cycle read");
-      return riscv::cycleSource(*Read);
+        throw std::runtime_error("invalid RISC-V counter read");
+      return riscv::counterSource(*Read);
     }
     if (const auto D = ppc::fixedPoint(E.IntrinsicId)) {
       if (!D->admits(Opts.TheArch) || E.Operands.size() != 2 ||
@@ -5451,6 +5491,10 @@ HighCWriter::typedArgumentText(const HighExpr &E, const TypeRef &Expected,
       return "(" + Parameter() + ")" + uintptrOperand(Text);
     };
     if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi) {
+      // A variable that names a place passes the place, as exprStr prints
+      // it: a frame alias has no assignment of its own to read.
+      if (auto Place = placeVarText(*Inner, 16))
+        return AsPointer(*Inner, std::move(*Place));
       const std::string Name = copyForwardName(varName(Inner->Var));
       const HighExpr *From = nullptr;
       std::string Text = printedForwardedVar(Name, 16, &From);
@@ -5469,12 +5513,20 @@ HighCWriter::typedArgumentText(const HighExpr &E, const TypeRef &Expected,
     return AsPointer(E, exprStr(E));
   }
   if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi) {
+    // A variable that names a place passes the place, as exprStr prints it:
+    // a frame alias has no assignment of its own to read.
+    if (auto Place = placeVarText(*Inner, 16))
+      return *Place;
     const std::string Name = copyForwardName(varName(Inner->Var));
     if (const auto Unknown = unknownVarUse(*Inner, Name, varName(Inner->Var));
         !Unknown.empty())
       return Unknown;
-    if (auto Printed = printedForwardedVar(Name, 16); !Printed.empty())
+    if (auto Printed = printedForwardedVar(Name, 16); !Printed.empty()) {
+      if (Printed == Name)
+        if (auto Slot = frameSlotVarText(*Inner))
+          return *Slot;
       return Printed;
+    }
     if (Expected)
       return Name;
   }
@@ -7168,6 +7220,9 @@ std::string HighCWriter::pointerObjectStr(const HighExpr &E) {
     if (auto Member = typedMemberAccess(*Inner))
       return "&" + *Member;
   if (Inner->Kind == ExprKind::Var || Inner->Kind == ExprKind::Phi) {
+    // A variable that names a place is the place, as exprStr prints it.
+    if (auto Place = placeVarText(*Inner, 16))
+      return *Place;
     const std::string Name = copyForwardName(varName(Inner->Var));
     if (auto It = FieldForward.find(Name); It != FieldForward.end())
       return It->second;
@@ -7179,6 +7234,8 @@ std::string HighCWriter::pointerObjectStr(const HighExpr &E) {
     if (std::string Unknown = unknownVarUse(*Inner, Name, varName(Inner->Var));
         !Unknown.empty())
       return Unknown;
+    if (auto Slot = frameSlotVarText(*Inner))
+      return *Slot;
     return Name;
   }
   return exprStr(*Inner);
@@ -8396,42 +8453,8 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
           break;
         }
       }
-    if (auto Reach = ReachingCatchFields.find(Name);
-        Reach != ReachingCatchFields.end())
-      return Reach->second;
-    if (auto Reach = ReachingCatchPtrs.find(Name);
-        Reach != ReachingCatchPtrs.end())
-      return Reach->second;
-    if (InEHClauseBody && isCatchFuncletParentFrame(E.Var))
-      return frameAddressText(
-          E, CurrentFunc->FrameSize > 0 ? -CurrentFunc->FrameSize : 0);
-    // The registration handler's EBP already has an establisher identity in
-    // frameDisplacement. Keep that identity when named slots are replaced by
-    // byte storage; an independent SSA root does not make it an unknown input.
-    if (FrameStorageActive && isRegistrationEstablisherFrame(E.Var))
-      if (const auto Disp = frameDisplacement(E))
-        return frameAddressText(E, *Disp);
-    if (ProjectFrameAliasesIntoStorage) {
-      if (CurrentFunc &&
-          isSyntheticEntryStackPointer(E.Var, *CurrentFunc, Opts.TheArch))
-        return "frame_base";
-      // A frame pointer may be assigned only on a normal try path. Project
-      // its certified displacement at each use so the exceptional edge also
-      // addresses the single byte backing store, rather than reading that
-      // potentially skipped C assignment.
-      if (auto Alias = FrameAliases.find(RawName); Alias != FrameAliases.end())
-        return frameAddressText(E, Alias->second);
-      if (const auto *Entry = frameStorageSlotNamed(Name);
-          Entry && E.Var.Kind != MedVar::Param && !isEmittedParamName(Name) &&
-          !isCxxCatchObjectName(Name)) {
-        const auto &[Disp, Slot] = *Entry;
-        const TypeRef &Type = Slot.Type ? Slot.Type : E.Type;
-        if (auto Member = frameRecordRead(Disp, Type))
-          return bareFrameRead(*Member, ParentPrec);
-        return bareLoad(memoryLoadExpr(Type, frameRecordAddress(Disp)),
-                        ParentPrec);
-      }
-    }
+    if (auto Place = placeVarText(E, ParentPrec))
+      return *Place;
     const HighExpr *Forwarded = nullptr;
     if (auto Printed = printedForwardedVar(Name, ParentPrec, &Forwarded);
         Printed != Name) {
@@ -8447,15 +8470,8 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     }
     if (std::string Unknown = unknownVarUse(E, Name, RawName); !Unknown.empty())
       return Unknown;
-    if (auto Slot = namedFrameSlot(E)) {
-      if (const auto Disp = frameDisplacement(E)) {
-        auto It = FrameSlots.find(*Disp);
-        if (It != FrameSlots.end() && It->second.UsedAsMemory)
-          return IntegerViewOperands.count(&E)
-                     ? PointerInteger("(uintptr_t)&" + *Slot)
-                     : "&" + *Slot;
-      }
-    }
+    if (auto Slot = frameSlotVarText(E))
+      return *Slot;
     // The C declaration is a logical value; a full GPR use observes the
     // ABI carrier. n32/n64 sign-extend even unsigned 32-bit integer
     // parameters. Keep narrow uses narrow so an explicit zero extension
@@ -9293,6 +9309,70 @@ std::string HighCWriter::formatReturnExpr(const HighExpr &Expr) {
   if (printsPointer(Expr, Text))
     return "(" + typeToC(FuncReturnType) + ")(uintptr_t)" + castOperand(Text);
   return Text;
+}
+
+std::optional<std::string> HighCWriter::placeVarText(const HighExpr &E,
+                                                     int ParentPrec) {
+  if (E.Kind != ExprKind::Var && E.Kind != ExprKind::Phi)
+    return std::nullopt;
+  const std::string RawName = varName(E.Var);
+  const std::string Name = copyForwardName(RawName);
+  if (auto Reach = ReachingCatchFields.find(Name);
+      Reach != ReachingCatchFields.end())
+    return Reach->second;
+  if (auto Reach = ReachingCatchPtrs.find(Name);
+      Reach != ReachingCatchPtrs.end())
+    return Reach->second;
+  if (InEHClauseBody && isCatchFuncletParentFrame(E.Var))
+    return frameAddressText(
+        E, CurrentFunc->FrameSize > 0 ? -CurrentFunc->FrameSize : 0);
+  // The registration handler's EBP already has an establisher identity in
+  // frameDisplacement. Keep that identity when named slots are replaced by
+  // byte storage; an independent SSA root does not make it an unknown input.
+  if (FrameStorageActive && isRegistrationEstablisherFrame(E.Var))
+    if (const auto Disp = frameDisplacement(E))
+      return frameAddressText(E, *Disp);
+  if (!ProjectFrameAliasesIntoStorage)
+    return std::nullopt;
+  if (CurrentFunc &&
+      isSyntheticEntryStackPointer(E.Var, *CurrentFunc, Opts.TheArch))
+    return "frame_base";
+  // A frame pointer may be assigned only on a normal try path. Project its
+  // certified displacement at each use so the exceptional edge also
+  // addresses the single byte backing store, rather than reading that
+  // potentially skipped C assignment.
+  if (auto Alias = FrameAliases.find(RawName); Alias != FrameAliases.end())
+    return frameAddressText(E, Alias->second);
+  if (const auto *Entry = frameStorageSlotNamed(Name);
+      Entry && E.Var.Kind != MedVar::Param && !isEmittedParamName(Name) &&
+      !isCxxCatchObjectName(Name)) {
+    const auto &[Disp, Slot] = *Entry;
+    const TypeRef &Type = Slot.Type ? Slot.Type : E.Type;
+    if (auto Member = frameRecordRead(Disp, Type))
+      return bareFrameRead(*Member, ParentPrec);
+    return bareLoad(memoryLoadExpr(Type, frameRecordAddress(Disp)), ParentPrec);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> HighCWriter::frameSlotVarText(const HighExpr &E) {
+  const auto Slot = namedFrameSlot(E);
+  if (!Slot)
+    return std::nullopt;
+  const auto Disp = frameDisplacement(E);
+  if (!Disp)
+    return std::nullopt;
+  const auto It = FrameSlots.find(*Disp);
+  if (It == FrameSlots.end() || !It->second.UsedAsMemory)
+    return std::nullopt;
+  if (!IntegerViewOperands.count(&E))
+    return "&" + *Slot;
+  // On a 64-bit target the source is built on a 64-bit host, where a
+  // pointer converted to uintptr_t is the unsigned 64-bit integer already.
+  std::string Text = "(uintptr_t)&" + *Slot;
+  if (getTargetRegInfo(Opts.TheArch).PointerSize != sizeof(uint64_t))
+    return Text;
+  return typedText(E, std::move(Text), sizeof(uint64_t), /*IsSigned=*/false);
 }
 
 std::string HighCWriter::printedForwardedVar(const std::string &Name,

@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Model Security Scan...</source>
+        <translation>모델 보안 검사...</translation>
+    </message>
+    <message>
+        <source>Inspect local model files and package templates</source>
+        <translation>로컬 모델 파일과 패키지 템플릿 검사</translation>
+    </message>
+    <message>
         <source>Inspect JVM classes and JARs…</source>
         <translation>JVM 클래스 및 JAR 검사…</translation>
     </message>
@@ -11552,6 +11560,193 @@ Your previous graph is still available.</source>
     <message>
         <source>Save native component to a new file</source>
         <translation>네이티브 구성 요소를 새 파일로 저장</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ModelScanDialog</name>
+    <message>
+        <source>Inferred projection layouts</source>
+        <translation>추론한 투영 구조</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>끄기</translation>
+    </message>
+    <message>
+        <source>&amp;Quantization sample (KiB)</source>
+        <translation>양자화 표본 크기(KiB)(&amp;Q)</translation>
+    </message>
+    <message>
+        <source>Model Security Scan</source>
+        <translation>모델 보안 검사</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>폴더…</translation>
+    </message>
+    <message>
+        <source>File…</source>
+        <translation>파일…</translation>
+    </message>
+    <message>
+        <source>Select model package</source>
+        <translation>모델 패키지 선택</translation>
+    </message>
+    <message>
+        <source>Select model file</source>
+        <translation>모델 파일 선택</translation>
+    </message>
+    <message>
+        <source>&amp;Model</source>
+        <translation>모델(&amp;M)</translation>
+    </message>
+    <message>
+        <source>&amp;Baseline (optional)</source>
+        <translation>기준 모델(선택 사항)(&amp;B)</translation>
+    </message>
+    <message>
+        <source>Scan</source>
+        <translation>검사</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>검사 취소</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>분석 작업자 시작 중…</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>근거</translation>
+    </message>
+    <message>
+        <source>Status or type</source>
+        <translation>상태 또는 유형</translation>
+    </message>
+    <message>
+        <source>Selected evidence</source>
+        <translation>선택한 근거</translation>
+    </message>
+    <message>
+        <source>Previous page</source>
+        <translation>이전 페이지</translation>
+    </message>
+    <message>
+        <source>Next page</source>
+        <translation>다음 페이지</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>보고서 내보내기…</translation>
+    </message>
+    <message>
+        <source>Save report to a new file</source>
+        <translation>보고서를 새 파일로 저장</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>분석 작업자가 중지되었습니다.</translation>
+    </message>
+    <message>
+        <source>Reading model artifacts…</source>
+        <translation>모델 파일을 읽는 중…</translation>
+    </message>
+    <message>
+        <source>Model scanning is unavailable in this worker.</source>
+        <translation>이 작업 프로세스는 모델 검사를 지원하지 않습니다.</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>취소됨</translation>
+    </message>
+    <message>
+        <source>%1 tensors</source>
+        <translation>텐서 %1개</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>발견 항목</translation>
+    </message>
+    <message>
+        <source>Coverage gaps</source>
+        <translation>검사하지 못한 범위</translation>
+    </message>
+    <message>
+        <source>Artifacts</source>
+        <translation>모델 파일</translation>
+    </message>
+    <message>
+        <source>Templates</source>
+        <translation>템플릿</translation>
+    </message>
+    <message>
+        <source>Tensors</source>
+        <translation>텐서</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>메타데이터</translation>
+    </message>
+    <message>
+        <source>Exported graphs</source>
+        <translation>내보낸 그래프</translation>
+    </message>
+    <message>
+        <source>Layers inferred from names</source>
+        <translation>이름으로 추정한 레이어</translation>
+    </message>
+    <message>
+        <source>Baseline comparison</source>
+        <translation>기준 모델 비교</translation>
+    </message>
+    <message>
+        <source>Tensor comparison</source>
+        <translation>텐서 비교</translation>
+    </message>
+    <message>
+        <source>Component changes</source>
+        <translation>구성 요소 변경 사항</translation>
+    </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>고급 옵션(JSON)</translation>
+    </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>텐서 또는 연산자 검색</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>그래프 범위</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>선언</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>GGUF 재구성…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>고급 옵션에서 template_policy를 keep, remove 또는 replace로 설정하세요.</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>의존성</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>출처</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>어댑터 행렬</translation>
     </message>
 </context>
 </TS>

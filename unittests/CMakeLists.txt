@@ -90,6 +90,10 @@ add_neverd_unittest(NeverDSupportSharedValueTests
 target_include_directories(NeverDSupportSharedValueTests PRIVATE
   "${CMAKE_SOURCE_DIR}/include")
 
+add_neverd_unittest(NeverDModelArtifactTests
+  model/ModelArtifactTests.cpp
+  LINK_COMPONENTS Model)
+
 add_neverd_unittest(NeverDJVMRecoveryTests
   jvm/JVMRecoveryTests.cpp
   LINK_COMPONENTS JVMRecovery
@@ -125,7 +129,7 @@ target_include_directories(NeverDExportTableTests PRIVATE
 
 add_neverd_unittest(NeverDLowUndefinedDigestTests
   LowUndefinedDigestTests.cpp
-  LINK_COMPONENTS IRLowValidation
+  LINK_COMPONENTS IRLowValidation IR
 )
 
 add_neverd_unittest(NeverDInstructionRelocationsTests
@@ -312,6 +316,22 @@ if(TARGET neverd AND Python3_EXECUTABLE)
       --neverd $<TARGET_FILE:neverd>)
   set_tests_properties(NeverDFunctionListingCLI PROPERTIES
     TIMEOUT 120 LABELS "NeverDFunctionListingCLI")
+  if(NEVERD_TEST_CLANG_EXECUTABLE)
+    add_test(NAME NeverDDataPtrScanCLI
+      COMMAND "${CMAKE_COMMAND}" -E env
+        "NEVERD_TEST_CLI=$<TARGET_FILE:neverd>"
+        "NEVERD_TEST_CLANG=${NEVERD_TEST_CLANG_EXECUTABLE}"
+        "NEVERD_TEST_LIBNEVERD=$<TARGET_FILE:neverd_shared>"
+        "${Python3_EXECUTABLE}" -m unittest scripts.tests.test_data_ptr_scan_cli -v)
+    set_tests_properties(NeverDDataPtrScanCLI PROPERTIES
+      TIMEOUT 120 LABELS "NeverDDataPtrScanCLI" WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    add_test(NAME NeverDDataPtrScanProfiles
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/scripts/tests/test_data_ptr_scan_profiles.py"
+        --neverd $<TARGET_FILE:neverd> --clang "${NEVERD_TEST_CLANG_EXECUTABLE}")
+    set_tests_properties(NeverDDataPtrScanProfiles PROPERTIES
+      TIMEOUT 180 LABELS "NeverDDataPtrScanProfiles")
+  endif()
 endif()
 
 if(TARGET neverd_shared)

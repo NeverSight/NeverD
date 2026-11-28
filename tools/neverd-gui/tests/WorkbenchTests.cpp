@@ -18476,6 +18476,32 @@ private slots:
     QTRY_COMPARE(clipboardText(), displayAddress(Base + 0x10, 16));
   }
 
+  void hiddenStringReferencesLoadTheLatestFilterWhenShown() {
+    QTemporaryDir directory;
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    AddressSpace space;
+    ChooserModel model(session, space, ChooserKind::StringReferences);
+    model.setPageVisible(false);
+    session.open(writeFixture(directory, QStringLiteral("fixture.bin")));
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    model.setFilter(QStringLiteral("Wide"));
+    QVERIFY(!model.loading());
+    QCOMPARE(model.total(), 0);
+    model.setPageVisible(true);
+    QTRY_COMPARE_WITH_TIMEOUT(model.total(), 1, OpenTimeoutMs);
+    QCOMPARE(model.rowObject(0).value("text").toString(),
+             QStringLiteral("Wide"));
+    model.setPageVisible(false);
+    model.setFilter({});
+    QVERIFY(!model.loading());
+    model.cancelLoading();
+    model.setPageVisible(true);
+    QVERIFY(model.cancelled());
+    QVERIFY(!model.loading());
+    model.resumeLoading();
+    QTRY_COMPARE_WITH_TIMEOUT(model.total(), 2, OpenTimeoutMs);
+  }
+
   void stringReferencesAndHexTextEncodings() {
     QTemporaryDir directory;
     const auto path = writeFixture(directory, QStringLiteral("fixture.bin"));

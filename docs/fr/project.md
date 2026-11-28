@@ -1,6 +1,6 @@
 **Langues**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: dc8f42e6cd494f4f2776cff5c3a1fd76711742ca11d1131eaed3b3cf5ea6fa64 -->
+<!-- i18n-source: 0af0d83722aeab684a0e8227e901ca4146336762b19d4173eaf981456cf80116 -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ Les cibles ELF entières expérimentales prennent en charge la traduction strict
 
 | Cible | Profils ELF vérifiés |
 |---|---|
-| RISC-V | RV32 (ILP32, ILP32D) et RV64 (LP64, LP64D) petit-boutistes. Les informations ELF déterminent les extensions M, A et C entière ou les extensions individuelles Zmmul, Zaamo, Zalrsc et Zca. L’attribut ISA du fichier ELF active également Zba 1.0, Zbb 1.0, Zbs 1.0 et Zicond 1.0. Zicntr 2.0 permet `rdcycle` et, sur RV32, `rdcycleh`. |
-| PowerPC | PPC32 System V et PPC64 ELFv1/ELFv2 dans les deux ordres d’octets. PPC32 prend en charge les appels entre modules via la PLT sécurisée et la BSS-PLT classique. Les deux ABI PPC64 prennent en charge les appels entre modules via la PLT et les changements de TOC. ELFv1 utilise des descripteurs de fonction et ELFv2 prend en charge les points d’entrée globaux et locaux. Les opérations scalaires vérifiées couvrent la division signée et non signée, la multiplication qui renvoie le mot de poids fort du produit et la multiplication avec détection de dépassement, ainsi que leurs effets sur CR0 et XER. Sur PPC64, les instructions préfixées de POWER10 pour l’addition, le chargement et le stockage d’entiers sont également prises en charge. L’instruction VMX `vaddubm` additionne 16 paires d’octets modulo 256. |
+| RISC-V | RV32 (ILP32, ILP32D) et RV64 (LP64, LP64D) petit-boutistes. Les informations ELF déterminent les extensions M, A et C entière ou les extensions individuelles Zmmul, Zaamo, Zalrsc et Zca. L’attribut ISA du fichier ELF active également Zba 1.0, Zbb 1.0, Zbs 1.0 et Zicond 1.0. Zicntr 2.0 prend en charge `rdcycle`, `rdtime` et `rdinstret`. RV32 permet aussi de lire les 32 bits de poids fort de chaque compteur. Zbkb 1.0 prend en charge `pack`, `packh` et, sur RV64, `packw`. |
+| PowerPC | PPC32 System V et PPC64 ELFv1/ELFv2 dans les deux ordres d’octets. PPC32 prend en charge les appels entre modules via la PLT sécurisée et la BSS-PLT classique. Les deux ABI PPC64 prennent en charge les appels entre modules via la PLT et les changements de TOC. ELFv1 utilise des descripteurs de fonction et ELFv2 prend en charge les points d’entrée globaux et locaux. Les opérations scalaires vérifiées couvrent la division signée et non signée, la multiplication qui renvoie le mot de poids fort du produit et la multiplication avec détection de dépassement, ainsi que leurs effets sur CR0 et XER. Sur PPC64, les instructions préfixées de POWER10 pour l’addition, le chargement et le stockage d’entiers sont également prises en charge. Les instructions VMX `vaddubm`, `vadduhm` et `vadduwm` additionnent des éléments non signés de 8, 16 et 32 bits respectivement, en ignorant la retenue finale de chaque élément. Les soustractions modulaires correspondantes sont `vsububm`, `vsubuhm` et `vsubuwm`. |
 
 La réécriture du code natif reste à implémenter pour ces profils. [Couverture de RISC-V et PowerPC (en anglais)](../riscv-powerpc.md)
 
@@ -342,6 +342,7 @@ Répétez l’option pour les autres entrées ambiguës, avec `:arm` si nécessa
 | `funcs` | Fonctions découvertes |
 | `disasm` | Désassemblage (`--func` nom ou hex) |
 | `sym-explore` | Exploration bornée des chemins LowIR natifs (`--func` ; sortie JSON) |
+| `scan --gguf` | [Inspecter des modèles locaux, comparer les tenseurs et vérifier un fichier GGUF reconstruit séparément](../model-scan.md) |
 | `scan` | [Vérifie la durée de vie des objets, l’initialisation, les bornes et les chaînes de format (JSON)](../memory-safety-scan.md) |
 | `hex` | Dump hexadécimal à une adresse |
 | `cfg` / `callgraph` | CFG / graphe d’appels (JSON ; DOT/SVG optionnel) |

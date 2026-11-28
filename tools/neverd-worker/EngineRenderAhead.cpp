@@ -408,10 +408,35 @@ RenderStore *Engine::storeOfViews() {
   return renderStore_.get();
 }
 
+bool Engine::hasOpeningWarmPage() {
+  // Most first opens have no stored renders. Their interactive open does not
+  // need to compute a render-store identity or create a listing.
+  std::error_code ec;
+  return std::filesystem::is_directory(
+             projectLocalFolder(projectFolder(), "render-ahead"), ec) &&
+         keptWarmPage(storeOfViews()).has_value();
+}
+
 Json Engine::keptRendersJson() {
-  const auto *store = storeOfViews();
+  auto *store = storeOfViews();
   return {{"kept", store ? store->records() : 0},
-          {"complete", store && store->contains(CompleteKey)}};
+          {"complete", store && store->contains(CompleteKey)},
+          {"warm_page", keptWarmPage(store).has_value()}};
+}
+
+std::optional<std::uint64_t> Engine::keptWarmPage(RenderStore *store) {
+  if (!store || !store->contains(CompleteKey))
+    return std::nullopt;
+  const auto pages = store->read(CompleteKey);
+  if (pages.size() != 1 || pages.front().empty())
+    return std::nullopt;
+  const auto &text = pages.front();
+  std::uint64_t entry = 0;
+  const auto end = text.data() + text.size();
+  const auto [next, error] = std::from_chars(text.data(), end, entry);
+  if (error != std::errc{} || next != end)
+    return std::nullopt;
+  return entry;
 }
 
 void Engine::openFactsStore(const std::string &name, bool writable) {
@@ -573,7 +598,12 @@ bool Engine::renderAheadStep() {
     renderAheadState_ = RenderAheadState::Done;
     renderAheadVerifying_ = false;
     if (store) {
-      store->write(CompleteKey, {});
+      // A later session can repeat the most expensive page's ordinary SDK
+      // warm-up while browsing. It stores only the cursor to that page.
+      std::vector<std::string> pages;
+      if (slowWarmPage_)
+        pages.push_back(std::to_string(*slowWarmPage_));
+      store->write(CompleteKey, pages);
       store->writeIndex();
     }
     if (factsStore_)

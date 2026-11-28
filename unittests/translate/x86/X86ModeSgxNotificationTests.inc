@@ -14,7 +14,7 @@ protected:
   const std::vector<uint8_t> Enclu{0x0f, 1, 0xd7};
   X86SgxPage Secs, TCS, Code, Previous, Next;
 
-  void startThread() {
+  void startThread(std::vector<uint8_t> EntryPrefixes = {}) {
     namespace le = llvm::support::endian;
     start(Mode::Long64);
     auto &V = Machine.Core.Core;
@@ -57,13 +57,16 @@ protected:
     R.GPR[1] = 0x1800;
     R.GPR[3] = Base;
     R.ZMM[2][0] = 0xad;
-    add(0x1000, Mode::Long64, Enclu);
+    EntryPrefixes.insert(EntryPrefixes.end(), Enclu.begin(), Enclu.end());
+    add(0x1000, Mode::Long64, std::move(EntryPrefixes));
   }
 
   void privateInstruction(unsigned Offset, llvm::ArrayRef<uint8_t> Bytes) {
     std::copy(Bytes.begin(), Bytes.end(), Code.Bytes.begin() + Offset);
     Program.push_back({Code.Linear + Offset, Mode::Long64, Bytes.vec()});
   }
+
+  void checkSavedEnclaveOperand(unsigned Leaf);
 
   void bindThread(X86SgxFeatures FeaturesSGX = {}) {
     auto EPC = llvm::cantFail(X86SgxMemory::create(
@@ -76,6 +79,179 @@ protected:
         X86PagedMemory::createWithSgx(RAM, Features, Controls, std::move(EPC)));
   }
 };
+
+TEST_F(X86ModeSgxThreadTest, PrefixedTransfersPreserveNextPCAndFullOperands) {
+  std::vector<std::vector<uint8_t>> Prefixes{{},
+                                             {0x26},
+                                             {0x2e},
+                                             {0x36},
+                                             {0x3e},
+                                             {0x64},
+                                             {0x65},
+                                             {0x67},
+                                             {0x67, 0x65, 0x4f},
+                                             {0x64, 0x67, 0x48}};
+  for (uint8_t Rex = 0x40; Rex <= 0x4f; ++Rex)
+    Prefixes.push_back({Rex});
+  constexpr uint64_t AEP = 0xffff800040001800ull;
+  constexpr uint64_t ExitTarget = 0xffff800010002000ull;
+  for (const auto &Prefix : Prefixes) {
+    SCOPED_TRACE(testing::PrintToString(Prefix));
+    startThread(Prefix);
+    auto Private = Prefix;
+    Private.insert(Private.end(), Enclu.begin(), Enclu.end());
+    privateInstruction(0, Private);
+    auto &R = Machine.Core.Core.Core.Core.Core.Core;
+    R.GPR[0] = 0xdeadbeef00000002ull;
+    R.GPR[1] = AEP;
+    bindThread();
+    X86ModeExecution Execution(*Memory, Options);
+    uint64_t Budget = 1;
+    auto Enter = llvm::cantFail(Execution.run(Machine, Program, Budget));
+    ASSERT_EQ(Enter.Completions, 1u) << Enter.OwnerError;
+    ASSERT_TRUE(Memory->sgxMemory()->active());
+    EXPECT_EQ(R.PC, Code.Linear);
+    EXPECT_EQ(R.GPR[1], 0x1000 + Private.size());
+    R.GPR[0] = 0xdeadbeef00000004ull;
+    R.GPR[3] = ExitTarget;
+    Budget = 1;
+    auto Exit = llvm::cantFail(Execution.run(Machine, Program, Budget));
+    ASSERT_EQ(Exit.Completions, 1u) << Exit.OwnerError;
+    EXPECT_FALSE(Memory->sgxMemory()->active());
+    EXPECT_EQ(R.PC, ExitTarget);
+    EXPECT_EQ(R.GPR[1], AEP);
+  }
+}
+
+TEST_F(X86ModeSgxThreadTest, EncluEncodingFaultsPrecedeLeafAndOperandAccess) {
+  struct Case {
+    std::vector<uint8_t> Prefix;
+    uint32_t Leaf;
+    bool TaskSwitched;
+    uint8_t Vector;
+  };
+  for (const Case &C :
+       std::vector<Case>{{{0x67}, 0, false, 13},
+                         {{0x67}, 1, false, 13},
+                         {{0x67}, 2, false, 13},
+                         {{0x67}, 0, true, 7},
+                         {{0x66}, 2, true, 6},
+                         {{0xf0}, 2, true, 6},
+                         {{0xf2}, 2, true, 6},
+                         {{0xf3}, 2, true, 6},
+                         {{0x65, 0xf2, 0x67, 0x4f}, 1, false, 6}}) {
+    SCOPED_TRACE(testing::Message()
+                 << testing::PrintToString(C.Prefix) << " leaf=" << C.Leaf);
+    startThread(C.Prefix);
+    auto &V = Machine.Core.Core;
+    auto &R = V.Core.Core.Core.Core;
+    R.GPR[0] = uint64_t{0xcafef00d} << 32 | C.Leaf;
+    R.GPR[3] = (uint64_t{1} << 48) | Base;
+    const auto InitialCR2 = V.Core.Core.CR2;
+    if (C.TaskSwitched)
+      Controls.CR0 |= 8;
+    bindThread();
+    X86ModeExecution Execution(*Memory, Options);
+    uint64_t Budget = 1;
+    auto Fault = llvm::cantFail(Execution.run(Machine, Program, Budget));
+    ASSERT_EQ(Fault.DeliveredVector, C.Vector) << Fault.OwnerError;
+    EXPECT_EQ(Fault.Completions, 0u);
+    EXPECT_EQ(Fault.Attempts, 1u);
+    EXPECT_EQ(V.Core.Core.CR2, InitialCR2);
+    EXPECT_FALSE(Memory->sgxMemory()->active());
+    const auto Frame = bytes(*Memory);
+    const auto SP = R.GPR[4];
+    if (C.Vector == 13)
+      EXPECT_EQ(word(Frame, SP, 8), 0u);
+    EXPECT_EQ(word(Frame, SP + (C.Vector == 13 ? 8 : 0), 8), 0x1000u);
+  }
+}
+
+TEST_F(X86ModeSgxThreadTest, EnclaveKeyAndReportFaultBeforePrivateOperands) {
+  for (uint32_t Leaf : {0u, 1u}) {
+    for (uint64_t Address :
+         {Base + 1, Base + 0x8000, (uint64_t{1} << 48) | Base}) {
+      SCOPED_TRACE(testing::Message()
+                   << "leaf=" << Leaf << " address=" << Address);
+      startThread({0x67});
+      privateInstruction(0, {0x67, 0x0f, 1, 0xd7});
+      const auto Outside = Machine;
+      bindThread();
+      X86ModeExecution Execution(*Memory, Options);
+      uint64_t Budget = 1;
+      auto Enter = llvm::cantFail(Execution.run(Machine, Program, Budget));
+      ASSERT_EQ(Enter.Completions, 1u) << Enter.OwnerError;
+      auto &R = Machine.Core.Core.Core.Core.Core.Core;
+      const uint64_t AX = (uint64_t{0xfedcba98} << 32) | Leaf;
+      R.GPR[0] = AX;
+      R.GPR[3] = Address;
+      Budget = 1;
+      auto Fault = llvm::cantFail(Execution.run(Machine, Program, Budget));
+      ASSERT_EQ(Fault.DeliveredVector, 13u) << Fault.OwnerError;
+      EXPECT_EQ(Fault.Completions, 0u);
+      ASSERT_FALSE(Memory->sgxMemory()->active());
+      const auto Frame = bytes(*Memory);
+      EXPECT_EQ(word(Frame, R.GPR[4], 8), 0u);
+      EXPECT_EQ(word(Frame, R.GPR[4] + 8, 8), 0x1800u);
+
+      Machine = Outside;
+      llvm::cantFail(Memory->bindControls(Controls));
+      R.GPR[0] = 3;
+      Budget = 1;
+      auto Resume = llvm::cantFail(Execution.run(Machine, Program, Budget));
+      ASSERT_EQ(Resume.Completions, 1u) << Resume.OwnerError;
+      EXPECT_EQ(R.PC, Code.Linear);
+      EXPECT_EQ(R.GPR[0], AX);
+      EXPECT_EQ(R.GPR[3], Address);
+    }
+  }
+}
+
+TEST_F(X86ModeSgxThreadTest, PendingVirtualInterruptRestartsEnclaveExit) {
+  startThread({0x67});
+  privateInstruction(0, {0x65, 0x67, 0x4f, 0x0f, 1, 0xd7});
+  Controls.CR4 |= 2; // PVI.
+  const auto Outside = Machine;
+  bindThread();
+  X86ModeExecution Execution(*Memory, Options);
+  uint64_t Budget = 1;
+  auto Enter = llvm::cantFail(Execution.run(Machine, Program, Budget));
+  ASSERT_EQ(Enter.Completions, 1u) << Enter.OwnerError;
+  ASSERT_TRUE(Memory->sgxMemory()->active());
+  auto &R = Machine.Core.Core.Core.Core.Core.Core;
+  ASSERT_EQ(R.PC, Code.Linear);
+  R.GPR[0] = 4;
+  R.GPR[3] = 0x2000;
+  R.RFlags |= 0x180000; // Both virtual interrupt bits pending at EEXIT.
+  Budget = 1;
+  auto Interrupted = llvm::cantFail(Execution.run(Machine, Program, Budget));
+  ASSERT_EQ(Interrupted.DeliveredVector, 13u) << Interrupted.OwnerError;
+  EXPECT_EQ(Interrupted.Attempts, 1u);
+  EXPECT_EQ(Interrupted.Completions, 0u);
+  EXPECT_FALSE(Memory->sgxMemory()->active());
+  const auto OutsideFrame = bytes(*Memory);
+  EXPECT_EQ(word(OutsideFrame, R.GPR[4], 8), 0u);
+  EXPECT_EQ(word(OutsideFrame, R.GPR[4] + 8, 8), 0x1800u);
+
+  // The outside handler resolves the virtual interrupt condition before
+  // ERESUME. The retained SSA must select the original EEXIT and operands.
+  Machine = Outside;
+  Controls.CR4 &= ~uint64_t{2};
+  llvm::cantFail(Memory->bindControls(Controls));
+  R.GPR[0] = 3;
+  Budget = 1;
+  auto Resume = llvm::cantFail(Execution.run(Machine, Program, Budget));
+  ASSERT_EQ(Resume.Completions, 1u) << Resume.OwnerError;
+  ASSERT_TRUE(Memory->sgxMemory()->active());
+  EXPECT_EQ(R.PC, Code.Linear);
+  EXPECT_EQ(R.GPR[0], 4u);
+  EXPECT_EQ(R.GPR[3], 0x2000u);
+  Budget = 1;
+  auto Exit = llvm::cantFail(Execution.run(Machine, Program, Budget));
+  EXPECT_EQ(Exit.Completions, 1u) << Exit.OwnerError;
+  EXPECT_FALSE(Memory->sgxMemory()->active());
+  EXPECT_EQ(R.PC, 0x2000u);
+}
 
 TEST_F(X86ModeSgxThreadTest,
        EnclaveNotificationResumeAndDecrementSelectCorrectFrames) {

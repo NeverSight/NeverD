@@ -17,8 +17,10 @@
 #include "X64SegmentMoveEncoding.h"
 #include "X64UserInterruptEncoding.h"
 
+#include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 #include "neverd/lift/X86/X86DebugRegisterEncoding.h"
 #include "neverd/lift/X86/X86HleEncoding.h"
 #include "neverd/lift/X86/X86HypercallEncoding.h"
@@ -77,8 +79,7 @@ class ImageProvider final : public SpecializationProvider {
   // Continuation source binds the exact original instruction bytes explicitly
   // at runtime. It never claims a Windows loader/fixed-image theorem and never
   // folds data reads. Other users retain the complete PE evidence boundary.
-  const bool ContinuationSnapshot;
-  const bool PagedDebug;
+  const X64ContinuationSourceOptions *ContinuationSnapshot;
   std::map<va_t, SpecializationTerminalImport> TerminalImports;
   std::shared_ptr<const SpecializationRawEnvironment> RawDomain;
 
@@ -138,12 +139,13 @@ class ImageProvider final : public SpecializationProvider {
   }
 
 public:
-  ImageProvider(const BinaryImage &Image, const SpecializationOptions &Options,
-                bool PreserveOpaqueState = false,
-                bool ContinuationSnapshot = false, bool PagedDebug = false)
+  ImageProvider(
+      const BinaryImage &Image, const SpecializationOptions &Options,
+      bool PreserveOpaqueState = false,
+      const X64ContinuationSourceOptions *ContinuationSnapshot = nullptr)
       : Image(Image), Options(Options),
         PreserveOpaqueState(PreserveOpaqueState),
-        ContinuationSnapshot(ContinuationSnapshot), PagedDebug(PagedDebug) {
+        ContinuationSnapshot(ContinuationSnapshot) {
     Decode.init(Arch::X64);
     Decode.setStrict(true);
     auto RawCost = x64::validateRawEnvironmentDeclarations(Options);
@@ -265,17 +267,23 @@ public:
       Window =
           llvm::ArrayRef<uint8_t>(S->Data).drop_front(Cursor.Address - S->VA);
     }
-    const size_t Size = std::min<size_t>(15, Window.size());
+    const size_t Size = std::min(x86::kMaxInstructionLen, Window.size());
     DecodedInsn Insn{};
     const auto DebugRegister =
-        PagedDebug ? x86DebugRegisterEncoding(Window.take_front(Size), true)
-                   : std::nullopt;
-    const bool Decoded =
-        DebugRegister ||
-        Decode.decodeOneForLift(Window.data(), Size, Cursor.Address, Insn);
+        ContinuationSnapshot && ContinuationSnapshot->PagedDebug
+            ? x86DebugRegisterEncoding(Window.take_front(Size), true)
+            : std::nullopt;
+    const auto FetchFault =
+        ContinuationSnapshot && ContinuationSnapshot->PagedMemory
+            ? x86PagedCode64FaultEncoding(Window.data(), Size)
+            : std::nullopt;
     if (DebugRegister)
       Insn.Size = DebugRegister->Size;
-    if (!Decoded || !Insn.Size || Insn.Size > Window.size() ||
+    else if (FetchFault)
+      Insn.Size = FetchFault->Size;
+    else
+      Decode.decodeOneForLift(Window.data(), Size, Cursor.Address, Insn);
+    if (!Insn.Size || Insn.Size > Window.size() ||
         (Supplemental.empty() &&
          !immutableMapping(Cursor.Address, Insn.Size, true)))
       return llvm::createStringError(llvm::errc::invalid_argument,
@@ -295,17 +303,28 @@ public:
         return llvm::createStringError(
             llvm::errc::not_supported,
             "exception edges require a recovery contract");
-    if (DebugRegister) {
+    if (DebugRegister || FetchFault) {
       SpecializationInstruction Result;
       Result.NativeBytes.assign(Window.begin(), Window.begin() + Insn.Size);
       Result.Origin.Address = Cursor.Address;
       Result.Origin.Size = Insn.Size;
       Result.Origin.Mode = Cursor.Mode;
       Result.Fallthrough = {Cursor.Address + Insn.Size, Cursor.Mode};
-      Result.ProfileProjection =
-          InterpreterProfileProjection::X64DebugRegisterV1;
-      Result.UndefinedEffects.Diagnostic =
-          "MOV-DR requires the paged debug-register profile";
+      if (FetchFault) {
+        Result.Origin.Control = LowInstructionControl::Terminator;
+        Result.Origin.ControlFlags = LowInstructionControlFlag::Terminator;
+        Result.ProfileProjection =
+            FetchFault->Operation == X86PagedCode64FaultEncoding::UD0
+                ? InterpreterProfileProjection::X64PagedUD0
+                : InterpreterProfileProjection::X64PagedPrefixLengthFault;
+        Result.UndefinedEffects.Diagnostic =
+            "original fault requires the paged instruction-fetch profile";
+      } else {
+        Result.ProfileProjection =
+            InterpreterProfileProjection::X64DebugRegisterV1;
+        Result.UndefinedEffects.Diagnostic =
+            "MOV-DR requires the paged debug-register profile";
+      }
       return Result;
     }
     // x87 and other sequence-dependent lifter state are outside this adapter's
@@ -326,6 +345,13 @@ public:
             "unsupported disabled-CET instruction encoding");
     }
     bool LoadedMemoryCall = false;
+    bool LoadedMemoryJump = false;
+    const bool DeclaredJumpExit = std::any_of(
+        Options.X64MachineExits.begin(), Options.X64MachineExits.end(),
+        [&](const auto &Exit) {
+          return Exit.Address == Cursor.Address &&
+                 Exit.Kind == SpecializationX64MachineExitKind::Jump;
+        });
     try {
       // With shadow stacks explicitly disabled, RDSSP leaves its destination
       // unchanged. This instruction-specific architectural rule must precede
@@ -413,11 +439,26 @@ public:
           LoadedMemoryCall = Decode.liftX64MemoryCallToLow(
               Insn, Result.Ops, &Result.UndefinedEffects,
               PreserveOpaqueState ? &Result.PreservedState : nullptr);
-        if (!LoadedMemoryCall) {
+        if (Options.ExplicitMachineState && Options.X64CetDisabled &&
+            !ContinuationSnapshot && !DeclaredJumpExit &&
+            Insn.Id == X86_INS_JMP)
+          LoadedMemoryJump = Decode.liftX64MemoryJumpToLow(
+              Insn, Result.Ops, &Result.UndefinedEffects,
+              PreserveOpaqueState ? &Result.PreservedState : nullptr);
+        if (!LoadedMemoryCall && !LoadedMemoryJump) {
           Result.UndefinedEffects = {};
           Decode.liftToLow(Insn, Result.Ops, {}, {}, &Result.UndefinedEffects,
                            PreserveOpaqueState ? &Result.PreservedState
                                                : nullptr);
+          if (Options.ExplicitMachineState && Options.X64CetDisabled &&
+              !ContinuationSnapshot && !DeclaredJumpExit &&
+              Insn.Id == X86_INS_JMP && !Result.Ops.empty() &&
+              Result.Ops.back().Opcode == NdOp::INDIR_BR &&
+              Result.Ops.back().NumInputs == 1 &&
+              Result.Ops.back().Inputs[0].isConst())
+            return llvm::createStringError(
+                llvm::errc::not_supported,
+                "constant-slot jump lacks an exact target-load projection");
         }
         if (Options.X64CetDisabled &&
             (Insn.Id == X86_INS_INCSSPD || Insn.Id == X86_INS_INCSSPQ))
@@ -664,9 +705,9 @@ validateBinaryImage(const BinaryImage &Image,
 } // namespace
 
 llvm::Expected<std::vector<SpecializationInstruction>>
-readBinaryX64ContinuationInstructions(const BinaryImage &Image,
-                                      llvm::ArrayRef<va_t> Addresses,
-                                      bool PagedDebug) {
+readBinaryX64ContinuationInstructions(
+    const BinaryImage &Image, llvm::ArrayRef<va_t> Addresses,
+    const X64ContinuationSourceOptions &SourceOptions) {
   SpecializationOptions Options;
   Options.ExplicitMachineState = true;
   Options.NormalNonfaultingExecution = true;
@@ -674,7 +715,7 @@ readBinaryX64ContinuationInstructions(const BinaryImage &Image,
   if (auto Failure = validateBinaryImage(Image, Options))
     return llvm::createStringError(llvm::errc::not_supported,
                                    Failure->Diagnostic);
-  ImageProvider Provider(Image, Options, false, true, PagedDebug);
+  ImageProvider Provider(Image, Options, false, &SourceOptions);
   SpecializationResult Preparation;
   if (Provider.preparationFailed(Preparation))
     return llvm::createStringError(llvm::errc::not_supported,

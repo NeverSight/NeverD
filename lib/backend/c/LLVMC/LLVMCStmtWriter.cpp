@@ -57,7 +57,8 @@
 #include "neverd/backend/MIPS/MIPSScalarFPSource.h"
 #include "neverd/backend/MachineInstructionText.h"
 #include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
-#include "neverd/backend/RISCV/RISCVCycleSource.h"
+#include "neverd/backend/RISCV/RISCVCounterSource.h"
+#include "neverd/backend/RISCV/RISCVFloatingSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/NativeVectorCall.h"
@@ -5063,21 +5064,63 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   if (!IA)
     return false;
   if (isRISCV(Opts.TheArch)) {
-    const riscv::CycleRead *Read = nullptr;
-#define NEVERD_RISCV_CYCLE(Id, Value, Word, High, Text)                        \
+    if (const auto *Tag = Call.getMetadata("neverd.riscv.fp")) {
+      const auto Number = [&](unsigned I) -> const llvm::ConstantInt * {
+        return I < Tag->getNumOperands()
+                   ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(
+                         Tag->getOperand(I))
+                   : nullptr;
+      };
+      if (Tag->getNumOperands() != 2 || !Number(0) || !Number(1) ||
+          !Number(0)->getType()->isIntegerTy(32) ||
+          !Number(1)->getType()->isIntegerTy(32))
+        throw std::invalid_argument("invalid RISC-V FP assembly tag");
+      const unsigned XLen = getTargetRegInfo(Opts.TheArch).PointerSize;
+      const auto Id = static_cast<Intrinsic>(Number(0)->getZExtValue());
+      const auto Selector = Number(1)->getZExtValue();
+      auto Asm = riscv::fpAssembly(Id, Selector, XLen, '$');
+      auto Matches = [&](llvm::Type *T, riscv::FPValue V) {
+        if (V == riscv::FPValue::S)
+          return T->isFloatTy();
+        if (V == riscv::FPValue::D)
+          return T->isDoubleTy();
+        return T->isIntegerTy(8 * riscv::fpBytes(V, XLen));
+      };
+      if (!Asm || !IA->hasSideEffects() || IA->getAsmString() != Asm->Text ||
+          IA->getConstraintString() != Asm->Constraints ||
+          Call.arg_size() != Asm->Count ||
+          !Matches(Call.getType(), Asm->Result))
+        throw std::invalid_argument("invalid RISC-V FP assembly");
+      std::vector<std::string> Args;
+      for (unsigned I = 0; I < Asm->Count; ++I) {
+        auto *Arg = Call.getArgOperand(I);
+        if (!Matches(Arg->getType(), Asm->Inputs[I]))
+          throw std::invalid_argument("invalid RISC-V FP operand");
+        Args.push_back(valueStr(Arg));
+      }
+      emitIndent(Indent);
+      if (!Call.use_empty())
+        OS << Name << " = ";
+      OS << riscv::fpSource(*riscv::fpAssembly(Id, Selector, XLen, '%'), Args,
+                            XLen)
+         << ";\n";
+      return true;
+    }
+    const riscv::CounterRead *Read = nullptr;
+#define NEVERD_RISCV_COUNTER(Id, Value, Word, Kind, High, Text)                \
   if (IA->getAsmString() == Text " $0")                                        \
-    Read = riscv::cycleRead(Intrinsic::Id);
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+    Read = riscv::counterRead(Intrinsic::Id);
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.def"
     if (Read) {
       if (!Read->admits(Opts.TheArch) || !IA->hasSideEffects() ||
           IA->getConstraintString() != "=r" || !Call.arg_empty() ||
           !Call.getType()->isIntegerTy(
               getTargetRegInfo(Opts.TheArch).PointerSize * 8))
-        throw std::invalid_argument("invalid RISC-V cycle read assembly");
+        throw std::invalid_argument("invalid RISC-V counter read assembly");
       emitIndent(Indent);
       if (!Call.use_empty())
         OS << Name << " = ";
-      OS << riscv::cycleSource(*Read) << ";\n";
+      OS << riscv::counterSource(*Read) << ";\n";
       return true;
     }
   }
@@ -7143,7 +7186,7 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     }
     if (const auto *Callee = Call.getCalledFunction();
         Callee && !needsCallSiteCType(Call)) {
-      const auto &Parameters = definitionPointerTypes(*Callee).Parameters;
+      const auto &Parameters = definitionSourceTypes(*Callee).Parameters;
       if (ArgIdx < Parameters.size() && Parameters[ArgIdx].Type) {
         Expr += imagePointerArgument(Operand,
                                      "(" + Parameters[ArgIdx].declaration() +

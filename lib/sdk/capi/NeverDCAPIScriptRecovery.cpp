@@ -10,6 +10,7 @@
 #include "neverd/analysis/JVMRecovery.h"
 #include "neverd/analysis/LuaRecovery.h"
 #include "neverd/analysis/PythonRecovery.h"
+#include "neverd/model/Artifact.h"
 #include "neverd/sdk/NeverDCAPISession.h"
 
 #include <cstdlib>
@@ -29,6 +30,24 @@ template <class Build> const char *ownedReport(Build Make) {
   }
 }
 } // namespace
+const char *neverd_model_scan_json_v1(const char *Path, const char *Settings,
+                                      neverd_cancel_probe_fn Stop,
+                                      void *Context) {
+  return ownedReport([&] {
+    return neverd::model::scanJSON(Path, Settings,
+                                   [&] { return Stop && Stop(Context); });
+  });
+}
+const char *neverd_model_rebuild_gguf_json_v1(const char *Input,
+                                              const char *Output,
+                                              const char *Settings,
+                                              neverd_cancel_probe_fn Stop,
+                                              void *Context) {
+  return ownedReport([&] {
+    return neverd::model::rebuildGGUF(Input, Output, Settings,
+                                      [&] { return Stop && Stop(Context); });
+  });
+}
 const char *neverd_lua_recover_json_v1(const char *Path, const char *Profile,
                                        neverd_cancel_probe_fn Stop,
                                        void *Context) {

@@ -35,6 +35,8 @@ TEST_F(X64PagedBranchDebugTest, OriginalBranchSelectionThroughBothCRoutes) {
   neverd::test::X86BranchDebugOracle CPU;
   ASSERT_NO_FATAL_FAILURE(
       CPU.initialize(neverd::test::X86BranchDebugOracle::Mode::Long64));
+  if (!CPU.tracePermitted())
+    GTEST_SKIP() << CPU.TracePermissionDeniedReason;
   const bool BlockSteps = CPU.stepsByBlocks();
   ASSERT_FALSE(HasFatalFailure());
   auto Cases = neverd::test::x86BranchDebugCases(false);

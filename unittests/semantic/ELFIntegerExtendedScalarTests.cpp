@@ -31,6 +31,7 @@ using namespace neverd;
 namespace {
 #include "../lift/fixtures/CycleVMX.inc"
 #include "../lift/fixtures/RISCVConditionalZero.inc"
+#include "../lift/fixtures/RISCVPack.inc"
 #include "ELFIntegerExtendedFixture.inc"
 
 TEST(PowerPCPrefixed, SignedD34AndFetchBoundaries) {
@@ -215,7 +216,53 @@ void expectRISCVResult(const BinaryImage &Img, Decoder &D, uint32_t Word,
   EXPECT_EQ(Emu.getRegister(integerreg::gpr(0)).value_or(0), 0u);
 }
 
-TEST(RISCVCycle, SamplesOncePerReadAcrossRV32Rollover) {
+TEST(RISCVPacking, OperandOrderAliasesAndExtensionSelection) {
+  using namespace pack_fixture;
+  constexpr uint64_t X = UINT64_C(0xaabbccdd12349955);
+  constexpr uint64_t Y = UINT64_C(0x11223344dead80ab);
+  for (Arch A : {Arch::RISCV32, Arch::RISCV64}) {
+    const bool Wide = isRISCV64(A);
+    const uint64_t Packed = Wide ? UINT64_C(0xdead80ab12349955) : 0x80ab9955;
+    for (bool Zbkb : {false, true})
+      for (bool Zbb : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << " Zbkb=" << Zbkb << " Zbb=" << Zbb);
+        BinaryImage Img;
+        Img.Arch = A;
+        Img.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+        Img.RISCV = {.Zbb = Zbb, .Zbkb = Zbkb};
+        Decoder D;
+        ASSERT_TRUE(D.init(Img));
+        const auto Check = [&](uint32_t Word, bool Enabled, uint64_t Value,
+                               unsigned Dst = 10) {
+          if (Enabled) {
+            expectRISCVResult(Img, D, Word, X, Y, Value, Dst);
+            return;
+          }
+          uint8_t Code[4];
+          llvm::support::endian::write32le(Code, Word);
+          DecodedInsn I;
+          if (D.decodeOneForLift(Code, sizeof(Code), 0x1000, I)) {
+            std::vector<LowOp> Ops;
+            EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+            EXPECT_TRUE(Ops.empty());
+          }
+        };
+        Check(Pack, Zbkb, Packed);
+        Check(PackIntoHigh, Zbkb, Packed, 11);
+        Check(PackDiscard, Zbkb, X);
+        Check(PackH, Zbkb, 0xab55);
+        Check(PackHZeroLow, Zbkb, 0xab00);
+        Check(PackW, Wide && Zbkb, UINT64_C(0xffffffff80ab9955));
+        Check(PackZeroHigh, Zbkb || (!Wide && Zbb),
+              Wide ? uint32_t(X) : uint16_t(X));
+        Check(PackWZeroHigh, Wide && (Zbkb || Zbb), uint16_t(X));
+        Check(Brev8, false, 0);
+      }
+  }
+}
+
+TEST(RISCVCounter, SamplesOncePerReadAcrossRV32Rollover) {
   for (Arch A :
        {Arch::RISCV32, Arch::RISCV32D, Arch::RISCV64, Arch::RISCV64D}) {
     const bool Wide = isRISCV64(A);
@@ -225,47 +272,108 @@ TEST(RISCVCycle, SamplesOncePerReadAcrossRV32Rollover) {
     Img.RISCV.Zicntr = true;
     Decoder D;
     ASSERT_TRUE(D.init(Img));
-    NdOpEmulator Emu(Img);
-    const uint64_t Samples[] = {0x12fffffffe, 0x12ffffffff, 0x1300000000,
-                                0x1300000001, 0x1300000002, 0x1300000003};
-    size_t Next = 0;
-    Emu.setRISCVCycleReader([&]() -> std::optional<uint64_t> {
-      if (Next == std::size(Samples))
-        return std::nullopt;
-      return Samples[Next++];
-    });
-    for (size_t I = 0; I <= std::size(Samples); ++I) {
-      const bool High = !Wide && I % 3 != 1;
-      const bool Discard = I == std::size(Samples) || (Wide && I == 3);
-      const uint32_t Word = Discard ? cycle_fixture::Discard
-                            : High  ? cycle_fixture::High
-                                    : cycle_fixture::Low;
-      uint8_t Code[4];
-      llvm::support::endian::write32le(Code, Word);
-      DecodedInsn Insn;
-      ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), 0x1000, Insn), 4);
-      std::vector<LowOp> Ops;
-      ASSERT_NO_THROW(D.liftToLow(Insn, Ops));
-      ASSERT_EQ(Ops.size(), 1u);
-      NdOpEmulator Unavailable(Img);
-      for (bool Strict : {false, true}) {
-        Unavailable.setStrictMode(Strict);
-        EXPECT_FALSE(Unavailable.step(Ops.front()));
+    for (const auto &C : cycle_fixture::Counters) {
+      NdOpEmulator Emu(Img);
+      const uint64_t Samples[] = {0x12fffffffe, 0x12ffffffff, 0x1300000000,
+                                  0x1300000001, 0x1300000002, 0x1300000003};
+      size_t Next = 0;
+      for (const auto &Source : cycle_fixture::Counters) {
+        Emu.setRISCVCounterReader(
+            Source.Kind, [&, Kind = Source.Kind]() -> std::optional<uint64_t> {
+              EXPECT_EQ(Kind, C.Kind);
+              if (Next == std::size(Samples))
+                return std::nullopt;
+              return Samples[Next++];
+            });
       }
-      EXPECT_EQ(Emu.step(Ops.front()), I < std::size(Samples));
-      EXPECT_EQ(Next, std::min(I + 1, std::size(Samples)));
-      if (Discard)
-        EXPECT_EQ(Emu.getRegister(integerreg::gpr(0)).value_or(0), 0u);
-      else
-        EXPECT_EQ(Emu.getRegister(integerreg::gpr(High ? 11 : 10)),
-                  Wide   ? Samples[I]
-                  : High ? Samples[I] >> 32
-                         : uint32_t(Samples[I]));
+      for (size_t I = 0; I <= std::size(Samples); ++I) {
+        const bool High = !Wide && I % 3 != 1;
+        const bool Discard = I == std::size(Samples) || (Wide && I == 3);
+        const uint32_t Word = Discard ? C.Discard : High ? C.High : C.Low;
+        uint8_t Code[4];
+        llvm::support::endian::write32le(Code, Word);
+        DecodedInsn Insn;
+        ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), 0x1000, Insn), 4);
+        std::vector<LowOp> Ops;
+        ASSERT_NO_THROW(D.liftToLow(Insn, Ops));
+        ASSERT_EQ(Ops.size(), 1u);
+        LowOp Malformed = Ops.front();
+        Malformed.Inputs[0].Size = 1;
+        EXPECT_FALSE(Emu.step(Malformed));
+        Malformed = Ops.front();
+        Malformed.MemoryOrdering = NdMemoryOrdering::Acquire;
+        EXPECT_FALSE(Emu.step(Malformed));
+        Malformed = Ops.front();
+        Malformed.MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+        EXPECT_FALSE(Emu.step(Malformed));
+        Malformed = Ops.front();
+        Malformed.Inputs[0].Offset += UINT64_C(1) << 16;
+        EXPECT_FALSE(Emu.step(Malformed));
+        NdOpEmulator Unavailable(Img);
+        Unavailable.setRegister(integerreg::gpr(10), 7);
+        Unavailable.setRegister(integerreg::gpr(11), 9);
+        for (bool Strict : {false, true}) {
+          Unavailable.setStrictMode(Strict);
+          EXPECT_FALSE(Unavailable.step(Ops.front()));
+        }
+        EXPECT_EQ(Unavailable.getRegister(integerreg::gpr(10)), 7u);
+        EXPECT_EQ(Unavailable.getRegister(integerreg::gpr(11)), 9u);
+        unsigned CycleReads = 0;
+        Unavailable.setRISCVCycleReader([&] {
+          ++CycleReads;
+          return 1u;
+        });
+        EXPECT_EQ(Unavailable.step(Ops.front()),
+                  C.Kind == riscv::Counter::Cycle);
+        EXPECT_EQ(CycleReads, unsigned(C.Kind == riscv::Counter::Cycle));
+        EXPECT_EQ(Emu.step(Ops.front()), I < std::size(Samples));
+        EXPECT_EQ(Next, std::min(I + 1, std::size(Samples)));
+        if (Discard)
+          EXPECT_EQ(Emu.getRegister(integerreg::gpr(0)).value_or(0), 0u);
+        else
+          EXPECT_EQ(Emu.getRegister(integerreg::gpr(High ? 11 : 10)),
+                    Wide   ? Samples[I]
+                    : High ? Samples[I] >> 32
+                           : uint32_t(Samples[I]));
+      }
     }
   }
 }
 
-TEST(PowerPCVMX, ByteLanesWrapAndOverlappingOperandsReadTheirOldValues) {
+TEST(RISCVCounter, FloatingStatusAndCountersHaveIndependentState) {
+  for (Arch A : {Arch::RISCV32D, Arch::RISCV64D}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = isRISCV32(A) ? Bitness::Bits32 : Bitness::Bits64;
+    Img.RISCV.SingleFloat = Img.RISCV.DoubleFloat = Img.RISCV.Zicntr = true;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    for (const auto &C : cycle_fixture::Counters) {
+      unsigned Reads = 0;
+      NdOpEmulator Emu(Img);
+      Emu.setStrictMode(true);
+      Emu.setRISCVFCSR(0x43);
+      Emu.setRISCVCounterReader(C.Kind, [&] { return ++Reads; });
+      for (uint32_t Word :
+           {cycle_fixture::ReadFCSR, C.Low, cycle_fixture::ReadFCSR}) {
+        uint8_t Code[4];
+        llvm::support::endian::write32le(Code, Word);
+        DecodedInsn Insn;
+        ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), 0x1000, Insn), 4);
+        std::vector<LowOp> Ops;
+        D.liftToLow(Insn, Ops);
+        ASSERT_EQ(Ops.size(), 1u);
+        ASSERT_TRUE(Emu.step(Ops.front()));
+      }
+      EXPECT_EQ(Reads, 1u);
+      EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)), 1u);
+      EXPECT_EQ(Emu.getRegister(integerreg::gpr(12)), 0x43u);
+      EXPECT_EQ(Emu.getRISCVFCSR(), 0x43u);
+    }
+  }
+}
+
+TEST(PowerPCVMX, LanesWrapAndOverlappingOperandsReadTheirOldValues) {
   for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE,
                  Arch::PPC64ELFv1, Arch::PPC64LEELFv1}) {
     BinaryImage Img;
@@ -283,7 +391,7 @@ TEST(PowerPCVMX, ByteLanesWrapAndOverlappingOperandsReadTheirOldValues) {
                 N >= 2 && N <= 13);
       EXPECT_EQ(TRI.isCallPreserved(ppc::vr(N), ppc::VectorBytes), N >= 20);
     }
-    for (const auto &Form : vmx_fixture::Adds) {
+    for (const auto &Form : vmx_fixture::Operations) {
       SCOPED_TRACE(::testing::Message()
                    << unsigned(A) << " " << std::hex << Form.Word);
       uint8_t Code[4];
@@ -300,10 +408,33 @@ TEST(PowerPCVMX, ByteLanesWrapAndOverlappingOperandsReadTheirOldValues) {
       for (unsigned N = 0; N < Left.size(); ++N) {
         Left[N] = 255 - 7 * N;
         Right[N] = Form.A == Form.B ? Left[N] : 1 + 19 * N;
-        Expected[N] = Left[N] + Right[N];
       }
+      int Carry = 0;
+      for (unsigned N = 0; N < Left.size(); ++N) {
+        if (N % Form.LaneBytes == 0)
+          Carry = 0;
+        int Result = Left[N] + Carry + (Form.Subtract ? -Right[N] : Right[N]);
+        Expected[N] = static_cast<uint8_t>(Result);
+        Carry = Result < 0 ? -1 : Result >> 8;
+      }
+      Emu.setRegisterBytes(ppc::vr(Form.B), Right);
+      Emu.setRegisterBytes(ppc::vr(Form.A), llvm::ArrayRef(Left).drop_back());
+      const auto Before = Emu.getRegisterBytes(ppc::vr(Form.Dst));
+      EXPECT_FALSE(Emu.step(Ops.front()));
+      EXPECT_EQ(Emu.getRegisterBytes(ppc::vr(Form.Dst)), Before);
       Emu.setRegisterBytes(ppc::vr(Form.A), Left);
       Emu.setRegisterBytes(ppc::vr(Form.B), Right);
+      const auto Original = Emu.getRegisterBytes(ppc::vr(Form.Dst));
+      LowOp Malformed = Ops.front();
+      Malformed.Inputs[0].Size = 1;
+      EXPECT_FALSE(Emu.step(Malformed));
+      Malformed = Ops.front();
+      Malformed.Inputs[0].Offset += UINT64_C(1) << 16;
+      EXPECT_FALSE(Emu.step(Malformed));
+      Malformed = Ops.front();
+      Malformed.MemoryOrdering = NdMemoryOrdering::Acquire;
+      EXPECT_FALSE(Emu.step(Malformed));
+      EXPECT_EQ(Emu.getRegisterBytes(ppc::vr(Form.Dst)), Original);
       Emu.setRegister(integerreg::ppc::XER, 0x80000000);
       Emu.setRegister(integerreg::ppc::crBit(0), 1);
       ASSERT_TRUE(Emu.step(Ops.front()));

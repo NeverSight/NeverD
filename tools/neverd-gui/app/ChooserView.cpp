@@ -220,13 +220,21 @@ void ChooserModel::reload() {
   endResetModel();
   emit totalChanged(total_);
   // A list of search results or references waits for its request.
-  if (session_.loaded() && !operation_.isEmpty() &&
-      (!Specs[static_cast<int>(kind_)].requested || !request_.isEmpty()))
-    requestPage(0);
+  firstPageDeferred_ =
+      session_.loaded() && !operation_.isEmpty() &&
+      (!Specs[static_cast<int>(kind_)].requested || !request_.isEmpty());
+  setPageVisible(pageVisible_);
   emit loadingChanged();
 }
 
+void ChooserModel::setPageVisible(bool visible) {
+  pageVisible_ = visible;
+  if (visible && std::exchange(firstPageDeferred_, false))
+    requestPage(0);
+}
+
 void ChooserModel::cancelLoading() {
+  firstPageDeferred_ = false;
   ++serial_;
   ++locationSerial_;
   cancelled_ = true;

@@ -244,6 +244,60 @@ void checkLanguageLandingPads(
   EXPECT_TRUE(Catch);
   EXPECT_TRUE(Cleanup);
 }
+// Interrupt each distinct unwind row while the fixture's spill frame is live.
+// The frame slide is the same for its current and historical numeric addresses.
+void checkSpillRows(llvm::ArrayRef<AArch64RecoveredUnwindRow> Rows,
+                    ExceptionAddressRange Range, llvm::ArrayRef<va_t> Signs,
+                    llvm::ArrayRef<va_t> OldSigns, unsigned &Checked) {
+  unsigned LiveRows = 0;
+  for (const auto &Row : Rows) {
+    if (!Row.StackOffset || *Row.StackOffset >= 0)
+      continue;
+    SCOPED_TRACE(Row.CodeOffset);
+    ++LiveRows;
+    if (Row.Signing.State) {
+      ASSERT_TRUE(Row.Signing.State->SigningPC);
+      ASSERT_TRUE(llvm::is_contained(Signs, *Row.Signing.State->SigningPC));
+      const auto Plan = prepareDarwinArm64eSystemCaller(Row, Range, Range.End);
+      ASSERT_TRUE(Plan);
+      EXPECT_EQ(Plan->Frame.SigningPC,
+                *Row.Signing.State->SigningPC + Range.size());
+      ++Checked;
+      continue;
+    }
+    ASSERT_TRUE(Row.LiveSigningModifier);
+    const auto &Live = *Row.LiveSigningModifier;
+    EXPECT_TRUE(llvm::equal(Live.SigningPCs, Signs));
+    std::array<va_t, aarch64_unwind::kRegisters> GPRs{};
+    std::array<uint8_t, kJoinStackBytes> Stack{};
+    const bool HasGPR = Live.Register < GPRs.size();
+    ASSERT_TRUE(HasGPR || Live.CFASlot);
+    size_t Offset = 0;
+    if (Live.CFASlot) {
+      ASSERT_GE(*Live.CFASlot, *Row.StackOffset);
+      Offset = size_t(*Live.CFASlot - *Row.StackOffset);
+      ASSERT_LE(Offset + sizeof(va_t), Stack.size());
+    }
+    const auto Resolve = [&](va_t PC) {
+      if (HasGPR)
+        GPRs[Live.Register] = PC + Range.size();
+      if (Live.CFASlot)
+        writeLE<va_t>(Stack.data() + Offset, PC + Range.size());
+      return prepareDarwinArm64eSystemCaller(Row, Range, Range.End, GPRs,
+                                             Stack);
+    };
+    for (va_t PC : Signs) {
+      const auto Plan = Resolve(PC);
+      ASSERT_TRUE(Plan);
+      EXPECT_EQ(Plan->Frame.SigningPC, PC + Range.size());
+      ++Checked;
+    }
+    for (va_t PC : OldSigns)
+      if (!llvm::is_contained(Signs, PC))
+        EXPECT_FALSE(Resolve(PC));
+  }
+  EXPECT_GT(LiveRows, 0U);
+}
 #endif
 
 TEST(AArch64AsyncUnwind,
@@ -869,32 +923,98 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
   const std::filesystem::path Root(Dir.str().str());
   auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
   const auto Source = (Root / kFrameSource).string();
-  std::ofstream(Source) << kJoinedSigningBody;
   const char *Export = std::getenv(kJoinedModelExport);
   unsigned Published = 0, Refused = 0, ModelCases = 0, VerifiedRows = 0,
-           ResolvedPCs = 0;
+           ResolvedPCs = 0, VerifiedIslands = 0, StackPCs = 0, SharedExits = 0,
+           RejectedExitRows = 0, SpillSnapshots = 0, CrossSlotSnapshots = 0,
+           CrossExitRows = 0;
   std::string Calls, Bodies;
   constexpr auto Word = aarch64::kInsnSize;
   enum Use { Common, Distinct, Local, Returns, Refuse };
   struct Case {
     const char *Flag;
     Use Behavior;
+    const char *Copy = nullptr;
+    const char *Save = nullptr;
+    const char *Reload = nullptr;
+    std::optional<unsigned> ValidExits = std::nullopt;
+    unsigned ValidSlots = 0;
+    int Carry = kCrossIgnoreCarry;
   };
   constexpr Case Cases[] = {
-      {kJoinCommon, Common},           {kJoinDistinct, Distinct},
-      {kJoinCopyPage, Distinct},       {kJoinLocal, Local},
-      {kJoinReturn, Returns},          {kJoinScratch, Distinct},
-      {kJoinPressureStore, Distinct},  {kJoinPressureReturn, Returns},
-      {kJoinPressurePrefix, Distinct}, {kJoinPressureConflict, Refuse},
-      {kJoinPressureScope, Refuse},    {kJoinUnknown, Refuse},
-      {kJoinCrossed, Refuse},          {kJoinSwapped, Refuse},
-      {kJoinOverwrite, Refuse},        {kJoinClobber, Refuse},
-      {kJoinWrongKey, Refuse}};
+      {kJoinAddZero, Distinct},
+      {kJoinSubZero, Distinct},
+      {kJoinShiftedZero, Distinct},
+      {kJoinKeepLR, Distinct},
+      {kJoinTwoCommon, Common},
+      {kJoinTwoDistinct, Distinct},
+      {kJoinSpill, Distinct},
+      {kJoinSpillClear, Distinct},
+      {kJoinSpillArms, Distinct},
+      {kJoinSpillPartial, Refuse},
+      {kJoinSpillAlias, Refuse},
+      {kJoinSpillReused, Refuse},
+      {kJoinSpillOverwrite, Refuse},
+      {kJoinHalfCopy, Refuse},
+      {kJoinAdjustedCopy, Refuse},
+      {kJoinTwoWrong, Refuse},
+      {kJoinForwardStore, Distinct},
+      {kJoinForwardReturn, Returns},
+      {kJoinFarStore, Distinct},
+      {kJoinFarReturn, Returns},
+      {kJoinLimitStore, Distinct},
+      {kJoinForwardScope, Refuse},
+      {kJoinForwardConflict, Refuse},
+      {kJoinCommon, Common},
+      {kJoinDistinct, Distinct},
+      {kJoinCopyPage, Distinct},
+      {kJoinLocal, Local},
+      {kJoinReturn, Returns},
+      {kJoinScratch, Distinct},
+      {kJoinPressureStore, Distinct},
+      {kJoinPressureReturn, Returns},
+      {kJoinPressurePrefix, Distinct},
+      {kJoinPressureConflict, Refuse},
+      {kJoinPressureScope, Refuse},
+      {kJoinUnknown, Refuse},
+      {kJoinCrossed, Refuse},
+      {kJoinSwapped, Refuse},
+      {kJoinOverwrite, Refuse},
+      {kJoinClobber, Refuse},
+      {kJoinWrongKey, Refuse},
+#define COMBINED_SIGNING_CASE(Copy, Slot, Mode, Behavior)                      \
+  {kCombined##Mode, Behavior, kCombined##Copy, kCombinedSave##Slot,            \
+   kCombinedLoad##Slot},
+#include "AArch64CombinedSigningFixtures.def"
+#define CROSS_BLOCK_CASE(Name, Flag, Exits, Slots, Carry)                      \
+  {Flag,    Exits == kCrossAllExits ? Distinct : Refuse,                       \
+   nullptr, nullptr,                                                           \
+   nullptr, Exits,                                                             \
+   Slots,   Carry},
+#include "AArch64CrossBlockSigningFixtures.def"
+  };
   for (bool KeyB : {false, true})
-    for (auto [Flag, Behavior] : Cases) {
-      const bool Pressure = Flag == kJoinPressureStore ||
-                            Flag == kJoinPressureReturn ||
-                            Flag == kJoinPressurePrefix;
+    for (auto [Flag, Behavior, Copy, Save, Reload, ValidExits, ValidSlots,
+               Carry] : Cases) {
+      const bool DualExit =
+          Copy || Flag == kJoinTwoCommon || Flag == kJoinTwoDistinct;
+      const bool Forward =
+          Flag == kJoinForwardStore || Flag == kJoinForwardReturn;
+      const bool Far = Flag == kJoinFarStore || Flag == kJoinFarReturn;
+      const bool Limit = Flag == kJoinLimitStore;
+      const bool Pressure =
+          Forward || Far || Limit || Flag == kJoinPressureStore ||
+          Flag == kJoinPressureReturn || Flag == kJoinPressurePrefix;
+      if (ValidExits)
+        std::ofstream(Source)
+            << llvm::formatv(kCrossBlockBody, kCrossSnapshotWord).str();
+      else if (Copy)
+        std::ofstream(Source)
+            << llvm::formatv(kCombinedBody, Copy, Save, Reload).str();
+      else
+        std::ofstream(Source) << kJoinedSigningBody;
+      SCOPED_TRACE(Copy ? Copy : Flag);
+      SCOPED_TRACE(Save ? Save : Flag);
       SCOPED_TRACE(Flag);
       SCOPED_TRACE(KeyB);
       std::string Input = (Root / kOriginal).string();
@@ -909,8 +1029,9 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
       ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
       const auto *Entry = Image->findSymbol(kSignalTickSymbol);
       ASSERT_NE(Entry, nullptr);
-      va_t Owner = Entry->Addr;
-      llvm::SmallVector<va_t, 2> Original;
+      const va_t SourceOwner = Entry->Addr;
+      va_t Owner = SourceOwner;
+      llvm::SmallVector<va_t, 2> Original, HistoricalSigns;
       const auto Inspect = [&] {
         const auto *Frame = Image->ExceptionMetadata.findFunction(Owner);
         ASSERT_NE(Frame, nullptr);
@@ -920,15 +1041,30 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
         ASSERT_TRUE(Decode.init(*Image));
         llvm::SmallVector<va_t, 2> Signs;
         llvm::SmallVector<va_t, 2> Auths;
+        llvm::SmallVector<std::pair<va_t, va_t>> Branches;
+        std::optional<va_t> Snapshot;
         const bool Split = Pressure && !Original.empty();
         for (size_t Offset = 0; Offset < Body->Bytes.size(); Offset += Word) {
           DecodedInsn I{};
           ASSERT_EQ(Decode.decodeOne(Body->Bytes.data() + Offset, Word,
                                      Owner + Offset, I),
                     int(Word));
+          if (ValidExits &&
+              readLE<uint32_t>(I.Raw->bytes) == kCrossSnapshotWord) {
+            ASSERT_FALSE(Snapshot);
+            Snapshot = Owner + Offset;
+          }
+          if (Split && I.Id == AARCH64_INS_B) {
+            const auto &D = I.Raw->detail->aarch64;
+            if (D.op_count == 1 && D.operands[0].type == AARCH64_OP_IMM)
+              Branches.emplace_back(Owner + Offset, va_t(D.operands[0].imm));
+          }
           if (I.Id == (KeyB ? AARCH64_INS_PACIBSPPC : AARCH64_INS_PACIASPPC))
             Signs.push_back(Owner + Offset);
-          if (I.Id == (KeyB ? AARCH64_INS_AUTIBSPPC : AARCH64_INS_AUTIASPPC) ||
+          if ((Flag == kCombinedWrongKey &&
+               I.Id ==
+                   (KeyB ? AARCH64_INS_AUTIASPPC : AARCH64_INS_AUTIBSPPC)) ||
+              I.Id == (KeyB ? AARCH64_INS_AUTIBSPPC : AARCH64_INS_AUTIASPPC) ||
               I.Id == (KeyB ? AARCH64_INS_RETABSPPC : AARCH64_INS_RETAASPPC)) {
             ASSERT_NE(I.Raw, nullptr);
             ASSERT_NE(I.Raw->detail, nullptr);
@@ -938,12 +1074,118 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
             Auths.push_back(Owner + Offset);
           }
         }
-        ASSERT_EQ(Auths.size(), Split ? 2u : 1u);
+        ASSERT_EQ(Auths.size(), ValidExits          ? kCrossExits
+                                : Split || DualExit ? 2u
+                                                    : 1u);
+        if (ValidExits)
+          CrossExitRows += Auths.size();
+        if (DualExit && Behavior != Refuse)
+          SharedExits += Auths.size();
         ASSERT_EQ(Signs.size(), Behavior == Common ? 1u : 2u);
-        if (Original.empty())
+        constexpr auto MaxDistance =
+            kAArch64PAuthLRImmMask * kAArch64PAuthLRScale;
+        if (Original.empty()) {
+          if (Forward)
+            EXPECT_LT(Auths.front(), Signs.front());
+          if (Far)
+            EXPECT_GT(Auths.front() - Signs.front(), MaxDistance);
+          if (Limit)
+            EXPECT_EQ(Auths.front() - Signs.front(), MaxDistance);
           Original = Signs;
+        }
         auto Rows = recoverDarwinAArch64Unwind(*Image, *Frame);
         ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+        if (ValidExits && Owner == SourceOwner) {
+          ASSERT_TRUE(Snapshot);
+          const auto Range = Frame->CodeRange;
+          const auto &Row = aarch64UnwindRowAt(*Rows, *Snapshot - Owner);
+          ASSERT_EQ(Row.StackOffset, -int(kJoinStackBytes));
+          // All register copies were cleared. Put the other, also permitted
+          // signing PC in stale cells so a wrong slot cannot pass by chance.
+          for (va_t Sign : Signs) {
+            const va_t Slid = Sign + Range.size();
+            const va_t Other =
+                (Sign == Signs.front() ? Signs.back() : Signs.front()) +
+                Range.size();
+            std::array<uint8_t, kJoinStackBytes> Stack{};
+            writeLE<va_t>(Stack.data() + kCrossPrimaryOffset,
+                          ValidSlots & kCrossPrimarySlot ? Slid : Other);
+            writeLE<va_t>(Stack.data() + kCrossBackupOffset,
+                          ValidSlots & kCrossBackupSlot ? Slid : Other);
+            const auto Plan = prepareDarwinArm64eSystemCaller(
+                Row, Range, Range.End, {}, Stack);
+            ASSERT_EQ(bool(Plan), ValidSlots != 0);
+            if (Plan) {
+              EXPECT_EQ(Plan->Frame.SigningPC, Slid);
+              EXPECT_EQ(Plan->Frame.Signing, KeyB ? NDArm64eSignedIBWithCFAPC
+                                                  : NDArm64eSignedIAWithCFAPC);
+            }
+            ++CrossSlotSnapshots;
+          }
+        }
+        if (Behavior == Refuse) {
+          // A rejected image can still have one independently valid exit.
+          for (auto [Index, Auth] : llvm::enumerate(Auths)) {
+            const bool FirstValid =
+                Flag == kCombinedBadSP || Flag == kCombinedBadCopy ||
+                Flag == kCombinedLostLR || Flag == kCombinedCall ||
+                Flag == kCombinedResign || Flag == kCombinedWrongKey;
+            const bool Unsigned =
+                ValidExits ? (*ValidExits & (1u << Index)) != 0
+                           : Flag == kCombinedBrokenCFI ||
+                                 (Index == 0 && FirstValid) ||
+                                 (Index == 1 && Flag == kCombinedBadFirst);
+            const auto &After =
+                aarch64UnwindRowAt(*Rows, Auth + Word - Frame->CodeRange.Begin)
+                    .Signing;
+            ASSERT_EQ(After.State.has_value(), Unsigned);
+            if (Unsigned)
+              EXPECT_EQ(After.State->Kind,
+                        dwarf_eh::AArch64RASigningKind::Unsigned);
+            else
+              EXPECT_EQ(After.Status, dwarf_eh::AArch64RAQueryStatus::Unknown);
+            ++RejectedExitRows;
+          }
+          return;
+        }
+        if (Copy || ValidExits) {
+          ASSERT_NO_FATAL_FAILURE(checkSpillRows(
+              *Rows, Frame->CodeRange, Signs, HistoricalSigns, SpillSnapshots));
+          HistoricalSigns.append(Signs);
+        }
+        if (Owner == SourceOwner &&
+            (Copy || Flag == kJoinSpillClear || Flag == kJoinSpillArms)) {
+          const auto StackOnly = llvm::find_if(*Rows, [](const auto &Row) {
+            return Row.LiveSigningModifier &&
+                   Row.LiveSigningModifier->CFASlot &&
+                   Row.LiveSigningModifier->Register ==
+                       aarch64_unwind::kRegisters;
+          });
+          ASSERT_NE(StackOnly, Rows->end());
+          std::array<uint8_t, kJoinStackBytes> Stack{};
+          ASSERT_TRUE(StackOnly->StackOffset);
+          const auto Offset = *StackOnly->LiveSigningModifier->CFASlot -
+                              *StackOnly->StackOffset;
+          ASSERT_GE(Offset, 0);
+          ASSERT_LE(size_t(Offset) + sizeof(va_t), Stack.size());
+          const auto Range = Frame->CodeRange;
+          EXPECT_FALSE(
+              prepareDarwinArm64eSystemCaller(*StackOnly, Range, Range.End));
+          EXPECT_FALSE(prepareDarwinArm64eSystemCaller(*StackOnly, Range,
+                                                       Range.End, {}, Stack));
+          for (va_t Sign : Signs) {
+            const va_t Slid = Range.End + Sign - Range.Begin;
+            writeLE<va_t>(Stack.data() + Offset, Slid);
+            const auto Plan = prepareDarwinArm64eSystemCaller(
+                *StackOnly, Range, Range.End, {}, Stack);
+            ASSERT_TRUE(Plan);
+            EXPECT_EQ(Plan->Frame.SigningPC, Slid);
+            EXPECT_FALSE(prepareDarwinArm64eSystemCaller(
+                *StackOnly, Range, Range.End, {},
+                llvm::ArrayRef(Stack).take_front(Offset + sizeof(Slid) - 1)));
+            ++StackPCs;
+          }
+        }
         for (auto PC : Signs) {
           const auto &Row =
               aarch64UnwindRowAt(*Rows, PC + Word - Frame->CodeRange.Begin)
@@ -961,6 +1203,35 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
             ASSERT_TRUE(Before.Signing.State->SigningPC);
             const auto Signer = *Before.Signing.State->SigningPC;
             Selected.push_back(Signer);
+            const auto Bits =
+                readLE<uint32_t>(Body->Bytes.data() + (Auth - Owner));
+            const auto Distance =
+                ((Bits >> kAArch64PAuthLRImmShift) & kAArch64PAuthLRImmMask) *
+                kAArch64PAuthLRScale;
+            EXPECT_EQ(Auth - Distance, Signer);
+            if (Forward || ((Far || Limit) && Signer == Signs.front())) {
+              EXPECT_TRUE(llvm::is_contained(
+                  Branches,
+                  std::pair(Signer + Word,
+                            Auth + (Behavior == Returns ? Word : 2 * Word))));
+              const auto Incoming = llvm::find_if(
+                  Branches, [&](auto Edge) { return Edge.second == Auth; });
+              ASSERT_NE(Incoming, Branches.end());
+              const auto &Dispatch =
+                  aarch64UnwindRowAt(*Rows, Incoming->first - Owner);
+              ASSERT_TRUE(Dispatch.Signing.State);
+              EXPECT_EQ(Dispatch.Signing.State->SigningPC, Signer);
+              if (Behavior != Returns) {
+                EXPECT_TRUE(llvm::is_contained(
+                    Branches, std::pair(Auth + Word, Incoming->first + Word)));
+                const auto &Resume =
+                    aarch64UnwindRowAt(*Rows, Incoming->first + Word - Owner);
+                ASSERT_TRUE(Resume.Signing.State);
+                EXPECT_EQ(Resume.Signing.State->Kind,
+                          dwarf_eh::AArch64RASigningKind::Unsigned);
+              }
+              ++VerifiedIslands;
+            }
             const auto Plan =
                 prepareDarwinArm64eSystemCaller(Before, Range, Range.End);
             ASSERT_TRUE(Plan);
@@ -1007,27 +1278,56 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
           EXPECT_EQ(Selected, Signs);
         }
         if (Export) {
-          Calls +=
-              llvm::formatv(
-                  kJoinModelCall, ModelCases, int64_t(Original.front() - Owner),
-                  int64_t(Original.back() - Owner), unsigned(Behavior != Local),
-                  unsigned(Behavior != Returns && Behavior != Local),
-                  unsigned(Pressure), unsigned(Flag == kJoinPressurePrefix))
-                  .str();
+          if (ValidExits)
+            Calls += llvm::formatv(kCrossModelCall, ModelCases,
+                                   int64_t(Original.front() - Owner),
+                                   int64_t(Original.back() - Owner), Carry)
+                         .str();
+          else
+            Calls +=
+                llvm::formatv(
+                    kJoinModelCall, ModelCases,
+                    int64_t(Original.front() - Owner),
+                    int64_t(Original.back() - Owner),
+                    unsigned(Behavior != Local),
+                    unsigned(Behavior != Returns && Behavior != Local),
+                    unsigned(Pressure), unsigned(Flag == kJoinPressurePrefix),
+                    unsigned(DualExit))
+                    .str();
           Bodies += llvm::formatv(kSigningModelPage, branch::A64PageBytes,
                                   Owner % branch::A64PageBytes)
                         .str();
           Bodies += llvm::formatv(kSigningModelLabel, ModelCases++).str();
-          for (size_t I = 0; I < Body->Bytes.size(); I += Word)
-            Bodies += llvm::formatv(kSigningModelWord,
-                                    readLE<uint32_t>(Body->Bytes.data() + I))
-                          .str();
+          auto Bytes = Body->Bytes;
+          while (!Bytes.empty()) {
+            const auto Bits = readLE<uint32_t>(Bytes.data());
+            size_t Run = Word;
+            while (Run < Bytes.size() &&
+                   readLE<uint32_t>(Bytes.data() + Run) == Bits)
+              Run += Word;
+            if (Run == Word)
+              Bodies += llvm::formatv(kSigningModelWord, Bits).str();
+            else
+              Bodies += llvm::formatv(kSigningModelFill, Run / Word, Word, Bits)
+                            .str();
+            Bytes = Bytes.drop_front(Run);
+          }
         }
       };
-      if (Behavior != Refuse)
+      if (Behavior != Refuse || Copy || ValidExits)
         ASSERT_NO_FATAL_FAILURE(Inspect());
-      for (const char *Name : {kPublished, kRepublishedSigningImage}) {
+      llvm::SmallVector<const char *, 3> Outputs{kPublished,
+                                                 kRepublishedSigningImage};
+      if (ValidExits)
+        Outputs.push_back(kCrossDirectO2);
+      for (const char *Name : Outputs) {
         SCOPED_TRACE(Name);
+        if (Name == kCrossDirectO2) {
+          Input = (Root / kOriginal).string();
+          Owner = SourceOwner;
+          Image = Reader->load(Input);
+          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        }
         auto Output = (Root / Name).string();
         std::filesystem::remove(Output);
         llvm::LLVMContext Context;
@@ -1039,7 +1339,7 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
         if (!Lifted.Success && Behavior == Refuse) {
           EXPECT_FALSE(std::filesystem::exists(Output));
           ++Refused;
-          break;
+          continue;
         }
         ASSERT_TRUE(Lifted.Success) << Lifted.Error;
         MachOPatcher Patcher;
@@ -1050,7 +1350,7 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
           EXPECT_FALSE(Patch.Success);
           EXPECT_FALSE(std::filesystem::exists(Output));
           ++Refused;
-          break;
+          continue;
         }
         ASSERT_TRUE(Patch.Success);
         const auto Installed =
@@ -1078,6 +1378,13 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
   RecordProperty(kSigningRows, VerifiedRows);
   RecordProperty(kSigningRefusals, Refused);
   RecordProperty(kJoinedSnapshotCases, ResolvedPCs);
+  RecordProperty(kJoinVerifiedIslands, VerifiedIslands);
+  RecordProperty(kJoinedStackCases, StackPCs);
+  RecordProperty(kJoinedDualExits, SharedExits);
+  RecordProperty(kRejectedExitRows, RejectedExitRows);
+  RecordProperty(kSpillSnapshots, SpillSnapshots);
+  RecordProperty(kCrossExitRows, CrossExitRows);
+  RecordProperty(kCrossSlotSnapshots, CrossSlotSnapshots);
   RecordProperty(kSigningModelCases, ModelCases);
 #else
   GTEST_SKIP() << kUnavailable;

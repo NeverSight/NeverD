@@ -1,0 +1,277 @@
+//===- AArch64CrossBlockSigningFixtures.def - arm64e carrier paths --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifdef ASYNC_FRAME_VALUE
+ASYNC_FRAME_VALUE(unsigned, kCrossExits, 3)
+ASYNC_FRAME_VALUE(unsigned, kCrossAllExits, (1u << kCrossExits) - 1)
+ASYNC_FRAME_VALUE(unsigned, kCrossPrimarySlot, 1)
+ASYNC_FRAME_VALUE(unsigned, kCrossBackupSlot, 2)
+ASYNC_FRAME_VALUE(int, kCrossIgnoreCarry, -1)
+ASYNC_FRAME_VALUE(unsigned, kCrossPrimaryOffset, 8)
+ASYNC_FRAME_VALUE(unsigned, kCrossBackupOffset, 16)
+ASYNC_FRAME_VALUE(uint32_t, kCrossSnapshotWord, 0xaa1f03e5)
+#endif
+
+#ifdef ASYNC_FRAME_TEXT
+ASYNC_FRAME_TEXT(kCrossDirectO2, "cross-block-direct-o2.dylib")
+ASYNC_FRAME_TEXT(kCrossSlotSnapshots, "verified_cross_block_slot_snapshots")
+ASYNC_FRAME_TEXT(kCrossExitRows, "verified_cross_block_authentication_rows")
+ASYNC_FRAME_TEXT(kCrossModelCall, R"asm(
+ .irp exit, 0, 1, 2
+  run_cross {0}, 0, {1}, \exit, {3}
+  run_cross {0}, 1, {2}, \exit, {3}
+ .endr
+)asm")
+ASYNC_FRAME_TEXT(kCrossBlockBody, R"asm(
+ .text
+ .globl _signal_tick
+ .p2align 2
+_signal_tick:
+ .cfi_startproc
+#ifdef NEVERD_SIGN_WITH_B
+#define SIGN .inst 0xdac1a7fe
+#define AUTH .inst 0xdac195fe
+#else
+#define SIGN .inst 0xdac1a3fe
+#define AUTH .inst 0xdac191fe
+#endif
+ nop
+ cbnz x1, Lright
+Lleft:
+ SIGN
+ adr x10, Lleft
+#if defined(CROSS_TWO_ADDRESSES) || defined(CROSS_TWO_CROSSED) || defined(CROSS_TWO_CLOBBER)
+ adr x8, Lleft
+#endif
+ b Lcopy
+Lright:
+#ifdef CROSS_ENTRY_LOST
+ mov x30, x9
+#elif defined(CROSS_ENTRY_RESIGN)
+ pacibsp
+#elif defined(CROSS_ENTRY_COPY)
+ mov x9, x30
+ mov x30, x9
+#endif
+#if defined(CROSS_ENTRY_SAVED) || defined(CROSS_ENTRY_SAVED_LOST)
+ stur x30, [sp, #-8]
+ .cfi_offset x30, -8
+ mov x30, x9
+#ifdef CROSS_ENTRY_SAVED
+ ldur x30, [sp, #-8]
+#endif
+#elif defined(CROSS_ENTRY_JOIN)
+ cbz x3, LrightSign
+ mov x30, x9
+#endif
+LrightSign:
+ SIGN
+#if defined(CROSS_ENTRY_SAVED) || defined(CROSS_ENTRY_SAVED_LOST)
+ .cfi_restore x30
+#endif
+ adr x10, LrightSign
+#if defined(CROSS_TWO_ADDRESSES) || defined(CROSS_TWO_CLOBBER)
+ adr x8, LrightSign
+#elif defined(CROSS_TWO_CROSSED)
+ adr x8, Lleft
+#endif
+Lcopy:
+ .cfi_same_value x19
+ .cfi_escape 0x2e, 0
+ mov x11, x10
+ mov x10, xzr
+ tbz x3, #0, Leven
+ orr x12, xzr, x11
+ b Lcopied
+Leven:
+ add x12, x11, #0
+Lcopied:
+ mov x11, xzr
+#if defined(CROSS_LOOP) || defined(CROSS_LOOP_LOST)
+ mov w4, #2
+Lloop:
+ mov x14, x12
+#ifdef CROSS_LOOP_LOST
+ mov w12, w14
+#else
+ orr x12, x14, xzr
+#endif
+ subs w4, w4, #1
+ b.ne Lloop
+#endif
+ sub x14, x12, #0
+#if defined(CROSS_TWO_ADDRESSES) || defined(CROSS_TWO_CROSSED) || defined(CROSS_TWO_CLOBBER)
+ mov x14, x8
+ mov x8, xzr
+#endif
+#if defined(CROSS_SELECT) || defined(CROSS_SELECT_LOST) || defined(CROSS_SELECT_SPILL) || defined(CROSS_SELECT_WRONG) || defined(CROSS_TWO_ADDRESSES) || defined(CROSS_TWO_CROSSED) || defined(CROSS_TWO_CLOBBER)
+#ifdef CROSS_SELECT_LOST
+ mov w14, w14
+#endif
+#ifdef CROSS_SELECT_WRONG
+ adr x14, Lleft
+#endif
+#ifdef CROSS_SELECT_SPILL
+ sub sp, sp, #16
+ .cfi_def_cfa_offset 16
+ str x14, [sp]
+ mov x14, xzr
+ ldr x14, [sp]
+ add sp, sp, #16
+ .cfi_def_cfa_offset 0
+#endif
+ cmp x1, #0
+ csel x15, x12, x14, eq
+#elif defined(CROSS_ALWAYS)
+ csel x15, x12, xzr, al
+#elif defined(CROSS_NV)
+ csel x15, x12, xzr, nv
+#elif defined(CROSS_ADDS)
+ cmp xzr, xzr
+ adds x15, x12, #0
+#elif defined(CROSS_SUBS)
+ adds xzr, xzr, xzr
+ subs x15, x12, xzr
+#elif defined(CROSS_ANDS)
+ cmp xzr, xzr
+ ands x15, x12, x12
+#else
+ mov x15, x12
+#endif
+ mov x12, xzr
+ mov x14, xzr
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ str x15, [sp, #16]
+ str x15, [sp, #8]
+ mov x15, xzr
+ cbz x3, Lfirst
+ tbz x3, #0, Lthird
+Lsecond:
+ .cfi_remember_state
+ ldr x13, [sp, #16]
+#ifdef CROSS_SECOND_LOST
+ mov w13, w13
+#endif
+ str x13, [sp, #8]
+ b LsecondDone
+LsecondDone:
+ mov x13, xzr
+ ldr x15, [sp, #8]
+ add sp, sp, #32
+ .cfi_def_cfa_offset 0
+ AUTH
+ str x15, [x0, #8]
+ b Lresult
+Lfirst:
+ .cfi_restore_state
+ .cfi_remember_state
+#ifdef CROSS_FIRST_LOST
+ strb w1, [sp, #15]
+#endif
+ ldr x15, [sp, #8]
+ add sp, sp, #32
+ .cfi_def_cfa_offset 0
+ AUTH
+ b Lresult
+Lthird:
+ .cfi_restore_state
+ ldr x13, [sp, #16]
+#if defined(CROSS_RELEASE) || defined(CROSS_RELEASE_STALE)
+ add sp, sp, #32
+ .cfi_def_cfa_offset 0
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+#elif defined(CROSS_HALF_RELEASE) || defined(CROSS_HALF_STALE)
+ add sp, sp, #16
+ .cfi_def_cfa_offset 16
+ sub sp, sp, #16
+ .cfi_def_cfa_offset 32
+#else
+ strb w1, [sp, #15]
+#endif
+#if !defined(CROSS_HALF_STALE) && !defined(CROSS_STALE) && !defined(CROSS_RELEASE_STALE)
+ str x13, [sp, #8]
+#endif
+ mov x13, xzr
+ b LthirdDone
+LthirdDone:
+#ifdef CROSS_PARTIAL
+ strh w1, [sp, #14]
+#elif defined(CROSS_ADJACENT)
+ strh w1, [sp, #6]
+#elif defined(CROSS_ALIAS)
+ str w1, [x2]
+#elif defined(CROSS_SLOT_WRONG)
+ adr x14, Lleft
+ str x14, [sp, #8]
+ mov x14, xzr
+#elif defined(CROSS_TWO_CLOBBER)
+ mov x16, xzr
+#endif
+ .inst {0}
+ ldr x15, [sp, #8]
+#if defined(CROSS_THIRD_SELECT) || defined(CROSS_THIRD_SELECT_LOST)
+ ldr x14, [sp, #16]
+#ifdef CROSS_THIRD_SELECT_LOST
+ mov w14, w14
+#endif
+ cmp x1, #0
+ csel x15, x15, x14, ne
+#endif
+ add sp, sp, #32
+ .cfi_def_cfa_offset 0
+ AUTH
+ str x15, [x0, #16]
+Lresult:
+ str x15, [x0]
+ mov x0, x15
+ ret
+ .cfi_endproc
+)asm")
+#endif
+
+#ifdef CROSS_BLOCK_CASE
+// The exit mask follows assembly order (second, first, third). Slot bits name
+// the primary and backup CFA cells that retain this path's PC at the third
+// exit. Guest code addresses are positive and nonzero. A flag-setting copy
+// yields N=Z=V=0 and the specified carry. A carry of -1 skips the flag check.
+CROSS_BLOCK_CASE(Moves, "-DCROSS_MOVES", 7, 3, -1)
+CROSS_BLOCK_CASE(AddFlags, "-DCROSS_ADDS", 7, 3, 0)
+CROSS_BLOCK_CASE(SubFlags, "-DCROSS_SUBS", 7, 3, 1)
+CROSS_BLOCK_CASE(AndFlags, "-DCROSS_ANDS", 7, 3, 0)
+CROSS_BLOCK_CASE(Select, "-DCROSS_SELECT", 7, 3, -1)
+CROSS_BLOCK_CASE(SelectSpill, "-DCROSS_SELECT_SPILL", 7, 3, -1)
+CROSS_BLOCK_CASE(TwoAddresses, "-DCROSS_TWO_ADDRESSES", 7, 3, -1)
+CROSS_BLOCK_CASE(TwoCrossed, "-DCROSS_TWO_CROSSED", 0, 0, -1)
+CROSS_BLOCK_CASE(TwoClobber, "-DCROSS_TWO_CLOBBER", 7, 3, -1)
+CROSS_BLOCK_CASE(EntryJoin, "-DCROSS_ENTRY_JOIN", 0, 0, -1)
+CROSS_BLOCK_CASE(SavedEntry, "-DCROSS_ENTRY_SAVED", 7, 3, -1)
+CROSS_BLOCK_CASE(SavedEntryLost, "-DCROSS_ENTRY_SAVED_LOST", 0, 0, -1)
+CROSS_BLOCK_CASE(WrongSlotPC, "-DCROSS_SLOT_WRONG", 3, 2, -1)
+CROSS_BLOCK_CASE(EntryCopy, "-DCROSS_ENTRY_COPY", 7, 3, -1)
+CROSS_BLOCK_CASE(EntryLost, "-DCROSS_ENTRY_LOST", 0, 0, -1)
+CROSS_BLOCK_CASE(EntryResign, "-DCROSS_ENTRY_RESIGN", 0, 0, -1)
+CROSS_BLOCK_CASE(Loop, "-DCROSS_LOOP", 7, 3, -1)
+CROSS_BLOCK_CASE(LoopLost, "-DCROSS_LOOP_LOST", 0, 0, -1)
+CROSS_BLOCK_CASE(Always, "-DCROSS_ALWAYS", 7, 3, -1)
+CROSS_BLOCK_CASE(NeverEncoding, "-DCROSS_NV", 7, 3, -1)
+CROSS_BLOCK_CASE(SelectWrong, "-DCROSS_SELECT_WRONG", 0, 0, -1)
+CROSS_BLOCK_CASE(ThirdSelect, "-DCROSS_THIRD_SELECT", 7, 3, -1)
+CROSS_BLOCK_CASE(ThirdSelectLost, "-DCROSS_THIRD_SELECT_LOST", 3, 3, -1)
+CROSS_BLOCK_CASE(HalfRelease, "-DCROSS_HALF_RELEASE", 7, 3, -1)
+CROSS_BLOCK_CASE(HalfStale, "-DCROSS_HALF_STALE", 3, 2, -1)
+CROSS_BLOCK_CASE(SelectLost, "-DCROSS_SELECT_LOST", 0, 0, -1)
+CROSS_BLOCK_CASE(Release, "-DCROSS_RELEASE", 7, 1, -1)
+CROSS_BLOCK_CASE(ReleaseStale, "-DCROSS_RELEASE_STALE", 3, 0, -1)
+CROSS_BLOCK_CASE(Stale, "-DCROSS_STALE", 3, 2, -1)
+CROSS_BLOCK_CASE(Partial, "-DCROSS_PARTIAL", 3, 2, -1)
+CROSS_BLOCK_CASE(Adjacent, "-DCROSS_ADJACENT", 7, 3, -1)
+CROSS_BLOCK_CASE(Alias, "-DCROSS_ALIAS", 3, 0, -1)
+CROSS_BLOCK_CASE(FirstLost, "-DCROSS_FIRST_LOST", 5, 3, -1)
+CROSS_BLOCK_CASE(SecondLost, "-DCROSS_SECOND_LOST", 6, 3, -1)
+#undef CROSS_BLOCK_CASE
+#endif

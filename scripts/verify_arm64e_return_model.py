@@ -83,8 +83,11 @@ def link_guest(guest, entry, driver, obj, support=()):
             any(int(address, 0) != base + int(offset) for _, address, offset in segments)):
         raise ValueError(CONFIG["bad_map"].format(path=guest))
     symbols = subprocess.check_output([*CONFIG["symbols"], guest], text=True)
-    start, = (int(row.split()[0], 16) for row in symbols.splitlines()
-              if row.split()[-1] == CONFIG["reset_symbol"])
+    rows = [row.split() for row in symbols.splitlines() if row.strip()]
+    start, = (int(row[0], 16) for row in rows if row[-1] == CONFIG["reset_symbol"])
+    if any(base + guest.stat().st_size > int(row[0], 16)
+           for row in rows if row[-1] == CONFIG["first_stack_symbol"]):
+        raise ValueError(CONFIG["stack_overlap"].format(path=guest))
     return {"entry": hex(start), "sha256": digest(guest),
             "object_sha256": digest(obj)}
 
@@ -156,8 +159,9 @@ def build_signing_address(binary, output, *, joins=False):
         entry = scratch / CONFIG["entry_object"]
         driver = scratch / (Path(CONFIG["guest_driver"]).stem + CONFIG["test_object_extension"])
         obj = assembly.with_suffix(CONFIG["test_object_extension"])
-        compile_object(source / CONFIG["guest_entry"], entry)
-        compile_object(source / CONFIG["guest_driver"], driver, CONFIG["driver_flags"])
+        flags = [profile["define"]] if joins else []
+        compile_object(source / CONFIG["guest_entry"], entry, flags)
+        compile_object(source / CONFIG["guest_driver"], driver, [*CONFIG["driver_flags"], *flags])
         compile_object(assembly, obj)
         name = profile["profile"]
         guest = link_guest(staged / name, entry, driver, obj)

@@ -2781,6 +2781,24 @@ language scope agree with the authenticator. The final image check resolves
 each direct target, decodes each authentication against the installed signer
 and compares the duplicated prefix with the source instructions.
 
+For a direct edge whose signer lies ahead of the authenticator or beyond its
+backwards immediate, the publisher places the original IA/IB authentication
+near the installed signing instruction. Ordinary execution branches over this
+copy after signing. The incoming edge selects it at the join. An AUT branches
+back to its continuation with an unsigned LR. An authenticated return remains
+a single instruction. Neither path consumes a GPR or a stack slot. The source
+address returned or stored by the program still denotes the original signing
+word. Placement requires matching frame rules and language exception scope.
+An ambiguous incoming edge or an incompatible scope blocks publication.
+
+Instruction-based unwind recovery budgets the reachable words of a large
+sparse frame. A gap after an unconditional branch has unknown signing state
+until a proven incoming edge establishes it again. A Darwin frame may span a
+declared data-in-code range when every reached instruction stays in code owned
+by the frame. An edge into a literal pool, including a partially overlapping
+instruction, fails the proof. The compact-unwind reader uses the same storage
+proof when the lookup sentinel extends one byte past the instruction section.
+
 A compact saved-register frame can use a PC-relative authenticated return
 without materializing the signing address as data. The publisher keeps its
 compact unwind recipe. When the function does reference a signing address in
@@ -2788,10 +2806,22 @@ old storage, both lifting and publication check the retained instruction and
 follow its owning entry to the current function. An address can be materialized
 after the last authentication in the function.
 
-Full-width MOV and ADD/SUB by zero carry a joined signing-PC relation
-through a register copy. A full-width self-copy of LR also preserves the
-relation between LR and its modifier. A partial copy or nonzero adjustment cannot
-supply that proof.
+The publisher and unwind recovery recognize full-width MOV and ADD/SUB by
+zero, including shifted zero and self-copies of LR. At two authentication exits
+that share an address producer, each exit must independently prove its LR, key
+and modifier on every incoming path. Both exits may reuse the same relocated
+signing PC when its register survives from every reaching producer. Explicit
+returns and stores of the address retain its original value.
+
+A full-width signed-PC modifier can also reach an authenticator through an
+active stack slot. The proof follows the slot relative to the caller's CFA
+through each predecessor, including a store on each arm before a join. A
+partial overwrite, a write that may alias the slot or a release and reuse of
+the slot invalidates that proof. An interruption while the only surviving
+copy is on the stack requires a bounded snapshot beginning at the interrupted
+SP. The five-argument `prepareDarwinArm64eSystemCaller` checks that the entire
+slot is available and that its loaded value matches a proved signing PC at the
+image's load address.
 
 The unwind analysis also recognizes a full-width literal load from an
 immutable, dyld-rebased slot as a possible signing address. Recovery checks
@@ -2851,6 +2881,116 @@ archived guest inventories also passed.
 [Validation record](evidence/arm64e-scratch-free-signing-2026-11-28.json) ·
 [Hosted Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46046283283) ·
 [Arm FVP execution](https://github.com/gmh5225/test_mac_intel/actions/runs/46051104410)
+
+Fourteen multi-entry fixtures cover IA and IB with forward signers and signers
+at or beyond the backward immediate limit. Across O0 publication and O2
+republication, the tests checked 56 images, 242 unwind rows, 92 interrupted
+signing PCs and 28 relocated authenticators. Twenty contradictory cases
+were rejected. Four generations of a mixed code and data image preserved the
+unwind state across embedded data. The free macOS Release run passed
+366 cases with zero skips. For each of the M4 and hosted Release exports,
+the Arm model ran 84 original and published bodies with two inputs at EL0
+and EL1 under all four EnPACM settings (1,344 calls per export).
+[Qualification record](evidence/arm64e-distant-joined-signers-2026-11-28.json) ·
+[macOS Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46109512420) ·
+[Arm FVP, M4 export](https://github.com/gmh5225/test_mac_intel/actions/runs/46110737909) ·
+[Arm FVP, hosted export](https://github.com/gmh5225/test_mac_intel/actions/runs/46113033008)
+
+The M4 replay recovered all 32 valid publications previously refused in the
+original 64 attempts. It rejected all four cases with an overwritten slot. Across IA and IB, the expanded regression published
+92 images at O0 and O2, checked 410 unwind rows and rejected
+34 contradictory inputs. It resolved 8 stack-only signing PCs and checked
+24 authentication exits in source and published images.
+The hosted macOS Release run passed 367 tests with zero skips. For each
+Release export the Arm model executed 138 bodies in 2,400 calls. A separate output
+slot verified which authentication exit ran for each signing path.
+[Qualification record](evidence/arm64e-shared-signing-carriers-2026-11-28.json) ·
+[macOS Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46130085765) ·
+[Arm model, M4 export](https://github.com/gmh5225/test_mac_intel/actions/runs/46133896744) ·
+[Arm model, hosted export](https://github.com/gmh5225/test_mac_intel/actions/runs/46133780808)
+
+#### Register copies, stack spills and independent authentication exits
+
+The combined fixtures choose the signing path and the authentication exit
+independently. Each exit authenticates with the relocated signing PC. Both
+return and store the source address, and the second exit writes a separate
+output slot. For each key the regression checks the original, the O0 image and
+its O2 republication. For each recovered row with a live spill frame, the
+test supplies interrupted register and stack snapshots and checks earlier
+generations' addresses against the current signing sites.
+
+The publisher and the unwinder share the full-width register-copy rule.
+It recognizes zero arithmetic and shifts, idempotent bitwise operations,
+equal-input selects, and zero-bit extracts. A stack index must have a known
+value after the instruction's extension and scaling. Paired and unaligned
+spills, pre/post-indexed transfers, and full-width release stores and acquire
+loads preserve a modifier in a live CFA slot. The frame proof checks whether
+the actual bytes of that slot are still available.
+
+When a function signs LR locally and has multiple register authentication
+exits, each exit must establish the signing instruction, key, modifier and
+matching SP. A path that loses LR, changes key, truncates its modifier, or may
+have overwritten its only spill prevents publication. The source unwind test
+also checks the state after each exit of these rejected images. A correct
+exit can still describe its own unsigned LR.
+
+The Arm model maps the guest text and its separate EL0 and EL1 stacks as
+Normal memory. This also exercises unaligned scalar spills on the same memory
+type used for a Darwin thread stack. The linker checks where the guest ends
+against the first stack block.
+
+On the M4 Max, the 110 original images had identical SHA-256 hashes in
+the baseline and candidate runs. Across independent O0 and O2 attempts,
+publication succeeded in all 124 valid cases and was refused in all
+96 invalid cases. The baseline had refused 72 valid attempts and accepted
+24 invalid ones. The separate two-generation regression checked 876
+active-frame snapshots and 1,154 signing rows. The M4 passed 420 Release tests, including
+the additional compact and DWARF language cases. Hosted macOS passed
+367 tests. For each export the Arm FVP executed 324 current bodies
+in 8,352 calls, replayed six archived inventories and verified
+the disabled-feature control for every inventory.
+[Qualification record](evidence/arm64e-combined-signing-carriers-2026-11-28.json) ·
+[Hosted macOS Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46143020794) ·
+[M4 export on Arm FVP](https://github.com/gmh5225/test_mac_intel/actions/runs/46143293586) ·
+[Hosted export on Arm FVP](https://github.com/gmh5225/test_mac_intel/actions/runs/46147038399)
+
+#### Cross-block copies, stack reuse and three authentication exits
+
+Two signing entries feed a diamond of full-width register copies, followed by
+three independently selectable authentication exits. The fixtures cover a loop
+backedge, selects with separately produced operands, and a backup modifier
+that survives the release of only part of a frame. After a full frame release,
+a later allocation requires a fresh store from a proven source. At the third
+exit an interrupted-stack check puts the other entry's valid signing PC into
+stale cells. The recovered row must select a cell that still belongs to the
+interrupted path.
+
+The unwinder intersects the facts of both possible CSEL operands. The
+publisher follows each operand back to its signing instruction on the same
+incoming path. A flag-setting arithmetic or logical copy preserves the source
+address for ordinary uses and computes NZCV. When multiple exits share a
+scratch register, the last preparation reaching each exit must match its LR.
+A physical clobber makes that scratch unavailable on the affected path.
+
+For multi-exit publication the forward analysis also checks the live LR before
+each contributing signer, after the frame dataflow has converged. A CFI rule
+may describe a separately saved return address. The input is refused when the
+live register at a signer has lost the caller's return or already holds a
+signature. Each other exit retains its own independently proved unwind row.
+
+On the M4 Max, all 68 valid direct publications succeeded and all 68 invalid
+attempts left no output. On the same inputs the prior development revision
+rejected 40 valid attempts, accepted 16 invalid attempts and produced incorrect
+exit rows for 20 original images. The regression checked 510 exit rows across
+original and published images, plus 136 interrupted stack snapshots in the
+original images.
+
+The Arm model ran all six combinations of signing path and exit for each of
+the 136 new original or published bodies. Across EL0, EL1 and the four
+EnPACM settings, the full inventory made 14,880 calls. Seven archived
+inventories and all eight disabled-feature controls also passed.
+[Qualification record](evidence/arm64e-cross-block-signing-2026-11-29.json) ·
+[Arm model run](https://github.com/gmh5225/test_mac_intel/actions/runs/46168244442)
 
 ### Native x1 runner qualification
 

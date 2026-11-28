@@ -47,12 +47,28 @@ public:
             LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
             LowInstructionPreservedState *PreservedState = nullptr);
 
+  /// Consume the same undefined-output audit during this instruction's
+  /// transfer, without serializing an operation-span identity.
+  void
+  liftWithUndefinedTransfer(const cs_insn *Insn, std::vector<LowOp> &Ops,
+                            llvm::ArrayRef<RelocatedAddressOperand> Relocs,
+                            llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
+                            LowUndefinedTransfer &Transfer);
+
   /// Lift a certified ordinary x64 memory-indirect near CALL with an explicit
   /// target LOAD, including constant IAT/GOT slots. Physical stack effects are
   /// still omitted. Only canonical unsegmented r/m64 forms with optional
   /// address-size override and REX are accepted. On false, Ops is unchanged.
   bool
   liftX64MemoryCall(const cs_insn *Insn, std::vector<LowOp> &Ops,
+                    LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
+                    LowInstructionPreservedState *PreservedState = nullptr);
+
+  /// Lift a certified ordinary x64 memory-indirect near JMP with an explicit
+  /// target LOAD. Only canonical unsegmented r/m64 forms are accepted.
+  /// On false, Ops is unchanged.
+  bool
+  liftX64MemoryJump(const cs_insn *Insn, std::vector<LowOp> &Ops,
                     LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
                     LowInstructionPreservedState *PreservedState = nullptr);
 
@@ -200,9 +216,10 @@ public:
     uint16_t AddressSize = 8;
 
     /// Per-instruction physical-target projection. The ordinary lift keeps
-    /// constant call slots visible for import binding; this projection reads
-    /// them through the same operandRead/computeEA path as dynamic addresses.
-    bool LoadMemoryCallTarget = false;
+    /// constant call/jump slots visible for import binding; this projection
+    /// reads them through the same operandRead/computeEA path as dynamic
+    /// addresses.
+    bool LoadMemoryControlTarget = false;
 
     void emitIntrinsic(Intrinsic Id, NdVar Out = NdVar::reg(x86reg::RAX, 8),
                        std::initializer_list<NdVar> Extra = {},
@@ -278,9 +295,10 @@ private:
   void liftImpl(const cs_insn *Insn, std::vector<LowOp> &Ops,
                 llvm::ArrayRef<RelocatedAddressOperand> Relocs,
                 llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
-                bool LoadMemoryCallTarget,
+                bool LoadMemoryControlTarget,
                 LowInstructionUndefinedEffects *UndefinedEffects,
-                LowInstructionPreservedState *PreservedState);
+                LowInstructionPreservedState *PreservedState,
+                LowUndefinedTransfer *Transfer = nullptr);
   bool liftCore(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftControl(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);
   bool liftAtomic(LiftState &S, const cs_insn *Insn, const cs_x86 &X86);

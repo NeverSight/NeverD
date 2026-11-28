@@ -45,10 +45,11 @@ namespace discovery_fixture {
 constexpr auto kGateTimeout = std::chrono::seconds(5);
 constexpr auto kGatePollInterval = std::chrono::milliseconds(5);
 
-bool waitFor(const std::string &path) {
+bool waitFor(const std::string &path, neverd_cancel_probe_fn stop = nullptr,
+             void *context = nullptr) {
   const auto deadline = std::chrono::steady_clock::now() + kGateTimeout;
   while (!std::filesystem::exists(std::filesystem::u8path(path))) {
-    if (std::chrono::steady_clock::now() >= deadline)
+    if ((stop && stop(context)) || std::chrono::steady_clock::now() >= deadline)
       return false;
     std::this_thread::sleep_for(kGatePollInterval);
   }
@@ -146,6 +147,7 @@ struct MockSession {
   std::vector<std::uint64_t> functions = listedFunctions({});
   unsigned discoveryPolls = 0;
   bool discoveryPublished = false, discoveryRebuild = false;
+  bool openingInventorySettled = false;
   neverd_load_progress_fn progress = nullptr;
   void *progressUser = nullptr;
   /// The loader the next load reads with, and the one the image was read
@@ -786,6 +788,28 @@ int neverd_session_discover_functions(neverd_session_t s) {
   }
   return neverd_func_count(s);
 }
+int neverd_session_discover_functions_cancellable(neverd_session_t s,
+                                                  neverd_cancel_probe_fn stop,
+                                                  void *context) {
+  auto &state = *session(s);
+  const auto marker = [&](const char *suffix) {
+    return std::filesystem::u8path(state.path + suffix);
+  };
+  if (std::filesystem::exists(marker(".pause-opening-discovery"))) {
+    std::ofstream(marker(".opening-discovery-waiting")) << "waiting";
+    if (!discovery_fixture::waitFor(state.path + ".finish-opening-discovery",
+                                    stop, context)) {
+      if (stop && stop(context)) {
+        std::ofstream(marker(".opening-discovery-cancelled")) << "cancelled";
+        return -2;
+      }
+      return -1;
+    }
+  }
+  const int count = neverd_session_discover_functions(s);
+  state.openingInventorySettled = count >= 0;
+  return count;
+}
 #ifdef NEVERD_TEST_STEPPED_DISCOVERY
 NEVERD_API int neverd_session_discover_functions_step(neverd_session_t s) {
   auto &state = *session(s);
@@ -1094,7 +1118,13 @@ const char *neverd_warm_functions_json(neverd_session_t s,
   auto &state = *session(s);
   state.error.clear();
   maxFunctions = std::clamp(maxFunctions, 1, 4096);
-  if (state.path.find("prepare-views") != std::string::npos) {
+  if (state.path.find("prepare-views") != std::string::npos ||
+      state.path.find("costly-warm-page") != std::string::npos) {
+    if (firstEntry && std::filesystem::exists(std::filesystem::u8path(
+                          state.path + ".check-opening-inventory"))) {
+      std::ofstream(std::filesystem::u8path(state.path + ".opening-warm-order"))
+          << (state.openingInventorySettled ? "settled" : "unsettled");
+    }
     std::puts("fixture view preparation started");
     std::fflush(stdout);
     if (state.path.ends_with("prepare-views-fail.bin")) {
@@ -1125,6 +1155,9 @@ const char *neverd_warm_functions_json(neverd_session_t s,
         {"full", false},
         {"next_entry",
          nullptr}}.dump());
+  if (state.path.find("costly-warm-page") != std::string::npos &&
+      firstEntry == Base + 64)
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
   if (firstEntry == 0)
     state.warmed = 0;
   // warm-slow.bin takes long enough per step for heartbeats to show a pass;
@@ -1163,6 +1196,14 @@ const char *neverd_warm_functions_json(neverd_session_t s,
        next == state.functions.end() ? Json(nullptr) : Json(hexAddress(*next))},
       {"call_summaries",
        summaries}}.dump());
+}
+const char *neverd_warm_initial_view_json(neverd_session_t s) {
+  if (session(s)->path.find("initial-root-") == std::string::npos)
+    return neverd_warm_functions_json(s, 0, 1);
+  return copy(Json{{"available", true},
+                   {"prepared", 1},
+                   {"initial_entry", hexAddress(Base + 64)}}
+                  .dump());
 }
 const char *neverd_prepare_call_summaries_json(neverd_session_t s) {
   auto &state = *session(s);

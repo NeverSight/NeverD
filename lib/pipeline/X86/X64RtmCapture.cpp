@@ -15,12 +15,14 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
+#include <utility>
 
 namespace neverd {
 
@@ -162,6 +164,35 @@ X64RtmFaultCapture::read(const llvm::json::Value &Value, va_t ImageBase,
        "outside RTM/HLE, successful instruction fetch and V6 event RAM"}};
   if (LoadBase)
     Capture.Receipt["load_base"] = "0x" + llvm::utohexstr(*LoadBase);
+  return Capture;
+}
+
+llvm::Expected<X64RtmFaultCapture>
+X64RtmFaultCapture::bind(llvm::json::Object &Request,
+                         llvm::StringRef ObservationJSON, va_t ImageBase,
+                         unsigned AddressBits) {
+  auto Saved = llvm::json::parse(ObservationJSON);
+  if (!Saved)
+    return Saved.takeError();
+  auto *Envelope = Saved->getAsObject();
+  auto *Fault = Envelope ? Envelope->get(Key) : nullptr;
+  if (!Fault)
+    return invalid("expected qemu_xbegin_fault_v1 in the observation file");
+  auto Capture = read(*Fault, ImageBase, AddressBits);
+  if (!Capture)
+    return Capture.takeError();
+  if (const auto *Existing = Request.get(Key)) {
+    auto Inline = read(*Existing, ImageBase, AddressBits);
+    if (!Inline)
+      return Inline.takeError();
+    // Both records are valid. Compare exact integers, including high unsigned
+    // registers that LLVM's JSON value equality can round to the same double.
+    if (llvm::formatv("{0}", *Existing).str() !=
+        llvm::formatv("{0}", *Fault).str())
+      return invalid("request already contains a different XBEGIN observation");
+  } else {
+    Request[Key] = std::move(*Fault);
+  }
   return Capture;
 }
 

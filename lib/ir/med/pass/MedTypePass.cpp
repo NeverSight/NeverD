@@ -1654,7 +1654,9 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
         AllVMXReturns =
             IntDist < 0 && FPRegWriteOp &&
             hasValidMedIntrinsicId(*FPRegWriteOp) &&
-            FPRegWriteOp->Inputs[0].ConstVal == unsigned(Intrinsic::PPCVaddubm);
+            FPRegWriteOp->Inputs[0].ConstVal < unsigned(Intrinsic::_Count) &&
+            ppc::vmxBinaryForm(
+                static_cast<Intrinsic>(FPRegWriteOp->Inputs[0].ConstVal));
         AnyVMXReturn |= AllVMXReturns;
       }
 

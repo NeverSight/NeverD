@@ -184,6 +184,7 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationEntryABI.cpp
   NdOpEmulator.cpp
   NdOpEmulatorExec.cpp
+  RISCVFloatingExecution.cpp
   NdOpEmulatorIntegerMemory.cpp
   NdOpEmulatorValues.cpp
   MIPS/MIPSHistoricalCP0.cpp

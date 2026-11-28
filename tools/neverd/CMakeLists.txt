@@ -86,6 +86,7 @@ add_neverd_tool(neverd
   cmd/NeverDCmdProcess.cpp
   cmd/NeverDCmdUnpack.cpp
   cmd/NeverDCmdSafety.cpp
+  cmd/NeverDCmdModel.cpp
   cmd/NeverDCmdConcolic.cpp
   cmd/NeverDCmdMobile.cpp
   cmd/NeverDCmdWeb.cpp
@@ -180,6 +181,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
     if(TARGET neverd-worker OR NEVERD_BUILD_WORKER OR NEVERD_BUILD_GUI)
       set(_neverd_sections_worker "$<TARGET_FILE:neverd-worker>")
     endif()
+    add_test(NAME NeverDModelScanCLI
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/model_scan_test.py"
+              "$<TARGET_FILE:neverd>" "${_neverd_sections_worker}" "$<TARGET_FILE:neverd_shared>")
+    set_tests_properties(NeverDModelScanCLI PROPERTIES TIMEOUT 120 LABELS "CLI;Model")
     add_test(NAME NeverDAnalysisSectionsCLI
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/analysis_sections_test.py"
               "$<TARGET_FILE:neverd>" ${_neverd_sections_worker})

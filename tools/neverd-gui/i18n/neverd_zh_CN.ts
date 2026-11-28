@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Model Security Scan...</source>
+        <translation>模型安全扫描...</translation>
+    </message>
+    <message>
+        <source>Inspect local model files and package templates</source>
+        <translation>检查本地模型文件和随附模板</translation>
+    </message>
+    <message>
         <source>Inspect JVM classes and JARs…</source>
         <translation>查看 JVM 类和 JAR 文件…</translation>
     </message>
@@ -11552,6 +11560,193 @@ Your previous graph is still available.</source>
     <message>
         <source>Save native component to a new file</source>
         <translation>将原生组件保存到新文件</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ModelScanDialog</name>
+    <message>
+        <source>Inferred projection layouts</source>
+        <translation>从张量推断的投影结构</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>&amp;Quantization sample (KiB)</source>
+        <translation>量化抽样（KiB）(&amp;Q)</translation>
+    </message>
+    <message>
+        <source>Model Security Scan</source>
+        <translation>模型安全扫描</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>文件夹…</translation>
+    </message>
+    <message>
+        <source>File…</source>
+        <translation>文件…</translation>
+    </message>
+    <message>
+        <source>Select model package</source>
+        <translation>选择模型包</translation>
+    </message>
+    <message>
+        <source>Select model file</source>
+        <translation>选择模型文件</translation>
+    </message>
+    <message>
+        <source>&amp;Model</source>
+        <translation>模型(&amp;M)</translation>
+    </message>
+    <message>
+        <source>&amp;Baseline (optional)</source>
+        <translation>基线（可选）(&amp;B)</translation>
+    </message>
+    <message>
+        <source>Scan</source>
+        <translation>扫描</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>取消扫描</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>正在启动分析工作进程…</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>证据</translation>
+    </message>
+    <message>
+        <source>Status or type</source>
+        <translation>状态或类型</translation>
+    </message>
+    <message>
+        <source>Selected evidence</source>
+        <translation>所选证据</translation>
+    </message>
+    <message>
+        <source>Previous page</source>
+        <translation>上一页</translation>
+    </message>
+    <message>
+        <source>Next page</source>
+        <translation>下一页</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>导出报告…</translation>
+    </message>
+    <message>
+        <source>Save report to a new file</source>
+        <translation>将报告保存到新文件</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>分析工作进程已停止。</translation>
+    </message>
+    <message>
+        <source>Reading model artifacts…</source>
+        <translation>正在读取模型文件…</translation>
+    </message>
+    <message>
+        <source>Model scanning is unavailable in this worker.</source>
+        <translation>此分析进程不支持模型扫描。</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>已取消</translation>
+    </message>
+    <message>
+        <source>%1 tensors</source>
+        <translation>%1 个张量</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>发现项</translation>
+    </message>
+    <message>
+        <source>Coverage gaps</source>
+        <translation>未覆盖的范围</translation>
+    </message>
+    <message>
+        <source>Artifacts</source>
+        <translation>模型文件</translation>
+    </message>
+    <message>
+        <source>Templates</source>
+        <translation>模板</translation>
+    </message>
+    <message>
+        <source>Tensors</source>
+        <translation>张量</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>元数据</translation>
+    </message>
+    <message>
+        <source>Exported graphs</source>
+        <translation>导出的计算图</translation>
+    </message>
+    <message>
+        <source>Layers inferred from names</source>
+        <translation>根据名称推断的层</translation>
+    </message>
+    <message>
+        <source>Baseline comparison</source>
+        <translation>基线比对</translation>
+    </message>
+    <message>
+        <source>Tensor comparison</source>
+        <translation>张量比对</translation>
+    </message>
+    <message>
+        <source>Component changes</source>
+        <translation>组件差异</translation>
+    </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>高级选项（JSON）</translation>
+    </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>搜索张量或算子</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>计算图作用域</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>声明</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>重建 GGUF…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>请在高级选项中将 template_policy 设为 keep、remove 或 replace。</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>依赖项</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>来源证据</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>适配器矩阵</translation>
     </message>
 </context>
 </TS>

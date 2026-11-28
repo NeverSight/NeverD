@@ -16,6 +16,7 @@
 
 #include "neverd/backend/IntegerMemorySource.h"
 #include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
+#include "neverd/backend/RISCV/RISCVFloatingSource.h"
 #include "neverd/backend/llvm/LLVMSyscallAsm.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -23,11 +24,11 @@
 #include "neverd/ir/X86/X87BCD.h"
 #include "neverd/ir/X86/X87Constant.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
-#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCounter.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/intrinsics/X86/X86DescriptorState.h"
 #include "neverd/ir/intrinsics/X86/X86Sgx.h"
-#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-intrinsic"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
@@ -129,7 +130,7 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
         " n_in=" + std::to_string(Op.NumInputs) +
         " target=" + std::to_string(static_cast<unsigned>(TargetArch)));
   };
-  if (IC == I::PPCVaddubm) {
+  if (auto Form = ppc::vmxBinaryForm(IC)) {
     if (!isPowerPC(TargetArch) || Op.NumInputs != 3 ||
         Op.Output.Size != ppc::VectorBytes ||
         Op.Inputs[1].Size != ppc::VectorBytes ||
@@ -138,14 +139,57 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
     if (!PortableBody)
       Builder.GetInsertBlock()->getParent()->addFnAttr("target-features",
                                                        ppc::VMXFeature);
-    auto *Bytes =
-        llvm::FixedVectorType::get(Builder.getInt8Ty(), ppc::VectorBytes);
-    auto *Left = Builder.CreateBitCast(getVar(Op.Inputs[1], Builder), Bytes);
-    auto *Right = Builder.CreateBitCast(getVar(Op.Inputs[2], Builder), Bytes);
-    return Builder.CreateBitCast(Builder.CreateAdd(Left, Right),
-                                 sizeToType(Op.Output.Size));
+    const unsigned LaneBytes = Form->LaneBytes;
+    auto *Lanes = llvm::FixedVectorType::get(Builder.getIntNTy(8 * LaneBytes),
+                                             ppc::VectorBytes / LaneBytes);
+    auto *Left = Builder.CreateBitCast(getVar(Op.Inputs[1], Builder), Lanes);
+    auto *Right = Builder.CreateBitCast(getVar(Op.Inputs[2], Builder), Lanes);
+    auto *Result = Form->Operation == ppc::VMXOperation::Sub
+                       ? Builder.CreateSub(Left, Right)
+                       : Builder.CreateAdd(Left, Right);
+    return Builder.CreateBitCast(Result, sizeToType(Op.Output.Size));
   }
-  if (const auto *Read = riscv::cycleRead(IC)) {
+  if (IC == I::RISCVFloating || IC == I::RISCVFPControl) {
+    const unsigned XLen = getTargetRegInfo(TargetArch).PointerSize;
+    if (!isRISCV(TargetArch) || PortableBody || Op.NumInputs < 2 ||
+        !Op.Inputs[1].isConst())
+      return refuseUnhandled();
+    const uint64_t Selector = Op.Inputs[1].ConstVal;
+    auto Asm = riscv::fpAssembly(IC, Selector, XLen, '$');
+    if (!Asm || Op.NumInputs != 2 + Asm->Count ||
+        Op.Output.Size != riscv::fpBytes(Asm->Result, XLen))
+      return refuseUnhandled();
+    auto Type = [&](riscv::FPValue V) -> llvm::Type * {
+      if (V == riscv::FPValue::S)
+        return Builder.getFloatTy();
+      if (V == riscv::FPValue::D)
+        return Builder.getDoubleTy();
+      return Builder.getIntNTy(8 * riscv::fpBytes(V, XLen));
+    };
+    llvm::SmallVector<llvm::Value *, 3> Args;
+    llvm::SmallVector<llvm::Type *, 3> Types;
+    for (unsigned J = 0; J < Asm->Count; ++J) {
+      const unsigned Bytes = riscv::fpBytes(Asm->Inputs[J], XLen);
+      if (Op.Inputs[2 + J].Size != Bytes)
+        return refuseUnhandled();
+      llvm::Value *V = getVar(Op.Inputs[2 + J], Builder);
+      if (V->getType()->isPointerTy())
+        V = Builder.CreatePtrToInt(V, Builder.getIntNTy(Bytes * 8));
+      Types.push_back(Type(Asm->Inputs[J]));
+      Args.push_back(Builder.CreateBitCast(V, Types.back()));
+    }
+    auto *FT = llvm::FunctionType::get(Type(Asm->Result), Types, false);
+    auto *Call = Builder.CreateCall(
+        llvm::InlineAsm::get(FT, Asm->Text, Asm->Constraints, true), Args);
+    Call->setMetadata(
+        "neverd.riscv.fp",
+        llvm::MDNode::get(
+            *Ctx,
+            {llvm::ConstantAsMetadata::get(Builder.getInt32(unsigned(IC))),
+             llvm::ConstantAsMetadata::get(Builder.getInt32(Selector))}));
+    return Builder.CreateBitCast(Call, Builder.getIntNTy(Op.Output.Size * 8));
+  }
+  if (const auto *Read = riscv::counterRead(IC)) {
     const unsigned Bytes = getTargetRegInfo(TargetArch).PointerSize;
     if (!Read->admits(TargetArch) || Op.NumInputs != 1 ||
         Op.Output.Size != Bytes)

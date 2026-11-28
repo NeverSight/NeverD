@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Model Security Scan...</source>
+        <translation>Análisis de seguridad del modelo...</translation>
+    </message>
+    <message>
+        <source>Inspect local model files and package templates</source>
+        <translation>Inspeccionar archivos de modelos locales y plantillas asociadas</translation>
+    </message>
+    <message>
         <source>Inspect JVM classes and JARs…</source>
         <translation>Inspeccionar clases JVM y archivos JAR…</translation>
     </message>
@@ -11588,6 +11596,193 @@ Su grafo anterior sigue disponible.</translation>
     <message>
         <source>Save native component to a new file</source>
         <translation>Guardar el componente nativo en un archivo nuevo</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ModelScanDialog</name>
+    <message>
+        <source>Inferred projection layouts</source>
+        <translation>Estructuras de proyección inferidas</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>Desactivado</translation>
+    </message>
+    <message>
+        <source>&amp;Quantization sample (KiB)</source>
+        <translation>Muestra de &amp;cuantización (KiB)</translation>
+    </message>
+    <message>
+        <source>Model Security Scan</source>
+        <translation>Análisis de seguridad del modelo</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Carpeta…</translation>
+    </message>
+    <message>
+        <source>File…</source>
+        <translation>Archivo…</translation>
+    </message>
+    <message>
+        <source>Select model package</source>
+        <translation>Seleccionar paquete de modelo</translation>
+    </message>
+    <message>
+        <source>Select model file</source>
+        <translation>Seleccionar archivo de modelo</translation>
+    </message>
+    <message>
+        <source>&amp;Model</source>
+        <translation>&amp;Modelo</translation>
+    </message>
+    <message>
+        <source>&amp;Baseline (optional)</source>
+        <translation>&amp;Referencia (opcional)</translation>
+    </message>
+    <message>
+        <source>Scan</source>
+        <translation>Analizar</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>Cancelar análisis</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Iniciando el proceso de análisis…</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Evidencia</translation>
+    </message>
+    <message>
+        <source>Status or type</source>
+        <translation>Estado o tipo</translation>
+    </message>
+    <message>
+        <source>Selected evidence</source>
+        <translation>Evidencia seleccionada</translation>
+    </message>
+    <message>
+        <source>Previous page</source>
+        <translation>Página anterior</translation>
+    </message>
+    <message>
+        <source>Next page</source>
+        <translation>Página siguiente</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Exportar informe…</translation>
+    </message>
+    <message>
+        <source>Save report to a new file</source>
+        <translation>Guardar el informe en un archivo nuevo</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>El proceso de análisis se ha detenido.</translation>
+    </message>
+    <message>
+        <source>Reading model artifacts…</source>
+        <translation>Leyendo los archivos del modelo…</translation>
+    </message>
+    <message>
+        <source>Model scanning is unavailable in this worker.</source>
+        <translation>Este proceso de análisis no admite modelos.</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Cancelado</translation>
+    </message>
+    <message>
+        <source>%1 tensors</source>
+        <translation>%1 tensores</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>Hallazgos</translation>
+    </message>
+    <message>
+        <source>Coverage gaps</source>
+        <translation>Áreas sin inspeccionar</translation>
+    </message>
+    <message>
+        <source>Artifacts</source>
+        <translation>Archivos del modelo</translation>
+    </message>
+    <message>
+        <source>Templates</source>
+        <translation>Plantillas</translation>
+    </message>
+    <message>
+        <source>Tensors</source>
+        <translation>Tensores</translation>
+    </message>
+    <message>
+        <source>Metadata</source>
+        <translation>Metadatos</translation>
+    </message>
+    <message>
+        <source>Exported graphs</source>
+        <translation>Grafos exportados</translation>
+    </message>
+    <message>
+        <source>Layers inferred from names</source>
+        <translation>Capas inferidas de los nombres</translation>
+    </message>
+    <message>
+        <source>Baseline comparison</source>
+        <translation>Comparación con la referencia</translation>
+    </message>
+    <message>
+        <source>Tensor comparison</source>
+        <translation>Comparación de tensores</translation>
+    </message>
+    <message>
+        <source>Component changes</source>
+        <translation>Cambios en los componentes</translation>
+    </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>Opciones avanzadas (JSON)</translation>
+    </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>Buscar tensores u operadores</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>Ámbito del grafo</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>Declaraciones</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>Reconstruir GGUF…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>Establezca template_policy en keep, remove o replace en las opciones avanzadas.</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Dependencias</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>Procedencia</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>Matrices del adaptador</translation>
     </message>
 </context>
 </TS>

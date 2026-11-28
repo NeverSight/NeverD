@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Spell an open integer call boundary in a Win64 original-state C export.
+/// Spell an open integer call boundary in a Win64 C export.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_BACKEND_C_HIGHC_COFF_HIGHCWIN64OPENCALL_H

@@ -137,17 +137,18 @@ public:
     std::string Alias;
     std::string declaration(llvm::StringRef Name = {}) const;
   };
-  struct DefinitionPointerTypes {
+  struct DefinitionSourceTypes {
     std::vector<SourcePointerType> Parameters;
+    std::map<unsigned, TypeRef> NarrowIntegers;
     SourcePointerType Result;
   };
-  /// The pointer types actually printed by a definition, shared by its
-  /// signature and direct calls regardless of module order. Declarations
-  /// outside the selected projection keep their own LLVM/source contract.
-  const DefinitionPointerTypes &
-  definitionPointerTypes(const llvm::Function &Fn) const;
-  mutable std::map<const llvm::Function *, DefinitionPointerTypes>
-      DefinitionPointers;
+  /// Source types bound to the definition's original entry. Pointer bridges
+  /// apply to selected definitions. A proved integer word also types a direct
+  /// declaration when only its caller is selected.
+  const DefinitionSourceTypes &
+  definitionSourceTypes(const llvm::Function &Fn) const;
+  mutable std::map<const llvm::Function *, DefinitionSourceTypes>
+      DefinitionTypesByFunction;
   std::optional<DebugParamBindings>
   debugArgumentBindings(const llvm::Function &Fn,
                         const FunctionSym &Signature) const;
@@ -163,6 +164,8 @@ public:
   void requireCSpelling(const llvm::Function &Callee) const;
   std::string sourceScalarType(llvm::Type *Type, bool Signed) const;
   std::string sourceFunctionResultType(const llvm::Function &Function) const;
+  static bool canNarrowIntegerParameter(const llvm::Argument &Arg,
+                                        const NdType &Declared);
   /// \p Fn's C declaration of \p Declarator; with \p Params, of its first
   /// that many parameters only.
   std::string sourceFunctionDeclaration(
