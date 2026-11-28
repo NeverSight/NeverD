@@ -1558,9 +1558,7 @@ void FuncDetector::scanCallTargets(
     Dec.setText(false);
   }
 
-  // A text section and its sized symbols can describe many tiny ranges.
-  // Sweep each range normally without starting a worker for a short scan.
-  if (PieceJobs.empty() && (Chunks.size() <= 1 || BytesUntilParallel != 0)) {
+  if (Chunks.size() <= 1 && PieceJobs.empty()) {
     for (auto &[Seg, Start, End] : Chunks)
       func_detect_detail::scanSegmentCalls(Img, Dec, Seg, Start, End, Out,
                                            CodeAddresses, Cancellation,
@@ -1666,17 +1664,23 @@ void FuncDetector::scanCallTargets(
                          LocalCodeAddresses.end());
   };
 
-  std::vector<std::thread> Ts;
-  Ts.reserve(ThreadsN);
-  for (unsigned T = 0; T < ThreadsN; ++T)
-    Ts.emplace_back([&] {
-      try {
-        Worker();
-      } catch (const func_detect_detail::DiscoveryCancelled &) {
-      }
-    });
-  for (auto &T : Ts)
-    T.join();
+  // Short symbol and section ranges do not need a new thread. Use the same
+  // private decoder so their targets do not depend on the caller's settings.
+  if (PieceJobs.empty() && BytesUntilParallel != 0) {
+    Worker();
+  } else {
+    std::vector<std::thread> Ts;
+    Ts.reserve(ThreadsN);
+    for (unsigned T = 0; T < ThreadsN; ++T)
+      Ts.emplace_back([&] {
+        try {
+          Worker();
+        } catch (const func_detect_detail::DiscoveryCancelled &) {
+        }
+      });
+    for (auto &T : Ts)
+      T.join();
+  }
   func_detect_detail::checkCancellation(Cancellation);
 
   // The targets the joined sweeps find, added to \p Out in order at the end.

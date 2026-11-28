@@ -239,6 +239,36 @@ TEST(FunctionDiscoveryAlignment, UnwindTailRequiresAnExecutableCompleteBody) {
   }
 }
 
+TEST(FuncDetectorCoverage, SmallARMCallSweepKeepsOperandDetail) {
+  BinaryImage Img;
+  Img.Arch = Arch::ARM;
+  Img.Mode = InstructionMode::ARM;
+  Img.Bits = Bitness::Bits32;
+  Img.Format = BinaryFormat::ELF;
+  Img.Entry = 0x1000;
+  const uint8_t Code[] = {
+      0x10, 0x40, 0x2d, 0xe9, // push {r4, lr}
+      0x01, 0x00, 0x00, 0xeb, // bl 0x1010
+      0x10, 0x80, 0xbd, 0xe8, // pop {r4, pc}
+      0x00, 0xf0, 0x20, 0xe3, // nop
+      0x07, 0x00, 0xa0, 0xe3, // mov r0, #7
+      0x1e, 0xff, 0x2f, 0xe1, // bx lr
+  };
+  Img.Segments.push_back(executableSegment(Img.Entry, Code));
+  Img.Symbols.push_back(Symbol::makeFunc(Img.Entry, 12));
+
+  for (bool Detail : {false, true}) {
+    SCOPED_TRACE(Detail);
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    D.setDetail(Detail);
+    const auto Entries = FuncDetector().detect(Img, D);
+    EXPECT_TRUE(llvm::any_of(
+        Entries, [](const auto &Entry) { return Entry.first == 0x1010; }));
+    EXPECT_EQ(D.detailEnabled(), Detail);
+  }
+}
+
 // A long `.text` is swept for call targets in pieces on the worker threads
 // and the pieces joined as one sweep would have gone.  Random bytes decode to
 // every length of instruction and to bytes that do not decode at all, so the
