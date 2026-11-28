@@ -393,8 +393,17 @@ in-place replacements, the assembler reserves the original input section
 extent after the new function's size directive. This preserves the PIC
 symbol flags and the linker's alignment bytes outside the original function.
 The section placement uses the replacement at its natural size.
-Together, the current and eight upgrade groups execute 2,054 whole ELFs
-per host, including 1,424 updated programs, and retain 686 relocatable
+
+The relocation-boundary fixtures read bytes at both signed GP-relative
+endpoints and return a full-width address on either side of a low-half carry.
+The n64 case carries through the higher and highest fields. Both update modes
+must match a separate direct link. A replacement that addresses one byte
+beyond either GP endpoint must fail and preserve the previous output.
+These checks cover classic and microMIPS R2/R6 on all three ABIs and MIPS16
+R2 on o32, in both byte orders.
+
+Together, the current and eight upgrade groups exercise 2,132 whole ELFs
+per host, including 1,476 updated programs, and retain 764 relocatable
 objects for comparison.
 
 When the original build uses a static library in a partial link, keep the
