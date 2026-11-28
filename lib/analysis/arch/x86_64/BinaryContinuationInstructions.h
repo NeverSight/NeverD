@@ -19,11 +19,12 @@
 namespace neverd {
 struct BinaryImage;
 namespace analysis {
+struct X64ContinuationSourceOptions;
 
 llvm::Expected<std::vector<SpecializationInstruction>>
-readBinaryX64ContinuationInstructions(const BinaryImage &Image,
-                                      llvm::ArrayRef<va_t> Addresses,
-                                      bool PagedDebug = false);
+readBinaryX64ContinuationInstructions(
+    const BinaryImage &Image, llvm::ArrayRef<va_t> Addresses,
+    const X64ContinuationSourceOptions &Options);
 
 } // namespace analysis
 } // namespace neverd

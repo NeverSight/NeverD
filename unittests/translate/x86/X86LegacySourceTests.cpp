@@ -1588,11 +1588,12 @@ TEST_P(X86LegacySourceTest,
   EXPECT_EQ(readSourceArtifact(Report), Expected.Manifest);
   for (const auto &Extra :
        {std::string("--llvm"), "--x64-continuation=" + Settings.string(),
-        std::string("--func=0x1000")}) {
+        std::string("--func=0x1000"), std::string("--check-all")}) {
     auto Bad = Args;
     Bad.push_back(Extra);
     EXPECT_FALSE(exec(ndBin(), Bad).ok());
     EXPECT_EQ(readSourceArtifact(Output), Expected.Source);
+    EXPECT_EQ(readSourceArtifact(Report), Expected.Manifest);
   }
   Args.back() = "--continuation-report=" + Output.string();
   EXPECT_FALSE(exec(ndBin(), Args).ok());

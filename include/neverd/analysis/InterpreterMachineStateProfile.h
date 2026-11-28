@@ -75,6 +75,9 @@ enum class InterpreterProfileProjection : uint8_t {
   X64SegmentMoveV1,
   /// Raw MOV-DR requires the paged debug bank and fault owner.
   X64DebugRegisterV1,
+  /// Faulting code64 spans authenticated by the paged instruction fetch.
+  X64PagedUD0,
+  X64PagedPrefixLengthFault,
 };
 
 } // namespace neverd::analysis

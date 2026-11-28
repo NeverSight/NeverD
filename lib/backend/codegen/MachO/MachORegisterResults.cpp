@@ -1151,28 +1151,33 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
         // Changing a register consumer to an immediate requires its sole
         // reaching definition. A branch or exceptional entry at the AUT
         // keeps the incoming register meaningful.
-        if (Joined != Joins.Addresses.end() && Sign.Authentication) {
-          const auto &A = *Sign.Authentication;
-          if (A.Consumer.PrepareAtSource)
+        MachOLiftedSourceAddress Site{PC, Target,
+                                      NumericPage ? MachOAddressForm::PagePair
+                                                  : MachOAddressForm::Single};
+        for (const auto &A : Sign.Authentications)
+          Site.Authentications.push_back(A.Consumer);
+        if (Joined != Joins.Addresses.end()) {
+          for (unsigned R : Site.preparedRegisters())
             OS << kAddress
-               << cs_reg_name(Decode.getHandle(),
-                              AARCH64_REG_X0 + *A.Consumer.ModifierRegister)
-               << kSeparator << kLocal << (A.Signer - Start) / Word << '\n';
-          else if (A.Consumer.Routes.empty())
-            References.push_back({A.Consumer.Instruction, A.Signer, 0});
-        } else if (Sign.Authentication) {
+               << cs_reg_name(Decode.getHandle(), AARCH64_REG_X0 + R)
+               << kSeparator << kLocal << (Target - Start) / Word << '\n';
+          for (const auto &A : Sign.Authentications)
+            if (!A.Consumer.PrepareAtSource && A.Consumer.Routes.empty())
+              References.push_back({A.Consumer.Instruction, A.Signer, 0});
+        } else if (!Sign.Authentications.empty()) {
+          const auto &A = Sign.Authentications.front();
           if (!ControlFlow) {
             OriginalControl = CFGBuilder().build(Image, Decode, Start);
             ControlFlow = &*OriginalControl;
           }
-          const va_t AuthPC = Sign.Authentication->Consumer.Instruction;
+          const va_t AuthPC = A.Consumer.Instruction;
           if (!llvm::any_of(ControlFlow->Blocks, [&](const LowBlock &B) {
                 return B.StartAddr <= PC && AuthPC < B.EndAddr;
               }))
             return std::nullopt;
-          if (!Sign.Authentication->Consumer.ModifierRegister)
+          if (!A.Consumer.ModifierRegister)
             References.push_back({AuthPC, Target, 0});
-          NextAuthentication = Sign.Authentication;
+          NextAuthentication = A;
         }
         Body.HasObservableSigningAddress |=
             Sign.Use == MachOSigningAddress::Observable;
@@ -1194,13 +1199,8 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
                                          Reg))
             return std::nullopt;
         }
-        Body.SourceAddresses.push_back(
-            {PC, Target,
-             NumericPage ? MachOAddressForm::PagePair
-                         : MachOAddressForm::Single,
-             OS.tell(), true,
-             Sign.Authentication ? std::optional(Sign.Authentication->Consumer)
-                                 : std::nullopt});
+        Site.AssemblyOffset = OS.tell();
+        Body.SourceAddresses.push_back(std::move(Site));
         if (Rebased)
           Body.SourcePointerSlots.push_back(
               aarch64::decodeLiteralLoad(Encoding, PC)->Address);

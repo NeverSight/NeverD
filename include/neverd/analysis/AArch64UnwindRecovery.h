@@ -16,6 +16,7 @@
 #include "neverd/runtime/DarwinArm64eUnwindRow.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 
@@ -38,12 +39,14 @@ struct AArch64UnwindRegister {
   bool operator==(const AArch64UnwindRegister &) const = default;
 };
 
-/// Every incoming path put its live LR's own signing PC in this GPR.
+/// Every incoming path put its live LR's own signing PC in the indicated
+/// carrier. Register is kRegisters when only the active CFA slot survives.
 /// PCs are image addresses, prior to the runtime slide.
 struct AArch64LiveSigningModifier {
   unsigned Register;
   dwarf_eh::AArch64RAKey Key;
   llvm::SmallVector<va_t, 2> SigningPCs;
+  std::optional<int64_t> CFASlot = std::nullopt;
   bool operator==(const AArch64LiveSigningModifier &) const = default;
 };
 
@@ -91,6 +94,27 @@ recoverDarwinAArch64Unwind(const BinaryImage &Image,
                            const ExceptionFunction &Function,
                            const AArch64UnwindRecoveryLimits &Limits = {});
 
+/// A machine memory transfer in the recovered frame. An unknown address or
+/// extent on a write can overlap any tracked slot. Only a full GPR transfer
+/// from a live frame cell supplies a register identity.
+struct AArch64FrameAccess {
+  bool Store;
+  std::optional<int64_t> CFAOffset;
+  unsigned Bytes;
+  std::optional<unsigned> Register;
+};
+
+using AArch64FrameAccesses =
+    llvm::DenseMap<va_t, llvm::SmallVector<AArch64FrameAccess, 1>>;
+
+/// Collect the transfers used by the unwind analysis for a path-wise
+/// reaching-definition proof in the image publisher.
+llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
+recoverDarwinAArch64Unwind(const BinaryImage &Image,
+                           const ExceptionFunction &Function,
+                           const AArch64UnwindRecoveryLimits &Limits,
+                           AArch64FrameAccesses *Accesses);
+
 /// Effective source rows retained while installing a classic B-key/SP object.
 /// They include remembered-state restores. Epilogues are post-AUT directives.
 struct AArch64ClassicReturnCFI {
@@ -136,6 +160,13 @@ prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
 std::optional<AArch64SystemCallerPlan> prepareDarwinArm64eSystemCaller(
     const AArch64RecoveredUnwindRow &Row, ExceptionAddressRange Range,
     va_t LoadedFrameStart, llvm::ArrayRef<va_t> InterruptedGPRs);
+
+/// ActiveStack begins at the interrupted SP. A stack-only signing modifier
+/// can be resolved only when the complete proven slot is in this snapshot.
+std::optional<AArch64SystemCallerPlan> prepareDarwinArm64eSystemCaller(
+    const AArch64RecoveredUnwindRow &Row, ExceptionAddressRange Range,
+    va_t LoadedFrameStart, llvm::ArrayRef<va_t> InterruptedGPRs,
+    llvm::ArrayRef<uint8_t> ActiveStack);
 
 /// Bind the instruction and its recovery row to the language table and its
 /// actual load address. A forwarding range contains no cleanup. A protected

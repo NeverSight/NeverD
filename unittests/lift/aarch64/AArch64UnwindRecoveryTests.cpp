@@ -607,6 +607,63 @@ TEST(AArch64ImplicitUnwind, InterruptedModifierSelectsAnIncomingSigner) {
     }
 }
 
+TEST(AArch64ImplicitUnwind, StackOnlyModifierRequiresItsEntireActiveSlot) {
+  constexpr auto Word = sizeof(uint32_t);
+  for (const auto &[Sign, Auth] :
+       {std::pair(ExplicitSignA, ExplicitAuthAX11),
+        std::pair(ExplicitSignB, ExplicitAuthBX11)}) {
+    for (auto Store : {ByteBelowLR, ByteInsideLR, HalfAcrossLR, IndexedStore}) {
+      Frame F{BranchToSecondSigner,
+              Sign,
+              PreviousPCInX11,
+              BranchToSharedAuth,
+              Sign,
+              PreviousPCInX11,
+              Allocate,
+              StoreModifierX11,
+              ClearModifierX11,
+              Store,
+              LoadModifierX11,
+              ReleaseStack,
+              Auth,
+              Ret};
+      const auto Range = F.Function.CodeRange;
+      auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+      ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+      const auto &Reload = aarch64UnwindRowAt(*Rows, JoinedSpillReload * Word);
+      const auto &Returned = aarch64UnwindRowAt(*Rows, Range.size() - Word);
+      if (Store != ByteBelowLR) {
+        EXPECT_FALSE(Reload.LiveSigningModifier);
+        EXPECT_EQ(Returned.Signing.Status, Status::Unknown);
+        continue;
+      }
+      ASSERT_TRUE(Reload.LiveSigningModifier);
+      EXPECT_EQ(Reload.LiveSigningModifier->Register, kRegisters);
+      EXPECT_EQ(Reload.LiveSigningModifier->CFASlot, -int(kRegisterBytes));
+      ASSERT_TRUE(Returned.Signing.State);
+      EXPECT_EQ(Returned.Signing.State->Kind, Kind::Unsigned);
+      std::array<uint8_t, 2 * kRegisterBytes> Stack{};
+      for (auto SourcePC : {Word, JoinedRightSigner * Word}) {
+        const auto LoadedPC = Range.End + SourcePC;
+        writeLE<va_t>(Stack.data(), LoadedPC);
+        EXPECT_FALSE(prepareDarwinArm64eSystemCaller(Reload, Range, Range.End,
+                                                     {}, Stack));
+        writeLE<va_t>(Stack.data() + kRegisterBytes, LoadedPC);
+        EXPECT_FALSE(prepareDarwinArm64eSystemCaller(
+            Reload, Range, Range.End, {}, llvm::ArrayRef(Stack).drop_back()));
+        auto Plan = prepareDarwinArm64eSystemCaller(Reload, Range, Range.End,
+                                                    {}, Stack);
+        ASSERT_TRUE(Plan);
+        EXPECT_EQ(Plan->Frame.SigningPC, LoadedPC);
+        EXPECT_EQ(Plan->Frame.Signing, Sign == ExplicitSignA
+                                           ? NDArm64eSignedIAWithCFAPC
+                                           : NDArm64eSignedIBWithCFAPC);
+        Stack.fill(0);
+      }
+    }
+  }
+}
+
 TEST(AArch64ImplicitUnwind, CompactRowsRecoverActualCarriersAtInterruption) {
   Frame F{SignB, Push, MoveFP, Call, Pop, AuthB, Ret};
   F.Function.Dwarf.reset();

@@ -1071,7 +1071,8 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
     const auto Source = SourceBody->Bytes;
     const va_t End = Start + Source.size();
     AddressExpansion InstalledOffset;
-    llvm::DenseMap<va_t, const MachOLiftedSourceAddress *> Authentications;
+    llvm::DenseMap<va_t, std::pair<const MachOSigningConsumer *, va_t>>
+        Authentications;
     llvm::DenseMap<va_t, std::pair<va_t, unsigned>> RouteTargets;
     bool RebuiltLSDA = false;
     for (const auto &Site : Addresses) {
@@ -1081,24 +1082,21 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                      Site.expandsAuthentication();
       if (Site.Form == MachOAddressForm::Expanded)
         InstalledOffset.Sites.push_back(Site.Instruction - Start);
-      if (Site.Authentication)
-        Authentications.try_emplace(Site.Authentication->Instruction, &Site);
-      if (Site.expandsAuthentication()) {
-        const auto &Auth = *Site.Authentication;
+      Site.forEachSigningExpansion([&](va_t PC, unsigned Words) {
+        InstalledOffset.Sites.append(Words, PC - Start);
+      });
+      for (const auto &Auth : Site.Authentications) {
+        Authentications.try_emplace(Auth.Instruction, &Auth, Site.Target);
         for (auto [Index, Route] : llvm::enumerate(Auth.Routes))
           if (Index)
             for (va_t Branch : Route.Branches)
               RouteTargets.try_emplace(Branch, Auth.Instruction,
                                        Auth.routeEntry(Index) *
                                            aarch64::kInsnSize);
-        const auto At = Site.signingExpansionSite() - Start;
-        Site.forEachSigningExpansion([&](va_t PC, unsigned Words) {
-          InstalledOffset.Sites.append(Words, PC - Start);
-        });
         if (Auth.RestoreSource)
-          InstalledOffset.Restores.emplace_back(At + aarch64::kInsnSize,
-                                                Auth.restoreWords() *
-                                                    aarch64::kInsnSize);
+          InstalledOffset.Restores.emplace_back(
+              Auth.Instruction - Start + aarch64::kInsnSize,
+              Auth.restoreWords() * aarch64::kInsnSize);
       }
     }
     llvm::sort(InstalledOffset.Sites);
@@ -1234,8 +1232,8 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
             return refuse(kLeafCode);
           continue;
         }
-        if (const auto *SigningConsumer =
-                Authentications.lookup(Start + Offset)) {
+        if (auto A = Authentications.find(Start + Offset);
+            A != Authentications.end()) {
           // Decode both instructions independently of the lowering plan. The
           // opcode preserves the IA/IB key and AUT/return behavior. Only the
           // second modifier changes representation.
@@ -1248,7 +1246,7 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
               I.Raw->detail->aarch64.operands[0].type != AARCH64_OP_REG)
             return refuse(kSourceAddressTarget);
           const auto Id = I.Id;
-          const auto &Auth = *SigningConsumer->Authentication;
+          const auto &Auth = *A->second.first;
           if (!Auth.Routes.empty()) {
             const auto Operation = machOPCSigningInstruction(Id);
             if (!Operation || Operation->Return != Auth.Returns ||
@@ -1302,14 +1300,12 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
             }
             continue;
           }
-          const auto Register =
-              SigningConsumer->Authentication->ModifierRegister;
-          const bool Restore = SigningConsumer->Authentication->RestoreSource;
+          const auto Register = Auth.ModifierRegister;
+          const bool Restore = Auth.RestoreSource;
           if (Restore && I.Raw->detail->aarch64.operands[0].reg !=
                              AARCH64_REG_X0 + *Register)
             return refuse(kSourceAddressTarget);
-          const bool Prepared =
-              SigningConsumer->Authentication->PrepareAtSource;
+          const bool Prepared = Auth.PrepareAtSource;
           const auto Prefix = Register && !Prepared ? Size : 0;
           if (After.size() < Prefix + Size)
             return refuse(kSourceAddressTarget);
@@ -1320,7 +1316,7 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
               I.Raw->detail->aarch64.op_count != 1)
             return refuse(kSourceAddressTarget);
           const va_t Sign =
-              Owner->second + InstalledOffset(SigningConsumer->Target - Start);
+              Owner->second + InstalledOffset(A->second.second - Start);
           const auto &Modifier = I.Raw->detail->aarch64.operands[0];
           if (Register) {
             const uint32_t Setup = readLE<uint32_t>(After.data());
@@ -1341,7 +1337,7 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
           }
           if (Restore && !machORestoresSigningAddress(
                              Decode, After.drop_front(Prefix + Size), PC + Size,
-                             *Register, SigningConsumer->Target + Slide))
+                             *Register, A->second.second + Slide))
             return refuse(kSourceAddressTarget);
           continue;
         }
@@ -1350,12 +1346,11 @@ verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
           const auto &Fixup = Addresses.front();
           Addresses = Addresses.drop_front();
           auto PC = Owner->second + InstalledOffset(Offset);
-          if (Fixup.Authentication && Fixup.Authentication->PrepareAtSource) {
+          for (const auto Register : Fixup.preparedRegisters()) {
             const auto Sign =
                 Owner->second + InstalledOffset(Fixup.Target - Start);
             const auto ADR = aarch64::encodePCRelativeAddress(
-                aarch64::AddressInstruction::ADR,
-                *Fixup.Authentication->ModifierRegister, PC, Sign);
+                aarch64::AddressInstruction::ADR, Register, PC, Sign);
             if (After.size() < 2 * aarch64::kInsnSize ||
                 ADR != readLE<uint32_t>(After.data()))
               return refuse(kSourceAddressTarget);

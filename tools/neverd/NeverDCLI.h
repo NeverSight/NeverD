@@ -384,6 +384,7 @@ extern llvm::cl::opt<bool> DumpHigh;
 // Decompile.
 extern llvm::cl::opt<bool> LlvmRoute;
 extern llvm::cl::opt<std::string> X64Continuation;
+extern llvm::cl::opt<std::string> X64XbeginObservation;
 extern llvm::cl::opt<std::string> X86LegacySource;
 extern llvm::cl::opt<std::string> ContinuationReport;
 extern llvm::cl::opt<bool> SourceSymbolic;

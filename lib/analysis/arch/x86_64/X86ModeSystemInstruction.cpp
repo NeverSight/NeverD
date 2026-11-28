@@ -87,25 +87,8 @@ llvm::Expected<X86ModeExecutionResult> executeModeSystemInstruction(
     return llvm::createStringError(
         llvm::errc::invalid_argument,
         "single-step system instruction requires the CPU debug bank");
-  R.InstructionAttempted = true;
-  if (x86PendingVirtualInterrupt(CPL, Memory.controls().CR4, Regs.RFlags)) {
-    R.Exception = X86MemoryException{13, 0, {}};
-    return R;
-  }
-  if (S.Debug && (!Memory.sgxMemory() ||
-                  Memory.sgxMemory()->instructionBreakpointsAt(I.Address))) {
-    const auto Matches = x86ExecutionBreakpoints(
-        S.Debug->DR, S.Debug->DR7, I.Address, Regs.RFlags, S.SSBlocked);
-    if (Matches) {
-      x86PublishInstructionDebug(*S.Debug, false, Matches);
-      R.Exception = X86MemoryException{1, 0, {}};
-      FaultKind = X86EventKind::InstructionBreakpoint;
-      return R;
-    }
-  }
-  R.InstructionAttempted = false;
-  auto Fetch = fetchX86SystemInstruction(S, Memory, I.Bytes,
-                                         O.Legacy.Segments.FullLimitChoice, R);
+  auto Fetch = fetchX86SystemInstruction(
+      S, Memory, I.Bytes, O.Legacy.Segments.FullLimitChoice, R, FaultKind);
   if (!Fetch)
     return Fetch.takeError();
   if (!*Fetch)

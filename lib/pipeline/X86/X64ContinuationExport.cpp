@@ -94,15 +94,9 @@ struct Request {
   std::vector<X64FunctionCallInterface> FunctionCalls;
 };
 
-llvm::Expected<Request> readRequest(llvm::StringRef Text, va_t ImageBase) {
-  if (Text.empty() ||
-      Text.size() > limits::pipeline::kX64ContinuationRequestBytes)
-    return invalid(
-        "x64 continuation request size is outside its allowed limit");
-  auto Parsed = llvm::json::parse(Text);
-  if (!Parsed)
-    return Parsed.takeError();
-  const auto *Object = Parsed->getAsObject();
+llvm::Expected<Request> readRequest(llvm::json::Value &Binding, va_t ImageBase,
+                                    llvm::StringRef XbeginObservationJSON) {
+  auto *Object = Binding.getAsObject();
   if (!Object)
     return invalid("x64 continuation request must be an object");
   static const std::set<llvm::StringRef> Keys{"profile",
@@ -123,7 +117,7 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text, va_t ImageBase) {
                                               "native_page_global_access",
                                               "native_rtm_abort_regions",
                                               "native_rtm_abort_steps",
-                                              "qemu_xbegin_fault_v1",
+                                              X64RtmFaultCapture::Key,
                                               "native_rtm_regions",
                                               "native_kvm_hypercalls",
                                               "native_hle_steps",
@@ -272,7 +266,8 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text, va_t ImageBase) {
     return invalid(
         "native RTM abort steps require successful-RAM kernel-events-v6 "
         "with a single RTM binding and no event scheduler");
-  if (const auto *V = Object->get("qemu_xbegin_fault_v1")) {
+  if (const auto *Inline = Object->get(X64RtmFaultCapture::Key);
+      Inline || !XbeginObservationJSON.empty()) {
     // Automatic admission makes no CPU assertion. Only remaining native
     // pairs can reach it after the observed instruction is lowered.
     if (Options.Profile != X64ContinuationProfile::KernelEventsNoFaultV6 ||
@@ -283,7 +278,11 @@ llvm::Expected<Request> readRequest(llvm::StringRef Text, va_t ImageBase) {
       return invalid("observed XBEGIN fault requires successful-RAM V6 with a "
                      "single CPU binding and no event scheduler");
     auto Capture =
-        X64RtmFaultCapture::read(*V, ImageBase, *Options.PagingAddressBits);
+        XbeginObservationJSON.empty()
+            ? X64RtmFaultCapture::read(*Inline, ImageBase,
+                                       *Options.PagingAddressBits)
+            : X64RtmFaultCapture::bind(*Object, XbeginObservationJSON,
+                                       ImageBase, *Options.PagingAddressBits);
     if (!Capture)
       return Capture.takeError();
     Options.ObservedXbeginFault = Capture->Site;
@@ -698,9 +697,27 @@ void driver(llvm::raw_ostream &OS,
 llvm::Expected<X64ContinuationExport>
 exportX64Continuation(const BinaryImage &Image, llvm::StringRef RequestJSON,
                       bool UseLLVM, DebugContext *Debug) {
-  auto Request = readRequest(RequestJSON, Image.Base);
+  return exportX64ContinuationWithObservation(Image, RequestJSON, UseLLVM,
+                                              Debug, {});
+}
+
+llvm::Expected<X64ContinuationExport> exportX64ContinuationWithObservation(
+    const BinaryImage &Image, llvm::StringRef RequestJSON, bool UseLLVM,
+    DebugContext *Debug, llvm::StringRef XbeginObservationJSON) {
+  constexpr auto Limit = limits::pipeline::kX64ContinuationRequestBytes;
+  if (RequestJSON.empty() || RequestJSON.size() > Limit ||
+      XbeginObservationJSON.size() > Limit)
+    return invalid(
+        "x64 continuation request size is outside its allowed limit");
+  auto Binding = llvm::json::parse(RequestJSON);
+  if (!Binding)
+    return Binding.takeError();
+  auto Request = readRequest(*Binding, Image.Base, XbeginObservationJSON);
   if (!Request)
     return Request.takeError();
+  if (RequestJSON.size() + XbeginObservationJSON.size() > Limit &&
+      llvm::formatv("{0}", *Binding).str().size() > Limit)
+    return invalid("bound x64 continuation request exceeds the request limit");
   if (Image.Arch != Arch::X64)
     return invalid("x64 continuation source requires an x86-64 image");
   llvm::json::Array Regions;
@@ -1028,9 +1045,6 @@ typedef struct neverd_x64_event_v1 {
   }
   if (Result.Source.size() > limits::pipeline::kX64ContinuationSourceBytes)
     return invalid("x64 continuation source exceeds the output size limit");
-  auto Binding = llvm::json::parse(RequestJSON);
-  if (!Binding)
-    return Binding.takeError();
   llvm::json::Object Report{
       {"schema_version", 2},
       {"profile", Profile},
@@ -1306,7 +1320,7 @@ typedef struct neverd_x64_event_v1 {
                     "raw steps and unscheduled drivers do not notify"}};
   }
   if (Request->XbeginFaultReceipt)
-    Report["qemu_xbegin_fault_v1"] = std::move(*Request->XbeginFaultReceipt);
+    Report[X64RtmFaultCapture::Key] = std::move(*Request->XbeginFaultReceipt);
   if (Request->RtmSteps.Kind != X64RtmAbortSelection::Off)
     Report["native_rtm_abort_steps"] =
         Request->RtmSteps.report(std::move(RtmStepReceipts));

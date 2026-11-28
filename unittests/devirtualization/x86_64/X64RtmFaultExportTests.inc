@@ -134,6 +134,114 @@ TEST_F(X64ContinuationExportTest, QemuXbeginFaultKeepsAutoOnOtherEntries) {
   }
 }
 
+TEST_F(X64ContinuationExportTest, CLIBindsSavedXbeginFaultToTheTargetRequest) {
+  load({0xc7, 0xf8, 5, 0, 0, 0, 0xc6, 0xf8, 0x42, 0x90, 0x90, 0xc3},
+       {{0x1000, 12}});
+  const std::string Selection =
+      R"("entries":[4096],"dispatch":"switch","native_rtm_abort_steps":"auto")";
+  const auto Fields = xbeginFaultFields(xbeginFaultObservation());
+  const auto Inline = request(Selection + "," + Fields);
+  const auto Query = tmpFile("target.json"), Saved = tmpFile("saved.json"),
+             Output = tmpFile("bound.c"), Report = tmpFile("bound.json");
+  const std::vector<std::string> Args{
+      "decompile",
+      tmpFile("input.elf").string(),
+      "--x64-continuation=" + Query.string(),
+      "--x64-xbegin-observation=" + Saved.string(),
+      "--continuation-report=" + Report.string(),
+      "-o",
+      Output.string()};
+  for (bool LLVM : {false, true}) {
+    auto Command = Args;
+    if (LLVM)
+      Command.push_back("--llvm");
+    const auto [Source, Manifest] = source(Inline, LLVM);
+    for (const auto &Capture :
+         {"{" + Fields + "}",
+          request(R"("instructions":[4096],"dispatch":"direct",)" + Fields)}) {
+      std::ofstream(Saved) << Capture;
+      for (const auto &Target : {request(Selection), Inline}) {
+        std::ofstream(Query) << Target;
+        const auto Ran = exec(ndBin(), Command);
+        ASSERT_TRUE(Ran.ok()) << Ran.err;
+        EXPECT_EQ(readOutput(Output), Source);
+        EXPECT_EQ(readOutput(Report), Manifest);
+        EXPECT_EQ(readOutput(Saved), Capture);
+      }
+    }
+  }
+}
+
+TEST_F(X64ContinuationExportTest,
+       SavedXbeginFaultRejectsInvalidAndConflictingEvidence) {
+  load({0xc7, 0xf8, 5, 0, 0, 0, 0xc3});
+  const std::string Select = R"("instructions":[4096])";
+  auto Capture = xbeginFaultObservation();
+  const uint64_t Max = std::numeric_limits<uint64_t>::max();
+  for (const auto Stop : {"before", "after"})
+    (*Capture.getObject(Stop))["rax"] = Max;
+  const auto Fields = xbeginFaultFields(Capture);
+  const auto Inline = request(Select + "," + Fields);
+  const auto Saved = "{" + Fields + "}";
+  const auto Refuse = [&](const std::string &Target,
+                          const std::string &Observation) {
+    const char *Manifest = "stale";
+    const char *C = neverd_x64_continuation_source_with_observation_v1(
+        Session, Target.data(), Target.size(), Observation.data(),
+        Observation.size(), 0, &Manifest);
+    EXPECT_EQ(C, nullptr);
+    EXPECT_EQ(Manifest, nullptr);
+    neverd_free_string(C);
+    if (C)
+      neverd_free_string(Manifest);
+  };
+  for (const auto Stop : {"before", "after"})
+    (*Capture.getObject(Stop))["rax"] = Max - 1;
+  Refuse(Inline, "{" + xbeginFaultFields(Capture) + "}");
+  auto FloatFields = Fields;
+  const std::string Cpu = "\"cpu\":2";
+  const auto Pos = FloatFields.find(Cpu);
+  ASSERT_NE(Pos, std::string::npos);
+  FloatFields.insert(Pos + Cpu.size(), ".0");
+  Refuse(Inline, "{" + FloatFields + "}");
+  Refuse(request(Select + "," + FloatFields), Saved);
+  Refuse(request(Select), "[]");
+  Refuse(request(Select), "{}");
+  Refuse(request(Select), "{");
+  Refuse(request(R"("instructions":[4102])"), Saved);
+  Refuse(request(Select + R"(,"paged_memory":true)"), Saved);
+}
+
+TEST_F(X64ContinuationExportTest, CLIProtectsTheSavedXbeginObservation) {
+  load({0xc7, 0xf8, 5, 0, 0, 0, 0xc3});
+  const auto Query = tmpFile("request.json"), Saved = tmpFile("capture.json"),
+             Output = tmpFile("output.c"), Report = tmpFile("report.json");
+  const auto Target = request(R"("instructions":[4096])");
+  const auto Capture = "{" + xbeginFaultFields(xbeginFaultObservation()) + "}";
+  std::ofstream(Query) << Target;
+  std::ofstream(Saved) << Capture;
+  const auto Observation = "--x64-xbegin-observation=" + Saved.string();
+  const auto X64 = "--x64-continuation=" + Query.string();
+  const auto Manifest = "--continuation-report=" + Report.string();
+  const std::vector<std::vector<std::string>> Invalid{
+      {Observation, Manifest, "-o", Output.string()},
+      {"--x86-legacy-source=" + Query.string(), Observation, Manifest, "-o",
+       Output.string()},
+      {X64, "--x64-xbegin-observation=", Manifest, "-o", Output.string()},
+      {X64, Observation, Manifest, "-o", Saved.string()},
+      {X64, Observation, "--continuation-report=" + Saved.string(), "-o",
+       Output.string()}};
+  for (const auto &Options : Invalid) {
+    std::vector<std::string> Args{"decompile", tmpFile("input.elf").string()};
+    Args.insert(Args.end(), Options.begin(), Options.end());
+    EXPECT_FALSE(exec(ndBin(), Args).ok());
+    EXPECT_EQ(readOutput(Saved), Capture);
+    EXPECT_EQ(readOutput(Query), Target);
+    EXPECT_FALSE(fs::exists(Output));
+    EXPECT_FALSE(fs::exists(Report));
+  }
+}
+
 TEST_F(X64ContinuationExportTest, QemuXbeginFaultRejectsContradictoryStops) {
   load({0xc7, 0xf8, 5, 0, 0, 0, 0xc3});
   const auto Refuse = [&](llvm::json::Object Capture,
