@@ -7,6 +7,7 @@
 /// GGUF directories, packing and unreferenced bytes.
 //===----------------------------------------------------------------------===//
 
+#include "GGUFLayout.h"
 #include "ModelInternal.h"
 
 #include "neverd/support/SHA256.h"
@@ -339,7 +340,7 @@ void scales(Package &P, File &F, const std::string &Name,
 }
 } // namespace
 
-void readGGUF(Package &P, const std::string &Name) {
+void readGGUF(Package &P, const std::string &Name, GGUFLayout *Layout) {
   File &F = P.file(Name);
   DirectoryReader R(F, P.B);
   if (R.readBytes(4) != "GGUF")
@@ -372,6 +373,19 @@ void readGGUF(Package &P, const std::string &Name) {
     if ((Template || Arch) && Type != 8)
       throw Error("invalid GGUF template or architecture type");
     auto [Value, H] = R.readMetadataValue(Type, Template || Arch);
+    if (Layout)
+      Layout->Metadata.push_back({Key, H, At, ValueAt, R.position()});
+    if (Arch || Key.ends_with(".block_count")) {
+      if (Arch || Value.is_number_unsigned())
+        P.Declarations.push_back(
+            {{"artifact", Name},
+             {"field", Key},
+             {"offset", ValueAt},
+             {"end", R.position()},
+             {"kind", Arch ? "architecture" : "layer_count"},
+             {"value", Value},
+             {"evidence_level", "declared"}});
+    }
     if (Key == "general.alignment") {
       if (Type != 4 || !(A = natural(Value)) || A % 8)
         throw Error("invalid GGUF alignment");
@@ -388,6 +402,18 @@ void readGGUF(Package &P, const std::string &Name) {
               ? "default"
               : Key.substr(
                     std::string_view("tokenizer.chat_template.").size()));
+    if (Key == "general.license" || Key == "general.author" ||
+        Key == "general.organization" || Key == "general.version" ||
+        Key == "general.quantized_by" || Key.starts_with("general.source.") ||
+        Key.starts_with("general.base_model.")) {
+      P.Provenance.push_back({{"source", Name},
+                              {"field", Key},
+                              {"offset", ValueAt},
+                              {"end", R.position()},
+                              {"encoded_value_sha256", H},
+                              {"verification", "producer-claim"}});
+      P.Fingerprints["provenance/" + Key] = H;
+    }
     if (Key.starts_with("split."))
       Split[Key] = Value;
     if (Key.starts_with("tokenizer.") || Key.starts_with("adapter.") || Arch ||
@@ -428,6 +454,8 @@ void readGGUF(Package &P, const std::string &Name) {
     }
     T.Elements = Elements;
     uint64_t Type = R.readUInt(4);
+    if (Layout)
+      Layout->Records.push_back({Id, R.position()});
     T.Offset = R.readUInt(8);
     if (T.Offset % A)
       throw LayoutError(
@@ -457,8 +485,9 @@ void readGGUF(Package &P, const std::string &Name) {
     Start = R.position();
   if (Start > F.size())
     throw Error("truncated GGUF directory padding");
-  inspectRange(P, F, Name, R.position(), Start - R.position(),
-               Region::Alignment);
+  if (!Layout)
+    inspectRange(P, F, Name, R.position(), Start - R.position(),
+                 Region::Alignment);
   std::sort(List.begin(), List.end(), [](const auto &L, const auto &R) {
     return std::tie(L.second.Offset, L.first) <
            std::tie(R.second.Offset, R.first);
@@ -483,7 +512,7 @@ void readGGUF(Package &P, const std::string &Name) {
     if ((Previous && *Previous == T.Offset) || (End && T.Offset < *End))
       throw LayoutError("overlapping GGUF tensor offsets",
                         {{"tensor", Id}, {"offset", T.Offset}});
-    if (End && !OpaquePredecessor) {
+    if (!Layout && End && !OpaquePredecessor) {
       auto Min = std::min(align(*End, A), T.Offset);
       inspectRange(P, F, Name, *End, Min - *End, Region::Alignment);
       inspectRange(P, F, Name, Min, T.Offset - Min, Region::Gap);
@@ -494,10 +523,16 @@ void readGGUF(Package &P, const std::string &Name) {
     scales(P, F, Name, Id, T, R.isBigEndian(), Scale);
     P.addTensor(std::move(Id), std::move(T));
   }
-  if (End && !OpaquePredecessor) {
+  if (!Layout && End && !OpaquePredecessor) {
     auto Min = std::min(align(*End, A), F.size());
     inspectRange(P, F, Name, *End, Min - *End, Region::FinalAlignment);
     inspectRange(P, F, Name, Min, F.size() - Min, Region::Trailer);
+  }
+  if (Layout) {
+    Layout->DirectoryEnd = R.position();
+    Layout->DataStart = Start;
+    Layout->Alignment = A;
+    Layout->BigEndian = R.isBigEndian();
   }
   Scale["coverage"] = !P.B.Opts.ScaleBytes            ? "not-requested"
                       : Scale["eligible_blocks"] == 0 ? "no-supported-blocks"

@@ -11748,5 +11748,41 @@ Your previous graph is still available.</translation>
         <source>Component changes</source>
         <translation>Component changes</translation>
     </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>Advanced options (JSON)</translation>
+    </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>Search tensors or operators</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>Graph scope</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>Declarations</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>Rebuild GGUF…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>Set template_policy to keep, remove or replace in Advanced options.</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Dependencies</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>Provenance</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>Adapter matrices</translation>
+    </message>
 </context>
 </TS>

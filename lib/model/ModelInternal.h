@@ -40,6 +40,7 @@ struct Stop : Error {
 struct Budget {
   const Options &Opts;
   uint64_t HeaderLeft = limits::kHeaderBytes, WorkLeft = limits::kWork;
+  uint64_t ExpandedLeft = limits::kHeaderBytes;
   uint64_t GapLeft, ScaleLeft, CompareLeft;
   size_t Files = 0, Entries = 0;
   explicit Budget(const Options &O)
@@ -52,6 +53,7 @@ uint64_t product(uint64_t A, uint64_t B);
 uint64_t sum(uint64_t A, uint64_t B);
 uint64_t natural(const Json &J);
 std::string digest(std::string_view Data);
+std::string encodeReport(const Json &Report);
 Json parseObject(std::string_view Data, Budget &B);
 void validName(std::string_view S);
 fs::path utf8Path(std::string_view Name);
@@ -64,11 +66,14 @@ struct File {
   explicit File(fs::path Root, fs::path Relative);
   ~File();
   File(const File &) = delete;
+  std::string snapshotID() const;
   void verify() const;
   uint64_t size() const { return Snapshot.getSize(); }
   void read(uint64_t At, std::span<char> Out);
   std::string header(uint64_t At, uint64_t Length, Budget &B);
 };
+std::string hashRange(File &Input, uint64_t Offset, uint64_t Length, Budget &B,
+                      llvm::raw_ostream *Copy = nullptr);
 struct BlockLayout {
   unsigned Elements, Bytes;
 };
@@ -78,6 +83,7 @@ struct Tensor {
   uint64_t Offset = 0, Elements = 0;
   std::optional<uint64_t> Bytes;
   std::optional<BlockLayout> Packing;
+  bool HasOffset = true;
 };
 struct Package {
   explicit Package(fs::path Root, std::string Id, Budget &B)
@@ -93,11 +99,16 @@ struct Package {
   std::set<std::string> Architectures;
   Json Artifacts = Json::array(), Findings = Json::array(),
        Gaps = Json::array();
+  Json Declarations = Json::array(), AdapterPairs = Json::array(),
+       Dependencies = Json::array(), Provenance = Json::array();
+  size_t AdapterPairCount = 0, DependencyCount = 0;
+  size_t GraphCount = 0, MatchingGraphs = 0;
   Json Metadata = Json::array(), Graphs = Json::array(),
        Layers = Json::object(), ProjectionLayouts = Json::array();
   size_t FindingCount = 0, ReviewCount = 0, GapCount = 0, MetadataCount = 0;
   uint64_t WeightBytesRead = 0;
   File &file(const std::string &Name);
+  std::string snapshotID() const;
   void addTensor(std::string Name, Tensor T);
   void finding(std::string Rule, std::string Source, std::string Severity,
                std::string Category, std::string Confidence,
@@ -106,7 +117,14 @@ struct Package {
            Json Evidence = Json::object());
   void verify() const;
 };
-void readGGUF(Package &P, const std::string &Name);
+struct GGUFLayout;
+bool isNumberedGGUF(llvm::StringRef Name);
+void readGGUF(Package &P, const std::string &Name,
+              GGUFLayout *Layout = nullptr);
+void inspectCheckpoint(Package &P, const std::string &Name);
+void inspectComponent(Package &P, const std::string &Name,
+                      std::string_view Kind);
+void inspectReferences(Package &P, const std::string &Name, const Json &Config);
 void readSafetensors(Package &P, const std::string &Name);
 void readONNX(Package &P, const std::string &Name);
 void inspectTemplate(Package &P, const std::string &FileId,
@@ -115,6 +133,8 @@ void inspectTemplate(Package &P, const std::string &FileId,
                      std::string Variant = "default");
 std::vector<std::unique_ptr<Package>> readInputs(const fs::path &Input,
                                                  Budget &B);
+std::optional<unsigned> tensorLayer(llvm::StringRef Name);
+void inspectStructure(Package &P);
 Json projectionLayouts(const Package &P);
 Json compare(Package &Candidate, Package &Base);
 } // namespace neverd::model

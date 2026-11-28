@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 89c89cb7f9c817b94939d8599f741411e1c7d629bb1230fc1ae52fcd67c9f191 -->
+<!-- i18n-source: ae0ba2221cdac5580beb4673b67f230ca77880a10bd1d4392b3d33c32a70d976 -->
 
 <div align="center">
 
@@ -341,7 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 検出された関数 |
 | `disasm` | 逆アセンブル（`--func` 名または hex） |
 | `sym-explore` | ネイティブ LowIR の有界パス探索（`--func`、JSON 出力） |
-| `scan --gguf` | [ローカルモデルのディレクトリ、テンソルの範囲、テンプレートを検査（JSON）](../model-scan.md) |
+| `scan --gguf` | [ローカルモデルの検査、テンソルの比較、別ファイルに再構築した GGUF の検証](../model-scan.md) |
 | `scan` | [オブジェクトの寿命、初期化、境界、書式文字列を検査（JSON）](../memory-safety-scan.md) |
 | `hex` | アドレスの hex dump |
 | `cfg` / `callgraph` | CFG / コールグラフ（JSON；DOT/SVG 任意） |

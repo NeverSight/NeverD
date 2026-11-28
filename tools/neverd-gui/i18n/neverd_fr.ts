@@ -11748,5 +11748,41 @@ Votre graphe précédent reste disponible.</translation>
         <source>Component changes</source>
         <translation>Modifications des composants</translation>
     </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>Options avancées (JSON)</translation>
+    </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>Rechercher des tenseurs ou des opérateurs</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>Portée du graphe</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>Déclarations</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>Reconstruire le GGUF…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>Dans les options avancées, définissez template_policy sur keep, remove ou replace.</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Dépendances</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>Provenance</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>Matrices de l’adaptateur</translation>
+    </message>
 </context>
 </TS>

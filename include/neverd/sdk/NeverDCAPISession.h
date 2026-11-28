@@ -48,6 +48,13 @@ NEVERD_API const char *neverd_model_scan_json_v1(const char *Path,
                                                  neverd_cancel_probe_fn Stop,
                                                  void *Context);
 
+/// Create a separate GGUF, verify its inventory and payloads before
+/// publication.
+NEVERD_API const char *
+neverd_model_rebuild_gguf_json_v1(const char *Input, const char *Output,
+                                  const char *OptionsJSON,
+                                  neverd_cancel_probe_fn Stop, void *Context);
+
 NEVERD_API neverd_session_t neverd_session_create(void);
 NEVERD_API void neverd_session_destroy(neverd_session_t Sess);
 /// Returns 1 on success, replacing the image, analysis, and per-image edits.

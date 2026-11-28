@@ -3014,7 +3014,8 @@
       ],
       "public_surfaces": {
         "c": [
-          "neverd_model_scan_json_v1"
+          "neverd_model_scan_json_v1",
+          "neverd_model_rebuild_gguf_json_v1"
         ],
         "python": [],
         "cli": [
@@ -3024,10 +3025,15 @@
           "neverd scan --scale-bytes",
           "neverd scan --compare-bytes",
           "neverd scan --model-offset",
-          "neverd scan --model-limit"
+          "neverd scan --model-limit",
+          "neverd scan --model-options",
+          "neverd scan --model-text",
+          "neverd scan --onnx-external-data",
+          "neverd scan --rebuild-gguf"
         ],
         "json": [
-          "neverd_model_scan_json_v1"
+          "neverd_model_scan_json_v1",
+          "neverd_model_rebuild_gguf_json_v1"
         ]
       }
     },
