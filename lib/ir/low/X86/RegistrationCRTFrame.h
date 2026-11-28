@@ -39,7 +39,7 @@ bool hasBindingPreservingKernelArgument(const BinaryImage &Image,
 /// The caller owns the current slot binding and the provider's effects.
 std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
                                        const LowOp &Op, size_t &Work);
-/// A checked standard stream index or startup mode keeps import bindings live.
+/// Check the current CRT argument, including output storage for an exit table.
 /// The caller supplies the current binding and the private outgoing stack word.
 bool hasBindingPreservingCRTArgument(const BinaryImage &Image,
                                      const LowBlock &Block, const LowOp &Op,

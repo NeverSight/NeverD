@@ -21744,6 +21744,11 @@ For the UCRT startup setters `_set_app_type`, `_set_fmode` and `_set_new_mode`,
 PE32 retains live import bindings when the checked call receives a documented
 mode on the private stack. MSVC can push that value directly or call a linked
 option getter that returns an immediate in EAX and then push EAX.
+A PE32 call to `_initialize_onexit_table` can write three pointers at the
+relocated address pushed by its caller. The normal return keeps import
+bindings live when all twelve bytes occupy resident, private, writable
+data disjoint from every import slot. Registering a function in that table
+has a separate allocation path.
 The Windows CRT startup also installs a top-level filter. Its returning
 `SetUnhandledExceptionFilter` call preserves import bindings when the
 argument is a relocated pointer into immutable code. A later exception
