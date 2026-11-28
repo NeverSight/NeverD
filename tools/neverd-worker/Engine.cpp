@@ -4795,7 +4795,10 @@ void Engine::afterReply(const std::function<bool()> &requestWaiting) {
       textKey_.clear();
       if (prepare(session_, *entry, "source")) {
         (void)listing().functionAliases();
-        primeSourcePage(*entry);
+        // A completed store already serves the opening page. Preparing the
+        // graph and names also helps an explicit refresh, which emits it anew.
+        if (!summariesDeferred_)
+          primeSourcePage(*entry);
       }
     }
   }

@@ -94,10 +94,14 @@ def check_opening_preparation(clients, executable, root):
                dict(explicit, call_summaries=True, render_ahead=True,
                     render_store="write", prepare_views=True))
             render_ahead(replica, done)
-            # Reopening actually prepared a dependency after the restore
-            # advanced the revision. This separate C view builds its own page.
+            # Restore prepared the selected function. The first emission in
+            # this session belongs to the separately requested C view.
             view = source(replica, A, representation="c")
-            assert view["fixture_prepares"] == 2 and view["fixture_pages"] == 2, view
+            assert view["fixture_prepares"] == 2 and view["fixture_pages"] == 1, view
+            fresh = ok(replica, "decompile", {"address": A, "representation": "source",
+                                              "limit": 4, "refresh": True})
+            assert fresh["fixture_prepares"] == 3 and fresh["fixture_pages"] == 2, fresh
+            assert source(replica, A)["text"] == fresh["text"]
         with Client(executable) as reader:
             opened = ok(reader, "open", {"path": str(binary), "read_only": True,
                                         "analysis": True, "initial_render_snapshot": True})
