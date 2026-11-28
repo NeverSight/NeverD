@@ -27,7 +27,7 @@ def map_image(uc, image, pages, bias=0, *, enforce_permissions=False):
 def run_micromips64(image, release, exit_nr, expected, *, instruction_limit=256,
                     set_thread_area=None, thread_pointers=None):
     from unicorn import (Uc, UC_ARCH_MIPS, UC_HOOK_INTR, UC_MODE_BIG_ENDIAN,
-                         UC_MODE_MIPS64, UC_TLB_VIRTUAL)
+                         UC_MODE_MIPS64, UC_PROT_READ, UC_PROT_WRITE, UC_TLB_VIRTUAL)
     from unicorn import mips_const as mips
 
     mode = UC_MODE_MIPS64 | (0 if image.little_endian else UC_MODE_BIG_ENDIAN)
@@ -47,6 +47,12 @@ def run_micromips64(image, release, exit_nr, expected, *, instruction_limit=256,
             value &= ~(1 << 26)
     engine.reg_write(status, value)
     map_image(engine, image, set(), enforce_permissions=True)
+    # A compiled process entry can spill before calling its first callee.
+    # One writable page below 2 GiB serves both n32 and n64. Leave space at
+    # the aligned SP for an empty argc/argv, environment and auxiliary vector.
+    stack = 0x7fff0000
+    engine.mem_map(stack, 4096, UC_PROT_READ | UC_PROT_WRITE)
+    engine.reg_write(mips.UC_MIPS_REG_SP, stack + 4096 - 64)
     observed = []
     expected_events = []
     if set_thread_area is not None:

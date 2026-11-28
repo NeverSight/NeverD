@@ -208,6 +208,13 @@ and reads the file and line at the linked instructions. Both modes carry
 the rebuilt function's new source line. The n64 fixtures place the
 function above 4 GiB.
 
+Fourteen entry-point fixtures use `_start` as a global alias of the
+function selected for relinking. The loader starts at that function in
+classic and microMIPS mode for all three ABIs, and in MIPS16 mode for
+o32. Both layouts preserve the alias, its encoding and the ELF entry
+address for the linked function. Each updated executable must match an
+independent link and exit with the replacement's status.
+
 | Instruction set | ABIs | Entry points |
 | --- | --- | --- |
 | MIPS I, II | o32 | Classic |
@@ -291,8 +298,8 @@ memory size and 256-byte alignment of `PT_TLS`.
 The MIPS16 branch programs take both arms of a conditional and swap the
 two destinations in the replacement. The targets are more than 2 KiB ahead
 in the original layout and behind the new `section` placement. Each native
-build produces 1,262 executable images across 366 configurations, including
-896 updated images. The upgrade check uses r13 and r14 to build one original
+build produces 1,304 executable images across 380 configurations, including
+924 updated images. The upgrade check uses r13 and r14 to build one original
 per ABI and byte order. Twelve more r14 originals use `ld.lld -r` to combine
 the startup, the function and two helpers. Both helpers define the same
 COMDAT function and different weak implementations of `group_choice`.
@@ -330,7 +337,7 @@ git submodule update --init third_party/llvm-project
 cmake -S third_party/llvm-project/llvm -B build-mips-tools -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=lld \
   -DLLVM_TARGETS_TO_BUILD=Mips -DLLVM_ENABLE_RTTI=ON
-cmake --build build-mips-tools --target llc llvm-mc lld
+cmake --build build-mips-tools --target llc llvm-mc llvm-ar lld
 ```
 
 Use `build-mips-tools/bin/ld.lld` as the linker. Run
