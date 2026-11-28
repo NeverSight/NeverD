@@ -2909,6 +2909,31 @@ slot verified which authentication exit ran for each signing path.
 [Arm model, M4 export](https://github.com/gmh5225/test_mac_intel/actions/runs/46133896744) ·
 [Arm model, hosted export](https://github.com/gmh5225/test_mac_intel/actions/runs/46133780808)
 
+#### Register copies, stack spills and independent authentication exits
+
+The combined fixtures choose the signing path and the authentication exit
+independently. Each exit authenticates with the relocated signing PC. Both
+return and store the source address, and the second exit writes a separate
+output slot. For each key the regression checks the original, the O0 image and
+its O2 republication. For each recovered row with a live spill frame, the
+test supplies interrupted register and stack snapshots and checks earlier
+generations' addresses against the current signing sites.
+
+The publisher and the unwinder share the full-width register-copy rule.
+It recognizes zero arithmetic and shifts, idempotent bitwise operations,
+equal-input selects, and zero-bit extracts. A stack index must have a known
+value after the instruction's extension and scaling. Paired and unaligned
+spills, pre/post-indexed transfers, and full-width release stores and acquire
+loads preserve a modifier in a live CFA slot. The frame proof checks whether
+the actual bytes of that slot are still available.
+
+When a function signs LR locally and has multiple register authentication
+exits, each exit must establish the signing instruction, key, modifier and
+matching SP. A path that loses LR, changes key, truncates its modifier, or may
+have overwritten its only spill prevents publication. The source unwind test
+also checks the state after each exit of these rejected images. A correct
+exit can still describe its own unsigned LR.
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,

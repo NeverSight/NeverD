@@ -92,6 +92,7 @@ bool wide(unsigned R) {
 struct Value {
   std::optional<int64_t> StackOffset;
   std::optional<va_t> CodeAddress;
+  std::optional<uint64_t> Constant;
   std::optional<unsigned> IncomingRegister;
   std::optional<AArch64ReturnAddressState> Return;
   bool operator==(const Value &) const = default;
@@ -127,6 +128,7 @@ bool intersect(std::optional<T> &A, const std::optional<T> &B) {
 bool intersect(Value &A, const Value &B) {
   bool Changed = intersect(A.StackOffset, B.StackOffset);
   Changed |= intersect(A.CodeAddress, B.CodeAddress);
+  Changed |= intersect(A.Constant, B.Constant);
   Changed |= intersect(A.IncomingRegister, B.IncomingRegister);
   Changed |= intersect(A.Return, B.Return);
   return Changed;
@@ -407,11 +409,23 @@ void memory(State &S, const State &Before, const DecodedInsn &I,
   const auto Word = readLE<uint32_t>(I.Raw->bytes);
   const auto AddressOp = aarch64AddressMemoryInstruction(Word);
   const auto WritebackOp = aarch64WritebackMemoryInstruction(Word);
-  const unsigned Bytes = AddressOp     ? AddressOp->accessBytes()
-                         : WritebackOp ? WritebackOp->accessBytes()
-                                       : 0;
-  const bool Load =
-      AddressOp ? AddressOp->isLoad() : WritebackOp && WritebackOp->isLoad();
+  const auto [Bytes, Load] = [&]() -> std::pair<unsigned, bool> {
+    if (AddressOp)
+      return {AddressOp->accessBytes(), AddressOp->isLoad()};
+    if (WritebackOp)
+      return {WritebackOp->accessBytes(), WritebackOp->isLoad()};
+    switch (I.Id) {
+#define NEVERD_A64_ACQUIRE_RELEASE(Insn, IsLoad, Size)                         \
+  case AARCH64_INS_##Insn:                                                     \
+    return {Size                      ? Size                                   \
+            : wide(D.operands[0].reg) ? sizeof(uint64_t)                       \
+                                      : sizeof(uint32_t),                      \
+            IsLoad};
+#include "neverd/decode/AArch64/AArch64AcquireRelease.def"
+    default:
+      return {};
+    }
+  }();
   const bool Store = Bytes && !Load;
   if (WritebackOp && WritebackOp->isStructure() && Load) {
     // Some decoders expose a whole tuple as one written register. Apply the
@@ -436,8 +450,10 @@ void memory(State &S, const State &Before, const DecodedInsn &I,
     if (FrameBase)
       S.Stack.clear();
     else
-      for (auto &[Offset, Cell] : S.Stack)
+      for (auto &[Offset, Cell] : S.Stack) {
         Cell.CodeAddress.reset();
+        Cell.Constant.reset();
+      }
   };
   const auto DiscardOverlapping = [&](int64_t Address, unsigned Size) {
     const auto Overlaps = [&](int64_t Cell) {
@@ -464,10 +480,20 @@ void memory(State &S, const State &Before, const DecodedInsn &I,
         UnknownStore(std::nullopt, false);
       continue;
     }
-    const auto Address = Op.mem.index == AARCH64_REG_INVALID
-                             ? add(Before.Registers[*Base].StackOffset,
-                                   D.post_index ? 0 : Op.mem.disp)
-                             : std::nullopt;
+    std::optional<int64_t> Address;
+    const auto BaseOffset = Before.Registers[*Base].StackOffset;
+    if (BaseOffset && AddressOp && AddressOp->hasRegisterIndex()) {
+      const auto IndexReg = AddressOp->index();
+      const auto IndexValue = IndexReg == kAddressMemoryRegisterMask
+                                  ? std::optional<uint64_t>(0)
+                                  : Before.Registers[IndexReg].Constant;
+      if (IndexValue)
+        Address =
+            add(BaseOffset,
+                static_cast<int64_t>(AddressOp->addressOffset(*IndexValue)));
+    } else if (Op.mem.index == AARCH64_REG_INVALID) {
+      Address = add(BaseOffset, D.post_index ? 0 : Op.mem.disp);
+    }
     if (!I.Raw->detail->writeback && WritebackOp && WritebackOp->isStructure())
       S.Registers[*Base] = Before.Registers[*Base];
     if (I.Raw->detail->writeback) {
@@ -533,8 +559,10 @@ void memory(State &S, const State &Before, const DecodedInsn &I,
       const auto Transfer = [&](unsigned R, int64_t Offset) {
         if (Store) {
           auto Cell = Before.Registers[R];
-          if (!Active)
+          if (!Active) {
             Cell.CodeAddress.reset();
+            Cell.Constant.reset();
+          }
           if (Cell != Value{})
             S.Stack[Offset] = Cell;
         } else {
@@ -635,6 +663,11 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
     if (const auto R = reg(Ops.front().reg))
       S.Registers[*R].CodeAddress =
           machORebasedLiteralAddress(Image, Word, I.Addr);
+  if (I.Raw->alias_id == AARCH64_INS_ALIAS_MOV && Ops.size() == 2 &&
+      Ops[0].type == AARCH64_OP_REG && Ops[1].type == AARCH64_OP_IMM)
+    if (const auto R = reg(Ops[0].reg); R && *R < kSP)
+      S.Registers[*R].Constant =
+          wide(Ops[0].reg) ? uint64_t(Ops[1].imm) : uint32_t(Ops[1].imm);
   if (const auto Copy = neverd::aarch64::fullWidthRegisterCopy(I)) {
     const auto Dest = *reg(Copy->first), Src = *reg(Copy->second);
     S.Registers[Dest] = Before.Registers[Src];
@@ -669,8 +702,10 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
                    [&](int64_t Slot) { return !SP || Slot < *SP; });
     // A released cell cannot re-establish a signing address on reallocation.
     const auto End = SP ? S.Stack.lower_bound(*SP) : S.Stack.end();
-    for (auto It = S.Stack.begin(); It != End; ++It)
+    for (auto It = S.Stack.begin(); It != End; ++It) {
       It->second.CodeAddress.reset();
+      It->second.Constant.reset();
+    }
   }
   if (cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL))
     clobberCallState(S);

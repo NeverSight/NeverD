@@ -178,12 +178,13 @@
       "profile": "joined-signing-address",
       "test": "AArch64LiftedImage.JoinedSigningModifiersFollowEachIncomingPath",
       "environment": "NEVERD_ARM64E_JOINED_SIGNING_FIXTURES",
-      "inventory": "shared-signing-carriers",
-      "bodies": 138,
+      "inventory": "combined-signing-carriers",
+      "bodies": 324,
       "archived_inventories": {
         "path-proven-modifiers": 36,
         "scratch-free-signing-edges": 54,
-        "distant-joined-signers": 84
+        "distant-joined-signers": 84,
+        "shared-signing-carriers": 138
       }
     }
   },

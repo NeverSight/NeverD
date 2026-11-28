@@ -21,6 +21,7 @@
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
+#include "neverd/decode/AArch64/AArch64RegisterCopy.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
@@ -139,6 +140,8 @@ bool independent(const DecodedInsn &I) {
     return D.op_count == unsigned(PCSigning->Authenticate) &&
            (!D.op_count || D.operands[0].type == AARCH64_OP_IMM ||
             D.operands[0].type == AARCH64_OP_REG);
+  if (aarch64::fullWidthRegisterCopy(I))
+    return true;
   switch (I.Id) {
 #define MACHO_REGISTER_ALU(Name) case AARCH64_INS_##Name:
 #include "MachORegisterResults.def"
@@ -146,6 +149,8 @@ bool independent(const DecodedInsn &I) {
         llvm::ArrayRef(D.operands, D.op_count), [](const cs_aarch64_op &Op) {
           return Op.type == AARCH64_OP_IMM || Op.type == AARCH64_OP_REG;
         });
+#define NEVERD_A64_ACQUIRE_RELEASE(Name, Load, Bytes) case AARCH64_INS_##Name:
+#include "neverd/decode/AArch64/AArch64AcquireRelease.def"
 #define MACHO_REGISTER_MEMORY(Name) case AARCH64_INS_##Name:
 #include "MachORegisterResults.def"
     return llvm::any_of(
@@ -898,8 +903,11 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     while (!Unreached.empty() && Unreached.front().second <= PC)
       Unreached = Unreached.drop_front();
     const bool OutsideCFG = !Unreached.empty() && Unreached.front().first <= PC;
+    // The decoded shift alias may omit its mandatory zero immediate. A proven
+    // register copy has no PC-relative operand and can retain its exact word.
     const bool KeepEncoding =
-        OutsideCFG && !PCSigning && !PACM && independent(I);
+        aarch64::fullWidthRegisterCopy(I).has_value() ||
+        (OutsideCFG && !PCSigning && !PACM && independent(I));
     const bool RecoveredCode = OutsideCFG && !Body.RecoveredData.empty();
     const auto *BranchTable = Dispatch.BranchTables.lookup(PC);
     const auto Targets = BranchTable
