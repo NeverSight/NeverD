@@ -417,9 +417,18 @@ following each branch. The R2 additions in the delay slots execute on the
 taken paths. The R6 compact branches skip those additions on the taken
 paths. All 24 classic and microMIPS configurations run both updates.
 
-Together, the current and nine upgrade groups exercise 2,282 whole ELFs
-per host, including 1,576 updated programs, and retain 914 relocatable
-objects for comparison.
+Six classic R2 programs use the Linux process entry stack supplied by QEMU.
+They read `argc`, `argv` and `envp` and verify `AT_ENTRY`, the page size
+and the program headers in the auxiliary vector. The guest checks the
+executable mappings for both `_start` and the rebuilt function. Each
+original, section and inplace ELF runs with four argument/environment
+combinations and three invalid-input controls. The n32 program reads
+32-bit pointers and ELF32 headers, and the n64 program runs above 4 GiB.
+
+Together, the current and nine upgrade groups produce 2,300 distinct
+whole-file artifacts per host, including 1,588 updates, and retain 938
+relocatable objects for comparison. The entry-stack input variations
+bring the guest invocation count to 2,408 per host.
 
 When the original build uses a static library in a partial link, keep the
 result of that `ld.lld -r` step as the manifest object. Rebuild it from the

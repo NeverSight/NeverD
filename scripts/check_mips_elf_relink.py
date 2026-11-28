@@ -25,7 +25,7 @@ MODES = ("section", "inplace")
 SAVED_ASSEMBLY_FLAGS = ("-fintegrated-as", "-save-temps=obj")
 C_CALL_UPGRADES = {"direct": "c-call-upgrade", "saved-replacement": "c-call-upgrade-saved",
                    "pic-saved-replacement": "c-call-upgrade-pic"}
-PRODUCT_VERSION = 19
+PRODUCT_VERSION = 20
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -186,6 +186,8 @@ def profiles(version=PRODUCT_VERSION):
     for abi in ABIS:
         for little in (False, True):
             yield Profile(abi, little)
+            if version >= 20:
+                yield Profile(abi, little, linkage="entry-stack")
             if version == 1:
                 continue
             if version >= 12:
@@ -312,11 +314,18 @@ def calculator(profile, updated):
 
 def layout(profile, section, *, split_entry=False):
     base = 0x120000000 if profile.high_address else 0x400000
-    headers = "PHDRS { startup PT_LOAD FLAGS(5); code PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6); }"
+    entry_stack = profile.linkage == "entry-stack"
+    headers = ""
+    if split_entry or entry_stack:
+        file_headers = " FILEHDR PHDRS" if entry_stack else ""
+        separate_code = " code PT_LOAD FLAGS(5);" if split_entry else ""
+        headers = f"PHDRS {{ startup PT_LOAD{file_headers} FLAGS(5);{separate_code} data PT_LOAD FLAGS(6); }}"
     calc = (".calc.update ALIGN(0x10000) : { *(.text.calc) } :code" if split_entry else
             ".calc.update ALIGN(0x1000) : { *(.text.calc) }")
     script = LAYOUT
-    if profile.linkage == "relocation-bounds":
+    if entry_stack:
+        script = script.replace("BASE_ADDRESS;", "BASE_ADDRESS + SIZEOF_HEADERS;")
+    elif profile.linkage == "relocation-bounds":
         anchor = "0x12347fff7fff8000" if profile.abi == "n64" else "0x12348000"
         script = script.replace("  .data :", f"""  .gp_edges : {{ *(.gp.first) . += 65534; *(.gp.last) }}
   _gp = ADDR(.gp_edges) + 0x8000;
@@ -336,9 +345,9 @@ def layout(profile, section, *, split_entry=False):
     elif profile.tls_model:
         script = script.replace("  .data :", "  .tdata : { *(.tdata*) }\n  __tls_image = ADDR(.tdata);\n  .data :")
     return (script.replace("BASE_ADDRESS", hex(base + (0x100000 if section else 0)))
-            .replace("PROGRAM_HEADERS", headers if split_entry else "")
-            .replace("ENTRY_SEGMENT", ":startup" if split_entry else "")
-            .replace("DATA_SEGMENT", ":data" if split_entry else "")
+            .replace("PROGRAM_HEADERS", headers)
+            .replace("ENTRY_SEGMENT", ":startup" if headers else "")
+            .replace("DATA_SEGMENT", ":data" if headers else "")
             .replace("RESERVE", ". = ADDR(.text) + 0x100;" if profile.shrinking else "")
             .replace("FILL", "=0" if profile.shrinking else "")
             .replace("OLD_CALC", "" if section else "*(.text.calc)")
@@ -385,8 +394,7 @@ def assemble_startup(args, build, profile):
          "-o", build / "start.o", "-"], source=startup(profile))
 
 
-def build_c_call_objects(args, build, profile, replacement_clang=None, replacement_flags=(), *, size_loop=False):
-    sources = FIXTURES / "c_abi"
+def c_target_flags(profile):
     abi = {"o32": "32", "n32": "n32", "n64": "64"}[profile.abi]
     addressing = ["-mabicalls", "-fPIC"] if profile.c_pic else ["-mno-abicalls", "-fno-pic"]
     flags = ["--target=" + profile.triple, "-march=" + profile.cpu, "-mabi=" + abi,
@@ -394,6 +402,23 @@ def build_c_call_objects(args, build, profile, replacement_clang=None, replaceme
              "-fno-ident", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables"]
     if profile.isa != "classic":
         flags.append("-mips16" if profile.isa == "mips16" else "-mmicromips")
+    return flags
+
+
+def build_entry_stack_objects(args, build, profile):
+    sources = FIXTURES / "entry_stack"
+    flags = c_target_flags(profile)
+    for name, source, extra in (("start.o", "start.S", [f"-DEXIT_NR={profile.exit_nr}"]),
+                                ("caller.o", "check.c", []),
+                                ("calc.o", "calc.c", ["-DBIAS=41"]),
+                                ("updated.o", "calc.c", ["-DBIAS=73"])):
+        run([args.clang, *flags, *extra, "-c", sources / source, "-o", build / name])
+    return ["start.o", "caller.o", "calc.o"]
+
+
+def build_c_call_objects(args, build, profile, replacement_clang=None, replacement_flags=(), *, size_loop=False):
+    sources = FIXTURES / "c_abi"
+    flags = c_target_flags(profile)
     if profile.large_frame:
         flags.append("-DCHECK_LARGE_FRAME")
     if size_loop:
@@ -724,7 +749,9 @@ def qualify_named_inputs(args, build, out, profile, expected):
 
 def save_linkage_objects(build, out, profile):
     names = ["caller.o", "calc.o"]
-    if profile.c_pic or profile.linkage in ("relocation-bounds", "branch-slots"):
+    if profile.linkage == "entry-stack":
+        names.append("start.o")
+    if profile.c_pic or profile.linkage in ("relocation-bounds", "branch-slots", "entry-stack"):
         names.append("updated.o")
     hashes = {}
     for name in names:
@@ -749,6 +776,8 @@ def qualify(args):
             if profile.c_call:
                 size_loop = not profile.large_frame and profile.optimization in ("O2", "Os")
                 objects = build_c_call_objects(args, build, profile, size_loop=size_loop)
+            elif profile.linkage == "entry-stack":
+                objects = build_entry_stack_objects(args, build, profile)
             elif profile.linkage:
                 objects = build_linkage_objects(args, build, profile, run)
             else:
@@ -775,7 +804,7 @@ def qualify(args):
                 patch(mode, out / f"{mode}.elf")
                 if (profile.c_call or profile.entry_alias or profile.dwarf_version
                         or profile.linkage in ("init-arrays", "large-segments", "callback-table",
-                                               "relocation-bounds", "branch-slots")):
+                                               "relocation-bounds", "branch-slots", "entry-stack")):
                     reference = build / "reference.elf"
                     script = build / ("section.ld" if mode == "section" else "base.ld")
                     run([args.lld, "-static", "-T", script, "-o", reference,
@@ -987,6 +1016,9 @@ def execute_image(path, image, profile, expected):
     elif profile.isa == "mips16":
         cpu = "74Kf"
     path.chmod(0o755)
+    if profile.linkage == "entry-stack":
+        from mips_elf_runtime import run_entry_stack
+        return run_entry_stack(qemu, path, expected, run)
     run([qemu, *(["-cpu", cpu] if cpu else []), path], expected=expected)
 
 
@@ -1074,7 +1106,7 @@ def execute(args):
         object_hashes = manifest["objects"]
         if set(object_hashes) != {p.name for p in cases if p.linkage or p.c_pic}:
             raise ValueError("MIPS relink object receipts do not match the expected linkage profiles")
-    results, placements = {}, {}
+    results, placements, stack_runs = {}, {}, {}
     for profile in cases:
         row, ranges = {}, {}
         original, updated = (81, 29) if profile.shrinking else (25, 37)
@@ -1103,7 +1135,9 @@ def execute(args):
                 ranges[case] = inspect_elf(image, profile, require_pic_marker=args.partial_link == "pic")
                 if profile.dwarf_version:
                     verify_dwarf(image, profile.dwarf_version, ranges[case], 14 if case == "original" else 29)
-                execute_image(path, image, profile, expected)
+                inputs = execute_image(path, image, profile, expected)
+                if inputs is not None:
+                    stack_runs.setdefault(profile.name, {})[case] = inputs
             row[case] = expected
         old, inplace = ranges["original"], ranges["inplace"]
         sizes = ranges["section"]["size"], inplace["size"]
@@ -1148,6 +1182,8 @@ def execute(args):
                                        profile.release, profile.exit_nr, updated)
     encode(root / "execution.json", results)
     encode(root / "placements.json", placements)
+    if stack_runs:
+        encode(root / "entry-stack-execution.json", stack_runs)
     print(f"Executed {sum(map(len, results.values()))} complete ELF files across {len(results)} profiles")
 
 

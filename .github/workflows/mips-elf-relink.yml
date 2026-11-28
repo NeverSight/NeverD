@@ -199,6 +199,7 @@ jobs:
           name: relink-execution
           path: |
             products/*/execution.json
+            products/*/entry-stack-execution.json
             products/*/placements.json
             products/*/from-*/execution.json
             products/*/from-*/placements.json
