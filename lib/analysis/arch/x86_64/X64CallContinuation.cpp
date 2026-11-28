@@ -60,6 +60,13 @@ void appendReturningCallDeclaration(RecoveryDigest &H,
       H.number(Range.End);
     }
   }
+  if (D.Version >= 5 || !D.FrameOutputs.empty()) {
+    H.number(D.FrameOutputs.size());
+    for (const auto &Output : D.FrameOutputs) {
+      H.number(Output.PointerRegister);
+      H.number(Output.Bytes);
+    }
+  }
 }
 
 llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
@@ -77,7 +84,8 @@ llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
     const bool V1 =
         D.Version == 1 &&
         D.Profile == SpecializationX64CallProfile::ConditionalNormalReturnV1 &&
-        D.PreservedFrameRanges.empty() && D.ResultObjectExclusions.empty();
+        D.PreservedFrameRanges.empty() && D.ResultObjectExclusions.empty() &&
+        D.FrameOutputs.empty();
     const bool V2 =
         D.Version == 2 &&
         D.Profile ==
@@ -85,7 +93,7 @@ llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
         !D.PreservedFrameRanges.empty() &&
         D.PreservedFrameRanges.size() <=
             limits::analysis::kX64ReturningCallPreservedFrameRangesLimit &&
-        D.ResultObjectExclusions.empty();
+        D.ResultObjectExclusions.empty() && D.FrameOutputs.empty();
     const bool V3 =
         D.Version == 3 &&
         D.Profile == SpecializationX64CallProfile::
@@ -93,7 +101,7 @@ llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
         !D.PreservedFrameRanges.empty() &&
         D.PreservedFrameRanges.size() <=
             limits::analysis::kX64ReturningCallPreservedFrameRangesLimit &&
-        D.ResultObjectExclusions.empty();
+        D.ResultObjectExclusions.empty() && D.FrameOutputs.empty();
     const bool V4 =
         D.Version == 4 &&
         D.Profile == SpecializationX64CallProfile::
@@ -103,8 +111,19 @@ llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
             limits::analysis::kX64ReturningCallPreservedFrameRangesLimit &&
         !D.ResultObjectExclusions.empty() &&
         D.ResultObjectExclusions.size() <=
-            limits::analysis::kX64ReturningCallObjectExclusionsLimit;
-    if ((!V1 && !V2 && !V3 && !V4) || D.Address == InvalidVA ||
+            limits::analysis::kX64ReturningCallObjectExclusionsLimit &&
+        D.FrameOutputs.empty();
+    const bool V5 =
+        D.Version == 5 &&
+        D.Profile == SpecializationX64CallProfile::
+                         ConditionalNormalReturnFrameOutputsV5 &&
+        !D.PreservedFrameRanges.empty() &&
+        D.PreservedFrameRanges.size() <=
+            limits::analysis::kX64ReturningCallPreservedFrameRangesLimit &&
+        D.ResultObjectExclusions.empty() && !D.FrameOutputs.empty() &&
+        D.FrameOutputs.size() <=
+            limits::analysis::kX64ReturningCallFrameOutputsLimit;
+    if ((!V1 && !V2 && !V3 && !V4 && !V5) || D.Address == InvalidVA ||
         D.OutgoingBytes < kHomeBytes || D.OutgoingBytes > INT64_MAX ||
         D.OutgoingBytes % kAddressBytes)
       return invalid("invalid explicit returning-call relation");
@@ -123,6 +142,20 @@ llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
                        "ordered, disjoint and nonempty");
       PreviousExclusionEnd = Range.End;
     }
+    uint64_t PreviousPointer = 0;
+    for (const auto &Output : D.FrameOutputs) {
+      if (Output.PointerRegister <= PreviousPointer ||
+          (Output.PointerRegister != x86reg::RCX &&
+           Output.PointerRegister != x86reg::RDX &&
+           Output.PointerRegister != x86reg::R8 &&
+           Output.PointerRegister != x86reg::R9) ||
+          !Output.Bytes ||
+          Output.Bytes >
+              limits::analysis::kX64ReturningCallFrameOutputBytesLimit)
+        return invalid("returning-call frame outputs require ordered x64 "
+                       "argument pointers and bounded byte extents");
+      PreviousPointer = Output.PointerRegister;
+    }
     for (size_t J = 0; J < I; ++J)
       if (D.Address == O.X64ReturningCalls[J].Address)
         return invalid("duplicate returning-call declaration");
@@ -139,7 +172,8 @@ returningCallDeclarationWords(const SpecializationX64ReturningCall &D) {
       D.Version == 1   ? "neverd-x64-conditional-normal-return-v1"
       : D.Version == 2 ? "neverd-x64-conditional-normal-return-frame-v2"
       : D.Version == 3 ? "neverd-x64-conditional-normal-return-object-v3"
-                       : "neverd-x64-conditional-normal-return-object-v4");
+      : D.Version == 4 ? "neverd-x64-conditional-normal-return-object-v4"
+                       : "neverd-x64-conditional-normal-return-outputs-v5");
   appendReturningCallDeclaration(H, D);
   const auto Bytes = llvm::fromHex(H.finish());
   std::array<uint64_t, 4> Words;
@@ -172,10 +206,13 @@ returningCallTransition(const SpecializationX64ReturningCall &D) {
   Policy.PreservedFrameRanges.reserve(D.PreservedFrameRanges.size());
   for (const auto &Range : D.PreservedFrameRanges)
     Policy.PreservedFrameRanges.push_back({Range.Begin, Range.End});
-  if (D.Version >= 3)
+  if (D.Version == 3 || D.Version == 4)
     Policy.ReturnedObject = RecoveryCallTransition::ResultObject{
         NdVar::reg(x86reg::RAX, kAddressBytes),
         NdVar::reg(x86reg::RDX, kAddressBytes), D.ResultObjectExclusions};
+  for (const auto &Output : D.FrameOutputs)
+    Policy.FrameOutputs.push_back(
+        {NdVar::reg(Output.PointerRegister, kAddressBytes), Output.Bytes});
   return Policy;
 }
 
