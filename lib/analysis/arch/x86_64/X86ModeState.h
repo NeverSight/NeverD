@@ -113,6 +113,7 @@ fetchX86SystemInstruction(X86ModeState &S, translate::X86PagedMemory &M,
 inline bool sameModeState(const X86ModeState &A, const X86ModeState &B) {
   return A.Core.Core == B.Core.Core && A.Debug == B.Debug && A.SMM == B.SMM &&
          A.MCA == B.MCA && A.Startup == B.Startup &&
+         A.DeadlineTimer == B.DeadlineTimer &&
          A.RetainedRealCS == B.RetainedRealCS &&
          std::tie(A.Core.SysenterCS, A.Core.SysenterESP, A.Core.SysenterEIP,
                   A.Core.Reserved, A.STIBlocked, A.SSBlocked, A.Halted,
