@@ -29,7 +29,7 @@ def observation():
     # PE entry is RVA 0x6e36. Resolve the actual provider from its eager
     # import and cross-check two separate exports before using the table.
     # Only boolean predicates on these fixed application/runtime images
-    # leave the debugger. The hardware execution breakpoints leave code intact.
+    # leave CDB. The workflow separately runs the file outside the debugger.
     entry = {
         "pc": "@eip == @$exentry-0x272",
         "app_type_export": "poi(@$exentry+0x128e) == @$t0+0x85a00",
@@ -67,7 +67,7 @@ def observation():
     def stop_at(address):
         # CDB also stops on first-chance exceptions. A sample at that stop
         # carries no evidence about the requested instruction.
-        return ["bc *", "ba e 1 " + address, "bl", "g", ".lastevent",
+        return ["bp /1 " + address, "g", ".lastevent",
                 '.if (@eip != (' + address + ')) { .echo XCPT4_UNEXPECTED_STOP; qd }']
 
     steps = [
@@ -79,7 +79,7 @@ def observation():
         marker("TABLE", table),
         *stop_at("@$t0+0x617d2"), marker("COMPARE", comparison),
         *stop_at("@$exentry-0x26d"), marker("RETURN", returned),
-        "bc *", "qd",
+        "qd",
     ]
     return steps, {"ENTRY": entry, "TABLE": table, "COMPARE": comparison, "RETURN": returned}
 
