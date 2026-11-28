@@ -43,7 +43,7 @@ constexpr llvm::StringLiteral PublicReportHex =
     "ff00ff00ff00ff00ff00ff00ff00ff0000000000000000000000000000000000"
     "6f994ab4dd7e59998c507d3909bb87c2";
 
-class SgxReferencePlatform final : public X86SgxKeyPlatform {
+class SgxReferencePlatform : public X86SgxKeyPlatform {
 public:
   std::string Target = llvm::fromHex(PublicTargetHex);
   std::string Report = llvm::fromHex(PublicReportHex);

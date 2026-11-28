@@ -31,6 +31,12 @@ llvm::Expected<std::unique_ptr<X86SgxMemory>>
 X86SgxMemory::create(std::vector<X86SgxPage> Pages,
                      std::optional<X86SgxEnclave> Active,
                      X86SgxFeatures Features) {
+  if (Features.Report2Write &&
+      (!Features.SGX256 ||
+       (*Features.Report2Write != X86SgxReport2Write::Payload768 &&
+        *Features.Report2Write != X86SgxReport2Write::ZeroReservedTail)))
+    return invalid(
+        "REPORT2 write footprint requires a supported 256BITSGX profile");
   auto Memory = std::make_unique<X86SgxMemory>();
   Memory->Features = Features;
   for (auto &Page : Pages) {

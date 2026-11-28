@@ -5,7 +5,6 @@ add_neverd_component_library(NeverDWeb
   packages/PackageDiff.cpp
   packages/PackageArchive.cpp
   packages/PackageIntegrity.cpp
-  packages/SHA512.cpp
   packages/evidence/Descriptor.cpp
   packages/evidence/Publication.cpp
   packages/advisories/SemVer.cpp
@@ -133,7 +132,7 @@ add_neverd_component_library(NeverDWeb
   features/Publication.cpp
   SessionAnchor.cpp
   SessionNative.cpp
-  LINK_COMPONENTS Zip
+  LINK_COMPONENTS Digest Zip
   LLVM_COMPONENTS Support
 )
 include("${CMAKE_SOURCE_DIR}/cmake/NeverDWebURL.cmake")

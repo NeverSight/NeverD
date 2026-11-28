@@ -362,10 +362,14 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   }
   if (Leaf >= 5 && Leaf <= 7 && EPC.Features.SGX2)
     return dynamicMemory(S, M, Progress, ExpectedBytes.size(), std::move(Out));
+  const auto Op = static_cast<KeyReportLeaf>(Leaf);
+  if (Op == KeyReportLeaf::Report || Op == KeyReportLeaf::Key ||
+      (EPC.Features.SGX256 &&
+       (Op == KeyReportLeaf::Report2 || Op == KeyReportLeaf::Key256)))
+    return keyOrReport(Op, S, M, Progress, ExpectedBytes.size(),
+                       std::move(Out));
   if (Leaf > 4)
     return Fault(13);
-  if (Leaf < 2)
-    return keyOrReport(S, M, Progress, ExpectedBytes.size(), std::move(Out));
   if (EPC.Active)
     return Fault(13);
   if (!EPC.X87)

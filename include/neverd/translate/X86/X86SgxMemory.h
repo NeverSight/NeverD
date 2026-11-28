@@ -51,6 +51,11 @@ struct X86SgxPage {
   std::optional<bool> TrackingComplete{};
 };
 
+/// Intel ISE 319433-063 gives a 768-byte EREPORT2 store in its operation
+/// and a zero reserved tail in its 1024-byte layout. Bind the processor's
+/// observed write footprint before publishing a successful report.
+enum class X86SgxReport2Write { Payload768, ZeroReservedTail };
+
 /// CPUID.(12H,1):EAX[10] selects the AEX notification attribute.
 /// CPUID.(12H,0):EAX[11] separately selects ENCLU[EDECCSSA].
 struct X86SgxFeatures {
@@ -62,12 +67,17 @@ struct X86SgxFeatures {
   bool KeySeparationAndSharing = false;
   /// CPUID.(12H,0):EAX[1]. Dynamic page operations on the imported EPCM.
   bool SGX2 = false;
+  /// CPUID.(12H,0):EAX[12] and CPUID.(12H,1):EAX[11], respectively.
+  bool SGX256 = false;
+  bool SHA384Measurements = false;
+  std::optional<X86SgxReport2Write> Report2Write{};
 
   static constexpr uint64_t Provision = 1u << 4, InitToken = 1u << 5,
-                            KSS = 1u << 7, Notify = 1u << 10;
+                            KSS = 1u << 7, Notify = 1u << 10, SHA384 = 1u << 11;
   uint64_t allowedAttributes() const {
     return 7 | (ProvisionKey ? Provision : 0) | (InitTokenKey ? InitToken : 0) |
-           (KeySeparationAndSharing ? KSS : 0) | (AEXNotify ? Notify : 0);
+           (KeySeparationAndSharing ? KSS : 0) | (AEXNotify ? Notify : 0) |
+           (SHA384Measurements ? SHA384 : 0);
   }
 };
 
