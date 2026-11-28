@@ -858,7 +858,8 @@ int auditEveryLoadedFunction(neverd_session_t Sess) {
 int runDecompile(neverd_session_t Sess) {
   if (X64Continuation.getNumOccurrences() ||
       X86LegacySource.getNumOccurrences() ||
-      ContinuationReport.getNumOccurrences())
+      ContinuationReport.getNumOccurrences() ||
+      X64XbeginObservation.getNumOccurrences())
     return runContinuation(Sess);
   if (DecompileCheckAll)
     return auditEveryLoadedFunction(Sess);
