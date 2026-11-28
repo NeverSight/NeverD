@@ -24,6 +24,8 @@ class X86SgxExecution;
 
 namespace neverd::translate {
 
+class X86SgxKeyPlatform;
+
 enum class X86SgxPageType : uint8_t {
   Regular,
   TCS,
@@ -43,6 +45,10 @@ struct X86SgxPage {
   bool Pending = false;
   bool Modified = false;
   std::array<uint8_t, 4096> Bytes{};
+  /// EPCM.PR from a permission restriction. Tracking is the page's imported
+  /// epoch observation for EACCEPT in this serialized processor model.
+  bool PermissionRestricted = false;
+  std::optional<bool> TrackingComplete{};
 };
 
 /// CPUID.(12H,1):EAX[10] selects the AEX notification attribute.
@@ -50,6 +56,19 @@ struct X86SgxPage {
 struct X86SgxFeatures {
   bool AEXNotify = false;
   bool DecrementSSA = false;
+  /// Additional attributes permitted in initialized SECS, CPUID.(12H,1):EAX.
+  bool ProvisionKey = false;
+  bool InitTokenKey = false;
+  bool KeySeparationAndSharing = false;
+  /// CPUID.(12H,0):EAX[1]. Dynamic page operations on the imported EPCM.
+  bool SGX2 = false;
+
+  static constexpr uint64_t Provision = 1u << 4, InitToken = 1u << 5,
+                            KSS = 1u << 7, Notify = 1u << 10;
+  uint64_t allowedAttributes() const {
+    return 7 | (ProvisionKey ? Provision : 0) | (InitTokenKey ? InitToken : 0) |
+           (KeySeparationAndSharing ? KSS : 0) | (AEXNotify ? Notify : 0);
+  }
 };
 
 struct X86SgxEnclave {
@@ -85,6 +104,11 @@ public:
     return Running && Running->SwitchXCR0 ? Running->XFRM : OutsideXCR0;
   }
   llvm::Error bindActive(std::optional<X86SgxEnclave> Enclave);
+  void bindKeyPlatform(std::shared_ptr<const X86SgxKeyPlatform> Platform);
+  /// Publish an external tracking observation for the current restriction
+  /// or type change. The platform supplies completion of the enclave shootdown.
+  llvm::Error bindPageTracking(uint64_t Physical, uint64_t OwnerSECS,
+                               bool Complete);
   bool hasRunningThread() const { return Running.has_value(); }
   uint64_t generation() const { return Generation; }
   bool enabled() const { return Enabled; }
@@ -124,6 +148,7 @@ private:
   std::optional<Thread> Running;
   std::optional<std::array<uint8_t, 160>> X87;
   X86SgxFeatures Features;
+  std::shared_ptr<const X86SgxKeyPlatform> Keys;
   bool Enabled = true;
   uint64_t OutsideXCR0 = 0;
   uint64_t Generation = 0;

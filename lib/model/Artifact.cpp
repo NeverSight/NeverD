@@ -56,27 +56,6 @@ void validName(std::string_view S) {
       S.find('\0') != S.npos)
     throw Error("invalid or oversized identifier");
 }
-Json parseObject(std::string_view Data, Budget &B) {
-  using Event = Json::parse_event_t;
-  std::vector<std::set<std::string>> Keys;
-  auto Guard = [&](int Depth, Event E, Json &Value) {
-    B.tick();
-    if (Depth > int(limits::kDepth))
-      throw Error("JSON nesting exceeds limit");
-    if (E == Event::object_start)
-      Keys.emplace_back();
-    if (E == Event::object_end)
-      Keys.pop_back();
-    if (E == Event::key &&
-        !Keys.back().insert(Value.get_ref<const std::string &>()).second)
-      throw Error("duplicate JSON object key");
-    return true;
-  };
-  auto J = Json::parse(Data, Guard, false);
-  if (!J.is_object())
-    throw Error("invalid JSON object");
-  return J;
-}
 fs::path utf8Path(std::string_view Name) {
   return fs::path(std::u8string(Name.begin(), Name.end()));
 }

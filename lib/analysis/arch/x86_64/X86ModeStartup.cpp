@@ -65,6 +65,8 @@ llvm::Error initializeProcessor(X86ModeState &S, translate::X86PagedMemory &M,
   Inputs.APIC = *translate::X86LocalApicFixed::fromState({});
   if (Inputs.LocalVectorCMCI)
     Inputs.LocalVectorCMCI = 1u << 16;
+  if (S.DeadlineTimer)
+    S.DeadlineTimer.emplace();
   Inputs.INITPending = Inputs.NMIPending = Inputs.SMIPending = false;
   return llvm::Error::success();
 }

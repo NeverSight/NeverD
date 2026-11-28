@@ -60,6 +60,29 @@ llvm::Error X86SgxMemory::bindX87(std::array<uint8_t, 160> Image,
   return llvm::Error::success();
 }
 
+void X86SgxMemory::bindKeyPlatform(
+    std::shared_ptr<const X86SgxKeyPlatform> Platform) {
+  if (Keys != Platform) {
+    Keys = std::move(Platform);
+    ++Generation;
+  }
+}
+
+llvm::Error X86SgxMemory::bindPageTracking(uint64_t Physical,
+                                           uint64_t OwnerSECS, bool Complete) {
+  auto I = EPC.find(Physical);
+  if (!Features.SGX2 || I == EPC.end() || !I->second.Valid ||
+      I->second.OwnerSECS != OwnerSECS ||
+      !(I->second.PermissionRestricted || I->second.Modified))
+    return invalid("tracking requires the current modified or restricted EPC "
+                   "page and its SECS");
+  if (I->second.TrackingComplete != Complete) {
+    I->second.TrackingComplete = Complete;
+    ++Generation;
+  }
+  return llvm::Error::success();
+}
+
 void X86SgxMemory::disableAfterMachineCheck() {
   if (Enabled) {
     Enabled = false;

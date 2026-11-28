@@ -511,6 +511,7 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
   }
   const auto Index = uint32_t(modeRegisters(S).GPR[1]);
   if (!Locked && ((S.MCA && X86MachineCheckState::ownsMSR(Index)) ||
+                  (S.DeadlineTimer && Index == X86TscDeadlineTimer::MSR) ||
                   (SEP && detail::sysenterMSR(Index)))) {
     Op = SystemOp::ReadMSR;
     Locked = systemLockPrefix(Binding.Bytes, ReadMSR, Long64);
@@ -553,7 +554,7 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
   else if (!Enclu && Memory.sgxMemory() && Memory.sgxMemory()->active() &&
            (!Binding.Body || !Binding.Validate)) {
     auto Denied = detail::X86SgxExecution::instructionException(
-        Binding.Bytes, Binding.Address, *Memory.sgxMemory());
+        Binding.Bytes, Binding.Address, Memory);
     if (!Denied)
       return Denied.takeError();
     EnclaveException = *Denied;
@@ -815,6 +816,8 @@ llvm::Expected<X86ModeExecutionResult> X86ModeExecution::runBoundaries(
     if (Interrupts && !S.Pending) {
       if (Interrupts->APIC.readCr8() != S.Core.Core.Core.Core.Core.CR8)
         return invalid("CPU CR8 and local APIC task priority disagree");
+      if (S.DeadlineTimer && Interrupts->SampledTSC)
+        S.DeadlineTimer->poll(*Interrupts->SampledTSC, Interrupts->APIC);
       if (Interrupts->MachineCheck) {
         if (!S.MCA)
           return invalid("machine-check reports require a bound MCA bank");

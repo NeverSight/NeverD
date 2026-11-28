@@ -103,15 +103,22 @@ public:
           _exit(97);
       }
       if (ptrace(PTRACE_TRACEME, 0, nullptr, nullptr))
-        _exit(98);
+        _exit(errno == EPERM ? TracePermissionDenied : 98);
       kill(getpid(), SIGSTOP);
       _exit(99);
     }
     int Signal = 0;
-    ASSERT_NO_FATAL_FAILURE(wait(Signal));
+    ASSERT_NO_FATAL_FAILURE(wait(Signal, /*Starting=*/true));
+    if (!TracePermitted)
+      return;
     ASSERT_EQ(Signal, SIGSTOP);
     ASSERT_EQ(ptrace(PTRACE_GETREGS, Child, nullptr, &Initial), 0);
   }
+
+  bool tracePermitted() const { return TracePermitted; }
+
+  static constexpr const char *TracePermissionDeniedReason =
+      "host denied PTRACE_TRACEME (EPERM); original CPU comparison unavailable";
 
   /// Whether PTRACE_SINGLEBLOCK stops this host at the first taken branch.
   /// It relies on DEBUGCTL.BTF, which a hypervisor need not virtualize; its
@@ -166,12 +173,14 @@ public:
 
 private:
   static constexpr unsigned MemoryBytes = 0x4000, StackOffset = 0x2000;
+  static constexpr int TracePermissionDenied = 100;
   void *RAM = MAP_FAILED;
   pid_t Child = -1;
   Mode Target = Mode::Long64;
   user_regs_struct Initial{};
+  bool TracePermitted = true;
 
-  void wait(int &Signal) {
+  void wait(int &Signal, bool Starting = false) {
     const auto Deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(5);
     do {
@@ -181,6 +190,11 @@ private:
       if (Ready == Child) {
         if (WIFEXITED(Status) || WIFSIGNALED(Status))
           Child = -1; // Already reaped; never signal a recycled process ID.
+        if (Starting && WIFEXITED(Status) &&
+            WEXITSTATUS(Status) == TracePermissionDenied) {
+          TracePermitted = false;
+          return;
+        }
         ASSERT_TRUE(WIFSTOPPED(Status)) << Status;
         Signal = WSTOPSIG(Status);
         return;

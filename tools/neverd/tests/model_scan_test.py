@@ -2,6 +2,7 @@
 """Exercise model evidence through the shipped CLI, worker and local C ABI."""
 
 import ctypes
+import hashlib
 import json
 from pathlib import Path
 import os
@@ -163,6 +164,71 @@ class ModelScan(unittest.TestCase):
                         self.assertEqual(result, report)
                 finally:
                     lib.neverd_free_string(data)
+
+    def test_gguf_digests_cover_exact_encoded_ranges(self):
+        metadata = [
+            ("general.architecture", 8, "example"),
+            ("tokenizer.ggml.tokens", 9, ["a", "中", ""] * 6000 + ["b" * 90000]),
+            ("empty", 8, ""),
+            ("tokenizer.ggml.merges", 9, []),
+            ("signed", 5, -19),
+        ]
+        for order in ("<", ">"):
+            with self.subTest(order=order):
+                data = gguf([("w", [2], 0, 0, b"sentinel")], metadata, endian=order)
+                self.file.write_bytes(data)
+                pkg = self.scan()["packages"][0]
+                artifact = pkg["artifacts"][0]
+                self.assertEqual(pkg["tensor_payload_bytes_read"], 0)
+                # The last record is the tensor name, rank, dimension, type and offset.
+                tensor_record = struct.pack(order + "Q1sIQIQ", 1, b"w", 1, 2, 0, 0)
+                directory_end = data.index(
+                    tensor_record, pkg["metadata"][-1]["end"]
+                ) + len(tensor_record)
+                self.assertEqual(artifact["directory_end"], directory_end)
+                self.assertEqual(
+                    artifact["directory_sha256"],
+                    hashlib.sha256(data[:directory_end]).hexdigest(),
+                )
+                self.assertEqual(
+                    [row["key"] for row in pkg["metadata"]], [m[0] for m in metadata]
+                )
+                for row in pkg["metadata"]:
+                    start = row["offset"] + 8 + len(row["key"].encode()) + 4
+                    self.assertEqual(
+                        row["encoded_value_sha256"],
+                        hashlib.sha256(data[start : row["end"]]).hexdigest(),
+                        row["key"],
+                    )
+
+    def test_gguf_scalar_widths_and_byte_orders(self):
+        fields = [
+            (0, "B", 0x81),
+            (1, "b", -123),
+            (2, "H", 0xABCD),
+            (3, "h", -12345),
+            (4, "I", 0xABCD8123),
+            (5, "i", -123456789),
+            (6, "f", -1.25),
+            (7, "B", True),
+            (10, "Q", 0xFEDCBA9876543210),
+            (11, "q", -0x123456789ABCDEF),
+            (12, "d", 1.125),
+        ]
+        for order in ("<", ">"):
+            with self.subTest(order=order):
+                data = bytearray(
+                    b"GGUF" + struct.pack(order + "IQQ", 3, 0, len(fields))
+                )
+                expected = {}
+                for kind, fmt, value in fields:
+                    key = f"scalar_{kind}"
+                    data += struct.pack(order + "Q", len(key)) + key.encode()
+                    data += struct.pack(order + "I" + fmt, kind, value)
+                    expected[key] = value
+                self.file.write_bytes(data)
+                rows = self.scan()["packages"][0]["metadata"]
+                self.assertEqual({r["key"]: r["value"] for r in rows}, expected)
 
     def test_verified_ranges_and_optional_sampling(self):
         payload = bytes([0, 0] + list(range(16)))
@@ -450,6 +516,38 @@ class ModelScan(unittest.TestCase):
         ]:
             f.write_bytes(struct.pack("<Q", len(header)) + header + b"X" * 6)
             self.assertEqual(self.scan(f, code=1)["packages"][0]["gap_count"], 1)
+
+    def test_json_key_scope_and_nesting_boundaries(self):
+        config = self.root / "config.json"
+        # Reusing a key in sibling objects is valid, including objects in arrays.
+        config.write_bytes(
+            b'{"model_type":"example","quantization":[{"x":[null,true,false]},'
+            b'{"x":[-1,0,1.25,"str"]}]}'
+        )
+        pkg = self.scan(config)["packages"][0]
+        self.assertEqual(pkg["declared_architectures"], ["example"])
+
+        # Container-end events use the depth of their corresponding start.
+        def nested(count, content):
+            return b'{"x":' + b"[" * count + content + b"]" * count + b"}"
+
+        for data in [nested(63, b"0"), nested(64, b"")]:
+            config.write_bytes(data)
+            self.assertEqual(self.scan(config)["packages"][0]["gap_count"], 0)
+
+        for data, reason in [
+            (br'{"a":[{"b":1,"\u0062":2}]}', "duplicate JSON object key"),
+            (nested(64, b"0"), "JSON nesting exceeds limit"),
+            (nested(65, b""), "JSON nesting exceeds limit"),
+            (b"[]", "invalid JSON object"),
+            (b'{"a":1} trailing', "invalid JSON object"),
+            (b'{"a":1e1000}', "invalid JSON object"),
+            (b'{"a":"\xff"}', "invalid JSON object"),
+        ]:
+            with self.subTest(data=data):
+                config.write_bytes(data)
+                pkg = self.scan(config, code=1)["packages"][0]
+                self.assertEqual(pkg["coverage_gaps"][0]["reason"], reason)
 
     def test_weight_only_structure_requires_same_layer_and_matrix_evidence(self):
         names = ["attn_q", "attn_k", "attn_v", "attn_output"]

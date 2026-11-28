@@ -78,7 +78,8 @@ llvm::Expected<X86ModeExecutionResult> executeModeSystemInstruction(
   const bool MSR = Operation == X86ModeSystemOp::ReadMSR ||
                    Operation == X86ModeSystemOp::WriteMSR;
   const bool Fast = !MSR && Operation != X86ModeSystemOp::Halt;
-  if (MSR && !sysenterMSR(Index))
+  const bool Deadline = S.DeadlineTimer && Index == X86TscDeadlineTimer::MSR;
+  if (MSR && !sysenterMSR(Index) && !Deadline)
     if (auto E = S.MCA->validate())
       return std::move(E);
   const uint8_t CPL = modeCPL(S, Memory.controls());
@@ -111,10 +112,13 @@ llvm::Expected<X86ModeExecutionResult> executeModeSystemInstruction(
     }
   } else {
     if (Operation == X86ModeSystemOp::ReadMSR) {
-      std::optional<uint64_t> Value =
-          sysenterMSR(Index)
-              ? std::optional<uint64_t>(sysenterRegister(S.Core, Index))
-              : S.MCA->readMSR(Index);
+      std::optional<uint64_t> Value;
+      if (Deadline)
+        Value = S.DeadlineTimer->read();
+      else if (sysenterMSR(Index))
+        Value = sysenterRegister(S.Core, Index);
+      else
+        Value = S.MCA->readMSR(Index);
       if (!Value) {
         R.Exception = X86MemoryException{13, 0, {}};
         return R;
@@ -126,7 +130,9 @@ llvm::Expected<X86ModeExecutionResult> executeModeSystemInstruction(
     } else {
       const uint64_t Value = uint32_t(Regs.GPR[0]) | (Regs.GPR[2] << 32);
       bool ClearedBankEnables = false;
-      if (sysenterMSR(Index)) {
+      if (Deadline) {
+        S.DeadlineTimer->write(Value);
+      } else if (sysenterMSR(Index)) {
         const bool FullAddress = Index != 0x174 && Memory.features().LongMode;
         if (FullAddress &&
             !llvm::isIntN(Memory.features().LA57 ? 57 : 48, int64_t(Value))) {
