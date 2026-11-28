@@ -11,6 +11,7 @@
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
 
 #include "X64MachineFlags.h"
+#include "X64PagedRegisterTransfer.h"
 #include "X64PagedSse.h"
 #include "X64SegmentMoveEncoding.h"
 #include "X64TaskPriority.h"
@@ -788,7 +789,8 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
     Last.BackingFault = T.Access.BackingFault;
     return Last;
   }
-  if (T.Event || T.Access.Status == X86PageWalkStatus::Exception) {
+  const auto DeliverInstructionEvent =
+      [&]() -> llvm::Expected<X64PagedExecutionResult> {
     T.normalizeRepeatEntry(State);
     Last.Exception = T.Access.Exception;
     X64ContinuationEventV1 Event = T.Event.value_or(X64ContinuationEventV1{});
@@ -809,15 +811,38 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
           !T.DebugRegister && Last.Delivery->SoftwareCompleted;
     }
     return Last;
-  }
+  };
+  if (T.Event || T.Access.Status == X86PageWalkStatus::Exception)
+    return DeliverInstructionEvent();
   const bool Partial =
       T.Repeated && Exit == uint64_t(X64PagedExit::RepeatContinue);
   if (Exit > uint64_t(X64ContinuationExitV1::Return) && !Partial) {
-    if (Exit != uint64_t(X64ContinuationExitV1::NativeInstruction) &&
-        Exit != uint64_t(X64ContinuationExitV1::InvalidState))
-      return invalid("paged body returned an unowned execution status");
-    Last.Exit = Exit;
-    return Last;
+    if (Exit != uint64_t(X64PagedExit::RegisterTransfer)) {
+      if (Exit != uint64_t(X64ContinuationExitV1::NativeInstruction) &&
+          Exit != uint64_t(X64ContinuationExitV1::InvalidState))
+        return invalid("paged body returned an unowned execution status");
+      Last.Exit = Exit;
+      return Last;
+    }
+    using Result = detail::X64PagedRegisterResult;
+    const auto Kind = detail::x64PagedRegisterTransfer(Bytes);
+    if (Kind == detail::X64PagedRegisterTransfer::Other || DebugSSBlocked)
+      return invalid("paged register transfer disagrees with instruction or "
+                     "debug binding");
+    const auto Outcome = detail::x64PagedRegisterResult(
+        Kind, Controls.EFER, CPL, Original.GPR[1], PagingAddressBits);
+    if (Outcome == Result::Native) {
+      Last.Exit = uint64_t(X64ContinuationExitV1::NativeInstruction);
+      return Last;
+    }
+    if (Outcome != Result::Complete) {
+      T.Access.Exception = X86MemoryException{
+          uint8_t(Outcome == Result::UndefinedOpcode ? 6 : 13), 0, {}};
+      return DeliverInstructionEvent();
+    }
+    Exit = uint64_t(Kind == detail::X64PagedRegisterTransfer::SysretQ
+                        ? X64ContinuationExitV1::PrivilegeReturn
+                        : X64ContinuationExitV1::Continue);
   }
   if (T.Store)
     Memory.commitStore(*T.Store, T.Bytes);

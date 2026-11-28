@@ -13,6 +13,7 @@
 #include "X64ContinuationSegments.h"
 
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
+#include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 #include "neverd/ir/X86/X86FastSystemRules.h"
 #include "neverd/lift/X86/X86Regs.h"
 
@@ -51,7 +52,9 @@ public:
 
   void sysret(bool Wide, llvm::ArrayRef<LowUndefinedEffect> Effects) {
     NdVar PC = W.read(NdVar::reg(x86reg::RCX, Wide ? 8 : 4));
-    if (Wide) {
+    // The paged executor checks the target and EFER.SCE together before
+    // publishing this staged register state. The flat domain checks it here.
+    if (Wide && !Options.PagedMemory) {
       const NdVar Shifted = W.temporary(), Canonical = W.temporary();
       const NdVar Bad = W.temporary(1);
       const auto Shift = k(64 - *Options.PagingAddressBits);
@@ -59,7 +62,7 @@ public:
       W.emit(NdOp::INT_ASHR, Canonical, {Shifted, Shift});
       W.emit(NdOp::INT_NOTEQUAL, Bad, {Canonical, PC});
       W.rejectIf(Bad);
-    } else {
+    } else if (!Wide) {
       const auto Low = PC;
       PC = W.temporary();
       W.emit(NdOp::INT_ZEXT, PC, {Low});
@@ -91,7 +94,10 @@ public:
     W.invalidateMonitor();
     for (size_t I = 0; I != Effects.size(); ++I)
       W.undefined(Effects[I], I);
-    W.leave(Exit::PrivilegeReturn, PC);
+    W.leave(Options.PagedMemory
+                ? static_cast<Exit>(X64PagedExit::RegisterTransfer)
+                : Exit::PrivilegeReturn,
+            PC);
   }
 
   void fastSystem(bool Enter, bool Wide,

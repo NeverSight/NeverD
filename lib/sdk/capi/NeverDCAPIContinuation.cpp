@@ -102,6 +102,23 @@ extern "C" const char *neverd_x64_continuation_source_with_observation_v1(
       });
 }
 
+extern "C" const char *neverd_x64_paged_return_entry_source_v1(
+    neverd_session_t Sess, neverd_va_t Entry, const char *RequestJSON,
+    size_t RequestSize, int UseLLVM, const char **ManifestJSON) {
+  return exportSource(
+      Sess, RequestJSON, RequestSize,
+      neverd::limits::pipeline::kX64ContinuationRequestBytes, ManifestJSON,
+      [=](auto &Session, llvm::StringRef Text)
+          -> llvm::Expected<neverd::X64ContinuationExport> {
+        if (UseLLVM != 0 && UseLLVM != 1)
+          return llvm::createStringError(
+              llvm::errc::invalid_argument,
+              "x64 continuation requires a valid C route");
+        return neverd::exportX64PagedReturnEntry(
+            Session.Img, Entry, Text, bool(UseLLVM), Session.decompileDebug());
+      });
+}
+
 extern "C" const char *neverd_x86_legacy_source_v1(neverd_session_t Sess,
                                                    const char *RequestJSON,
                                                    size_t RequestSize,

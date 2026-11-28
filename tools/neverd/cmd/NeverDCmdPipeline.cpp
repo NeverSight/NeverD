@@ -476,6 +476,18 @@ std::optional<uint64_t> exportedAddress(neverd_session_t Sess, StringRef Name) {
 
 } // namespace
 
+std::optional<uint64_t> resolveDecompileEntry(neverd_session_t Sess,
+                                              const std::string &Name) {
+  if (!llvm::StringRef(Name).starts_with_insensitive("0x")) {
+    const int Index = neverd_func_find_by_name(Sess, Name.c_str());
+    if (Index >= 0)
+      return neverd_func_entry(Sess, Index);
+    if (auto Address = exportedAddress(Sess, Name))
+      return Address;
+  }
+  return parseAddrArg(Name);
+}
+
 bool configureAnalysisSession(neverd_session_t Sess) {
   return configureEVM(Sess) && configureSBF(Sess);
 }
@@ -1122,34 +1134,14 @@ int runDecompile(neverd_session_t Sess) {
   }
   const char *Source = nullptr;
   if (!ExportFunc.empty()) {
-    int FuncIdx = -1;
-    uint64_t DirectAddr = 0;
-    bool HaveDirectAddr = false;
-    StringRef FuncRef(ExportFunc.getValue());
-    if (FuncRef.consume_front("0x") || FuncRef.consume_front("0X")) {
-      if (!FuncRef.empty() && !FuncRef.getAsInteger(16, DirectAddr)) {
-        HaveDirectAddr = true;
-      }
-    } else {
-      FuncIdx = neverd_func_find_by_name(Sess, ExportFunc.c_str());
-      if (FuncIdx < 0)
-        if (const std::optional<uint64_t> Exported =
-                exportedAddress(Sess, FuncRef)) {
-          HaveDirectAddr = true;
-          DirectAddr = *Exported;
-        }
-      if (FuncIdx < 0 && !HaveDirectAddr && !FuncRef.empty() &&
-          !FuncRef.getAsInteger(16, DirectAddr)) {
-        HaveDirectAddr = true;
-      }
-    }
-    if (FuncIdx < 0 && !HaveDirectAddr) {
+    const auto SelectedEntry =
+        resolveDecompileEntry(Sess, ExportFunc.getValue());
+    if (!SelectedEntry) {
       WithColor::error() << "function not found: " << ExportFunc.getValue()
                          << "\n";
       return 1;
     }
-    const uint64_t Entry =
-        FuncIdx >= 0 ? neverd_func_entry(Sess, FuncIdx) : DirectAddr;
+    const uint64_t Entry = *SelectedEntry;
     if (DecompileCallees) {
       if (LlvmRoute || Devirtualize || NoOpt || DedicatedLanguage ||
           SourceTransforms || StackFrameInfo || HasStackFrame || JsonOutput) {

@@ -7,6 +7,7 @@
 /// Execute exported C and verify the real SDK and CLI retain exact boundaries.
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/analysis/arch/x86_64/X64PagedRegisterTransfer.h"
 #include "../../HostCompiler.h"
 #include "../../HostCpu.h"
 #include "../../lift/NeverDLiftFixture.h"
@@ -1487,6 +1488,7 @@ static void original(neverd_x64_state_v6 *s, void *code, uint64_t *ram) {
 #include "X64PagedFunctionCallTests.inc"
 #include "X64PagedFunctionContextTests.inc"
 #include "X64PagedSseTests.inc"
+#include "X64ReturnStackEventTests.inc"
 #include "X64RtmAbortExportTests.inc"
 #include "X64RtmFaultExportTests.inc"
 #include "X64RtmPrefixExportTests.inc"

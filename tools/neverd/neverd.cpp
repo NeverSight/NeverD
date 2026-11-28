@@ -284,9 +284,10 @@ static int realMain(int Argc, char *Argv[]) {
   // same one-function PE path as a known hex address.  The hint is checked
   // against the loaded name table below; normal loading remains authoritative.
   neverd_va_t NameHint = 0;
-  // Interpreter recovery and callee closure need the image-wide function,
-  // relocation and exception inventory before selecting their work set.
-  if (!ExportFunc.empty() && !Devirtualize && !DecompileCallees) {
+  // State-source recovery and callee closure need the full PE relocation,
+  // function and exception inventory even when selecting one entry.
+  if (!ExportFunc.empty() && !Devirtualize && !DecompileCallees &&
+      !X64Continuation.getNumOccurrences()) {
     StringRef FuncRef(ExportFunc.getValue());
     if (FuncRef.consume_front("0x") || FuncRef.consume_front("0X")) {
       uint64_t Addr = 0;

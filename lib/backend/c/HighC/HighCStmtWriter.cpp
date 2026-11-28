@@ -1800,7 +1800,8 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
         break;
       emitIndent(Indent);
       if (Stmt.Val->Kind == ExprKind::Call &&
-          aarch64PointerCRequiresDiscard(Stmt.Val->IntrinsicId)) {
+          (Stmt.Val->SourceCallHint ||
+           aarch64PointerCRequiresDiscard(Stmt.Val->IntrinsicId))) {
         OS << callStatementText(*Stmt.Val) << "\n";
         break;
       }

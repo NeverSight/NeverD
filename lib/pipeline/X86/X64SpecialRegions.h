@@ -17,6 +17,7 @@
 #include "llvm/Support/JSON.h"
 
 #include <cstdint>
+#include <set>
 #include <vector>
 
 namespace llvm {
@@ -36,6 +37,7 @@ struct X64ContinuationSourceOptions;
 struct X64SpecialRegionSelection {
   std::vector<va_t> Addresses;
   llvm::json::Array Regions;
+  std::set<va_t> UnprovedJumps;
 };
 
 /// Recover each entry once, in breadth-first batches. Only original direct
@@ -63,7 +65,7 @@ llvm::Expected<X64SpecialRegionSelection> selectX64SpecialRegions(
     const analysis::X64ContinuationSourceOptions &SourceOptions,
     unsigned CalleeDepth, bool FollowDirectJumps, bool NativeRtmAbortRegions,
     const X64RtmAbortSelection &RtmSteps, bool NativeRtmRegions,
-    DebugContext *Debug);
+    DebugContext *Debug, bool CollectUnprovedJumps);
 
 /// Connect adjacent selected instructions after checking their actual next PC.
 /// All other transfers use the common indexed dispatch. Keep instruction exits,

@@ -30,6 +30,7 @@
 #include "X64EncluEncoding.h"
 #include "X64FredReturnEncoding.h"
 #include "X64MachineFlags.h"
+#include "X64PagedRegisterTransfer.h"
 #include "X64PortIOEncoding.h"
 #include "X64Recovery.h"
 #include "X64RepeatedString.h"
@@ -1357,6 +1358,17 @@ buildInstruction(SpecializationInstruction Instruction,
       PrivilegeReturn && Instruction.Ops.size() == 1 &&
       sysretIntrinsic(Instruction.Ops.front(), Options) &&
       Instruction.Origin.Control == LowInstructionControl::Terminator;
+  const auto RegisterTransfer =
+      Options.PagedReturnStackEvents && !Options.PagedDebug
+          ? detail::x64PagedRegisterTransfer(Instruction.NativeBytes)
+          : detail::X64PagedRegisterTransfer::Other;
+  const bool PagedSysret =
+      Sysret && RegisterTransfer == detail::X64PagedRegisterTransfer::SysretQ;
+  const bool PagedSwapGS =
+      RegisterTransfer == detail::X64PagedRegisterTransfer::SwapGS &&
+      Instruction.Ops.size() == 1 &&
+      x64::legacygs::supportsOperation(Instruction.Ops.front(),
+                                       controlOptions(Options));
   const bool Sysenter =
       FastSystem && Instruction.Ops.size() == 1 &&
       eventIntrinsic(Instruction.Ops.front(), Intrinsic::X86Sysenter, 1) &&
@@ -1599,19 +1611,19 @@ buildInstruction(SpecializationInstruction Instruction,
     // Audited MOV CR8 has one register operand and no data memory. Its
     // undefined-effects certificate already checked the original encoding.
     PagedRoles = (Repeated || PortIO || DebugRegister || PagedTaskPriority ||
-                  Ud0 || PrefixLengthFault)
+                  Ud0 || PrefixLengthFault || PagedSysret || PagedSwapGS)
                      ? detail::X64PagedMemoryRoles{.Supported = true}
                      : detail::x64PagedMemoryRoles(Instruction);
     if ((!PagedRoles.Supported && !Iret && !FarReturn && !FarPointer &&
          !SegmentMove) ||
-        Sysret || Sysenter || Sysexit)
+        (Sysret && !PagedSysret) || Sysenter || Sysexit)
       RequireNative(
           "paged execution requires a scalar instruction commit model");
     for (const auto &Op : Instruction.Ops) {
       if (Op.Opcode == NdOp::INTRINSIC && !divisionPreconditionIntrinsic(Op) &&
           !alignmentIntrinsic(Op) && !FaultingInstruction && !Interrupt &&
           !Iret && !FarReturn && !FarPointer && !SegmentMove && !PortIO &&
-          !DebugTrap && !PagedTaskPriority &&
+          !DebugTrap && !PagedTaskPriority && !PagedSysret && !PagedSwapGS &&
           !(Options.PagedDebug &&
             (PoppedFlags ||
              Instruction.NativeBytes == std::vector<uint8_t>{0x9c})) &&
@@ -1710,7 +1722,7 @@ buildInstruction(SpecializationInstruction Instruction,
                 Flags::IOPLMask | Flags::VirtualInterruptMask |
                 (Options.PagedDebug ? 0x100 : 0) |
                 ((Iret || FarReturn || FarPointer || SegmentMove || Repeated ||
-                  PortIO)
+                  PortIO || PagedSysret || PagedSwapGS)
                      ? 0x4000
                      : 0)
       : SgxTransfer ? 0x240ed7 // CPL3 POPF, IF=1; no TF/RF/NT/VM/IOPL/VIF/VIP.
@@ -2051,7 +2063,9 @@ buildInstruction(SpecializationInstruction Instruction,
       W.codeTarget(NextPC);
     if (Options.PagedDebug && Kind == Exit::Jump)
       W.pagedAccess(TakenBranch, 0, X64PagedAccess::BranchDecision, false);
-    W.leave(Kind, NextPC);
+    W.leave(PagedSwapGS ? static_cast<Exit>(X64PagedExit::RegisterTransfer)
+                        : Kind,
+            NextPC);
   }
   Result.WritesCr8 = W.WritesCr8;
   if (Function.Blocks.size() > Options.MaxOperations ||
@@ -2071,6 +2085,10 @@ buildX64ContinuationSource(const BinaryImage &Image,
                            llvm::ArrayRef<va_t> Addresses,
                            const X64ContinuationSourceOptions &Options) {
   const bool Controls = hasControlState(Options);
+  if (Options.PagedReturnStackEvents &&
+      (!Options.PagedMemory || Options.ScheduledEvents))
+    return invalid(
+        "paged return stack events require unscheduled paged memory");
   if (Options.PagedDebug && !Options.PagedMemory)
     return invalid("paged_debug requires paged_memory");
   if (Options.PagedMemory &&

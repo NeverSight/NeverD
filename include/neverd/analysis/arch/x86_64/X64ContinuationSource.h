@@ -526,6 +526,10 @@ struct X64ContinuationSourceOptions {
   /// belong to that executor. ScheduledEvents selects its faultable scheduler;
   /// native bindings and the no-fault EventDelivery interface remain separate.
   bool PagedMemory = false;
+  /// Physical-entry exits use the instruction-time guest stack. The
+  /// unscheduled, non-debug executor also owns the exact register-only
+  /// SWAPGS/SYSRETQ epilogue in its captured paging context.
+  bool PagedReturnStackEvents = false;
   /// Bind TF/ICEBP to the paged runtime's explicit debug bank. Distinct
   /// bridges carry current MOV-SS inhibition and require the bank before
   /// polling/fetch. Ordinary no-fault profiles retain their earlier domain.

@@ -419,6 +419,52 @@ no additional per-instruction work. Omitting `function_calls` retains the
 previous source and manifest. The owner is
 [`X64FunctionCalls.cpp`](../lib/pipeline/X86/X64FunctionCalls.cpp).
 
+### Paged entries with a changing return stack
+
+An ordinary C caller can enter an interrupt or stack-switching routine using
+its current offline V6 register state, the embedding caller's
+`X64PagedExecution` over owned guest RAM, and an instruction budget. Use
+`--func` with a continuation request declaring the captured CPU's
+`profile`, `mxcsr_mask` and `paging_address_bits`.
+
+```sh
+neverd decompile input.exe --func 0x140001000 --x64-continuation=cpu.json \
+  --continuation-report=entry.json -o entry.c
+```
+
+Adding `--llvm` selects the LLVM-to-C route. The single-entry SDK export is
+`neverd_x64_paged_return_entry_source_v1`. To put multiple entry points in one
+C file, select `entries`, `paged_memory: true` and `return_stack_events: true`
+in the general continuation request. All entries share one instruction switch.
+The generated C invocation for the example is
+
+```c
+uint64_t exit = neverd_x64_enter_paged_140001000_v6(state, context, &budget);
+```
+
+The named entry requires the guest PC to match. Each original instruction
+reads its operands using its current registers, page tables and guest RAM.
+A near RET reads the word at the RSP it actually consumes, including after a
+stack switch. The caller receives the instruction's status and updated state.
+CALL (1), audited unproved JMP (2), RET (3) and privilege return (6) stop even
+at selected targets. The manifest lists the exact jump stops. Other branches
+retain bounded dispatch. Exceptions, missing backing, changed bytes and native
+requests retain their paged status and budget rules. To continue at the
+current PC, call `neverd_x64_resume_paged_transfers_v6(state, context, &budget)`
+with the same working context. Link the matching paged execution bridge from
+the NeverD analysis component into the embedding program. An instruction or
+event with a separate pending
+delivery uses its existing paged resumption contract.
+
+For the non-debug SWAPGS/SYSRETQ epilogue the executor authenticates the
+instruction bytes, tests the original CPL and reads EFER.SCE from the guest
+paging controls. SWAPGS exchanges the two captured GS bases. A successful
+SYSRETQ installs the RCX/R11/STAR return context and preserves RSP. Disabled
+SCE delivers #UD, and an enabled SYSRETQ at nonzero CPL delivers #GP(0).
+A noncanonical supervisor target exposes a native request because the fault
+context depends on the original CPU. Debug-profile exports retain their
+existing native boundaries at these two encodings.
+
 ### Paged entry call views
 
 With `"paged_memory": true` and instruction debug disabled, function activation uses
