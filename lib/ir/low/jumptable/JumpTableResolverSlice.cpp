@@ -10615,8 +10615,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         // x - q*N, whose symbolic root is Add.  Do not spend the bounded
         // structural matcher on unrelated masks or arithmetic; those retain
         // the finite SAT path and its shared solver-query ceiling.
+        // A normalized merge arm created after the selector snapshot also
+        // takes that SAT path. The matcher only sees the original nodes.
         if (!PathPredicate && !ExactRecipe && !RecipeIncomplete &&
             NormalizedRemainder &&
+            NormalizedRemainder.index() < SelectorExpressionNodeCount &&
             Ctx.op(NormalizedRemainder) == symbolic::SymOp::Add) {
           // Recipe matching is an auxiliary fast proof.  A non-modulo Add can
           // otherwise consume the complete finite-set allowance while trying

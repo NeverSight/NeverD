@@ -63,6 +63,51 @@ f3 mkf3(int x) {
                        "retf3", {"retf3", "mkf3", "f3"});
 }
 
+TEST_F(AArch64_StructReturn, TailCallForwardsAPreservedFirstDouble) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const auto Source = tmpFile("tail-hfa.s");
+  const auto Object = tmpFile("tail-hfa.o");
+  std::ofstream(Source) << R"asm(
+.text
+.globl make_hfa
+.type make_hfa,%function
+make_hfa:
+fadd d1,d0,d0
+fadd d2,d1,d0
+ret
+.size make_hfa,.-make_hfa
+.globl tail_hfa
+.type tail_hfa,%function
+tail_hfa:
+b make_hfa
+.size tail_hfa,.-tail_hfa
+.globl sum_hfa
+.type sum_hfa,%function
+sum_hfa:
+stp x29,x30,[sp,#-16]!
+bl tail_hfa
+fadd d0,d0,d1
+fadd d0,d0,d2
+ldp x29,x30,[sp],#16
+ret
+.size sum_hfa,.-sum_hfa
+)asm";
+  const auto Assembled =
+      exec(NEVERD_TEST_CLANG, {"-target", "aarch64-linux-gnu", "-c",
+                               Source.string(), "-o", Object.string()});
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+  const auto IR = liftToLLVMIRUnopt(Object);
+  ASSERT_EQ(IR.exitCode, 0) << IR.err;
+  for (const char *Name : {"make_hfa", "tail_hfa"}) {
+    const auto Signature =
+        std::string("{ double, double, double } @") + Name + "(";
+    EXPECT_NE(IR.out.find("define dso_local " + Signature), std::string::npos)
+        << IR.out;
+    EXPECT_NE(IR.out.find("call " + Signature), std::string::npos) << IR.out;
+  }
+}
+
 // A double and an int are no float aggregate: they return in x0:x1, the
 // double's bits in x0.
 TEST_F(AArch64_StructReturn, ADoubleAndAnIntReturnInTheIntegerPair) {

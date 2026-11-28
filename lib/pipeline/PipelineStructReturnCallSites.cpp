@@ -72,10 +72,7 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
         for (size_t I = 0; I + 1 < Blk.Ops.size(); ++I) {
           const MedOp &Call = Blk.Ops[I];
           const MedOp &Ret = Blk.Ops[I + 1];
-          if (Call.Opcode == NdOp::CALL && Call.Output.Kind == MedVar::Reg &&
-              Ret.Opcode == NdOp::RETURN && Ret.NumInputs >= 1 &&
-              Ret.Inputs[0].Kind == MedVar::Reg &&
-              Ret.Inputs[0].RegOff == Call.Output.RegOff)
+          if (Call.Opcode == NdOp::CALL && forwardsRegisterResults(Call, Ret))
             return true;
         }
       return false;
@@ -459,14 +456,9 @@ void remodelStructReturnForwarderCalls(const BinaryImage &Img,
         for (auto &Blk : MF.Blocks) {
           for (size_t I = 0; I + 1 < Blk.Ops.size(); ++I) {
             auto &Op = Blk.Ops[I];
-            if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
-                Op.NumInputs < 1 || !Op.Inputs[0].isConst() ||
-                Op.Output.Kind != MedVar::Reg)
-              continue;
             auto &Ret = Blk.Ops[I + 1];
-            if (Ret.Opcode != NdOp::RETURN || Ret.NumInputs < 1 ||
-                Ret.Inputs[0].Kind != MedVar::Reg ||
-                Ret.Inputs[0].RegOff != Op.Output.RegOff)
+            if (!forwardsRegisterResults(Op, Ret) || !Op.NumInputs ||
+                !Op.Inputs[0].isConst())
               continue;
             bool ThroughImport = false;
             MedFunc *G =

@@ -39,6 +39,11 @@ MedFunc *forwardingCallee(const BinaryImage &Img, const PipelineResult &Result,
                           const std::map<va_t, MedFunc *> &ByEntry,
                           const MedOp &Call, bool *ThroughImport = nullptr);
 
+/// Whether an adjacent call and return forward the callee's physical results
+/// before aggregate remodeling. A native tail transfer still forwards them
+/// when call-effect recovery removes the default scalar result.
+bool forwardsRegisterResults(const MedOp &Call, const MedOp &Return);
+
 /// Widen every callee that returns a 64-bit integer in a register pair to an
 /// i64 return, and remodel the call sites (including loop-carried i64
 /// accumulators) so both halves flow through.  32-bit targets only.
