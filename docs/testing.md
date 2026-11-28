@@ -1635,6 +1635,10 @@ of evidence.
 Win64 object: a label that reads `%rsi` before any write is left out, since
 Win64 keeps `%rsi`, and a table address loaded into `%rsi` before a call still
 gives the jump after the call its two labels.
+`JTE_X86_64.AConstantIndexIntoAFixedImageTableBranchesToItsLabel` links a
+static executable whose jump reads an absolute table with a constant index,
+as the Go runtime does: the jump becomes a branch to the sixth slot's label and
+reaches no other.
 `JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
 whose first state is a constant: scalar recovery first takes its dispatch as a
 direct branch and withdraws that guess when the cases loop back, and the

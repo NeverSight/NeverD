@@ -5512,6 +5512,52 @@ TEST_F(JTE_X86_64, WithdrawnScalarGuessKeepsTheProvedTable) {
     EXPECT_TRUE(Table.AnalysisOnly);
 }
 
+static fs::path fixedConstantIndexX64Exe() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_fixed_constant_index.exe";
+}
+
+// An image that runs at its link address holds the addresses its absolute
+// table stores, so a constant index makes the jump a branch to the one label
+// that word names, as the Go 1.20 and 1.21 runtimes compile it.
+TEST_F(JTE_X86_64, AConstantIndexIntoAFixedImageTableBranchesToItsLabel) {
+  const fs::path Path = fixedConstantIndexX64Exe();
+  if (!fs::exists(Path))
+    GTEST_SKIP() << "ld.lld did not link " << Path.string();
+  auto ImageOrErr = neverd::loadBinary(Path);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  ASSERT_TRUE(Image.LoadsAtLinkAddress);
+  const neverd::Symbol *Table = Image.findSymbol("fixed_table");
+  ASSERT_NE(Table, nullptr);
+  const auto Label = [&](size_t Slot) {
+    const uint8_t *Bytes = Image.readVA(Table->Addr + Slot * 8, 8);
+    uint64_t Entry = 0;
+    if (Bytes)
+      std::memcpy(&Entry, Bytes, sizeof(Entry));
+    return static_cast<neverd::va_t>(Entry);
+  };
+  const neverd::Symbol *Function = Image.findSymbol("fixed_const_index");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Func =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+
+  std::set<neverd::va_t> Starts;
+  for (const neverd::LowBlock &Block : Func.Blocks) {
+    Starts.insert(Block.StartAddr);
+    for (const neverd::LowOp &Op : Block.Ops)
+      EXPECT_NE(Op.Opcode, neverd::NdOp::INDIR_BR)
+          << "unresolved jump at 0x" << std::hex << Op.Addr;
+  }
+  EXPECT_TRUE(Func.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_EQ(Starts.count(Label(5)), 1u);
+  EXPECT_EQ(Starts.count(Label(4)), 0u);
+  EXPECT_EQ(Starts.count(Label(6)), 0u);
+}
+
 static fs::path scaleAfterExtendX64Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_scale_after_extend.o";
 }

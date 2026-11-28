@@ -2945,9 +2945,15 @@ LowIR facts without inventing live-in register values. Exact ordinary scalar
 loads share `readImmutableImageScalar` with MedIR: only uniquely mapped,
 immutable data or supported instruction storage without overlapping fixups
 can supply bits, and pointer-width address candidates retain their separate
-relocation proof. Cold reads charge the image metadata inventory against the
-existing evidence budget; repeated reads cache successes and failures within
-one CFG build. An unaffordable read leaves arithmetic-only proofs usable.
+relocation proof. An image that runs at its link address
+(`BinaryImage::LoadsAtLinkAddress`) holds every address it stores unchanged,
+and the walk only follows a value to the code it names, so there
+`readImmutableBranchScalar` returns those candidates too: the Go 1.20 and
+1.21 runtimes index an absolute table with a constant (`mov $5, %ecx; lea
+table(%rip), %rdx; jmp *(%rdx,%rcx,8)`), and the jump becomes a branch to the
+label its word names, which must still be a decoded instruction start. Cold
+reads charge the image metadata inventory against the existing evidence
+budget; repeated reads cache successes and failures within one CFG build. An unaffordable read leaves arithmetic-only proofs usable.
 If ordinary constant propagation cannot resolve a target, a bounded,
 straight-path symbolic query may prove that its full-width scalar expression
 is constant for every input. `LowScalarSymbolic` shares integer semantics with

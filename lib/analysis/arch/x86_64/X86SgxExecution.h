@@ -12,6 +12,8 @@
 
 #include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
 
+#include <vector>
+
 namespace neverd::analysis::detail {
 struct X86SgxFrameProgress {
   std::optional<uint64_t> XSavePage, GprPage;
@@ -20,6 +22,9 @@ struct X86SgxFrameProgress {
 struct X86SgxInstructionProgress {
   std::optional<uint64_t> TCSPhysical;
   X86SgxFrameProgress Frame, NotificationFrame;
+  // Retain a completed KEYREQUEST/TARGETINFO read across a later backing stop.
+  std::vector<uint8_t> Request;
+  bool ReportDataChecked = false;
 };
 
 class X86SgxExecution {
@@ -40,6 +45,10 @@ public:
                                       uint64_t SavedFlags);
 
 private:
+  static llvm::Expected<X86ModeExecutionResult>
+  keyOrReport(X86ModeState &State, translate::X86PagedMemory &Memory,
+              X86SgxInstructionProgress &Progress, unsigned InstructionSize,
+              X86ModeExecutionResult Result);
   static llvm::Expected<bool> bindFrame(translate::X86PagedMemory &Memory,
                                         const translate::X86SgxEnclave &Enclave,
                                         const translate::X86SgxPage &TCS,

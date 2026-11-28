@@ -198,7 +198,8 @@ bool chargeStorageQuery(const BinaryImage &Image, uint32_t Size,
           Image.MachOResolvedChainedPointerSlots.size(),
           Image.ConflictingImportStorageSlots.size(),
           Image.ImportPtrSlots.size(), Image.ImportStorageSlots.size(),
-          Image.DyldBindSlots.size(), Image.ObjCSourceReferences.size(),
+          Image.DyldBindSlots.size(), Image.IndirectFunctionSlots.size(),
+          Image.ObjCSourceReferences.size(),
           Image.DataAddressRelocOperands.size(),
           Image.CodeAddressRelocOperands.size()})
       if (!Lookup(Count, Window))
@@ -364,6 +365,9 @@ bool hasConflictingFixups(const BinaryImage &Image, va_t Address,
       Touches(Image.ImportPtrSlots, Map, Import) ||
       Touches(Image.ImportStorageSlots, Map, Import) ||
       Touches(Image.DyldBindSlots, Map, Import) ||
+      // The dynamic linker fills these with what a GNU indirect function's
+      // resolver returns, whatever the file holds.
+      Touches(Image.IndirectFunctionSlots, Set) ||
       Touches(Image.ObjCSourceReferences, Map, ObjCReference) ||
       TouchesOperands(Image.DataAddressRelocOperands) ||
       TouchesOperands(Image.CodeAddressRelocOperands))
@@ -498,9 +502,13 @@ readImmutableCodeBytes(const BinaryImage &Image, va_t Address, uint32_t Size) {
   return std::vector<uint8_t>(Bytes, Bytes + Size);
 }
 
-std::optional<uint64_t> readImmutableImageScalar(const BinaryImage &Image,
-                                                 va_t Address, uint32_t Size,
-                                                 size_t *RemainingWork) {
+namespace {
+/// The scalar readers' common body. KeepAddresses returns a pointer-width
+/// value that may be an image address instead of refusing it.
+std::optional<uint64_t> readImmutableScalar(const BinaryImage &Image,
+                                            va_t Address, uint32_t Size,
+                                            size_t *RemainingWork,
+                                            bool KeepAddresses) {
   if (!Size || Size > sizeof(uint64_t) || !supportsImmutableImageReads(Image))
     return std::nullopt;
   if (RemainingWork) {
@@ -529,6 +537,7 @@ std::optional<uint64_t> readImmutableImageScalar(const BinaryImage &Image,
           Image.ImportPtrSlots.size(),
           Image.ImportStorageSlots.size(),
           Image.DyldBindSlots.size(),
+          Image.IndirectFunctionSlots.size(),
           Image.ObjCSourceReferences.size(),
           Image.DataAddressRelocOperands.size(),
           Image.CodeAddressRelocOperands.size(),
@@ -560,10 +569,25 @@ std::optional<uint64_t> readImmutableImageScalar(const BinaryImage &Image,
   uint64_t Bits = 0;
   for (unsigned I = 0; I < Size; ++I)
     Bits |= uint64_t{(*Bytes)[I]} << (I * 8);
-  if (Size == Image.getPointerSize() &&
+  if (!KeepAddresses && Size == Image.getPointerSize() &&
       Image.isPotentiallyRelocatableAddress(Bits))
     return std::nullopt;
   return Bits;
+}
+} // namespace
+
+std::optional<uint64_t> readImmutableImageScalar(const BinaryImage &Image,
+                                                 va_t Address, uint32_t Size,
+                                                 size_t *RemainingWork) {
+  return readImmutableScalar(Image, Address, Size, RemainingWork,
+                             /*KeepAddresses=*/false);
+}
+
+std::optional<uint64_t> readImmutableBranchScalar(const BinaryImage &Image,
+                                                  va_t Address, uint32_t Size,
+                                                  size_t *RemainingWork) {
+  return readImmutableScalar(Image, Address, Size, RemainingWork,
+                             Image.LoadsAtLinkAddress);
 }
 
 std::optional<uint32_t> readMIPS16LiteralWord(const BinaryImage &Image,
