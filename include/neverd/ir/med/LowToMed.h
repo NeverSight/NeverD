@@ -235,6 +235,12 @@ public:
   /// call by its target).  Mach-O only (the slot table is empty otherwise);
   /// optional, null = no-op.
   void setStackProbeSlots(const std::set<va_t> *S) { StackProbeSlots = S; }
+
+  void setStaticAllocationBindings(const std::set<va_t> &Alloc,
+                                   const std::set<va_t> &Release) {
+    StaticAllocatorSlots = &Alloc;
+    StaticReleaseSlots = &Release;
+  }
   /// The addresses that name a runtime routine one intrinsic models
   /// (runtimeRoutineCallsOf), read once for every converter of a run.
   /// Without them a converter reads its own from its image.
@@ -575,6 +581,8 @@ private:
   /// Null/empty until the pipeline (which has the loaded import tables)
   /// provides it.  Mach-O only.
   const std::set<va_t> *StackProbeSlots = nullptr;
+  const std::set<va_t> *StaticAllocatorSlots = nullptr;
+  const std::set<va_t> *StaticReleaseSlots = nullptr;
   /// The image's stack-probe helpers (setStackProbeIndex), or null.
   const libc::StackProbeIndex *StackProbes = nullptr;
 

@@ -176,7 +176,9 @@ bool nativeArgumentsAreNonFrame(
 
 bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                                 Arch Target, BinaryFormat Format,
-                                unsigned SourceResultOperands) {
+                                unsigned SourceResultOperands,
+                                llvm::ArrayRef<uint32_t> StaticAllocatorCalls,
+                                bool *UsedAllocator, bool *PrivateStores) {
   if (auto Error = validateLowInstructionBoundaries(
           Low, LowInstructionBoundaryRequirement::Required)) {
     llvm::consumeError(std::move(Error));
@@ -336,7 +338,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   const auto &TRI = getTargetRegInfo(Target);
   std::map<int, MedVar> BlockSP;
   const auto CallSP =
-      HasCalls && QualifiedMemory
+      (HasCalls || PrivateStores) && QualifiedMemory
           ? sourceCallStackPointers(Function, Target, Remaining, BlockSP)
           : std::map<const MedOp *, MedVar>{};
   for (const auto &[Call, SP] : CallSP)
@@ -344,7 +346,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   // One static call can produce and consume different words on a loop edge.
   const bool MayForward =
       (isMIPSN32(Target) || isMIPSN64(Target)) && !NativeCalls.empty();
-  if (MayForward && QualifiedMemory && !HasMergeStores) {
+  if ((MayForward || PrivateStores) && QualifiedMemory && !HasMergeStores) {
     for (const auto &Entry : BlockSP)
       MemoryAddresses.push_back(Entry.second);
     for (const auto &B : Function.Blocks)
@@ -364,6 +366,37 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     const auto It = Offsets.find(key(V));
     return It == Offsets.end() ? std::nullopt : It->second;
   };
+  if (PrivateStores) {
+    *PrivateStores =
+        QualifiedMemory && !HasMergeStores &&
+        llvm::all_of(Function.Blocks, [&](const MedBlock &B) {
+          const auto Entry = BlockSP.find(B.Id);
+          std::optional<int64_t> SP =
+              Entry == BlockSP.end() ? std::nullopt : Offset(Entry->second);
+          for (const MedOp &Op : B.Ops) {
+            const auto &Out = Op.Output;
+            const unsigned Width = TRI.addressRegisterBytes();
+            if (Out.Kind == MedVar::Reg && Out.Size &&
+                Out.RegOff < TRI.StackPointer + Width &&
+                Out.RegOff + Out.Size > TRI.StackPointer)
+              SP = Out.RegOff == TRI.StackPointer && Out.Size == Width
+                       ? Offset(Out)
+                       : std::nullopt;
+            if (Op.Opcode == NdOp::INDIR_BR)
+              return false;
+            if (Op.Opcode != NdOp::STORE)
+              continue;
+            const auto *Addr = safety::detail::memoryAddress(Op);
+            const auto *Value = safety::detail::storedValue(Op);
+            const auto At = Addr ? Offset(*Addr) : std::nullopt;
+            if (!Value || !Value->Size || !SP ||
+                *SP < -limits::ir::kSourceFrameAnalysisMaxFrame || !At ||
+                *At < *SP || *At >= 0 || *At + Value->Size > 0)
+              return false;
+          }
+          return true;
+        });
+  }
   MedDefSiteIndex Definitions(Function);
   safety::detail::ExactPhiGraph Graph(Function);
   // Only the byte-by-byte record walk tracks the addresses and register
@@ -555,6 +588,18 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         // argument have no provenance in this frame. Spilling that result
         // beside the saved link does not escape the link slot. Unknown and
         // pointer-returning calls still provide no such proof.
+        if (UsedAllocator && isMIPSN32(Target) &&
+            Op.Opcode == NdOp::INDIR_CALL && Op.Output.Kind == MedVar::Reg &&
+            Op.Output.RegOff == TRI.IntReturnReg &&
+            Op.Output.Size == TRI.addressRegisterBytes() &&
+            llvm::is_contained(StaticAllocatorCalls, Op.CallSiteId) &&
+            BeforeFrameEscape(*D.Block, &Op - D.Block->Ops.data())) {
+          // A bound allocator returns null or fresh storage disjoint from this
+          // frame. The scan verifies the image's writes and reachable calls.
+          Safe = true;
+          *UsedAllocator = true;
+          break;
+        }
         if (const auto Call = Calls.find(&Op);
             Call != Calls.end() &&
             First + Bytes <= Call->second.NumericResultBytes) {

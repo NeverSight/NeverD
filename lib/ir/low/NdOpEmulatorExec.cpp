@@ -658,6 +658,8 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
   // masked-memory executors with different memory ownership.
   if (MIPSReservationGranule && Id != Intrinsic::RequireAligned)
     return false;
+  if (Id == Intrinsic::RISCVFloating || Id == Intrinsic::RISCVFPControl)
+    return executeRISCVFloating(Op);
   if (const auto *Read = riscv::cycleRead(Id)) {
     if (!Read->admits(Img.Arch) || Op.NumInputs != 1 ||
         (!Op.Output.isReg() && !Op.Output.isTemp()) ||
