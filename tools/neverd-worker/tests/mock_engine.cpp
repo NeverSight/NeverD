@@ -1167,6 +1167,14 @@ const char *neverd_warm_functions_json(neverd_session_t s,
       {"call_summaries",
        summaries}}.dump());
 }
+const char *neverd_warm_initial_view_json(neverd_session_t s) {
+  if (session(s)->path.find("initial-root-") == std::string::npos)
+    return neverd_warm_functions_json(s, 0, 1);
+  return copy(Json{{"available", true},
+                   {"prepared", 1},
+                   {"initial_entry", hexAddress(Base + 64)}}
+                  .dump());
+}
 const char *neverd_prepare_call_summaries_json(neverd_session_t s) {
   auto &state = *session(s);
   state.error.clear();

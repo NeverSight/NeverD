@@ -586,7 +586,7 @@ static const char *warmFunctionsJson(neverd_session_t Sess,
       return nullptr;
     }
     std::optional<AnalysisCacheWarmup> Warmup;
-    std::optional<va_t> Next;
+    std::optional<va_t> Selected, Next;
     // A PE function's preparation keeps this state unless its handler
     // discovery adds metadata, which after a full load it does not.  Bytecode
     // images have no C view to prepare.
@@ -615,8 +615,10 @@ static const char *warmFunctionsJson(neverd_session_t Sess,
       // of the callees they leave out (where each call's setup gives its
       // arguments), that warming builds a page of functions at a time.
       {
-        if (InitialView)
-          FirstEntry = initialViewEntry(*S).value_or(FirstEntry);
+        if (InitialView) {
+          Selected = initialViewEntry(*S);
+          FirstEntry = Selected.value_or(FirstEntry);
+        }
         const FunctionPage Page = functionPage(*S, FirstEntry, MaxFunctions);
         std::vector<va_t> Entries;
         Entries.reserve(Page.Functions.size());
@@ -641,6 +643,8 @@ static const char *warmFunctionsJson(neverd_session_t Sess,
     }
     llvm::json::Object Result;
     Result["available"] = Warmup.has_value();
+    if (Selected && Warmup && Warmup->Prepared)
+      Result["initial_entry"] = vaHex(*Selected);
     Result["prepared"] = static_cast<int64_t>(Warmup ? Warmup->Prepared : 0);
     Result["full"] = Warmup && Warmup->Full;
     Result["next_entry"] =

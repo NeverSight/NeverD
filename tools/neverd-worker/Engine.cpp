@@ -3851,25 +3851,28 @@ void Engine::prepareViews() {
     loadProgress_("prepare_views", 0, 0, "Preparing shared view indexes");
   // One page also prepares the image-wide widths, types and symbol names.
   // Later selections reuse those exact facts; no full-program C is emitted.
-  const auto page =
+  auto page =
       summariesDeferred_ ? keptWarmPage(renderStore_.get()) : std::nullopt;
   static const auto initial =
       engineSymbol<SessionJsonFunction>("neverd_warm_initial_view_json");
-  if (!page && initial)
-    (void)backendJson(initial(session_), true);
-  else {
+  if (!page && initial) {
+    const auto warmed = backendJson(initial(session_), true);
+    const auto selected = warmed.find("initial_entry");
+    if (summaryJob_ && renderAheadRequested_ && renderStoreMode_ == "write" &&
+        selected != warmed.end() && selected->is_string())
+      page = parseAddress(selected->get_ref<const std::string &>());
+  } else {
     const int count =
         page ? ::neverd::limits::worker::kSummaryPreparationFunctions
              : ::neverd::limits::worker::kInitialViewPreparationFunctions;
     (void)backendJson(warm(session_, page.value_or(0), count), true);
-    if (page) {
-      const int index = neverd_func_find_by_addr(session_, *page);
-      const int size = index >= 0 ? neverd_func_size(session_, index) : 0;
-      if (size > 0 &&
-          static_cast<std::uint64_t>(size) <=
-              ::neverd::limits::worker::kRenderAheadMaxFunctionBytes)
-        openingSourcePreparation_ = *page;
-    }
+  }
+  if (page) {
+    const int index = neverd_func_find_by_addr(session_, *page);
+    const int size = index >= 0 ? neverd_func_size(session_, index) : 0;
+    if (size > 0 && static_cast<std::uint64_t>(size) <=
+                        ::neverd::limits::worker::kRenderAheadMaxFunctionBytes)
+      openingSourcePreparation_ = *page;
   }
   if (loadProgress_)
     loadProgress_("prepare_views", 1, 1, "Shared view indexes ready");
@@ -4782,7 +4785,8 @@ void Engine::afterReply(const std::function<bool()> &requestWaiting) {
   // its reply, after ordinary revision invalidation and before the idle grace
   // for whole-project jobs. A foreground request already queued gets the lane.
   const auto entry = std::exchange(openingSourcePreparation_, std::nullopt);
-  if (entry && summariesDeferred_ && (!requestWaiting || !requestWaiting())) {
+  if (entry && (summariesDeferred_ || (summaryJob_ && renderAheadRequested_)) &&
+      (!requestWaiting || !requestWaiting())) {
     using PrepareView = int (*)(neverd_session_t, neverd_va_t, const char *);
     static const auto prepare =
         engineSymbol<PrepareView>("neverd_prepare_function_view");

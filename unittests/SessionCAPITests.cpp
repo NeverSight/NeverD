@@ -5406,7 +5406,8 @@ TEST_F(SessionCAPITest, InitialViewWarmsDependenciesAndLeavesPagingInOrder) {
     State.Img.Symbols.push_back(
         neverd::Symbol::makeFunc(DataELFEntry + I * Stride, Stride));
   neverd::sdk::SessionTestAccess::resetFunctions(State);
-  const auto checkNext = [&](const char *Raw, neverd_va_t Expected) {
+  const auto checkNext = [&](const char *Raw, neverd_va_t Expected,
+                             std::optional<neverd_va_t> Initial) {
     auto Page = llvm::json::parse(takeString(Raw));
     ASSERT_TRUE(bool(Page)) << llvm::toString(Page.takeError());
     ASSERT_NE(Page->getAsObject(), nullptr);
@@ -5415,9 +5416,17 @@ TEST_F(SessionCAPITest, InitialViewWarmsDependenciesAndLeavesPagingInOrder) {
     uint64_t Address;
     ASSERT_FALSE(Next->getAsInteger(0, Address));
     EXPECT_EQ(Address, Expected);
+    const auto Chosen = Page->getAsObject()->getString("initial_entry");
+    ASSERT_EQ(Chosen.has_value(), Initial.has_value());
+    if (Initial) {
+      ASSERT_FALSE(Chosen->getAsInteger(0, Address));
+      EXPECT_EQ(Address, *Initial);
+    }
   };
-  checkNext(neverd_warm_initial_view_json(Session), DataELFEntry + 2 * Stride);
-  checkNext(neverd_warm_functions_json(Session, 0, 1), DataELFEntry + Stride);
+  checkNext(neverd_warm_initial_view_json(Session), DataELFEntry + 2 * Stride,
+            DataELFEntry + Stride);
+  checkNext(neverd_warm_functions_json(Session, 0, 1), DataELFEntry + Stride,
+            std::nullopt);
 }
 
 TEST_F(SessionCAPITest, PreparedCallSummariesAgreeWithEachAnalysisClosure) {

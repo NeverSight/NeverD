@@ -318,9 +318,9 @@ NEVERD_API const char *neverd_warm_functions_json(neverd_session_t Sess,
 
 /// Warm the first source replica while an image is open for browsing. A
 /// bounded x64 call graph can prioritize a function whose analysis shares
-/// dependencies with many others. Returns the same JSON as a one-entry warm
-/// page, with its cursor relative to the chosen entry. The ordinary paged
-/// warm-up always uses its caller's start address.
+/// dependencies with many others. A one-entry warm page includes its usual
+/// cursor and, when that candidate was prepared, its address in
+/// "initial_entry". Ordinary paged warming uses its caller's start address.
 NEVERD_API const char *neverd_warm_initial_view_json(neverd_session_t Sess);
 
 /// Solve the call-register summaries of every function of an x86-64 image

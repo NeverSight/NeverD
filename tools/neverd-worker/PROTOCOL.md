@@ -989,6 +989,8 @@ It belongs to the open revision. Later revisions and larger snapshots use the
 ordinary snapshot request. Replica restore performs its normal validation.
 After restoring a completed store, an idle replica can also prepare the
 source dependencies of a bounded, listed entry on the recorded slow page.
+On a fresh project, a writable replica with idle rendering enabled can also
+prepare the source of the entry selected by the engine’s bounded call graph.
 Refreshing still discards the selected pipeline result and rebuilds it.
 
 `open` and `analysis_restore` accept `prepare_views:true` when the worker advertises

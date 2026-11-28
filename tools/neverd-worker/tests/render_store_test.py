@@ -65,6 +65,18 @@ def asks_engine_first(client):
 
 
 def check_opening_preparation(clients, executable, root):
+    # A fresh rendering replica can prepare the selected call-graph root.
+    # A replica that only reads stored pages performs no speculative render.
+    fresh = root / ("initial-root-" + NAME)
+    fresh.write_bytes(b"fresh source fixture")
+    for store, extra in (("write", 1), ("read", 0)):
+        owner, replica = session(clients, executable, fresh, store=store,
+                                 prepare_views=True)
+        page = source(replica, A, representation="c")
+        assert page["fixture_prepares"] == 1 + extra, page
+        assert page["fixture_pages"] == 1 + extra, page
+        end(replica, owner)
+
     binary = root / ("costly-warm-page-" + NAME)
     binary.write_bytes(b"render store fixture")
     owner, writer = session(clients, executable, binary)
