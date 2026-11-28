@@ -18,6 +18,7 @@
 #include <QComboBox>
 #include <QFile>
 #include <QFileDialog>
+#include <QFont>
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -56,6 +57,11 @@ QString diagnostics(QJsonObject R) {
   }
   return L.join(QStringLiteral("\n"));
 }
+QFont literalFont(QFont Font) {
+  Font.setStyleStrategy(static_cast<QFont::StyleStrategy>(
+      Font.styleStrategy() | QFont::PreferNoShaping));
+  return Font;
+}
 // Measuring and painting reuse the first screen's glyphs. Keep the cache
 // proportional to the viewport even when a single JSON string is very long.
 void cacheFirstScreen(QPlainTextEdit &View) {
@@ -68,6 +74,17 @@ void cacheFirstScreen(QPlainTextEdit &View) {
     if (Block.length() <= Columns)
       Block.layout()->setCacheEnabled(true);
 }
+void setCodeText(QPlainTextEdit &View, const QString &Text) {
+  // Keep normal shaping for Unicode source, names and diagnostics.
+  QFont TextFont = View.font();
+  if (std::all_of(Text.cbegin(), Text.cend(),
+                  [](QChar C) { return C.unicode() < 0x80; }))
+    TextFont = literalFont(TextFont);
+  if (View.document()->defaultFont() != TextFont)
+    View.document()->setDefaultFont(TextFont);
+  View.setPlainText(Text);
+  cacheFirstScreen(View);
+}
 } // namespace
 
 class JVMRecoveryDialog::DetailView final : public QPlainTextEdit {
@@ -79,18 +96,7 @@ public:
     if (!Dirty)
       return;
     Dirty = false;
-    const QString Text = Dialog.detailText(this);
-    // ASCII JSON can display each character literally. Keep the normal font
-    // shaping for reports containing Unicode names, strings or diagnostics.
-    QFont TextFont = font();
-    if (std::all_of(Text.cbegin(), Text.cend(),
-                    [](QChar C) { return C.unicode() < 0x80; }))
-      TextFont.setStyleStrategy(static_cast<QFont::StyleStrategy>(
-          TextFont.styleStrategy() | QFont::PreferNoShaping));
-    if (document()->defaultFont() != TextFont)
-      document()->setDefaultFont(TextFont);
-    setPlainText(Text);
-    cacheFirstScreen(*this);
+    setCodeText(*this, Dialog.detailText(this));
   }
   void setVisible(bool Visible) override {
     // Showing a plain-text editor lays out its document to size the scrollbars.
@@ -184,6 +190,8 @@ JVMRecoveryDialog::JVMRecoveryDialog(const QString &Worker, QWidget *Parent)
   Evidence = pane(new DetailView(*this), tr("Evidence"), "jvmEvidence");
   Mappings = new QListWidget;
   Mappings->setObjectName("jvmMappings");
+  // Each row contains a decimal PC, a hex offset and an ASCII JVM mnemonic.
+  Mappings->setFont(literalFont(Mappings->font()));
   Mappings->setAccessibleName(tr("Bytecode mappings"));
   Split->addWidget(Tabs);
   Split->addWidget(Mappings);
@@ -389,8 +397,7 @@ void JVMRecoveryDialog::select(bool ChooseTab) {
   for (auto *View : {Bytecode, IR, Evidence})
     View->invalidate();
   QSignalBlocker Guard(Java);
-  Java->setPlainText(F["source"].toString());
-  cacheFirstScreen(*Java);
+  setCodeText(*Java, F["source"].toString());
   const auto Instructions = F["instructions"].toArray();
   Mappings->clear();
   for (auto V : Instructions) {
