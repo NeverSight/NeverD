@@ -71,9 +71,13 @@ UNWIND_PROOF_WORD(JoinedRightSigner, 4)
 UNWIND_PROOF_WORD(JoinedAuthBlock, 6)
 UNWIND_PROOF_WORD(JoinedAuthenticator, 8)
 UNWIND_PROOF_WORD(JoinedAfterAuth, 9)
+UNWIND_PROOF_WORD(StoreModifierX11, 0xf90007eb) // str x11, [sp, #8]
+UNWIND_PROOF_WORD(LoadModifierX11, 0xf94007eb)  // ldr x11, [sp, #8]
+UNWIND_PROOF_WORD(ReleaseStack, 0x910043ff)     // add sp, sp, #16
+UNWIND_PROOF_WORD(JoinedSpillReload, 10)
 UNWIND_PROOF_WORD(ClearModifierX11, 0xaa1f03eb)
 UNWIND_PROOF_WORD(BranchToSecondSigner, 0xb4000080) // cbz x0, .+16
-UNWIND_PROOF_WORD(BranchToSharedAuth, 0x14000003) // b .+12
+UNWIND_PROOF_WORD(BranchToSharedAuth, 0x14000003)   // b .+12
 UNWIND_PROOF_WORD(CopyX11ToX12, 0xaa0b03ec)
 UNWIND_PROOF_WORD(AddZeroX11ToX12, 0x9100016c)
 UNWIND_PROOF_WORD(SubZeroX11ToX12, 0xd100016c)

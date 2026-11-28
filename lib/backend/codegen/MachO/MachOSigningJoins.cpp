@@ -9,6 +9,7 @@
 #include "MachOPageAddress.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
+#include "neverd/decode/AArch64/AArch64RegisterCopy.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/FunctionBody.h"
@@ -50,6 +51,7 @@ struct Instruction {
   std::optional<unsigned> Modifier;
   std::optional<va_t> BranchTarget;
   bool Call = false;
+  bool MayReload = false;
 };
 
 using Origins = llvm::SmallVector<std::pair<va_t, va_t>, 2>;
@@ -62,6 +64,7 @@ struct Proof {
   bool Joined = false;
   bool Unknown = false;
   bool Mismatch = false;
+  bool NeedsSpills = false;
 };
 
 // Walk the two reaching definitions together. A join with two different
@@ -69,19 +72,24 @@ struct Proof {
 Proof reachingSigners(const LowFunc &CFG,
                       const llvm::DenseMap<va_t, Instruction> &Code,
                       const LowBlock &Consumer, va_t Auth, unsigned Modifier,
-                      unsigned Key) {
-  using Cursor = std::tuple<int, va_t, unsigned, va_t, va_t, va_t, int>;
+                      unsigned Key,
+                      const llvm::DenseMap<va_t, uint32_t> &Prepared,
+                      const AArch64FrameAccesses *Accesses,
+                      llvm::ArrayRef<AArch64RecoveredUnwindRow> Rows,
+                      va_t FrameStart) {
+  using Cursor =
+      std::tuple<int, va_t, unsigned, va_t, va_t, va_t, int, int64_t>;
   llvm::SmallVector<Cursor, 4> Work;
   llvm::SmallDenseSet<Cursor, 8> Seen;
   Work.emplace_back(Consumer.Id, Auth, Modifier, InvalidVA, InvalidVA,
-                    InvalidVA, -1);
+                    InvalidVA, -1, 0);
   Proof Result;
   size_t Steps = 0;
   while (!Work.empty()) {
     const auto State = Work.pop_back_val();
     if (!Seen.insert(State).second)
       continue;
-    auto [Id, End, R, Origin, Target, Signer, Edge] = State;
+    auto [Id, End, R, Origin, Target, Signer, Edge, Slot] = State;
     const auto &B = CFG.Blocks[Id];
     bool Done = false;
     for (va_t PC = End; PC > B.StartAddr;) {
@@ -92,7 +100,37 @@ Proof reachingSigners(const LowFunc &CFG,
       const auto &I = It->second;
       if (Origin == InvalidVA) {
         Result.WritesToConsumer |= I.Writes;
-        if (I.Definition == R && I.Address && I.Producer >= B.StartAddr) {
+        if (Slot) {
+          // Follow this exact CFA cell on this predecessor. A partial or
+          // possibly aliasing write cannot identify the reaching GPR.
+          const auto A = Accesses->find(PC);
+          if (A != Accesses->end())
+            for (const auto &Write : A->second) {
+              if (!Write.Store)
+                continue;
+              if (Write.CFAOffset && Write.Bytes) {
+                const auto At = *Write.CFAOffset;
+                if (At <= Slot
+                        ? uint64_t(Slot) - uint64_t(At) >= Write.Bytes
+                        : uint64_t(At) - uint64_t(Slot) >= kRegisterBytes)
+                  continue;
+                if (At == Slot && Write.Register) {
+                  R = *Write.Register;
+                  Slot = 0;
+                  break;
+                }
+              }
+              Result.Unknown = true;
+              break;
+            }
+          const auto SP = aarch64UnwindRowAt(Rows, PC - FrameStart).StackOffset;
+          if (Result.Unknown || I.Call || (Slot && (!SP || Slot < *SP))) {
+            Result.Unknown = true;
+            Done = true;
+            break;
+          }
+        } else if (I.Definition == R && I.Address &&
+                   I.Producer >= B.StartAddr) {
           Origin = I.Producer;
           Target = *I.Address;
           // A page pair can write a different register at its first word.
@@ -100,15 +138,31 @@ Proof reachingSigners(const LowFunc &CFG,
         } else if (I.Definition == R && I.Copy) {
           R = *I.Copy;
         } else if (I.Writes & (uint32_t(1) << R)) {
-          Result.Unknown = true;
-          Done = true;
-          break;
+          if (I.MayReload && Accesses) {
+            const auto A = Accesses->find(PC);
+            if (A != Accesses->end())
+              for (const auto &Read : A->second)
+                if (!Read.Store && Read.Register == R && Read.CFAOffset)
+                  Slot = *Read.CFAOffset;
+          }
+          if (!Slot) {
+            Result.NeedsSpills |= I.MayReload && !Accesses;
+            Result.Unknown = true;
+            Done = true;
+            break;
+          }
         }
+        // A setup emitted for another exit is also a write on this path.
+        // The current reaching producer can share its own setup.
+        if (Origin == InvalidVA && !Prepared.empty())
+          Result.WritesToConsumer |= Prepared.lookup(PC);
       }
       if (Signer == InvalidVA) {
         if (I.Signing && !I.Signing->Authenticate && I.Signing->Key == Key) {
           Signer = PC;
-        } else if (I.Signing || I.Call || (I.Writes & (uint32_t(1) << kLR))) {
+        } else if (I.Signing || I.Call ||
+                   ((I.Writes & (uint32_t(1) << kLR)) &&
+                    !(I.Definition == kLR && I.Copy == kLR))) {
           Result.Unknown = true;
           Done = true;
           break;
@@ -141,7 +195,7 @@ Proof reachingSigners(const LowFunc &CFG,
       Result.Unknown = true;
     for (auto Pred : B.Preds)
       Work.emplace_back(Pred, CFG.Blocks[Pred].EndAddr, R, Origin, Target,
-                        Signer, Edge < 0 ? Pred : Edge);
+                        Signer, Edge < 0 ? Pred : Edge, Slot);
   }
   return Result;
 }
@@ -280,8 +334,14 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
            I.Id == AARCH64_INS_TBNZ) &&
           !Ops.empty() && Ops.back().type == AARCH64_OP_IMM)
         Fact.BranchTarget = va_t(Ops.back().imm);
+      if (const auto Copy = aarch64::fullWidthRegisterCopy(I)) {
+        Fact.Definition = gpr(Copy->first);
+        Fact.Copy = gpr(Copy->second);
+      }
       if (Ops.empty() || Ops.front().type != AARCH64_OP_REG)
         continue;
+      Fact.MayReload = llvm::any_of(
+          Ops, [](const auto &Op) { return Op.type == AARCH64_OP_MEM; });
       const auto RD = Ops.front().reg;
       if (RD < AARCH64_REG_X0 || RD > AARCH64_REG_X28)
         continue;
@@ -304,21 +364,35 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
           Fact.Address = Pair->Target;
           Fact.Producer = PC - Word;
         }
-      } else if ((I.Id == AARCH64_INS_MOV ||
-                  I.Raw->alias_id == AARCH64_INS_ALIAS_MOV) &&
-                 Ops.size() == 2 && Ops[1].type == AARCH64_OP_REG &&
-                 Ops[1].reg >= AARCH64_REG_X0 &&
-                 Ops[1].reg <= AARCH64_REG_X28) {
-        Fact.Copy = gpr(Ops[1].reg);
       }
     }
 
+  const auto *Frame = Image.ExceptionMetadata.findFunction(CFG.Entry);
+  llvm::DenseMap<va_t, uint32_t> Prepared;
+  std::optional<AArch64FrameAccesses> Accesses;
+  std::vector<AArch64RecoveredUnwindRow> Rows;
   for (const auto &[Block, PC] : Consumers) {
     const auto &I = Code.at(PC);
     if (!I.Signing || !I.Modifier)
       continue;
     const auto R = *I.Modifier;
-    auto Paths = reachingSigners(CFG, Code, *Block, PC, R, I.Signing->Key);
+    const auto Trace = [&] {
+      return reachingSigners(CFG, Code, *Block, PC, R, I.Signing->Key, Prepared,
+                             Rows.empty() ? nullptr : &*Accesses, Rows,
+                             Frame ? Frame->CodeRange.Begin : 0);
+    };
+    auto Paths = Trace();
+    if (Paths.NeedsSpills && Frame && !Accesses) {
+      Accesses.emplace();
+      auto Recovered =
+          recoverDarwinAArch64Unwind(Image, *Frame, {}, &*Accesses);
+      if (Recovered) {
+        Rows = std::move(*Recovered);
+        Paths = Trace();
+      } else {
+        llvm::consumeError(Recovered.takeError());
+      }
+    }
     if (!Paths.Joined &&
         (!Paths.CrossesEdge || (!Paths.Mismatch && Paths.Definitions.empty())))
       continue;
@@ -348,8 +422,25 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
       for (auto Physical : machOSigningScratchRegisters()) {
         const unsigned N = Physical - AARCH64_REG_X0;
         const auto Mask = uint32_t(1) << N;
-        if ((Reserved | Paths.WritesToConsumer) & Mask)
+        if (Paths.WritesToConsumer & Mask)
           continue;
+        if (Reserved & Mask) {
+          // Only reuse a preparation reaching this exit from every origin.
+          if (llvm::all_of(Paths.Definitions, [&](const auto &P) {
+                auto A = Result.Addresses.find(P.first);
+                return A != Result.Addresses.end() &&
+                       llvm::any_of(A->second.Authentications,
+                                    [&](const auto &V) {
+                                      return V.Signer == P.second &&
+                                             V.Consumer.PrepareAtSource &&
+                                             V.Consumer.ModifierRegister == N;
+                                    });
+              })) {
+            Scratch = N;
+            break;
+          }
+          continue;
+        }
         // It may be live elsewhere in the function. Its old value must be
         // dead on every exit from each site at which we install a modifier.
         if (!((Read | Written) & Mask) ||
@@ -370,8 +461,9 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
         }
         for (auto [Index, Route] : llvm::enumerate(Dispatch->Routes))
           for (va_t Branch : Route.Branches)
-            if (Index)
-              Result.BranchRoutes.try_emplace(Branch, PC, Index);
+            if (Index &&
+                !Result.BranchRoutes.try_emplace(Branch, PC, Index).second)
+              return {.Unresolved = true};
         Result.Dispatches.try_emplace(PC, *Dispatch);
       }
     }
@@ -384,20 +476,23 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
     }
     bool First = true;
     for (const auto &[Origin, Sign] : Paths.Definitions) {
-      MachOSigningAddress A;
-      A.Use =
+      const auto Use =
           Local ? MachOSigningAddress::Local : MachOSigningAddress::Observable;
+      auto &A = Result.Addresses[Origin];
+      if (A.Use != MachOSigningAddress::None && A.Use != Use)
+        return {.Unresolved = true};
+      A.Use = Use;
+      if (Scratch)
+        Prepared[Origin] |= uint32_t(1) << *Scratch;
       const auto SigningWord =
           readLE<uint32_t>(Source.Bytes.data() + (Sign - CFG.Entry));
       Result.SigningPCs.insert(Sign);
       Result.RetainedSigningWords.insert(SigningWord);
       if (!Local && (Scratch || First))
-        A.Authentication = MachOAuthenticationReplacement{
-            Dispatch.value_or(
-                MachOSigningConsumer{PC, Scratch, false, Scratch.has_value()}),
-            Replacement, Sign};
-      if (!Result.Addresses.try_emplace(Origin, A).second)
-        Result.Unresolved = true;
+        A.Authentications.push_back(
+            {Dispatch.value_or(
+                 MachOSigningConsumer{PC, Scratch, false, Scratch.has_value()}),
+             Replacement, Sign});
       First = false;
     }
     if (!Local)
@@ -408,7 +503,6 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
   // The linked-image verifier checks the exact displacement independently.
   if (Result.Dispatches.empty())
     return Result;
-  const auto *Frame = Image.ExceptionMetadata.findFunction(CFG.Entry);
   size_t Growth = 0;
   for (size_t Offset = 0; Offset < Count * Word; Offset += Word) {
     const auto Bits = readLE<uint32_t>(Source.Bytes.data() + Offset);
@@ -469,10 +563,9 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
     }
   }
   for (auto &[Origin, Address] : Result.Addresses)
-    if (Address.Authentication &&
-        !Address.Authentication->Consumer.Routes.empty())
-      Address.Authentication->Consumer =
-          Result.Dispatches.at(Address.Authentication->Consumer.Instruction);
+    for (auto &A : Address.Authentications)
+      if (!A.Consumer.Routes.empty())
+        A.Consumer = Result.Dispatches.at(A.Consumer.Instruction);
   return Result;
 }
 

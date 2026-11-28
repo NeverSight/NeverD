@@ -337,6 +337,25 @@ Ldone:
  ret
  .ltorg
 )asm")
+ASYNC_FRAME_TEXT(kJoinAddZero, "-DNEVERD_JOIN_ADD_ZERO")
+ASYNC_FRAME_TEXT(kJoinSubZero, "-DNEVERD_JOIN_SUB_ZERO")
+ASYNC_FRAME_TEXT(kJoinShiftedZero, "-DNEVERD_JOIN_SHIFTED_ZERO")
+ASYNC_FRAME_TEXT(kJoinKeepLR, "-DNEVERD_JOIN_KEEP_LR")
+ASYNC_FRAME_TEXT(kJoinTwoCommon, "-DNEVERD_JOIN_TWO_COMMON")
+ASYNC_FRAME_TEXT(kJoinTwoDistinct, "-DNEVERD_JOIN_TWO_DISTINCT")
+ASYNC_FRAME_TEXT(kJoinSpill, "-DNEVERD_JOIN_SPILL")
+ASYNC_FRAME_TEXT(kJoinSpillClear, "-DNEVERD_JOIN_SPILL_CLEAR")
+ASYNC_FRAME_TEXT(kJoinSpillArms, "-DNEVERD_JOIN_SPILL_ARMS")
+ASYNC_FRAME_TEXT(kJoinSpillPartial, "-DNEVERD_JOIN_SPILL_PARTIAL")
+ASYNC_FRAME_TEXT(kJoinSpillAlias, "-DNEVERD_JOIN_SPILL_ALIAS")
+ASYNC_FRAME_TEXT(kJoinSpillReused, "-DNEVERD_JOIN_SPILL_REUSED")
+ASYNC_FRAME_TEXT(kJoinSpillOverwrite, "-DNEVERD_JOIN_SPILL_OVERWRITE")
+ASYNC_FRAME_TEXT(kJoinHalfCopy, "-DNEVERD_JOIN_HALF_COPY")
+ASYNC_FRAME_TEXT(kJoinAdjustedCopy, "-DNEVERD_JOIN_ADJUSTED_COPY")
+ASYNC_FRAME_TEXT(kJoinTwoWrong, "-DNEVERD_JOIN_TWO_WRONG")
+ASYNC_FRAME_VALUE(unsigned, kJoinStackBytes, 16)
+ASYNC_FRAME_TEXT(kJoinedStackCases, "resolved_stack_signing_pcs")
+ASYNC_FRAME_TEXT(kJoinedDualExits, "verified_shared_authentication_exits")
 ASYNC_FRAME_TEXT(kJoinCommon, "-DNEVERD_JOIN_COMMON")
 ASYNC_FRAME_TEXT(kJoinDistinct, "-DNEVERD_JOIN_DISTINCT")
 ASYNC_FRAME_TEXT(kJoinCopyPage, "-DNEVERD_JOIN_COPY_PAGE")
@@ -365,6 +384,7 @@ ASYNC_FRAME_TEXT(kJoinWrongKey, "-DNEVERD_JOIN_WRONG_KEY")
 ASYNC_FRAME_TEXT(kJoinedModelExport, "NEVERD_ARM64E_JOINED_SIGNING_FIXTURES")
 ASYNC_FRAME_TEXT(kJoinedSnapshotCases, "resolved_interrupted_signing_pcs")
 ASYNC_FRAME_TEXT(kJoinModelCall, R"asm(
+ mov x3, #0
  ldr x19, =Lbody{0}
  ldr x9, ={1}
  add x19, x19, x9
@@ -373,6 +393,17 @@ ASYNC_FRAME_TEXT(kJoinModelCall, R"asm(
  ldr x9, ={2}
  add x19, x19, x9
  run_body {0}, 1, {3}, {4}, 0, {5}, {6}
+ .if {7}
+  mov x3, #1
+  ldr x19, =Lbody{0}
+  ldr x9, ={1}
+  add x19, x19, x9
+  run_body {0}, 0, {3}, {4}, 0, {5}, {6}
+  ldr x19, =Lbody{0}
+  ldr x9, ={2}
+  add x19, x19, x9
+  run_body {0}, 1, {3}, {4}, 0, {5}, {6}
+ .endif
 )asm")
 ASYNC_FRAME_TEXT(kJoinedSigningBody, R"asm(
  .text
@@ -381,6 +412,23 @@ ASYNC_FRAME_TEXT(kJoinedSigningBody, R"asm(
 _signal_tick:
  .cfi_startproc
  nop
+#if defined(NEVERD_JOIN_TWO_COMMON) || defined(NEVERD_JOIN_TWO_DISTINCT) || defined(NEVERD_JOIN_TWO_WRONG)
+#define NEVERD_JOIN_TWO
+#endif
+#ifdef NEVERD_JOIN_TWO_COMMON
+#define NEVERD_JOIN_COMMON
+#endif
+#if defined(NEVERD_JOIN_ADD_ZERO) || defined(NEVERD_JOIN_SUB_ZERO) || defined(NEVERD_JOIN_SHIFTED_ZERO) || defined(NEVERD_JOIN_HALF_COPY) || defined(NEVERD_JOIN_ADJUSTED_COPY)
+#define NEVERD_JOIN_COPY_PAGE
+#endif
+#if defined(NEVERD_JOIN_SPILL_CLEAR) || defined(NEVERD_JOIN_SPILL_OVERWRITE) || defined(NEVERD_JOIN_SPILL_PARTIAL) || defined(NEVERD_JOIN_SPILL_ALIAS) || defined(NEVERD_JOIN_SPILL_REUSED)
+#define NEVERD_JOIN_SPILL
+#endif
+.macro save_join
+ sub sp, sp, #16
+ .cfi_adjust_cfa_offset 16
+ str x15, [sp]
+.endm
 #ifdef NEVERD_JOIN_FORWARD_CONFLICT
 #define NEVERD_JOIN_CROSSED
 #endif
@@ -442,6 +490,39 @@ Lauth:
  .cfi_same_value x19
 #endif
  .cfi_escape 0x2e, 0
+#ifdef NEVERD_JOIN_KEEP_LR
+ mov x30, x30
+#endif
+#ifdef NEVERD_JOIN_SPILL
+ save_join
+#endif
+#if defined(NEVERD_JOIN_SPILL_CLEAR) || defined(NEVERD_JOIN_SPILL_ARMS)
+ mov x15, xzr
+#endif
+#ifdef NEVERD_JOIN_SPILL_OVERWRITE
+ str xzr, [sp]
+#endif
+#ifdef NEVERD_JOIN_SPILL_PARTIAL
+ stur w2, [sp, #3]
+#endif
+#ifdef NEVERD_JOIN_SPILL_ALIAS
+ str x2, [x0]
+#endif
+#ifdef NEVERD_JOIN_SPILL_REUSED
+ add sp, sp, #16
+ .cfi_adjust_cfa_offset -16
+ sub sp, sp, #16
+ .cfi_adjust_cfa_offset 16
+#endif
+#if defined(NEVERD_JOIN_SPILL) || defined(NEVERD_JOIN_SPILL_ARMS)
+ str xzr, [sp, #8]
+ ldr x15, [sp]
+ add sp, sp, #16
+ .cfi_adjust_cfa_offset -16
+#endif
+#ifdef NEVERD_JOIN_TWO
+ cbnz x3, Lotherauth
+#endif
 #ifdef NEVERD_JOIN_PRESSURE_PREFIX
  ldr x9, [x2, #8]
 #ifdef NEVERD_JOIN_PRESSURE_SCOPE
@@ -473,6 +554,20 @@ Lauth:
 #endif
  ret
 #endif
+#ifdef NEVERD_JOIN_TWO
+Lotherauth:
+#ifdef NEVERD_JOIN_TWO_WRONG
+ adr x15, Lfirst
+#endif
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xdac195fe
+#else
+ .inst 0xdac191fe
+#endif
+ str x15, [x0]
+ mov x0, x15
+ ret
+#endif
  .endm
 #ifdef NEVERD_JOIN_FORWARD
  b Lchoose
@@ -500,6 +595,10 @@ Lfirst:
 #else
  adr x15, Lfirst
 #endif
+#ifdef NEVERD_JOIN_SPILL_ARMS
+ .cfi_remember_state
+ save_join
+#endif
  live_inputs
 #ifdef NEVERD_JOIN_PRESSURE_PREFIX
  adr x9, Lfirst
@@ -512,6 +611,9 @@ Lfirst:
  .endr
 #endif
 Lright:
+#ifdef NEVERD_JOIN_SPILL_ARMS
+ .cfi_restore_state
+#endif
 #ifndef NEVERD_JOIN_COMMON
 Lsecond:
 #ifdef NEVERD_JOIN_WRONG_KEY
@@ -529,11 +631,26 @@ Lsecond:
 #elif defined(NEVERD_JOIN_COPY_PAGE)
  adrp x10, Lsecond@PAGE
  add x10, x10, Lsecond@PAGEOFF
+#if defined(NEVERD_JOIN_ADD_ZERO)
+ add x15, x10, #0
+#elif defined(NEVERD_JOIN_SHIFTED_ZERO)
+ add x15, x10, #0, lsl #12
+#elif defined(NEVERD_JOIN_SUB_ZERO)
+ sub x15, x10, #0
+#elif defined(NEVERD_JOIN_HALF_COPY)
+ mov w15, w10
+#elif defined(NEVERD_JOIN_ADJUSTED_COPY)
+ add x15, x10, #4
+#else
  mov x15, x10
+#endif
 #elif defined(NEVERD_JOIN_RETURN)
  adr x0, Lsecond
 #else
  adr x15, Lsecond
+#endif
+#ifdef NEVERD_JOIN_SPILL_ARMS
+ save_join
 #endif
 #ifdef NEVERD_JOIN_CLOBBER
  mov w15, w2
