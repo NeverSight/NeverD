@@ -12,6 +12,7 @@
 #include "ZipInternal.h"
 
 #include "neverd/web/Error.h"
+#include "neverd/web/SeekableZip.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/CRC.h"
@@ -31,10 +32,10 @@ bool packageZipDeflateAvailable() {
 #endif
 }
 
-void decodeZipMember(const Blob &Stored, uint16_t Method, uint64_t Size,
-                     uint32_t ExpectedCRC,
-                     llvm::function_ref<void(std::string_view)> Append,
-                     uint64_t &Steps, llvm::function_ref<bool()> Stop) {
+void decodeZipMemberRange(uint64_t StoredSize, ZipReadAt ReadAt,
+                          uint16_t Method, uint64_t Size, uint32_t ExpectedCRC,
+                          llvm::function_ref<void(std::string_view)> Append,
+                          uint64_t &Steps, llvm::function_ref<bool()> Stop) {
   uint64_t Read = 0, Produced = 0;
   uint32_t CRC = 0;
   const auto Step = [&] {
@@ -53,12 +54,11 @@ void decodeZipMember(const Blob &Stored, uint16_t Method, uint64_t Size,
     Append(Bytes);
   };
   if (Method == 0) {
-    if (Stored.size() != Size)
+    if (StoredSize != Size)
       throw Error("zip_stored_size_mismatch");
-    while (Read < Stored.size()) {
+    while (Read < StoredSize) {
       Step();
-      auto Bytes =
-          Stored.read(Read, std::min(BlobTransferBytes, Stored.size() - Read));
+      auto Bytes = ReadAt(Read, std::min(BlobTransferBytes, StoredSize - Read));
       Read += Bytes.size();
       Consume(Bytes);
     }
@@ -79,9 +79,8 @@ void decodeZipMember(const Blob &Stored, uint16_t Method, uint64_t Size,
     std::array<char, BlobTransferBytes> Output;
     for (;;) {
       Step();
-      if (!S.avail_in && Read < Stored.size()) {
-        Input = Stored.read(Read,
-                            std::min(BlobTransferBytes, Stored.size() - Read));
+      if (!S.avail_in && Read < StoredSize) {
+        Input = ReadAt(Read, std::min(BlobTransferBytes, StoredSize - Read));
         Read += Input.size();
         S.next_in = reinterpret_cast<Bytef *>(Input.data());
         S.avail_in = uInt(Input.size());
@@ -93,7 +92,7 @@ void decodeZipMember(const Blob &Stored, uint16_t Method, uint64_t Size,
       const auto Count = Output.size() - S.avail_out;
       Consume({Output.data(), Count});
       if (Status == Z_STREAM_END) {
-        if (S.avail_in || Read != Stored.size())
+        if (S.avail_in || Read != StoredSize)
           throw Error("zip_trailing_deflate_data");
         break;
       }
@@ -108,5 +107,14 @@ void decodeZipMember(const Blob &Stored, uint16_t Method, uint64_t Size,
     throw Error("zip_uncompressed_size_mismatch");
   if (CRC != ExpectedCRC)
     throw Error("zip_crc_mismatch");
+}
+void decodeZipMember(const Blob &Stored, uint16_t Method, uint64_t Size,
+                     uint32_t CRC,
+                     llvm::function_ref<void(std::string_view)> Append,
+                     uint64_t &Steps, llvm::function_ref<bool()> Stop) {
+  decodeZipMemberRange(
+      Stored.size(),
+      [&](uint64_t At, uint64_t N) { return Stored.read(At, N); }, Method, Size,
+      CRC, Append, Steps, Stop);
 }
 } // namespace neverd::web

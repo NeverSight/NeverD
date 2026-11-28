@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 89c89cb7f9c817b94939d8599f741411e1c7d629bb1230fc1ae52fcd67c9f191 -->
+<!-- i18n-source: ae0ba2221cdac5580beb4673b67f230ca77880a10bd1d4392b3d33c32a70d976 -->
 
 <div align="center">
 
@@ -341,7 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 발견된 함수 |
 | `disasm` | 디스어셈블(`--func` 이름 또는 hex) |
 | `sym-explore` | 제한된 네이티브 LowIR 경로 탐색(`--func`, JSON 출력) |
-| `scan --gguf` | [로컬 모델 디렉터리, 텐서 범위, 템플릿 검사(JSON)](../model-scan.md) |
+| `scan --gguf` | [로컬 모델 검사, 텐서 비교 및 별도 파일로 재구성한 GGUF 검증](../model-scan.md) |
 | `scan` | [객체 수명, 초기화, 경계 및 서식 문자열 검사(JSON)](../memory-safety-scan.md) |
 | `hex` | 주소의 hex dump |
 | `cfg` / `callgraph` | CFG / 호출 그래프(JSON; DOT/SVG 선택) |

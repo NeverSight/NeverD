@@ -472,6 +472,8 @@ extern llvm::cl::opt<neverd_scan_analyzers> ScanAnalyzers;
 extern llvm::cl::opt<bool> ModelGGUF;
 extern llvm::cl::opt<std::string> ModelBaseline;
 extern llvm::cl::opt<uint64_t> ModelGap;
+extern llvm::cl::opt<std::string> ModelOptions;
+extern llvm::cl::opt<bool> ModelExternalData;
 extern llvm::cl::opt<uint64_t> ModelScales;
 extern llvm::cl::opt<uint64_t> ModelCompare;
 extern llvm::cl::opt<uint64_t> ModelOffset;

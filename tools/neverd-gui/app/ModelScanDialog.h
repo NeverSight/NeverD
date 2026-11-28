@@ -18,25 +18,34 @@ class QPushButton;
 class QTreeWidget;
 class QPlainTextEdit;
 class QLabel;
+class QGraphicsView;
+class QTreeWidgetItem;
 namespace neverd::gui {
 class ModelScanDialog final : public QDialog {
   Q_OBJECT
 public:
   ModelScanDialog(const QString &Worker, QWidget *Parent);
 
+signals:
+  void nativeComponentRequested(const QString &Path);
+
 private:
   void start();
   void receive(const QJsonObject &Message);
   void showReport();
   void updateActions();
+  void showGraph(const QJsonObject &Graph);
+  void expandGraph(QTreeWidgetItem *Item);
   EngineClient Client;
   QString Active;
-  bool Ready = false;
+  bool Ready = false, CanRebuild = false;
   int Offset = 0;
   QJsonObject Report;
-  QLineEdit *Input, *Baseline;
+  QByteArray SerializedReport;
+  QGraphicsView *GraphView;
+  QLineEdit *Input, *Baseline, *OptionsJSON, *Search, *Scope;
   QSpinBox *ScaleKiB;
-  QPushButton *Run, *Cancel, *Previous, *Next, *Save;
+  QPushButton *Run, *Cancel, *Previous, *Next, *Save, *Rebuild;
   QLabel *Status;
   QTreeWidget *Evidence;
   QPlainTextEdit *Detail;

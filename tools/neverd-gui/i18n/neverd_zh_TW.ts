@@ -11712,5 +11712,41 @@ Your previous graph is still available.</source>
         <source>Component changes</source>
         <translation>元件差異</translation>
     </message>
+    <message>
+        <source>Advanced options (JSON)</source>
+        <translation>進階選項（JSON）</translation>
+    </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>搜尋張量或運算子</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>計算圖作用域</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>宣告</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>重建 GGUF…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>請在進階選項將 template_policy 設為 keep、remove 或 replace。</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>相依項目</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>來源證據</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>配接器矩陣</translation>
+    </message>
 </context>
 </TS>

@@ -141,9 +141,15 @@ auto modelScanner() {
       "neverd_model_scan_json_v1");
   return Scan;
 }
-Engine::Reply scanModel(const Json &Input, std::atomic<bool> &Cancelled) {
-  auto Scan = modelScanner();
-  if (!Scan)
+auto modelRebuilder() {
+  static auto Build =
+      engineSymbol<decltype(&neverd_model_rebuild_gguf_json_v1)>(
+          "neverd_model_rebuild_gguf_json_v1");
+  return Build;
+}
+Engine::Reply scanModel(bool Rebuild, const Json &Input,
+                        std::atomic<bool> &Cancelled) {
+  if (Rebuild ? !modelRebuilder() : !modelScanner())
     throw Error("unsupported", "This engine does not provide model scanning");
   auto Path = stringField(Input, "path");
   if (Path.empty() || Path.find(char(0)) != Path.npos)
@@ -154,11 +160,27 @@ Engine::Reply scanModel(const Json &Input, std::atomic<bool> &Cancelled) {
   auto Stop = [](void *Context) -> int {
     return static_cast<std::atomic<bool> *>(Context)->load();
   };
+  std::string Destination;
+  if (Rebuild) {
+    Destination = stringField(Input, "output");
+    if (Destination.empty() || Destination.find(char(0)) != Destination.npos)
+      throw Error("invalid_request", "Invalid new GGUF output path");
+  }
+  auto Settings = Options.dump();
   std::unique_ptr<const char, decltype(&neverd_free_string)> Report(
-      Scan(Path.c_str(), Options.dump().c_str(), Stop, &Cancelled),
+      Rebuild
+          ? modelRebuilder()(Path.c_str(), Destination.c_str(),
+                             Settings.c_str(), Stop, &Cancelled)
+          : modelScanner()(Path.c_str(), Settings.c_str(), Stop, &Cancelled),
       neverd_free_string);
   if (!Report)
     throw Error("engine_error", "Model scan returned no report");
+  if (Input.value("serialized_report", false)) {
+    Json Payload = {{"report_json", Report.get()}};
+    if (Cancelled.load())
+      Payload["status"] = parseJson(Report.get()).at("status");
+    return {std::move(Payload), {}};
+  }
   return {parseJson(Report.get()), {}};
 }
 auto jvmRecovery() {
@@ -471,6 +493,8 @@ Json hello() {
          {"patch_context", "patch_preview", "patch_apply", "patch_revert",
           "patches", "patch_export"})
       result["capabilities"].push_back(operation);
+  if (modelRebuilder())
+    result["capabilities"].push_back("model_rebuild_gguf");
   if (modelScanner())
     result["capabilities"].push_back("model_scan");
   if (Engine::keepsSourcePatches())
@@ -731,7 +755,9 @@ void executeLoop(State &state, Transport &transport) {
         if (scriptOperation(op))
           transport.send(response(value, revision(), project(), "progress",
                                   {{"phase", "reading"}}));
-        auto reply = op == "model_scan" ? scanModel(input, request->cancelled)
+        auto reply = (op == "model_scan" || op == "model_rebuild_gguf")
+                         ? scanModel(op == "model_rebuild_gguf", input,
+                                     request->cancelled)
                      : scriptOperation(op)
                          ? recoverScript(op, input, request->cancelled)
                      : webRequest ? Engine::Reply{web.execute(op, input), {}}
@@ -781,7 +807,8 @@ void executeLoop(State &state, Transport &transport) {
           }
           result["completed_before_cancellation"] =
               !ComparisonStopped && !scanStopped &&
-              !((scriptOperation(op) || op == "model_scan") &&
+              !((scriptOperation(op) || op == "model_scan" ||
+                 op == "model_rebuild_gguf") &&
                 result["status"] == "ok" &&
                 result["payload"].value("status", std::string()) ==
                     "cancelled");
