@@ -2934,6 +2934,11 @@ have overwritten its only spill prevents publication. The source unwind test
 also checks the state after each exit of these rejected images. A correct
 exit can still describe its own unsigned LR.
 
+The Arm model maps the guest text and its separate EL0 and EL1 stacks as
+Normal memory. This also exercises unaligned scalar spills on the same memory
+type used for a Darwin thread stack. The linker checks where the guest ends
+against the first stack block.
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,

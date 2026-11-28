@@ -903,11 +903,20 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     while (!Unreached.empty() && Unreached.front().second <= PC)
       Unreached = Unreached.drop_front();
     const bool OutsideCFG = !Unreached.empty() && Unreached.front().first <= PC;
-    // The decoded shift alias may omit its mandatory zero immediate. A proven
-    // register copy has no PC-relative operand and can retain its exact word.
+    // Some register-copy aliases carry an implicit shift or condition outside
+    // the operand list. Preserve that word while leaving ordinary register
+    // moves and immediate operands visible to the native ABI verifier.
+    const bool EncodedCopy =
+        (D.cc != AArch64CC_Invalid ||
+         llvm::any_of(Ops,
+                      [](const auto &Op) {
+                        return Op.type == AARCH64_OP_REG &&
+                               (Op.shift.type != AARCH64_SFT_INVALID ||
+                                Op.ext != AARCH64_EXT_INVALID);
+                      })) &&
+        aarch64::fullWidthRegisterCopy(I);
     const bool KeepEncoding =
-        aarch64::fullWidthRegisterCopy(I).has_value() ||
-        (OutsideCFG && !PCSigning && !PACM && independent(I));
+        EncodedCopy || (OutsideCFG && !PCSigning && !PACM && independent(I));
     const bool RecoveredCode = OutsideCFG && !Body.RecoveredData.empty();
     const auto *BranchTable = Dispatch.BranchTables.lookup(PC);
     const auto Targets = BranchTable
