@@ -99,6 +99,46 @@ def verify(cli, worker, host, path, expected):
             assert client.call("memory_safety_scan", {"analyzer": "typo"})["error"]["code"] == "invalid_request"
 
 
+def verify_direct_read_initialization(cli, worker, host, root):
+    # All three read the caller's scalar field through RCX on Win64.
+    cases = (
+        ("borrowed", "8b 01 c3", 0, 1),                    # load 4
+        ("initialized", "c7 01 07 00 00 00 0f b6 01 c3", 1, 0),  # store 4, load 1
+        ("partial", "c6 01 07 8b 01 c3", 0, 1),            # store 1, load 4
+    )
+    for name, code, written, unresolved in cases:
+        path = root / (name + ".exe")
+        path.write_bytes(pe(bytes.fromhex(code)))
+        report, _ = cli_report(cli, path, "--analyzer=audit")
+        assert report["verdict"] == "SAFE" and report["coverage_complete"], report
+        assert not report["findings"]
+        assert report["analyzers"]["audit"]["direct_read_initialization"] == {
+            "preceding_constant_store": written, "local_stack": 0,
+            "outside_or_unresolved": unresolved,
+        }, report
+        assert "direct_read_initialization" not in report["analyzers"]["hunt"]
+        if written:
+            verify(cli, worker, host, path, "SAFE")
+
+    # Reserve a real Win64 frame and address a slot through RDX.
+    store = bytes.fromhex("c7 02 07 00 00 00")
+    load = bytes.fromhex("0f b6 02")
+    frame = bytes.fromhex("48 83 ec 28 48 8d 54 24 10")
+    leave = bytes.fromhex("48 83 c4 28 c3")
+    for code, expected in ((store + load, "SAFE"), (load + store, "UNSAFE")):
+        path = root / ("frame-" + expected.lower() + ".exe")
+        path.write_bytes(pe(frame + code + leave))
+        report, _ = cli_report(cli, path, "--analyzer=audit")
+        assert report["verdict"] == expected and report["coverage_complete"], report
+        initialized = int(expected == "SAFE")
+        assert report["analyzers"]["audit"]["direct_read_initialization"] == {
+            "preceding_constant_store": initialized, "local_stack": 1 - initialized,
+            "outside_or_unresolved": 0,
+        }, report
+        findings = [(g["property"], g["verdict"]) for g in report["findings"]]
+        assert findings == ([] if initialized else [("uninitialized_read", "UNSAFE")])
+
+
 def verify_cli_options(cli, clean, output):
     run = subprocess.run([cli, "scan", str(clean), "--json", "--analyzer=both", "-o", str(output)],
                          capture_output=True, text=True, timeout=90)
@@ -164,6 +204,8 @@ def main():
         assert report["verdict"] == "UNKNOWN" and not report["coverage_complete"]
         for row in report["analyzers"].values():
             assert row["state"] == "unsupported" and "unsupported instruction at 0x140001002" in row["error"], row
+            assert "direct_read_initialization" not in row
+        verify_direct_read_initialization(args.cli, args.worker, host, root)
         verify_cli_options(args.cli, clean, root / "report.json")
         verify_shared_catalog_scope(args.cli, host, mixed, root / "catalog.json")
 

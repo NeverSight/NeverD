@@ -11,11 +11,13 @@
 #ifndef NEVERD_SAFETY_SAFETYSCAN_H
 #define NEVERD_SAFETY_SAFETYSCAN_H
 
+#include "neverd/safety/AllocLifetime.h"
 #include "neverd/safety/Safety.h"
 
 #include "llvm/ADT/STLFunctionalExtras.h"
 
 #include <array>
+#include <optional>
 
 namespace neverd::safety {
 
@@ -32,6 +34,7 @@ enum class ScanState {
 struct AnalyzerResult {
   ScanState State;
   SafetyReport Report;
+  std::optional<DirectReadInitialization> DirectReads;
 };
 
 struct ScanReport {
