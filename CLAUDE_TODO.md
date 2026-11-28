@@ -162,19 +162,17 @@ hands over, nor reads that a `v_known ?` flag guards) found these. The
 printer fix (`placeVarText`) cleared every temporary of that kind that a
 typed call argument printed.
 
-- AArch64 machine-outlined functions that read their caller's frame.
-  `OUTLINED_FUNCTION_52` in the aarch64 Rust probes is
-  `ldur w0, [x29, #-0xa8]; b close` and renders as
-  `int32_t var_mA8; return close(var_mA8);`: a slot of its own frame that
-  nothing assigns. An outlined function sets up no frame, so x29 is still
-  the caller's frame pointer. Cause, confirmed with a probe: the
-  frame-pointer rule in `HighCWriter::frameDisplacement` for functions with
-  exception metadata fires for it outside any EH clause body and takes the
-  incoming x29 as the function's own frame. Every Linux function with an FDE
-  has exception metadata; the rule should hold only where the frame pointer
-  is the parent's by contract (an EH clause body or funclet), and elsewhere
-  the read should fail closed. One function
-  in each of the eight aarch64 Linux Rust images, with and without DWARF.
+- AArch64 machine-outlined functions read their caller's frame through an
+  x29 they never set. `218e0c9072` keeps `frameDisplacement`'s frame-pointer rule
+  to EH clause bodies wherever the EH runtime calls no funclets (Itanium,
+  compact unwind, ARM EHABI, Go), so `OUTLINED_FUNCTION_52`'s
+  `ldur w0, [x29, #-0xa8]` fails closed instead of reading a `var_mA8` that
+  nothing assigns, and GCC's cold parts lose a store no instruction makes.
+  Left: functions whose prologue the outliner moved into a helper that sets
+  x29 (`Cache::with_global` calls `OUTLINED_FUNCTION_39`, which runs
+  `mov x29, sp`) now fail closed on 8 reads each where the old names were
+  0x60 bytes off. Modeling the helper's write to x29 as part of the call
+  would give them their real slots.
 - MSVC C++ EH, analysis-only rendering: after `_CxxThrowException` the catch
   continuation's return value prints as a temporary nothing assigns
   (`uint32_t t39; ... return t39;` in `cxx_eh_probe` fh3/fh4 o2 at
