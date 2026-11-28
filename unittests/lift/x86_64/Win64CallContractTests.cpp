@@ -2705,6 +2705,9 @@ TEST(Win64CallContract, JoinedSourceObservationsKeepTheirCallCoordinates) {
 
 TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
   constexpr va_t Target = Text + 0x80;
+  constexpr llvm::StringLiteral StackLink =
+      ", take_stack) __asm__(__NEVERD_WIN64_STR(__USER_LABEL_PREFIX__) "
+      "\"take_stack\")";
   for (bool Stored : {false, true}) {
     std::vector<uint8_t> Code(0xa0, 0xcc);
     std::vector<uint8_t> Caller = {0x48, 0x83, 0xec, 0x38}; // sub rsp,38h
@@ -2758,9 +2761,7 @@ TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
                     std::string::npos,
                 !Stored);
       EXPECT_NE(Source.find("take_stack("), std::string::npos);
-      EXPECT_EQ(llvm::StringRef(Source).contains(
-                    ", take_stack) __asm__(\"take_stack\")"),
-                !LLVM);
+      EXPECT_EQ(llvm::StringRef(Source).contains(StackLink), !LLVM);
       for (llvm::StringRef Dialect : {"-std=gnu11", "-std=gnu2x"})
         source_call_execution_test::checkSyntax(
             Source, {"--target=x86_64-w64-windows-gnu", "-ffreestanding",
@@ -2806,9 +2807,7 @@ TEST(Win64CallContract, SourceCanBindOneOriginalOutgoingWordAtItsCall) {
             "__neverd_read_precall_word(&__neverd_precall, 0x" +
             llvm::utohexstr(Site) + "ULL, 32U";
         EXPECT_EQ(llvm::StringRef(Bound).contains(Read), !Stored);
-        EXPECT_EQ(llvm::StringRef(Bound).contains(
-                      ", take_stack) __asm__(\"take_stack\")"),
-                  !LLVM);
+        EXPECT_EQ(llvm::StringRef(Bound).contains(StackLink), !LLVM);
         EXPECT_EQ(llvm::StringRef(Bound).contains(
                       "const uint64_t link_base = 0x" +
                       llvm::utohexstr(Image.Base) + "ULL;"),
