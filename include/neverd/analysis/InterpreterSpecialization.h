@@ -132,9 +132,11 @@ enum class SpecializationX64CallProfile : uint8_t {
   /// invocation. This is a caller-owned callee contract, not a fact inferred
   /// from an import name or a concrete run.
   ConditionalNormalReturnResultObjectV3,
-  /// V3 plus caller-declared absolute ranges missed by every nonnull result
-  /// object. This is an explicit callee-effect premise, not inferred from an
-  /// allocator name, image layout, or observed address.
+  /// A bounded nullable result object with caller-declared absolute ranges
+  /// missed by every nonnull result object. Earlier preserved frame spans may
+  /// be empty; the current-frame suffix above the outgoing arguments remains
+  /// preserved. The exclusion is an explicit callee-effect premise, not
+  /// inferred from an allocator name, image layout, or observed address.
   ConditionalNormalReturnResultObjectExcludedV4,
   /// V2 plus declared caller-frame output spans. The named argument registers
   /// must hold exact pointers into the declared entry frame at each physical
@@ -175,8 +177,9 @@ struct SpecializationX64ReturningCall {
   va_t Address = InvalidVA;
   SpecializationX64CallProfile Profile = SpecializationX64CallProfile::None;
   uint64_t OutgoingBytes = 0;
-  /// Versions 2 through 4. Sorted, disjoint, nonempty entry-frame-relative
-  /// spans.
+  /// Versions 2 through 5. Sorted, disjoint, nonempty entry-frame-relative
+  /// spans. Version 4 may omit earlier spans while retaining the caller-frame
+  /// suffix above the outgoing arguments.
   /// Only bytes materialized immediately before the call are retained.
   std::vector<SpecializationCallPreservedFrameRange> PreservedFrameRanges;
   /// Version 4 only. Sorted, disjoint absolute ranges missed by the complete
