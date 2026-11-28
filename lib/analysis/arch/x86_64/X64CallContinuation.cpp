@@ -106,7 +106,6 @@ llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
         D.Version == 4 &&
         D.Profile == SpecializationX64CallProfile::
                          ConditionalNormalReturnResultObjectExcludedV4 &&
-        !D.PreservedFrameRanges.empty() &&
         D.PreservedFrameRanges.size() <=
             limits::analysis::kX64ReturningCallPreservedFrameRangesLimit &&
         !D.ResultObjectExclusions.empty() &&

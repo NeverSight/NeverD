@@ -760,6 +760,43 @@ TEST_F(PEFixedImageTest,
   }
 }
 
+TEST_F(PEFixedImageTest, ReturningCallV4NeedsNoEarlierFrameSpan) {
+  // The call consumes its own return slot and outgoing arguments. No older
+  // frame byte is required after the call; the current-frame suffix remains.
+  const std::vector<uint8_t> Code{0xba, 0x08, 0,    0,    0, // mov edx,8
+                                  0x48, 0x83, 0xec, 0x40,    // sub rsp,64
+                                  0xff, 0xd7,                // call rdi
+                                  0x48, 0x83, 0xc4, 0x40,    // add rsp,64
+                                  0x48, 0x85, 0xc0,          // test rax,rax
+                                  0x74, 0x03,                // je ret
+                                  0xc6, 0x00, 0x00, // mov byte ptr [rax],0
+                                  0xc3};            // ret
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x1009, Base + 0x1017);
+  O.EntryFrameBounds = SpecializationEntryFrameBounds{-128, 8};
+  O.EntryReturnSlot = SpecializationFrameSlot{0, 8};
+  O.ProveStoreFrameSeparation = true;
+  O.ProveStoreReturnSlotSeparation = true;
+  auto &Call = O.X64ReturningCalls.front();
+  Call.Version = 4;
+  Call.Profile = SpecializationX64CallProfile::
+      ConditionalNormalReturnResultObjectExcludedV4;
+  Call.ResultObjectExclusions = {{Base, Base + 0x4000}};
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  ASSERT_EQ(R.ReturningCalls.size(), 1U);
+  auto Valid = validateSpecializationRawEnvironment(R, O);
+  EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
+
+  auto Overlap = O;
+  Overlap.X64ReturningCalls.front().PreservedFrameRanges = {{-72, -64}};
+  const auto Refused =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, Overlap);
+  EXPECT_FALSE(Refused.complete());
+  EXPECT_TRUE(Refused.Residual.Blocks.empty());
+}
+
 TEST_F(PEFixedImageTest, ReturningCallResultObjectBoundsSymbolicOffset) {
   // The index is symbolic but masked into the declared 64-byte extent. A null
   // result writes in the low address range; an explicit frame exclusion is
