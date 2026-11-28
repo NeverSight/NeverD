@@ -9,7 +9,9 @@ __attribute__((noinline)) int sample(void) {
   void *memory = malloc(32);
   if (!memory)
     return 0;
-#if RELEASE_ALLOCATION
+#if RELEASE_ALLOCATION == 2
+  free((void *)0);
+#elif RELEASE_ALLOCATION
   free(memory);
 #endif
 #if RECORD_COMPLETION

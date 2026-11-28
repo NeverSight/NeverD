@@ -178,7 +178,7 @@ v13 and returns a vector in v2. [AltiVec Programming Environments Manual](https:
 | Identify and load | ELF class, machine, flags and attributes | ELF class, machine, ABI flag and byte order |
 | Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences, atomics, cycle reads, scalar F/D operations and floating-point control/status registers | Integer ALU, signed and unsigned word/doubleword division, VMX modulo byte addition, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
 | CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer and double-float ABI argument registers | Direct and conditional branches, CTR loops, conditional direct and indirect calls, CTR jumps and guarded LR returns, integer register arguments |
-| Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset | Same stages in target byte order |
+| Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset and scalar F/D operations, including RISC-V rounding and FCSR | Same stages in target byte order for the qualified PowerPC subset |
 | Native rewrite | Unsupported | Unsupported |
 
 When selected on its own, a straight-line RV32 or PPC32 leaf can establish a

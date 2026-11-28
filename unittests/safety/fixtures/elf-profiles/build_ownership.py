@@ -22,13 +22,14 @@ def main():
             toolchain = target + "-linux-gnuabi64"
             libc = args.sysroot / toolchain / "lib32" / "libc.so.6"
             profile = "mips64n32el" if little else "mips64n32"
-            for variant in ("released", "unreleased", "unrelated-store"):
+            for variant, release in (("released", 1), ("unreleased", 0),
+                                     ("free-null", 2), ("unrelated-store", 1)):
                 image = args.output.resolve() / (profile + "-" + variant)
                 subprocess.run([
                     args.clang, "--target=" + target + "-unknown-linux-gnu", "-O1", "-g",
                     "-fdebug-compilation-dir=.", "-ffreestanding", "-fno-builtin",
                     "-fPIC", "-mabicalls", "-march=mips64r2", "-mabi=n32",
-                    "-DRELEASE_ALLOCATION=" + str(int(variant != "unreleased")),
+                    "-DRELEASE_ALLOCATION=" + str(release),
                     "-DRECORD_COMPLETION=" + str(int(variant == "unrelated-store")),
                     "-c", "ownership.c", "-o", obj,
                 ], cwd=source, check=True)

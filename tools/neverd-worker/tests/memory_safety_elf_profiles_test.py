@@ -65,13 +65,15 @@ def verify_ownership(cli, directory, name, temporary):
         report = scan("released", *flags)
         audit = report["analyzers"]["audit"]
         assert report["verdict"] == "SAFE" and report["coverage_complete"], (name, report)
-        assert audit["scanned"] > 0 and audit["unknown"] == 0 and not report["findings"], name
+        assert audit["scanned"] == 1 and audit["unknown"] == 0 and not report["findings"], name
 
-    report = scan("unreleased", "--analyzer=audit")
-    assert report["verdict"] == "UNSAFE" and report["coverage_complete"], (name, report)
-    assert [(f["function"], f["class"]) for f in observations(report, "audit")] == [
-        ("sample", "heap_leak")
-    ], (name, report)
+    for variant, verdicts in (("unreleased", {"UNSAFE"}), ("free-null", {"UNKNOWN", "UNSAFE"})):
+        # A call to free(NULL) cannot discharge the original allocation.
+        report = scan(variant, "--analyzer=audit")
+        assert report["coverage_complete"] and report["verdict"] in verdicts, (name, report)
+        assert [(f["function"], f["class"]) for f in observations(report, "audit")] == [
+            ("sample", "heap_leak")
+        ], (name, report)
 
     # Publication to a global requires a stronger write-set proof. A change
     # in the version provider also removes the known allocation contract.
