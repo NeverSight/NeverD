@@ -32,6 +32,7 @@
 #include <QTabWidget>
 #include <QTextBlock>
 #include <QVBoxLayout>
+#include <algorithm>
 
 using namespace neverd::gui;
 namespace {
@@ -55,7 +56,55 @@ QString diagnostics(QJsonObject R) {
   }
   return L.join(QStringLiteral("\n"));
 }
+// Measuring and painting reuse the first screen's glyphs. Keep the cache
+// proportional to the viewport even when a single JSON string is very long.
+void cacheFirstScreen(QPlainTextEdit &View) {
+  const auto Metrics = View.fontMetrics();
+  const int Lines = View.viewport()->height() / Metrics.lineSpacing() + 1;
+  const int Columns =
+      View.viewport()->width() / qMax(1, Metrics.averageCharWidth()) + 1;
+  auto Block = View.document()->begin();
+  for (int I = 0; I < Lines && Block.isValid(); ++I, Block = Block.next())
+    if (Block.length() <= Columns)
+      Block.layout()->setCacheEnabled(true);
+}
 } // namespace
+
+class JVMRecoveryDialog::DetailView final : public QPlainTextEdit {
+public:
+  explicit DetailView(JVMRecoveryDialog &Dialog) : Dialog(Dialog) {}
+
+  void invalidate() { Dirty = true; }
+  void prepare() {
+    if (!Dirty)
+      return;
+    Dirty = false;
+    const QString Text = Dialog.detailText(this);
+    // ASCII JSON can display each character literally. Keep the normal font
+    // shaping for reports containing Unicode names, strings or diagnostics.
+    QFont TextFont = font();
+    if (std::all_of(Text.cbegin(), Text.cend(),
+                    [](QChar C) { return C.unicode() < 0x80; }))
+      TextFont.setStyleStrategy(static_cast<QFont::StyleStrategy>(
+          TextFont.styleStrategy() | QFont::PreferNoShaping));
+    if (document()->defaultFont() != TextFont)
+      document()->setDefaultFont(TextFont);
+    setPlainText(Text);
+    cacheFirstScreen(*this);
+  }
+  void setVisible(bool Visible) override {
+    // Showing a plain-text editor lays out its document to size the scrollbars.
+    // Install the selected method's text before Qt measures the page.
+    if (Visible)
+      prepare();
+    QPlainTextEdit::setVisible(Visible);
+  }
+
+private:
+  JVMRecoveryDialog &Dialog;
+  bool Dirty = false;
+};
+
 JVMRecoveryDialog::JVMRecoveryDialog(const QString &Worker, QWidget *Parent)
     : QDialog(Parent) {
   setAttribute(Qt::WA_DeleteOnClose);
@@ -121,18 +170,18 @@ JVMRecoveryDialog::JVMRecoveryDialog(const QString &Worker, QWidget *Parent)
   Layout->addWidget(Results);
   auto *Split = new QSplitter;
   Tabs = new QTabWidget;
-  auto pane = [&](QString Title, QString Name) {
-    auto *P = new QPlainTextEdit;
+  Tabs->setDocumentMode(true);
+  auto pane = [&](auto *P, QString Title, QString Name) {
     P->setReadOnly(true);
     P->setObjectName(Name);
     P->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     Tabs->addTab(P, Title);
     return P;
   };
-  Java = pane(tr("Java source"), "jvmSource");
-  Bytecode = pane(tr("Bytecode"), "jvmBytecode");
-  IR = pane(tr("Typed IR"), "jvmIR");
-  Evidence = pane(tr("Evidence"), "jvmEvidence");
+  Java = pane(new QPlainTextEdit, tr("Java source"), "jvmSource");
+  Bytecode = pane(new DetailView(*this), tr("Bytecode"), "jvmBytecode");
+  IR = pane(new DetailView(*this), tr("Typed IR"), "jvmIR");
+  Evidence = pane(new DetailView(*this), tr("Evidence"), "jvmEvidence");
   Mappings = new QListWidget;
   Mappings->setObjectName("jvmMappings");
   Mappings->setAccessibleName(tr("Bytecode mappings"));
@@ -337,9 +386,11 @@ QJsonObject JVMRecoveryDialog::currentFunction() const {
 }
 void JVMRecoveryDialog::select(bool ChooseTab) {
   const auto F = currentFunction();
-  RenderedTabs.fill(false, Tabs->count());
+  for (auto *View : {Bytecode, IR, Evidence})
+    View->invalidate();
   QSignalBlocker Guard(Java);
   Java->setPlainText(F["source"].toString());
+  cacheFirstScreen(*Java);
   const auto Instructions = F["instructions"].toArray();
   Mappings->clear();
   for (auto V : Instructions) {
@@ -347,12 +398,12 @@ void JVMRecoveryDialog::select(bool ChooseTab) {
     auto *Item = new QListWidgetItem(QStringLiteral("%1   0x%2   %3")
                                          .arg(I["pc"].toInt())
                                          .arg(I["offset"].toInteger(), 0, 16)
-                                         .arg(I["opcode"].toString()),
-                                     Mappings);
+                                         .arg(I["opcode"].toString()));
     QVariantList Lines;
     for (auto S : I["source_spans"].toArray())
       Lines.push_back(S.toObject()["line"].toInt());
     Item->setData(Qt::UserRole, Lines);
+    Mappings->addItem(Item);
   }
   auto Flags = QStringList{Report["status"].toString(), F["status"].toString(),
                            diagnostics(Report), diagnostics(F)};
@@ -360,7 +411,7 @@ void JVMRecoveryDialog::select(bool ChooseTab) {
   Flags.removeDuplicates();
   Status->setText(Flags.join(QStringLiteral(" · ")));
   if (ChooseTab) {
-    auto *View = Evidence;
+    QPlainTextEdit *View = Evidence;
     if (!Inventory && !Java->document()->isEmpty())
       View = Java;
     else if (!Inventory && (F["ir"].isObject() || F["ir"].isArray()))
@@ -375,28 +426,27 @@ void JVMRecoveryDialog::select(bool ChooseTab) {
   showCurrentTab();
 }
 void JVMRecoveryDialog::showCurrentTab() {
-  const int Tab = Tabs->currentIndex();
-  auto *View = Tabs->currentWidget();
-  if (View != Java && !RenderedTabs.testBit(Tab)) {
-    RenderedTabs.setBit(Tab);
-    const auto F = currentFunction();
-    if (View == Bytecode) {
-      const auto Instructions = F["instructions"].toArray();
-      Bytecode->setPlainText(Instructions.isEmpty() ? QString()
-                                                    : json(Instructions));
-    } else if (View == IR) {
-      IR->setPlainText(json(F["ir"]));
-    } else if (View == Evidence) {
-      auto Details = F.isEmpty() ? Report : F;
-      if (F.isEmpty())
-        Details.remove("functions");
-      else
-        for (auto K : {"source", "instructions", "ir"})
-          Details.remove(K);
-      Evidence->setPlainText(Report.isEmpty() ? QString() : json(Details));
-    }
-  }
+  if (auto *View = Tabs->currentWidget(); View != Java)
+    static_cast<DetailView *>(View)->prepare();
   updateViewActions();
+}
+QString JVMRecoveryDialog::detailText(const DetailView *View) const {
+  const auto F = currentFunction();
+  if (View == Bytecode) {
+    const auto Instructions = F["instructions"].toArray();
+    return Instructions.isEmpty() ? QString() : json(Instructions);
+  }
+  if (View == IR)
+    return json(F["ir"]);
+  if (Report.isEmpty())
+    return {};
+  auto Details = F.isEmpty() ? Report : F;
+  if (F.isEmpty())
+    Details.remove("functions");
+  else
+    for (auto K : {"source", "instructions", "ir"})
+      Details.remove(K);
+  return json(Details);
 }
 bool JVMRecoveryDialog::exportView(const QString &Dest, bool Full) {
   if (Report.isEmpty() || (!Full && !Save->isEnabled()))
