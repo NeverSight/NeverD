@@ -60,6 +60,23 @@ class HostAPITests(unittest.TestCase):
         self.assertEqual(library.neverd_dyld_cache_images_json.argtypes,
                          [ctypes.c_char_p])
 
+    def test_initial_view_warmup_releases_the_returned_page(self) -> None:
+        from neverd_plugin.ffi import HostAPI
+
+        library = _FakeLibrary()
+        page = ctypes.create_string_buffer(b'{"prepared":1}')
+        address = ctypes.addressof(page)
+        warm = mock.Mock(return_value=address)
+        library.neverd_warm_initial_view_json = _FakeFunction(warm)
+        session = ctypes.c_void_p(123)
+
+        self.assertEqual(
+            HostAPI(library).owned_string("neverd_warm_initial_view_json", session),
+            '{"prepared":1}',
+        )
+        warm.assert_called_once_with(session)
+        self.assertEqual(library.freed, [address])
+
     def test_owned_string_is_decoded_and_freed_exactly_once(self) -> None:
         from neverd_plugin.ffi import HostAPI
 
