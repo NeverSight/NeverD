@@ -156,6 +156,13 @@ std::string neverd::safety::toJson(const ScanReport &Scan, bool Pretty) {
         {"unknown", Unknown},
         {"budget_hit",
          R.BudgetHit || Result.State == ScanState::BudgetExhausted}};
+    if (Result.DirectReads) {
+      const DirectReadInitialization &Reads = *Result.DirectReads;
+      Summary["direct_read_initialization"] = json::Object{
+          {"preceding_constant_store", Reads.PrecedingConstantStore},
+          {"local_stack", Reads.LocalStack},
+          {"outside_or_unresolved", Reads.OutsideOrUnresolved}};
+    }
     if (Enabled) {
       Complete &= Finished;
       AnyAnalyzed |= Finished || R.AnalysisComplete || !R.Findings.empty();

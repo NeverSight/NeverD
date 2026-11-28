@@ -23,9 +23,17 @@
 
 #include "llvm/ADT/STLFunctionalExtras.h"
 
+#include <cstdint>
 #include <vector>
 
 namespace neverd::safety {
+
+/// Counts direct MedIR loads and read-modify-write operations visited by Audit.
+struct DirectReadInitialization {
+  uint64_t PrecedingConstantStore = 0;
+  uint64_t LocalStack = 0;
+  uint64_t OutsideOrUnresolved = 0;
+};
 
 /// Run the heap-lifetime audit over every lifted function and return one
 /// finding per detected defect.
@@ -43,6 +51,13 @@ std::vector<Finding> auditMemory(const AnalysisInput &In,
                                  const SinkCatalog &Cat,
                                  const SafetyBudgets &Budgets,
                                  llvm::function_ref<bool()> Canceled);
+
+/// Collect initialization coverage in the same traversal as the audit.
+std::vector<Finding> auditMemory(const AnalysisInput &In,
+                                 const SinkCatalog &Cat,
+                                 const SafetyBudgets &Budgets,
+                                 llvm::function_ref<bool()> Canceled,
+                                 DirectReadInitialization &DirectReads);
 
 } // namespace neverd::safety
 
