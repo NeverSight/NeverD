@@ -5,6 +5,7 @@
     .space 4096
 stack_top:
     .section .text.start,"ax",@progbits
+    .p2align 2
     .globl _start
     .ent _start
 _start:
