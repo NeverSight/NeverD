@@ -139,7 +139,7 @@ public:
   };
   struct DefinitionSourceTypes {
     std::vector<SourcePointerType> Parameters;
-    std::map<unsigned, TypeRef> LowWords;
+    std::map<unsigned, TypeRef> NarrowIntegers;
     SourcePointerType Result;
   };
   /// Source types bound to the definition's original entry. Pointer bridges
@@ -164,7 +164,8 @@ public:
   void requireCSpelling(const llvm::Function &Callee) const;
   std::string sourceScalarType(llvm::Type *Type, bool Signed) const;
   std::string sourceFunctionResultType(const llvm::Function &Function) const;
-  static bool observesOnlyLowWord(const llvm::Argument &Arg);
+  static bool canNarrowIntegerParameter(const llvm::Argument &Arg,
+                                        const NdType &Declared);
   /// \p Fn's C declaration of \p Declarator; with \p Params, of its first
   /// that many parameters only.
   std::string sourceFunctionDeclaration(

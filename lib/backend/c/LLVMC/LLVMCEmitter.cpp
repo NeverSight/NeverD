@@ -2440,11 +2440,20 @@ static bool readsOnlyLowBits(const llvm::User &User, unsigned Bits) {
   return false;
 }
 
-bool LLVMCWriter::observesOnlyLowWord(const llvm::Argument &Arg) {
-  return Arg.getType()->isIntegerTy(64) && !Arg.use_empty() &&
-         llvm::all_of(Arg.users(), [](const llvm::User *Use) {
-           return readsOnlyLowBits(*Use, 32);
-         });
+bool LLVMCWriter::canNarrowIntegerParameter(const llvm::Argument &Arg,
+                                            const NdType &Declared) {
+  const auto *Carrier = Arg.getType();
+  if (Declared.Kind != NdTypeKind::Int || !std::has_single_bit(Declared.Size) ||
+      (!Carrier->isIntegerTy(32) && !Carrier->isIntegerTy(64)) ||
+      Arg.use_empty())
+    return false;
+  const unsigned Bits = Declared.Size * 8;
+  return Bits < Carrier->getIntegerBitWidth() &&
+         llvm::all_of(
+             Arg.users(),
+             [Bits](const llvm::User *Use) {
+               return readsOnlyLowBits(*Use, Bits);
+             });
 }
 
 TypeRef LLVMCWriter::boundIntegerResult(const llvm::Function &Fn) const {
@@ -3044,12 +3053,12 @@ LLVMCWriter::sourceFunctionDeclaration(const llvm::Function &Fn,
   if (Count == 0 && !FT->isVarArg()) {
     Result += "void";
   } else if (Count) {
-    const auto &Words = definitionSourceTypes(Fn).LowWords;
+    const auto &Integers = definitionSourceTypes(Fn).NarrowIntegers;
     for (unsigned I = 0; I < Count; ++I) {
       if (I)
         Result += ", ";
-      if (auto Word = Words.find(I); Word != Words.end())
-        Result += typeToC(Word->second);
+      if (auto It = Integers.find(I); It != Integers.end())
+        Result += typeToC(It->second);
       else
         Result += sourceScalarType(
             FT->getParamType(I),

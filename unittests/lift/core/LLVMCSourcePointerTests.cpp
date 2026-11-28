@@ -296,6 +296,87 @@ TEST(LLVMCSourceParameters, DebugWordRequiresUnobservedUpperBits) {
   EXPECT_EQ(Render().find("low(uint32_t"), std::string::npos);
 }
 
+TEST(LLVMCSourceParameters, NarrowDebugParametersRespectObservedBits) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"(
+    target datalayout = "e-p:64:64"
+    define i32 @byte_mask(i32 %input) {
+      %r = and i32 %input, 129
+      ret i32 %r
+    }
+    define i32 @short_bits(i64 %input) {
+      %s = trunc i64 %input to i16
+      %r = zext i16 %s to i32
+      ret i32 %r
+    }
+    define i32 @uses_bit_eight(i32 %input) {
+      %r = and i32 %input, 256
+      ret i32 %r
+    }
+    define i32 @call_both(i32 %x, i64 %y) {
+      %a = call i32 @byte_mask(i32 %x)
+      %b = call i32 @short_bits(i64 %y)
+      %r = add i32 %a, %b
+      ret i32 %r
+    }
+  )",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  PointerContext Debug;
+  va_t Entry = 0x1000;
+  auto Bind = [&](const char *Name, unsigned Bytes, bool Signed) {
+    auto &Signature = Debug.Functions[Entry];
+    Signature.Addr = Entry;
+    Signature.Name = Name;
+    Signature.ReturnType = NdType::makeInt(4, false);
+    Signature.Params = {{"input", NdType::makeInt(Bytes, Signed)}};
+    rewrite_source::setOriginalVA(*Module->getFunction(Name), Entry++);
+  };
+  Bind("byte_mask", 1, false);
+  Bind("short_bits", 2, true);
+  Bind("uses_bit_eight", 1, false);
+
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::ELF;
+  auto Render = [&](const llvm::Function *Only = nullptr) {
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    EXPECT_TRUE(
+        LLVMCEmitter().emit(*Module, Out, Options, &Debug, nullptr, Only));
+    return Text;
+  };
+  const std::string Header = "#include <stdint.h>\n"
+                             "uint32_t byte_mask(uint8_t);\n"
+                             "uint32_t short_bits(int16_t);\n";
+  const std::string Whole = Render();
+  EXPECT_NE(Whole.find("uses_bit_eight(uint32_t input)"), std::string::npos);
+  source_call_execution_test::checkSyntax(
+      Header + Render(Module->getFunction("call_both")), {"-std=c11"});
+  const std::string Test = Header + Whole + R"(
+    int main(void) {
+      for (int32_t i = INT16_MIN; i <= INT16_MAX; ++i) {
+        uint32_t bits = (uint16_t)i;
+        if (byte_mask((uint8_t)i) != (bits & 129) ||
+            short_bits((int16_t)i) != bits ||
+            uses_bit_eight(bits) != (bits & 256) ||
+            call_both(bits | 0xffff0000u, bits | UINT64_C(0x1234000000000000))
+                != (bits & 129) + bits)
+          return 1;
+      }
+      return 0;
+    }
+  )";
+  for (const auto *Optimization : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(Test, {Optimization});
+
+  Options.Format = BinaryFormat::COFF;
+  source_call_execution_test::checkSyntax(
+      Header + Render(),
+      {"--target=x86_64-pc-windows-msvc", "-ffreestanding", "-std=c11"});
+}
+
 TEST(LLVMCSourcePointers, AddressBoundZeroArgumentStdcallKeepsItsLinkage) {
   constexpr va_t Entry = 0x2000;
   llvm::LLVMContext Context;
