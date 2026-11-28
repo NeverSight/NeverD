@@ -14,7 +14,7 @@ session or host APIC.
 The producer must establish that this limited profile applies and serialize
 access to the object. Arrival routing/timing, APIC configuration changes,
 NMI/ExtINT arbitration, spurious/software interrupts, SynIC/automatic EOI,
-posted interrupts, timer/device behavior and CPU wakeup are outside it.
+posted interrupts and external device timing have separate owners. The mixed-mode CPU combines the fixed bank with the deadline timer described below.
 The class does not construct a complete interrupt controller or certify a
 saved machine as runnable.
 
@@ -66,6 +66,23 @@ that external request and retain any unfinished routing obligation. The local
 transition does not acknowledge an I/O APIC or deassert a device line. TMR and
 IRR stay unchanged, including an IRR request for the same vector. An empty ISR
 produces no EOI and no mutation.
+
+## Local TSC deadline
+
+On a CPU that advertises CPUID.01H:ECX[24], bind
+`X86ModeState::DeadlineTimer` and pass admitted timer-LVT changes to
+`setLocalVector`. The mode executor then routes guest RDMSR and WRMSR for
+IA32_TSC_DEADLINE (0x6E0) to the per-CPU timer. Switching into or out of
+deadline mode disarms it. A mask or vector change within that mode preserves
+the programmed value. Writing zero disarms the timer. INIT resets the bank.
+
+`X86ModeInterrupts::SampledTSC` supplies an absolute guest TSC at the next
+serialized boundary, including HLT and a zero instruction budget. A due
+deadline clears once. If the LVT is unmasked, its vector enters IRR as an
+edge. IF, TPR and ISR priority subsequently govern acceptance. A concurrent
+SMI can enter firmware first, leaving the deadline interrupt pending until
+RSM restores an eligible processor state. Count-based LVT timers use a
+separate clock. [Intel local APIC timer](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html) · [KVM local APIC implementation](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/lapic.c)
 
 ## CR8 and TPR coherence
 

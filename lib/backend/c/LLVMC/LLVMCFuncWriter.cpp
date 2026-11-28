@@ -3463,7 +3463,7 @@ LLVMCWriter::definitionSourceTypes(const llvm::Function &Fn) const {
   const bool ProgramMain = !Indirect && declaresProgramMain(*Signature);
   if (Selected)
     Types.Parameters.resize(Fn.arg_size());
-  const bool WordArguments =
+  const bool NarrowArguments =
       Bindings && !Fn.isVarArg() &&
       Fn.getCallingConv() == llvm::CallingConv::C &&
       getTargetRegInfo(Opts.TheArch).PointerSize == sizeof(uint64_t) &&
@@ -3486,11 +3486,9 @@ LLVMCWriter::definitionSourceTypes(const llvm::Function &Fn) const {
     if (!DebugIndex)
       continue;
     const auto &Type = Signature->Params[*DebugIndex].second;
-    if (WordArguments && Type && Type->Kind == NdTypeKind::Int &&
-        Type->Size == sizeof(uint32_t) && observesOnlyLowWord(Arg)) {
-      Types.LowWords.emplace(Arg.getArgNo(),
-                             NdType::makeInt(Type->Size, Type->IsSigned));
-    }
+    if (NarrowArguments && Type && canNarrowIntegerParameter(Arg, *Type))
+      Types.NarrowIntegers.emplace(Arg.getArgNo(),
+                                   NdType::makeInt(Type->Size, Type->IsSigned));
     if (!Selected || !Type || Type->Kind != NdTypeKind::Ptr || !Type->Pointee)
       continue;
     const bool Record = Type->Pointee->Kind == NdTypeKind::Struct &&
@@ -10668,9 +10666,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     const std::optional<size_t> DebugIdx =
         debugParamIndexOf(ParamIdx, SretParamIdx);
     if (DebugIdx) {
-      if (auto Word = DefinitionTypes.LowWords.find(ParamIdx);
-          Word != DefinitionTypes.LowWords.end())
-        return typeToC(Word->second);
+      if (auto It = DefinitionTypes.NarrowIntegers.find(ParamIdx);
+          It != DefinitionTypes.NarrowIntegers.end())
+        return typeToC(It->second);
       TypeRef Ty = DebugFn->Params[*DebugIdx].second;
       if (Ty && Ty->Kind == NdTypeKind::Struct && Ty->IsEnum &&
           !Ty->SourceName.empty()) {

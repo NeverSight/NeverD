@@ -736,6 +736,17 @@ TEST_F(PEFixedImageTest, RawCodeProviderMustSupplyMatchingPreparedDomain) {
   auto Stale = specializeInterpreter(P, {Base + 0x1000}, Changed);
   EXPECT_EQ(Stale.Status, SpecializationStatus::InvalidInput);
   EXPECT_EQ(P.Fetches, 0u);
+  Changed = Options;
+  Changed.MaxNativeReturnTargets = 2;
+  Stale = specializeInterpreter(P, {Base + 0x1000}, Changed);
+  EXPECT_EQ(Stale.Status, SpecializationStatus::InvalidInput);
+  EXPECT_EQ(P.Fetches, 0u);
+  const auto WithReturnLimit =
+      specializeBinaryInterpreter(Image, Base + 0x1000, Changed);
+  ASSERT_TRUE(WithReturnLimit.complete()) << WithReturnLimit.Diagnostic;
+  ASSERT_TRUE(WithReturnLimit.RawEnvironment);
+  EXPECT_NE(WithReturnLimit.RawEnvironment->Domain->DomainDigest,
+            Good.RawEnvironment->Domain->DomainDigest);
   auto Valid = specializeInterpreter(P, {Base + 0x1000}, Options);
   EXPECT_EQ(Valid.Status, SpecializationStatus::Unsupported);
   EXPECT_EQ(P.Fetches, 1u);
