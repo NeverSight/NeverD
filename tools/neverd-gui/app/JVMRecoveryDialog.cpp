@@ -28,10 +28,15 @@
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QStringTokenizer>
+#include <QStringView>
 #include <QTabWidget>
 #include <QTextBlock>
+#include <QTextCursor>
+#include <QTextDocument>
 #include <QVBoxLayout>
 #include <algorithm>
 
@@ -74,29 +79,60 @@ void cacheFirstScreen(QPlainTextEdit &View) {
     if (Block.length() <= Columns)
       Block.layout()->setCacheEnabled(true);
 }
-void setCodeText(QPlainTextEdit &View, const QString &Text) {
+// An ASCII JSON line occupies one document block. Replacing the text within
+// changed blocks keeps the layouts of matching bytecode, IR and evidence rows.
+bool updateJSONLines(QPlainTextEdit &View, const QString &Text) {
+  auto *Document = View.document();
+  if (Document->isEmpty() || Text.count(u'\n') + 1 != Document->blockCount())
+    return false;
+
+  QTextCursor Edit(Document);
+  Edit.beginEditBlock();
+  auto Block = Document->begin();
+  for (QStringView Line : QStringView(Text).tokenize(u'\n')) {
+    if (Line != Block.text()) {
+      Edit.setPosition(Block.position());
+      Edit.setPosition(Block.position() + Block.length() - 1,
+                       QTextCursor::KeepAnchor);
+      Edit.insertText(Line.toString());
+    }
+    Block = Block.next();
+  }
+  Edit.endEditBlock();
+  Document->setModified(false);
+  View.setTextCursor(QTextCursor(Document));
+  View.horizontalScrollBar()->setValue(View.horizontalScrollBar()->minimum());
+  View.verticalScrollBar()->setValue(View.verticalScrollBar()->minimum());
+  return true;
+}
+void setCodeText(QPlainTextEdit &View, const QString &Text,
+                 bool IsJSON = false) {
   // Keep normal shaping for Unicode source, names and diagnostics.
   QFont TextFont = View.font();
-  if (std::all_of(Text.cbegin(), Text.cend(),
-                  [](QChar C) { return C.unicode() < 0x80; }))
+  const bool ASCII = std::all_of(Text.cbegin(), Text.cend(),
+                                 [](QChar C) { return C.unicode() < 0x80; });
+  if (ASCII)
     TextFont = literalFont(TextFont);
   if (View.document()->defaultFont() != TextFont)
     View.document()->setDefaultFont(TextFont);
-  View.setPlainText(Text);
+  if (!IsJSON || !ASCII || !updateJSONLines(View, Text))
+    View.setPlainText(Text);
   cacheFirstScreen(View);
 }
 } // namespace
 
 class JVMRecoveryDialog::DetailView final : public QPlainTextEdit {
 public:
-  explicit DetailView(JVMRecoveryDialog &Dialog) : Dialog(Dialog) {}
+  explicit DetailView(JVMRecoveryDialog &Dialog) : Dialog(Dialog) {
+    setUndoRedoEnabled(false);
+  }
 
   void invalidate() { Dirty = true; }
   void prepare() {
     if (!Dirty)
       return;
     Dirty = false;
-    setCodeText(*this, Dialog.detailText(this));
+    setCodeText(*this, Dialog.detailText(this), /*IsJSON=*/true);
   }
   void setVisible(bool Visible) override {
     // Showing a plain-text editor lays out its document to size the scrollbars.
