@@ -872,7 +872,7 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
   std::ofstream(Source) << kJoinedSigningBody;
   const char *Export = std::getenv(kJoinedModelExport);
   unsigned Published = 0, Refused = 0, ModelCases = 0, VerifiedRows = 0,
-           ResolvedPCs = 0, VerifiedIslands = 0;
+           ResolvedPCs = 0, VerifiedIslands = 0, StackPCs = 0, SharedExits = 0;
   std::string Calls, Bodies;
   constexpr auto Word = aarch64::kInsnSize;
   enum Use { Common, Distinct, Local, Returns, Refuse };
@@ -880,7 +880,23 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
     const char *Flag;
     Use Behavior;
   };
-  constexpr Case Cases[] = {{kJoinForwardStore, Distinct},
+  constexpr Case Cases[] = {{kJoinAddZero, Distinct},
+                            {kJoinSubZero, Distinct},
+                            {kJoinShiftedZero, Distinct},
+                            {kJoinKeepLR, Distinct},
+                            {kJoinTwoCommon, Common},
+                            {kJoinTwoDistinct, Distinct},
+                            {kJoinSpill, Distinct},
+                            {kJoinSpillClear, Distinct},
+                            {kJoinSpillArms, Distinct},
+                            {kJoinSpillPartial, Refuse},
+                            {kJoinSpillAlias, Refuse},
+                            {kJoinSpillReused, Refuse},
+                            {kJoinSpillOverwrite, Refuse},
+                            {kJoinHalfCopy, Refuse},
+                            {kJoinAdjustedCopy, Refuse},
+                            {kJoinTwoWrong, Refuse},
+                            {kJoinForwardStore, Distinct},
                             {kJoinForwardReturn, Returns},
                             {kJoinFarStore, Distinct},
                             {kJoinFarReturn, Returns},
@@ -906,6 +922,7 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
                             {kJoinWrongKey, Refuse}};
   for (bool KeyB : {false, true})
     for (auto [Flag, Behavior] : Cases) {
+      const bool DualExit = Flag == kJoinTwoCommon || Flag == kJoinTwoDistinct;
       const bool Forward =
           Flag == kJoinForwardStore || Flag == kJoinForwardReturn;
       const bool Far = Flag == kJoinFarStore || Flag == kJoinFarReturn;
@@ -927,7 +944,8 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
       ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
       const auto *Entry = Image->findSymbol(kSignalTickSymbol);
       ASSERT_NE(Entry, nullptr);
-      va_t Owner = Entry->Addr;
+      const va_t SourceOwner = Entry->Addr;
+      va_t Owner = SourceOwner;
       llvm::SmallVector<va_t, 2> Original;
       const auto Inspect = [&] {
         const auto *Frame = Image->ExceptionMetadata.findFunction(Owner);
@@ -962,7 +980,9 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
             Auths.push_back(Owner + Offset);
           }
         }
-        ASSERT_EQ(Auths.size(), Split ? 2u : 1u);
+        ASSERT_EQ(Auths.size(), Split || DualExit ? 2u : 1u);
+        if (DualExit)
+          SharedExits += Auths.size();
         ASSERT_EQ(Signs.size(), Behavior == Common ? 1u : 2u);
         constexpr auto MaxDistance =
             kAArch64PAuthLRImmMask * kAArch64PAuthLRScale;
@@ -977,6 +997,34 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
         }
         auto Rows = recoverDarwinAArch64Unwind(*Image, *Frame);
         ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+        if (Owner == SourceOwner &&
+            (Flag == kJoinSpillClear || Flag == kJoinSpillArms)) {
+          const auto StackOnly = llvm::find_if(*Rows, [](const auto &Row) {
+            return Row.LiveSigningModifier &&
+                   Row.LiveSigningModifier->CFASlot &&
+                   Row.LiveSigningModifier->Register ==
+                       aarch64_unwind::kRegisters;
+          });
+          ASSERT_NE(StackOnly, Rows->end());
+          std::array<uint8_t, kJoinStackBytes> Stack{};
+          const auto Range = Frame->CodeRange;
+          EXPECT_FALSE(
+              prepareDarwinArm64eSystemCaller(*StackOnly, Range, Range.End));
+          EXPECT_FALSE(prepareDarwinArm64eSystemCaller(*StackOnly, Range,
+                                                       Range.End, {}, Stack));
+          for (va_t Sign : Signs) {
+            const va_t Slid = Range.End + Sign - Range.Begin;
+            writeLE<va_t>(Stack.data(), Slid);
+            const auto Plan = prepareDarwinArm64eSystemCaller(
+                *StackOnly, Range, Range.End, {}, Stack);
+            ASSERT_TRUE(Plan);
+            EXPECT_EQ(Plan->Frame.SigningPC, Slid);
+            EXPECT_FALSE(prepareDarwinArm64eSystemCaller(
+                *StackOnly, Range, Range.End, {},
+                llvm::ArrayRef(Stack).take_front(sizeof(Slid) - 1)));
+            ++StackPCs;
+          }
+        }
         for (auto PC : Signs) {
           const auto &Row =
               aarch64UnwindRowAt(*Rows, PC + Word - Frame->CodeRange.Begin)
@@ -1074,7 +1122,8 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
                   kJoinModelCall, ModelCases, int64_t(Original.front() - Owner),
                   int64_t(Original.back() - Owner), unsigned(Behavior != Local),
                   unsigned(Behavior != Returns && Behavior != Local),
-                  unsigned(Pressure), unsigned(Flag == kJoinPressurePrefix))
+                  unsigned(Pressure), unsigned(Flag == kJoinPressurePrefix),
+                  unsigned(DualExit))
                   .str();
           Bodies += llvm::formatv(kSigningModelPage, branch::A64PageBytes,
                                   Owner % branch::A64PageBytes)
@@ -1151,6 +1200,8 @@ TEST(AArch64LiftedImage, JoinedSigningModifiersFollowEachIncomingPath) {
   RecordProperty(kSigningRefusals, Refused);
   RecordProperty(kJoinedSnapshotCases, ResolvedPCs);
   RecordProperty(kJoinVerifiedIslands, VerifiedIslands);
+  RecordProperty(kJoinedStackCases, StackPCs);
+  RecordProperty(kJoinedDualExits, SharedExits);
   RecordProperty(kSigningModelCases, ModelCases);
 #else
   GTEST_SKIP() << kUnavailable;

@@ -32,7 +32,7 @@ struct MachOAuthenticationReplacement {
 
 struct MachOSigningAddress {
   enum { None, Local, Observable } Use = None;
-  std::optional<MachOAuthenticationReplacement> Authentication;
+  llvm::SmallVector<MachOAuthenticationReplacement, 0> Authentications{};
   /// Retained instruction identity in a previously published image.
   std::optional<uint32_t> InstalledSigner;
   /// A following published address pair restores the authenticated register.

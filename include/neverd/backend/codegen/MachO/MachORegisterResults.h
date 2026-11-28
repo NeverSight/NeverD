@@ -20,6 +20,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 
@@ -138,26 +139,34 @@ struct MachOLiftedSourceAddress {
   uint64_t AssemblyOffset = 0;
   /// Inserting a word here preserves the body's local PC-relative encodings.
   bool CanExpand = true;
-  std::optional<MachOSigningConsumer> Authentication;
+  llvm::SmallVector<MachOSigningConsumer, 0> Authentications{};
 
-  va_t signingExpansionSite() const {
-    return Authentication->PrepareAtSource ? Instruction
-                                           : Authentication->Instruction;
+  /// Each live modifier is prepared once here, even if two exits use it.
+  llvm::SmallVector<unsigned, 1> preparedRegisters() const {
+    llvm::SmallVector<unsigned, 1> Result;
+    for (const auto &Auth : Authentications)
+      if (Auth.PrepareAtSource &&
+          !llvm::is_contained(Result, *Auth.ModifierRegister))
+        Result.push_back(*Auth.ModifierRegister);
+    return Result;
   }
 
   template <typename Fn> void forEachSigningExpansion(Fn Visit) const {
-    if (!Authentication)
-      return;
-    if (const auto Words = Authentication->insertedWords())
-      Visit(signingExpansionSite(), Words);
-    for (const auto &Route : Authentication->Routes)
-      if (Route.IslandWords)
-        Visit(Route.Signer, Route.IslandWords);
+    if (const auto Count = preparedRegisters().size())
+      Visit(Instruction, Count);
+    for (const auto &Auth : Authentications) {
+      if (!Auth.PrepareAtSource && Auth.insertedWords())
+        Visit(Auth.Instruction, Auth.insertedWords());
+      for (const auto &Route : Auth.Routes)
+        if (Route.IslandWords)
+          Visit(Route.Signer, Route.IslandWords);
+    }
   }
 
   bool expandsAuthentication() const {
-    return Authentication &&
-           (Authentication->insertedWords() || !Authentication->Routes.empty());
+    return llvm::any_of(Authentications, [](const auto &Auth) {
+      return Auth.insertedWords() || !Auth.Routes.empty();
+    });
   }
 };
 

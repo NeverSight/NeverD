@@ -2806,10 +2806,22 @@ old storage, both lifting and publication check the retained instruction and
 follow its owning entry to the current function. An address can be materialized
 after the last authentication in the function.
 
-Full-width MOV and ADD/SUB by zero carry a joined signing-PC relation
-through a register copy. A full-width self-copy of LR also preserves the
-relation between LR and its modifier. A partial copy or nonzero adjustment cannot
-supply that proof.
+The publisher and unwind recovery recognize full-width MOV and ADD/SUB by
+zero, including shifted zero and self-copies of LR. At two authentication exits
+that share an address producer, each exit must independently prove its LR, key
+and modifier on every incoming path. Both exits may reuse the same relocated
+signing PC when its register survives from every reaching producer. Explicit
+returns and stores of the address retain its original value.
+
+A full-width signed-PC modifier can also reach an authenticator through an
+active stack slot. The proof follows the slot relative to the caller's CFA
+through each predecessor, including a store on each arm before a join. A
+partial overwrite, a write that may alias the slot or a release and reuse of
+the slot invalidates that proof. An interruption while the only surviving
+copy is on the stack requires a bounded snapshot beginning at the interrupted
+SP. The five-argument `prepareDarwinArm64eSystemCaller` checks that the entire
+slot is available and that its loaded value matches a proved signing PC at the
+image's load address.
 
 The unwind analysis also recognizes a full-width literal load from an
 immutable, dyld-rebased slot as a possible signing address. Recovery checks
@@ -2883,6 +2895,19 @@ and EL1 under all four EnPACM settings (1,344 calls per export).
 [macOS Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46109512420) ·
 [Arm FVP, M4 export](https://github.com/gmh5225/test_mac_intel/actions/runs/46110737909) ·
 [Arm FVP, hosted export](https://github.com/gmh5225/test_mac_intel/actions/runs/46113033008)
+
+The M4 replay recovered all 32 valid publications previously refused in the
+original 64 attempts. It rejected all four cases with an overwritten slot. Across IA and IB, the expanded regression published
+92 images at O0 and O2, checked 410 unwind rows and rejected
+34 contradictory inputs. It resolved 8 stack-only signing PCs and checked
+24 authentication exits in source and published images.
+The hosted macOS Release run passed 367 tests with zero skips. For each
+Release export the Arm model executed 138 bodies in 2,400 calls. A separate output
+slot verified which authentication exit ran for each signing path.
+[Qualification record](evidence/arm64e-shared-signing-carriers-2026-11-28.json) ·
+[macOS Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46130085765) ·
+[Arm model, M4 export](https://github.com/gmh5225/test_mac_intel/actions/runs/46133896744) ·
+[Arm model, hosted export](https://github.com/gmh5225/test_mac_intel/actions/runs/46133780808)
 
 ### Native x1 runner qualification
 
