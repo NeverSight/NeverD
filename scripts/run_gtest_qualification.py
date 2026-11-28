@@ -16,9 +16,13 @@ import sys
 import xml.etree.ElementTree as ET
 
 if __package__:
-    from .run_lift_qualification import audit, sha256
+    from .run_lift_qualification import (
+        RESULT_CHECKS, QualificationError, QualificationReport, sha256,
+    )
 else:
-    from run_lift_qualification import audit, sha256
+    from run_lift_qualification import (
+        RESULT_CHECKS, QualificationError, QualificationReport, sha256,
+    )
 
 
 def identities(listing: str, minimum: int) -> tuple[str, ...]:
@@ -50,23 +54,35 @@ def run(binary: Path, output: Path, test_filter: str, minimum: int,
     output.parent.mkdir(parents=True, exist_ok=True)
     receipt = output.with_suffix(".qualification.json")
     listing_path = output.with_suffix(".discovered.txt")
-    if binary in (output, receipt, listing_path):
+    verification = output.with_suffix(".verification.json")
+    if binary in (output, receipt, listing_path, verification):
         raise ValueError("qualification output must not overwrite its binary")
     # No failed discovery or execution may leave an old successful receipt.
-    for path in (output, receipt, listing_path):
+    for path in (output, receipt, listing_path, verification):
         path.unlink(missing_ok=True)
     args = [str(binary), "--gtest_filter=" + test_filter]
-    digest = sha256(binary)
-    discovery = subprocess.run(args + ["--gtest_list_tests"], check=True,
-                               text=True, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, timeout=timeout)
-    listing_path.write_text(discovery.stdout, encoding="utf-8")
-    names = identities(discovery.stdout, minimum)
-    result = subprocess.run(args + ["--gtest_output=xml:" + str(output)],
-                            timeout=timeout)
-    outcome = audit(ET.parse(output).getroot(), names, result.returncode)
-    if sha256(binary) != digest:
-        raise ValueError("qualification binary changed during execution")
+    progress = QualificationReport({
+        "input": "a readable test binary",
+        "discovery": "the complete filtered test inventory",
+        **RESULT_CHECKS,
+        "binary identity": "matching binary hashes before and after execution",
+    })
+    try:
+        with progress.check("input"):
+            digest = sha256(binary)
+        with progress.check("discovery"):
+            discovery = subprocess.run(args + ["--gtest_list_tests"], check=True,
+                                       text=True, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, timeout=timeout)
+            listing_path.write_text(discovery.stdout, encoding="utf-8")
+            names = identities(discovery.stdout, minimum)
+        outcome = progress.run_tests(args, output, names, timeout=timeout)
+        with progress.check("binary identity"):
+            if sha256(binary) != digest:
+                progress.observations = {}
+                raise QualificationError("qualification binary changed during execution")
+    finally:
+        progress.write(verification)
     report = {"binary_sha256": digest, "filter": test_filter,
               "minimum_tests": minimum, "outcome": outcome}
     receipt.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
