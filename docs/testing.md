@@ -25962,6 +25962,8 @@ prototypes. The native pointer suite compiles a complete public MinGW toy and
 checks both matching CRT layouts and rejection of mismatched MSVCRT/UCRT
 headers or same-offset fields of a different type. These source checks do not certify native kernel or ARM64 execution.
 
+`LLVMCSourceParameters.DebugWordRequiresUnobservedUpperBits` checks the C definition and a separately selected direct caller against a 32-bit header. It covers truncation, masking, upper-bit reads, a stored function address and exact LLVM-type export.
+
 ## Repeated image memory in C
 
 `X86RepState.ImageCopiesRetainEveryAccessedByte` recompiles both C routes at

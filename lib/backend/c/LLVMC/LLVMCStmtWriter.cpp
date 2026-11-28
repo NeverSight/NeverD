@@ -7186,7 +7186,7 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     }
     if (const auto *Callee = Call.getCalledFunction();
         Callee && !needsCallSiteCType(Call)) {
-      const auto &Parameters = definitionPointerTypes(*Callee).Parameters;
+      const auto &Parameters = definitionSourceTypes(*Callee).Parameters;
       if (ArgIdx < Parameters.size() && Parameters[ArgIdx].Type) {
         Expr += imagePointerArgument(Operand,
                                      "(" + Parameters[ArgIdx].declaration() +
