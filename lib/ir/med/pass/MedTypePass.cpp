@@ -22,6 +22,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
@@ -1219,6 +1220,8 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
   // path that genuinely leaves a floating-point value in the FP return register
   // (fpReturnElemSize sees a real FLOAT producer, not a live-in self-copy)
   // wins.
+  bool AnyVMXReturn = false;
+  bool AllVMXReturns = isPowerPC(TheArch) && !Func.CallersReadIntegerResult;
   bool AnyFloat = false;
   uint16_t BestFloatElem = 0;
   const MedOp *BestInt = nullptr;
@@ -1594,6 +1597,10 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
         }
         const auto Rit2 = ScanFrom++;
         const int OpDist = Dist++;
+        // A call clobbers v2. An earlier VMX write cannot reach this return.
+        if (AllVMXReturns && !FPRegWriteOp &&
+            (Rit2->Opcode == NdOp::CALL || Rit2->Opcode == NdOp::INDIR_CALL))
+          AllVMXReturns = false;
         if (Rit2->Output.Kind != MedVar::Reg || Rit2->Output.Size == 0)
           continue;
 
@@ -1639,6 +1646,16 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
             }
           }
         }
+      }
+
+      // The PPC vector bank is separate from the scalar FPRs. A whole VMX
+      // producer reaching v2 at every exit proves a vector result.
+      if (AllVMXReturns) {
+        AllVMXReturns =
+            IntDist < 0 && FPRegWriteOp &&
+            hasValidMedIntrinsicId(*FPRegWriteOp) &&
+            FPRegWriteOp->Inputs[0].ConstVal == unsigned(Intrinsic::PPCVaddubm);
+        AnyVMXReturn |= AllVMXReturns;
       }
 
       // A shared epilogue can merge every return path before a single `ret`,
@@ -1759,6 +1776,11 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
     }
   }
 
+  if (AllVMXReturns && AnyVMXReturn && !BestIntPhiWidth &&
+      !WidestReturnedBytes) {
+    DefinedReturnBytes = ppc::VectorBytes;
+    return ppc::byteVectorType();
+  }
   if (AnyFloat)
     return NdType::makeFloat(BestFloatElem ? BestFloatElem : 8);
   uint16_t IntSize = 0;
@@ -1965,7 +1987,9 @@ static void inferParamTypes(MedFunc &Func, const TargetRegInfo &TRI,
         !TRI.isFrameOrLinkReg(MP.RegOff)) {
       TP.Type = NdType::makePtr();
       TP.Type->Size = TRI.PointerSize;
-    } else if (Scalar != Func.FPParamScalarBytes.end())
+    } else if (isPowerPC(TRI.TheArch) && TRI.isVectorReg(MP.RegOff))
+      TP.Type = ppc::byteVectorType();
+    else if (Scalar != Func.FPParamScalarBytes.end())
       TP.Type = NdType::makeFloat(Scalar->second);
     // A scalar a vector register carries is a float of its width, as the
     // ABI passes it there (MedLLVMEmitter's fpAbiType): declared an integer
@@ -2228,6 +2252,8 @@ void inferMedTypes(MedFunc &Func, Arch TheArch,
       inferReturnType(Func, TRI, TheArch, ReturnViaX87, Func.DefinedReturnBytes,
                       CalleeFloatReturns);
   Func.FPReturnViaX87 = ReturnViaX87;
+  if (isPowerPC(TheArch))
+    Func.ReturnsVectorRegister = Func.ReturnType->Kind == NdTypeKind::Vector;
   inferParamTypes(Func, TRI, EntryParameterValues(Func, TRI.PointerSize));
   inferLocalTypes(Func);
 

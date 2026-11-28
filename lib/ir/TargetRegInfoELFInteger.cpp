@@ -13,6 +13,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/lift/IntegerRegisters.h"
+#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 #include "neverd/loader/ELF/PowerPCABI.h"
 
 #include <array>
@@ -38,6 +39,11 @@ constexpr uint64_t RVSaved[] = {gpr(3),  gpr(4),  gpr(8),  gpr(9),  gpr(18),
                                 gpr(19), gpr(20), gpr(21), gpr(22), gpr(23),
                                 gpr(24), gpr(25), gpr(26), gpr(27)};
 constexpr auto PPCSaved = registers<14, 18>();
+constexpr uint64_t PPCVectors[] = {
+#define NEVERD_PPC_VMX_REGISTER(Index) ppc::vr(Index),
+#include "neverd/lift/PowerPC/PowerPCVMXRegisters.def"
+};
+static_assert(std::size(PPCVectors) == ppc::VectorCount);
 constexpr const char *RVNames[] = {
     "zero", "ra", "sp", "gp", "tp",  "t0",  "t1", "t2", "s0", "s1", "a0",
     "a1",   "a2", "a3", "a4", "a5",  "a6",  "a7", "s2", "s3", "s4", "s5",
@@ -60,14 +66,15 @@ const char *rvName(uint64_t Off, uint16_t) {
                                                         : "unknown";
 }
 const char *ppcName(uint64_t Off, uint16_t) {
-  using namespace integerreg;
+  using integerreg::PC;
+  using namespace integerreg::ppc;
   if (Off == PC)
     return "pc";
-  if (Off == ppc::LR)
+  if (Off == LR)
     return "lr";
-  if (Off == ppc::CTR)
+  if (Off == CTR)
     return "ctr";
-  if (Off == ppc::XER)
+  if (Off == XER)
     return "xer";
   static constexpr const char *CRNames[] = {
       "cr0_lt", "cr0_gt", "cr0_eq", "cr0_so", "cr1_lt", "cr1_gt", "cr1_eq",
@@ -75,8 +82,16 @@ const char *ppcName(uint64_t Off, uint16_t) {
       "cr3_eq", "cr3_so", "cr4_lt", "cr4_gt", "cr4_eq", "cr4_so", "cr5_lt",
       "cr5_gt", "cr5_eq", "cr5_so", "cr6_lt", "cr6_gt", "cr6_eq", "cr6_so",
       "cr7_lt", "cr7_gt", "cr7_eq", "cr7_so"};
-  if (Off >= ppc::crBit(0) && Off < ppc::crBit(32))
-    return CRNames[Off - ppc::crBit(0)];
+  if (Off >= crBit(0) && Off < crBit(32))
+    return CRNames[Off - crBit(0)];
+  if (Off >= ppc::vr(0) && Off < ppc::vr(ppc::VectorCount) &&
+      (Off - ppc::vr(0)) % ppc::VectorBytes == 0) {
+    static constexpr const char *Names[] = {
+#define NEVERD_PPC_VMX_REGISTER(Index) "v" #Index,
+#include "neverd/lift/PowerPC/PowerPCVMXRegisters.def"
+    };
+    return Names[(Off - ppc::vr(0)) / ppc::VectorBytes];
+  }
   return Off >= gpr(0) && Off < gpr(32) && Off % 8 == 0 ? PPCNames[Off / 8 - 1]
                                                         : "unknown";
 }
@@ -110,12 +125,20 @@ TargetRegInfo integerInfo(Arch A) {
       Info.FPReturnRegs = Info.FPParamRegs.take_front(2);
       Info.FPReturnReg = fpr(10);
     }
-  }
-  if (!RV)
+  } else {
+    const llvm::ArrayRef<uint64_t> Vectors(PPCVectors);
+    Info.VecRegBase = ppc::vr(0);
+    Info.VecRegCount = Vectors.size();
+    Info.FPABIRegWidth = Info.VecRegStride = ppc::VectorBytes;
+    Info.FPParamRegs =
+        Vectors.slice(ppc::FirstVectorArgument, ppc::VectorArgumentCount);
+    Info.FPReturnRegs = Info.FPParamRegs.take_front(1);
+    Info.FPReturnReg = Info.FPReturnRegs.front();
     Info.CallStackArgumentBase =
         isPowerPC64ELFv1(A) ? ppc_elf::ELFv1StackArgumentBase
         : isPowerPC64(A)    ? ppc_elf::ELFv2StackArgumentBase
                             : ppc_elf::PPC32StackArgumentBase;
+  }
   return Info;
 }
 } // namespace

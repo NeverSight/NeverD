@@ -3067,6 +3067,47 @@ offset. Both addresses move together. The proof-based
 recoveries run first and are unchanged; a dispatch by value claims no table
 storage, no index and no relocation suppression.
 
+A linked image holds no relocation for a relative table, so that list is empty
+for a jump through one, and nothing may bound the jump's index: Rust compiles a
+`match` on an enum's discriminant read from memory to `lea table(%rip), %rcx;
+movslq (%rcx,%rax,4), %rdx; add %rcx, %rdx; jmp *%rdx` with no compare, since
+the type allows no other value. After the scalar recoveries,
+`CFGBuilder::recoverOwnLabelTableBranches` reads such a jump's target back
+through the blocks that are each the only way into the next, starting with
+the constants every path into the first of them leaves in a register (a
+table address hoisted out of a loop; a call keeps only what the callee
+preserves): the table's address plus its 32-bit slot,
+read from a read-only, non-executable section.
+The labels are the table's leading slots, up to the first slot that names
+anything but code of the function, an instruction start of one linear decode
+of it, and no address inside an instruction recursive descent already decoded.
+The linear decode is kept only when every instruction recursive descent decoded
+in the function is one of its starts. Nothing proves how many slots the table
+has, so no index domain is claimed; a slot read past the table's end names
+code the machine would run for that index too, and only adds an edge. A jump
+whose index domain ran out of evidence still dispatches, since the dispatch
+claims no domain; one whose table evidence, or its function's marker evidence,
+ran out is left opaque. The labels are published as the jump's targets so that
+the code they reach is decoded, and a jump there through another such table (a
+`match` after a `match`, or a loop unrolled around one) dispatches the same
+way, round by round up to `kMaxOwnLabelTableRounds`; the linear decode is made
+once and checked again each round. After each round every dispatch is read
+again on the grown graph, and withdrawn for good if its table read changed:
+code its labels reach can enter its blocks another way, with another address
+in the register. The resolver's fixed point is not run
+again: that would retry proofs whose evidence ran out and drop the
+incompleteness they recorded. `dispatchUnprovedBranchesByValue` then keeps an
+edge only where the
+same callee-saved-register test admits it, and withdraws all of them if it
+cannot decide. The table's address is no address of the lifted program,
+so neither is the jump's value, but the slot is the same number in both: the
+dispatch's selector occurrence is the LOAD of the slot and its case keys are
+the labels' offsets from the table (`CFGBuilder::OwnLabelTableReads`). HighC
+and the LLVM emitter bind that occurrence through the switch selector plan,
+and the default arm still traps. No resolver stage sees such a dispatch, so it
+never counts as a published table, and losing its labels loses no validated
+one.
+
 A direct branch, or the end of a block, can reach an address where the image
 maps no code: data, bytes the file does not hold, the end of a section.
 `CFGBuilder` records the address in `LowFunc::TruncatedPathAddresses` and
@@ -11670,6 +11711,22 @@ alone, and it keeps the blocks it walked only once the definition is in view.
 libzstd's sequence decoder also compares `%dl` after a shift, long before a
 dispatch that indexes with `%rdx`: that compare keeps the syntax it had,
 since unfolding it into the shift makes a condition the proof cannot use.
+The structural rule that a compared lane is the index looks for the lane's
+zero extension the same way: when the compare's block writes no byte of the
+register, it follows the blocks each entered only by falling through from
+the one before, and no call may run between the extension and the compare.
+It stops at a block also entered another way, as a function entry or a
+root of the proof such as a relocated label or a landing pad: that entry
+skips the extension, and no all-path query checks a structural leaf.
+Such a compare of the index lane also decides which view the proof keeps,
+since guards over different widths share no symbolic index: a full-width
+guard wins only when one of them is such a compare too, or no guard is.
+A routine of bash's command printer loads a field with
+`movl 0x18(%rbx), %eax`, tests `(%eax - 4) & ~4` on the full register and
+branches away on 4 and 8, and bounds `%eax` by twenty in the next block.
+Keeping that full-width test alone left two holes and no bound; the
+compare's view now bounds the dispatch, and dropping the test only enlarges
+the domain.
 The address-role proof takes a table load's scale from the role's own index
 occurrence first. An AArch64 extended-register operand widens the index into
 a temporary the same instruction scales. An x86 32-bit write widens it into

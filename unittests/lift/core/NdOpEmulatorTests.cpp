@@ -58,6 +58,37 @@ TEST_F(NdOpEmulatorTest, BasicArithmetic) {
   EXPECT_EQ(Emu.getRegister(8).value_or(0), 15u);
 }
 
+TEST_F(NdOpEmulatorTest, ScalarWritesPreserveRegisterViewsAndReplaceTemps) {
+  NdOpEmulator Emu(Img);
+  Emu.setStrictMode(true);
+  LowOp Add;
+  Add.Opcode = NdOp::INT_ADD;
+  Add.Output = NdVar::reg(0x90, 1);
+  Add.addInput(NdVar::scalar(2, 1));
+  Add.addInput(NdVar::scalar(5, 1));
+  ASSERT_TRUE(Emu.step(Add));
+  EXPECT_EQ(Emu.getRegister(Add.Output.Offset), 7u);
+
+  Emu.setRegister(Add.Output.Offset, 0x1234);
+  ASSERT_TRUE(Emu.step(Add));
+  EXPECT_EQ(Emu.getRegister(Add.Output.Offset), 0x1207u);
+
+  std::vector<uint8_t> Bytes(16, 0xa5);
+  Emu.setRegisterBytes(Add.Output.Offset, Bytes);
+  ASSERT_TRUE(Emu.step(Add));
+  Bytes.front() = 7;
+  EXPECT_EQ(Emu.getRegisterBytes(Add.Output.Offset), Bytes);
+  EXPECT_EQ(Emu.getRegister(Add.Output.Offset), UINT64_C(0xa5a5a5a5a5a5a507));
+
+  Add.Output = NdVar::tmp(0x98, 1);
+  Emu.setRegisterBytes(Add.Output.Offset, Bytes);
+  ASSERT_TRUE(Emu.step(Add));
+  EXPECT_EQ(Emu.getRegister(Add.Output.Offset), 7u);
+  const auto Temp = Emu.getRegisterBytes(Add.Output.Offset);
+  ASSERT_TRUE(Temp);
+  EXPECT_EQ(Temp->size(), sizeof(uint64_t));
+}
+
 TEST_F(NdOpEmulatorTest,
        StrictArithmeticAndComparisonsRequireEveryOperandByteBeforeWriting) {
   const struct {

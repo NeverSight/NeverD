@@ -13,9 +13,12 @@
 // NEVERD_ELF_IRELATIVE(Arch, Type): GNU indirect function relocations; the
 // addend, or the slot under REL, names the resolver the dynamic linker calls.
 // The ELF relocation roles depend on XLEN, independently of the FP calling convention.
-#define NEVERD_ELF_RISCV_RELOCATION(Role, Target, ...) \
-  Role(Target, __VA_ARGS__) \
-  Role(Target##D, __VA_ARGS__)
+// MSVC's traditional preprocessor passes forwarded variadic arguments on as a
+// single argument, so the helper takes the relocation type alone; a role with
+// more fields lists both targets itself.
+#define NEVERD_ELF_RISCV_RELOCATION(Role, Target, Type) \
+  Role(Target, Type) \
+  Role(Target##D, Type)
 
 #ifndef NEVERD_ELF_IRELATIVE
 #define NEVERD_ELF_IRELATIVE(Arch, Type)
@@ -140,10 +143,14 @@ NEVERD_ELF_SYMBOL_VALUE(ARM, R_ARM_ABS32, true)
 NEVERD_ELF_SYMBOL_VALUE(AArch64, R_AARCH64_GLOB_DAT, true)
 NEVERD_ELF_SYMBOL_VALUE(AArch64, R_AARCH64_JUMP_SLOT, true)
 NEVERD_ELF_SYMBOL_VALUE(AArch64, R_AARCH64_ABS64, true)
-NEVERD_ELF_RISCV_RELOCATION(NEVERD_ELF_SYMBOL_VALUE, RISCV32, R_RISCV_JUMP_SLOT, false)
-NEVERD_ELF_RISCV_RELOCATION(NEVERD_ELF_SYMBOL_VALUE, RISCV64, R_RISCV_JUMP_SLOT, false)
-NEVERD_ELF_RISCV_RELOCATION(NEVERD_ELF_SYMBOL_VALUE, RISCV32, R_RISCV_32, true)
-NEVERD_ELF_RISCV_RELOCATION(NEVERD_ELF_SYMBOL_VALUE, RISCV64, R_RISCV_64, true)
+NEVERD_ELF_SYMBOL_VALUE(RISCV32, R_RISCV_JUMP_SLOT, false)
+NEVERD_ELF_SYMBOL_VALUE(RISCV32D, R_RISCV_JUMP_SLOT, false)
+NEVERD_ELF_SYMBOL_VALUE(RISCV64, R_RISCV_JUMP_SLOT, false)
+NEVERD_ELF_SYMBOL_VALUE(RISCV64D, R_RISCV_JUMP_SLOT, false)
+NEVERD_ELF_SYMBOL_VALUE(RISCV32, R_RISCV_32, true)
+NEVERD_ELF_SYMBOL_VALUE(RISCV32D, R_RISCV_32, true)
+NEVERD_ELF_SYMBOL_VALUE(RISCV64, R_RISCV_64, true)
+NEVERD_ELF_SYMBOL_VALUE(RISCV64D, R_RISCV_64, true)
 NEVERD_ELF_SYMBOL_VALUE(PPC32, R_PPC_ADDR32, true)
 NEVERD_ELF_SYMBOL_VALUE(PPC32LE, R_PPC_ADDR32, true)
 NEVERD_ELF_SYMBOL_VALUE(PPC64, R_PPC64_ADDR64, true)

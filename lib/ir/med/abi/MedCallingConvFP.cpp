@@ -788,6 +788,26 @@ void detectFPParams(
     if (!AlreadyParam.count(Op->Output.RegOff))
       Add(*Op);
 
+  // An AltiVec argument keeps its register even if the callee never reads
+  // an earlier argument. Preserve the intervening positions in the prototype.
+  if (isPowerPC(TargetArch) && OwnRegisters.empty() && !FPParams.empty()) {
+    const uint64_t Last =
+        std::ranges::max_element(FPParams, {}, &MedVar::RegOff)->RegOff;
+    for (uint64_t Reg : TRI.floatingParamRegs(TargetFormat)) {
+      if (Reg >= Last)
+        break;
+      if (AlreadyParam.contains(Reg))
+        continue;
+      MedVar Slot;
+      Slot.Kind = MedVar::Param;
+      Slot.Id = -1;
+      Slot.Size = TRI.FPABIRegWidth;
+      Slot.RegOff = Reg;
+      Slot.TheArch = TargetArch;
+      FPParams.push_back(Slot);
+    }
+  }
+
   // FP arguments occupy the vector/FP registers in increasing register order
   // (XMM0,XMM1,.. / D0,D1,.. / S0,S1,..), so order the recovered FP parameters
   // by register offset to match the ABI sequence regardless of the order the

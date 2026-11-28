@@ -1611,6 +1611,25 @@ later, by seven with `cmp $6, %al` before the dispatch indexes with `%rax`:
 both dispatches read their seven slots. A second path into the lane compare
 that loads all of `%rax`, a load of all of `%rax` before both compares, or a
 write of `%ah` between them stays unresolved.
+`JTE_X86_64.LaneCompareBoundWinsOverAWideTest` loads `%eax` with `movl`,
+tests `(%eax - 4) & ~4` on the full register in the next block and bounds
+`%eax` by ten in the one after: the dispatch reads its ten slots. A second
+path into the compare that loads all of `%rax`, a call between the load and
+the compare, or an address of the compare block that .data holds stays
+unresolved.
+`JTE_X86_64.AnUnboundedOwnLabelTableDispatchesByValue` jumps through relative
+tables that nothing bounds, as Rust matches a discriminant read from memory:
+the jump dispatches by value on the three labels of six slots, comparing the
+LOAD of the slot with the labels' offsets from the table. A label that reads
+`%rbx` before any path to the jump wrote it is left out, a slot that names an
+address inside an instruction ends the table, a table address loaded into
+`%r12` before a loop is found at its dispatch, a dispatch that one of its
+labels re-enters with another table's address is withdrawn, and a table in
+`.data` gives no labels. `x64swx_enumbyte0`, `3` and `5` in `NeverDSwitchXformTests` run the
+same shape from C, an unreachable default on a byte argument, through the lift,
+recompile and emulation and compare the results; `x64swx_enumload` runs eight
+such switches in a row on bytes read back from the stack, whose domains run out
+of evidence.
 `JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
 whose first state is a constant: scalar recovery first takes its dispatch as a
 direct branch and withdraws that guess when the cases loop back, and the

@@ -264,6 +264,12 @@ std::filesystem::path safetyFixture(llvm::StringRef Name) {
          "safety" / "fixtures" / "binaries" / Name.str();
 }
 
+/// The separate-debug-file fixtures beside this test.
+std::filesystem::path companionFixture(llvm::StringRef Name) {
+  return std::filesystem::path(__FILE__).parent_path() / "fixtures" /
+         Name.str();
+}
+
 std::vector<uint8_t> makeELFObjectExtentFixture() {
   using ELFT = llvm::object::ELF64LE;
   using Elf_Ehdr = ELFT::Ehdr;
@@ -2358,7 +2364,7 @@ TEST(LoadDebugInfoTest,
   // This reproducible fixture is intentionally linked with -no_uuid.  Its
   // adjacent dSYM still supplies useful names and lines, but cannot prove that
   // its types or object extents belong to the exact loaded image.
-  const std::filesystem::path Binary = safetyFixture("safety_cases_macho_x64");
+  const auto Binary = companionFixture("companion-no-uuid.dylib");
   std::unique_ptr<Loader> Loader = Loader::create(BinaryFormat::MachO);
   ASSERT_NE(Loader, nullptr);
   llvm::Expected<BinaryImage> ImgOr = Loader->load(Binary);
@@ -2373,12 +2379,12 @@ TEST(LoadDebugInfoTest,
   EXPECT_FALSE(R.Context->hasAuthenticatedFunctionSignatures());
   EXPECT_FALSE(R.Context->hasAuthenticatedObjectExtents());
   const std::vector<FunctionSym> Functions = R.Context->allFunctions();
-  const auto Leaks = std::find_if(Functions.begin(), Functions.end(),
+  const auto Named = std::find_if(Functions.begin(), Functions.end(),
                                   [](const FunctionSym &Function) {
-                                    return Function.Name == "leaks_memory";
+                                    return Function.Name == "named_by_dwarf";
                                   });
-  ASSERT_NE(Leaks, Functions.end());
-  EXPECT_EQ(R.Context->resolveAuthenticatedReturnValueState(Leaks->Addr).Kind,
+  ASSERT_NE(Named, Functions.end());
+  EXPECT_EQ(R.Context->resolveAuthenticatedReturnValueState(Named->Addr).Kind,
             AuthenticatedReturnKind::Unknown);
 }
 
@@ -3260,12 +3266,6 @@ std::string fixtureText(llvm::StringRef Name) {
 std::vector<uint8_t> fixtureBytes(const std::filesystem::path &Path) {
   std::ifstream Input(Path, std::ios::binary);
   return std::vector<uint8_t>(std::istreambuf_iterator<char>(Input), {});
-}
-
-/// The separate-debug-file fixtures beside this test.
-std::filesystem::path companionFixture(llvm::StringRef Name) {
-  return std::filesystem::path(__FILE__).parent_path() / "fixtures" /
-         Name.str();
 }
 
 /// Sets an environment variable for the life of the object.

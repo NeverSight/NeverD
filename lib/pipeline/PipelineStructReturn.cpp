@@ -13,6 +13,7 @@
 #include "PipelineReturnModelingDetail.h"
 
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/MedReturnArguments.h"
 #include "neverd/ir/med/MedReturnValue.h"
@@ -553,10 +554,12 @@ void recoverVectorReturnFromCallers(const BinaryImage &Img,
   for (auto &MF : Result.MedFuncs)
     if (!MF.SourceTypeHint && !MF.SourceParametersBound &&
         MF.MultiReturn.empty() && !MF.FPReturnViaX87 &&
+        !MF.ReturnsVectorRegister &&
         !(MF.ReturnType && MF.ReturnType->Kind == NdTypeKind::Float) &&
         ReadAsVector.count(MF.Entry) && !ReadAsInteger.count(MF.Entry) &&
         returnsWholeVector(MF, TRI, /*NoIntegerResult=*/false)) {
-      MF.ReturnType = NdType::makeFloat(16);
+      MF.ReturnType =
+          isPowerPC(Img.Arch) ? ppc::byteVectorType() : NdType::makeFloat(16);
       MF.ReturnsVectorRegister = true;
     }
 }

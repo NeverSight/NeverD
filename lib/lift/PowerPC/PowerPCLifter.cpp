@@ -19,6 +19,7 @@
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
 #include "neverd/lift/PowerPC/PowerPCPrefixed.h"
+#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 #include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -32,6 +33,8 @@ namespace opcode {
 enum : unsigned {
 #define NEVERD_PPC_OPCODE(Name, Value) Name = Value,
 #include "PowerPCIntegerOpcodes.def"
+#define NEVERD_PPC_VMX(Id, Value, Word, Name) Id = Word,
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.def"
 };
 } // namespace opcode
 
@@ -450,6 +453,13 @@ bool integer(State &S, Arch A, uint32_t W) {
     return true;
   }
   switch (Op) {
+  case opcode::VMX:
+    if ((W & VXFormMask) != opcode::PPCVaddubm)
+      return false;
+    S.emitIntrinsic(
+        Intrinsic::PPCVaddubm, NdVar::reg(vr(T), VectorBytes),
+        {NdVar::reg(vr(RA), VectorBytes), NdVar::reg(vr(RB), VectorBytes)});
+    return true;
 #define NEVERD_PPC_LOGICAL_IMM(Name, Encoding, Kind, Shift, Record)            \
   case Encoding:                                                               \
     S.result(                                                                  \

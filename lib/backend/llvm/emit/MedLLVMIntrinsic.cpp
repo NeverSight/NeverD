@@ -23,9 +23,11 @@
 #include "neverd/ir/X86/X87BCD.h"
 #include "neverd/ir/X86/X87Constant.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/intrinsics/X86/X86DescriptorState.h"
 #include "neverd/ir/intrinsics/X86/X86Sgx.h"
+#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-intrinsic"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
@@ -127,6 +129,32 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
         " n_in=" + std::to_string(Op.NumInputs) +
         " target=" + std::to_string(static_cast<unsigned>(TargetArch)));
   };
+  if (IC == I::PPCVaddubm) {
+    if (!isPowerPC(TargetArch) || Op.NumInputs != 3 ||
+        Op.Output.Size != ppc::VectorBytes ||
+        Op.Inputs[1].Size != ppc::VectorBytes ||
+        Op.Inputs[2].Size != ppc::VectorBytes)
+      return refuseUnhandled();
+    if (!PortableBody)
+      Builder.GetInsertBlock()->getParent()->addFnAttr("target-features",
+                                                       ppc::VMXFeature);
+    auto *Bytes =
+        llvm::FixedVectorType::get(Builder.getInt8Ty(), ppc::VectorBytes);
+    auto *Left = Builder.CreateBitCast(getVar(Op.Inputs[1], Builder), Bytes);
+    auto *Right = Builder.CreateBitCast(getVar(Op.Inputs[2], Builder), Bytes);
+    return Builder.CreateBitCast(Builder.CreateAdd(Left, Right),
+                                 sizeToType(Op.Output.Size));
+  }
+  if (const auto *Read = riscv::cycleRead(IC)) {
+    const unsigned Bytes = getTargetRegInfo(TargetArch).PointerSize;
+    if (!Read->admits(TargetArch) || Op.NumInputs != 1 ||
+        Op.Output.Size != Bytes)
+      return refuseUnhandled();
+    auto *Ty = llvm::FunctionType::get(Builder.getIntNTy(Bytes * 8), false);
+    auto *Asm = llvm::InlineAsm::get(Ty, std::string(Read->Mnemonic) + " $0",
+                                     "=r", /*hasSideEffects=*/true);
+    return Builder.CreateCall(Asm);
+  }
   if (const auto D = ppc::fixedPoint(IC)) {
     if (!powerPCFixedPointMedShapeIsValid(Op, TargetArch, *D))
       return refuseUnhandled();

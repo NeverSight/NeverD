@@ -36,5 +36,7 @@ NEVERD_RISCV_EXTENSION(DoubleFloat, "d", 2, 2, P.DoubleFloat)
 NEVERD_RISCV_EXTENSION(Zcf, "zcf", 1, 0, P.Zcf && !P.Compressed)
 NEVERD_RISCV_EXTENSION(Zcd, "zcd", 1, 0, P.Zcd && !P.Compressed)
 
+NEVERD_RISCV_EXTENSION(Zicntr, "zicntr", 2, 0, P.Zicntr)
+
 #undef NEVERD_RISCV_BASE
 #undef NEVERD_RISCV_EXTENSION

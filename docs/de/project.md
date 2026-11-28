@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 21284b2f875981795182bc036debd072bfd230dcd4c3ad06d1a35ee39e586e38 -->
+<!-- i18n-source: 36aefbaf0943c4b4797c512359a1f9a683639f0da3e6ec555740d6b1666edfbc -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ Die experimentellen Integer-ELF-Ziele unterstützen striktes Lifting, die Rekons
 
 | Ziel | Geprüfte ELF-Profile |
 |---|---|
-| RISC-V | RV32I/ILP32 und RV64I/LP64 in Little Endian. Die ELF-Angaben bestimmen die Erweiterungen M, A und Integer-C oder die einzelnen Erweiterungen Zmmul, Zaamo, Zalrsc und Zca. Das ISA-Attribut der ELF-Datei aktiviert auch Zba 1.0, Zbb 1.0, Zbs 1.0 und Zicond 1.0. |
-| PowerPC | PPC32 System V und PPC64 ELFv1/ELFv2 in beiden Byte-Reihenfolgen. PPC32 unterstützt modulübergreifende Aufrufe über die Secure PLT und die klassische BSS-PLT. Beide PPC64-ABIs unterstützen modulübergreifende PLT-Aufrufe und TOC-Wechsel. ELFv1 verwendet Funktionsdeskriptoren, ELFv2 unterstützt globale und lokale Einsprungpunkte. Die geprüften Skalaroperationen umfassen die Division mit und ohne Vorzeichen, die Multiplikation mit Ausgabe des oberen Produktworts und die Multiplikation mit Überlaufanzeige sowie deren Auswirkungen auf CR0 und XER. Für PPC64 unterstützt der Lifter auch die präfigierten POWER10-Befehle für Ganzzahladdition, Laden und Speichern. |
+| RISC-V | RV32 (ILP32, ILP32D) und RV64 (LP64, LP64D) in Little Endian. Die ELF-Angaben bestimmen die Erweiterungen M, A und Integer-C oder die einzelnen Erweiterungen Zmmul, Zaamo, Zalrsc und Zca. Das ISA-Attribut der ELF-Datei aktiviert auch Zba 1.0, Zbb 1.0, Zbs 1.0 und Zicond 1.0. Zicntr 2.0 ermöglicht `rdcycle` und auf RV32 zusätzlich `rdcycleh`. |
+| PowerPC | PPC32 System V und PPC64 ELFv1/ELFv2 in beiden Byte-Reihenfolgen. PPC32 unterstützt modulübergreifende Aufrufe über die Secure PLT und die klassische BSS-PLT. Beide PPC64-ABIs unterstützen modulübergreifende PLT-Aufrufe und TOC-Wechsel. ELFv1 verwendet Funktionsdeskriptoren, ELFv2 unterstützt globale und lokale Einsprungpunkte. Die geprüften Skalaroperationen umfassen die Division mit und ohne Vorzeichen, die Multiplikation mit Ausgabe des oberen Produktworts und die Multiplikation mit Überlaufanzeige sowie deren Auswirkungen auf CR0 und XER. Für PPC64 unterstützt der Lifter auch die präfigierten POWER10-Befehle für Ganzzahladdition, Laden und Speichern. Der VMX-Befehl `vaddubm` addiert 16 Bytepaare jeweils modulo 256. |
 
 Das Umschreiben von nativem Code steht für diese Profile noch aus. [Unterstützung für RISC-V und PowerPC (Englisch)](../riscv-powerpc.md)
 

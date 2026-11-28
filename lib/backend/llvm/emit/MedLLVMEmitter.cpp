@@ -59,6 +59,7 @@
 #include "neverd/ir/med/X86/X86FourSourceShape.h"
 #include "neverd/ir/med/X86/X86RegistrationEntry.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 #include "neverd/loader/AArch64MemoryImage.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/ELF/PowerPCABI.h"
@@ -730,6 +731,11 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     // it to the FP register file; declaring it an integer would route it
     // through the integer registers instead.
     if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff, TargetFormat)) {
+      if (isPowerPC(TargetArch) && HaveTypes && Func.TypedParams[I].Type &&
+          Func.TypedParams[I].Type->Kind == NdTypeKind::Vector) {
+        ParamTypes.push_back(mapNdtype(Func.TypedParams[I].Type));
+        continue;
+      }
       const auto Scalar = Func.FPParamScalarBytes.find(P.RegOff);
       ParamTypes.push_back(
           fpAbiType((TargetArch == Arch::AArch64 || isMIPS(TargetArch)) &&
@@ -889,6 +895,11 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
 #include "neverd/lift/RISCV/RISCVExtensions.def"
     }
     LLVMFunc->addFnAttr("target-features", Features);
+  } else if (!PortableBody && isPowerPC(TargetArch) &&
+             (RetType->isVectorTy() ||
+              llvm::any_of(ParamTypes,
+                           [](llvm::Type *T) { return T->isVectorTy(); }))) {
+    LLVMFunc->addFnAttr("target-features", ppc::VMXFeature);
   }
   LLVMFunc->addFnAttr(llvm::Attribute::NullPointerIsValid);
   if (Func.DoesNotReturn)
