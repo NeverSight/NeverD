@@ -1,7 +1,7 @@
 # CLAUDE_TODO
 
 Open work left by the jump-table and CI campaign, as of 2026-11-28 (dev at
-`94fbde2240`). Items are ordered by what to do next.
+`ccc4482612`). Items are ordered by what to do next.
 
 ## 1. Next action: CI on the current dev head
 
@@ -19,9 +19,9 @@ Open work left by the jump-table and CI campaign, as of 2026-11-28 (dev at
     preprocessor passed it on as one argument (C4003 + C2059).
   - `f63f4f96f2` and `aa4e382e91`: dispatch by value through own-label relative
     tables (section 4).
-  - `d732960877`: Win64 keeps `%rsi` and `%rdi` across calls for own-label table
+  - `b8180a4371`: Win64 keeps `%rsi` and `%rdi` across calls for own-label table
     reads and the kept-register filter.
-  - `94fbde2240`: a table jump whose every label reads a kept register keeps its
+  - `ccc4482612`: a table jump whose every label reads a kept register keeps its
     whole table (gimli `FileEntry::clone`).
 - Find a Windows build error with
   `gh api repos/NeverSight/NeverD/actions/jobs/<job>/logs | grep -E 'FAILED:|error C[0-9]+'`.
@@ -32,7 +32,7 @@ Open work left by the jump-table and CI campaign, as of 2026-11-28 (dev at
 
 ## 2. Jump tables: unresolved dispatches left
 
-After `94fbde2240` the coverage set (545 items) has 278 unresolved indirect jumps
+After `ccc4482612` the coverage set (545 items) has 278 unresolved indirect jumps
 (`indirect targets not proved` outside a dispatch's default arm): 260
 AArch64, 16 x86-64 Linux Rust, 2 Go amd64. The census (9 binaries) has 3, all
 in pcre2.
