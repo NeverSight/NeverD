@@ -3069,8 +3069,11 @@ for a jump through one, and nothing may bound the jump's index: Rust compiles a
 movslq (%rcx,%rax,4), %rdx; add %rcx, %rdx; jmp *%rdx` with no compare, since
 the type allows no other value. After the scalar recoveries,
 `CFGBuilder::recoverOwnLabelTableBranches` reads such a jump's target back
-through the blocks that are each the only way into the next: the table's
-address plus its 32-bit slot, read from a read-only, non-executable section.
+through the blocks that are each the only way into the next, starting with
+the constants every path into the first of them leaves in a register (a
+table address hoisted out of a loop; a call keeps only what the callee
+preserves): the table's address plus its 32-bit slot,
+read from a read-only, non-executable section.
 The labels are the table's leading slots, up to the first slot that names
 anything but code of the function, an instruction start of one linear decode
 of it, and no address inside an instruction recursive descent already decoded.
@@ -3084,7 +3087,10 @@ ran out is left opaque. The labels are published as the jump's targets so that
 the code they reach is decoded, and a jump there through another such table (a
 `match` after a `match`, or a loop unrolled around one) dispatches the same
 way, round by round up to `kMaxOwnLabelTableRounds`; the linear decode is made
-once and checked again each round. The resolver's fixed point is not run
+once and checked again each round. After each round every dispatch is read
+again on the grown graph, and withdrawn for good if its table read changed:
+code its labels reach can enter its blocks another way, with another address
+in the register. The resolver's fixed point is not run
 again: that would retry proofs whose evidence ran out and drop the
 incompleteness they recorded. `dispatchUnprovedBranchesByValue` then keeps an
 edge only where the

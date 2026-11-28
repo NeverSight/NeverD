@@ -402,15 +402,40 @@ std::optional<TableReadKey> tableReadStorage(const NdVar &Value) {
   return std::nullopt;
 }
 
-/// What the indirect jump ending the last of \p Chain's blocks jumps to.
-/// Each block of \p Chain is the only way into the next.
-std::optional<TableReadValue>
-tableReadTarget(const LowFunc &Func, const std::vector<size_t> &Chain) {
+/// The values a run of LowIR ops computes toward a table read, op by op.
+/// Each value is kept with the size it was written at; a register keeps one
+/// only while all eight bytes of it were written together.  A call keeps
+/// only the registers the callee preserves.
+class TableReadState {
   using K = TableReadValue::Kind;
-  // Each value with the size it was written at.  A register keeps one only
-  // while all eight bytes of it were written together.
   std::map<TableReadKey, std::pair<TableReadValue, uint16_t>> Values;
-  auto ValueOf = [&](const NdVar &Value) -> std::optional<TableReadValue> {
+  llvm::ArrayRef<uint64_t> Preserved;
+
+  static bool isConstant(const std::optional<TableReadValue> &Value) {
+    return Value && Value->K == K::Constant;
+  }
+
+public:
+  explicit TableReadState(llvm::ArrayRef<uint64_t> Preserved)
+      : Preserved(Preserved) {}
+
+  /// Start with \p Constants in the whole registers they name.
+  void seed(const std::map<uint64_t, uint64_t> &Constants) {
+    for (const auto &[Register, Constant] : Constants)
+      Values[TableReadKey{true, Register}] = {
+          TableReadValue{K::Constant, Constant, 0}, 8};
+  }
+
+  /// The constants the whole registers hold.
+  std::map<uint64_t, uint64_t> constants() const {
+    std::map<uint64_t, uint64_t> Result;
+    for (const auto &[Key, Value] : Values)
+      if (Key.first && Value.first.K == K::Constant && Value.second == 8)
+        Result.emplace(Key.second, Value.first.Value);
+    return Result;
+  }
+
+  std::optional<TableReadValue> valueOf(const NdVar &Value) const {
     if (Value.isConst())
       return TableReadValue{K::Constant, Value.Offset, 0};
     const auto Key = tableReadStorage(Value);
@@ -420,10 +445,123 @@ tableReadTarget(const LowFunc &Func, const std::vector<size_t> &Chain) {
     if (It == Values.end() || It->second.second != Value.Size)
       return std::nullopt;
     return It->second.first;
-  };
-  auto IsConstant = [](const std::optional<TableReadValue> &Value) {
-    return Value && Value->K == K::Constant;
-  };
+  }
+
+  // Every register a LowIR op writes is its output: an intrinsic's other
+  // results are copied out by ops of their own.
+  void step(const LowOp &Op) {
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+      for (auto It = Values.begin(); It != Values.end();)
+        if (It->first.first && std::find(Preserved.begin(), Preserved.end(),
+                                         It->first.second) != Preserved.end())
+          ++It;
+        else
+          It = Values.erase(It);
+      return;
+    }
+    const auto In = [&](unsigned Input) -> std::optional<TableReadValue> {
+      return Input < Op.NumInputs ? valueOf(Op.Inputs[Input]) : std::nullopt;
+    };
+    std::optional<TableReadValue> Result;
+    switch (Op.Opcode) {
+    case NdOp::COPY:
+      if (Op.NumInputs == 1)
+        Result = In(0);
+      break;
+    case NdOp::INT_ADD: {
+      if (Op.NumInputs != 2 || Op.Output.Size != 8)
+        break;
+      auto Sum = [&](const std::optional<TableReadValue> &Left,
+                     const std::optional<TableReadValue> &Right)
+          -> std::optional<TableReadValue> {
+        if (!Left || !isConstant(Right))
+          return std::nullopt;
+        switch (Left->K) {
+        case K::Constant:
+          return TableReadValue{K::Constant, Left->Value + Right->Value, 0};
+        case K::Scaled:
+          return TableReadValue{K::SlotAddress, Right->Value, Left->Bytes};
+        case K::ExtendedSlot:
+          if (Left->Value == Right->Value) {
+            TableReadValue Target = *Left;
+            Target.K = K::RelativeTarget;
+            return Target;
+          }
+          return std::nullopt;
+        default:
+          return std::nullopt;
+        }
+      };
+      const auto Left = In(0), Right = In(1);
+      Result = Sum(Left, Right);
+      if (!Result)
+        Result = Sum(Right, Left);
+      break;
+    }
+    case NdOp::INT_MULT:
+    case NdOp::INT_LEFT: {
+      if (Op.NumInputs != 2 || Op.Output.Size != 8)
+        break;
+      const auto Left = In(0), Right = In(1);
+      if (isConstant(Left) && isConstant(Right)) {
+        if (Op.Opcode == NdOp::INT_MULT)
+          Result = TableReadValue{K::Constant, Left->Value * Right->Value, 0};
+        break;
+      }
+      auto Scale = [&](const std::optional<TableReadValue> &Factor)
+          -> std::optional<TableReadValue> {
+        if (!isConstant(Factor))
+          return std::nullopt;
+        const uint64_t Bytes =
+            Op.Opcode == NdOp::INT_MULT
+                ? Factor->Value
+                : (Factor->Value < 8 ? uint64_t{1} << Factor->Value : 0);
+        if (Bytes != sizeof(int32_t))
+          return std::nullopt;
+        return TableReadValue{K::Scaled, 0, static_cast<uint16_t>(Bytes)};
+      };
+      Result = Scale(Right);
+      if (!Result && Op.Opcode == NdOp::INT_MULT)
+        Result = Scale(Left);
+      break;
+    }
+    case NdOp::LOAD: {
+      const NdVar &Address = Op.NumInputs >= 2 ? Op.Inputs[1] : Op.Inputs[0];
+      const auto At = valueOf(Address);
+      if (At && At->K == K::SlotAddress && Op.Output.Size == At->Bytes)
+        Result = TableReadValue{K::Slot, At->Value, At->Bytes, Op.Addr, Op.Seq};
+      break;
+    }
+    case NdOp::INT_SEXT: {
+      auto Slot = In(0);
+      if (Slot && Slot->K == K::Slot && Slot->Bytes == 4 &&
+          Op.Output.Size == 8) {
+        Slot->K = K::ExtendedSlot;
+        Result = Slot;
+      }
+      break;
+    }
+    default:
+      break;
+    }
+    if (const auto Key = tableReadStorage(Op.Output)) {
+      Values.erase(*Key);
+      if (Result && (Op.Output.isTemp() ||
+                     (Op.Output.Size == 8 && Op.Output.Offset % 8 == 0)))
+        Values.emplace(*Key, std::make_pair(*Result, Op.Output.Size));
+    }
+  }
+};
+
+/// What the indirect jump ending the last of \p Chain's blocks jumps to,
+/// with \p Entry in the registers as the first block starts.  Each block of
+/// \p Chain is the only way into the next.
+std::optional<TableReadValue>
+tableReadTarget(const LowFunc &Func, const std::vector<size_t> &Chain,
+                const std::map<uint64_t, uint64_t> &Entry,
+                llvm::ArrayRef<uint64_t> Preserved) {
+  TableReadState State(Preserved);
+  State.seed(Entry);
   for (size_t Index : Chain) {
     const LowBlock &Block = Func.Blocks[Index];
     const bool Last = Index == Chain.back();
@@ -432,107 +570,62 @@ tableReadTarget(const LowFunc &Func, const std::vector<size_t> &Chain) {
       if (Last && I + 1 == Block.Ops.size()) {
         if (Op.Opcode != NdOp::INDIR_BR || Op.NumInputs != 1)
           return std::nullopt;
-        return ValueOf(Op.Inputs[0]);
+        return State.valueOf(Op.Inputs[0]);
       }
-      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        Values.clear();
-        continue;
-      }
-      const auto In = [&](unsigned Input) -> std::optional<TableReadValue> {
-        return Input < Op.NumInputs ? ValueOf(Op.Inputs[Input]) : std::nullopt;
-      };
-      std::optional<TableReadValue> Result;
-      switch (Op.Opcode) {
-      case NdOp::COPY:
-        if (Op.NumInputs == 1)
-          Result = In(0);
-        break;
-      case NdOp::INT_ADD: {
-        if (Op.NumInputs != 2 || Op.Output.Size != 8)
-          break;
-        auto Sum = [&](const std::optional<TableReadValue> &Left,
-                       const std::optional<TableReadValue> &Right)
-            -> std::optional<TableReadValue> {
-          if (!Left || !IsConstant(Right))
-            return std::nullopt;
-          switch (Left->K) {
-          case K::Constant:
-            return TableReadValue{K::Constant, Left->Value + Right->Value, 0};
-          case K::Scaled:
-            return TableReadValue{K::SlotAddress, Right->Value, Left->Bytes};
-          case K::ExtendedSlot:
-            if (Left->Value == Right->Value) {
-              TableReadValue Target = *Left;
-              Target.K = K::RelativeTarget;
-              return Target;
-            }
-            return std::nullopt;
-          default:
-            return std::nullopt;
-          }
-        };
-        const auto Left = In(0), Right = In(1);
-        Result = Sum(Left, Right);
-        if (!Result)
-          Result = Sum(Right, Left);
-        break;
-      }
-      case NdOp::INT_MULT:
-      case NdOp::INT_LEFT: {
-        if (Op.NumInputs != 2 || Op.Output.Size != 8)
-          break;
-        const auto Left = In(0), Right = In(1);
-        if (IsConstant(Left) && IsConstant(Right)) {
-          if (Op.Opcode == NdOp::INT_MULT)
-            Result = TableReadValue{K::Constant, Left->Value * Right->Value, 0};
-          break;
-        }
-        auto Scale = [&](const std::optional<TableReadValue> &Factor)
-            -> std::optional<TableReadValue> {
-          if (!IsConstant(Factor))
-            return std::nullopt;
-          const uint64_t Bytes =
-              Op.Opcode == NdOp::INT_MULT
-                  ? Factor->Value
-                  : (Factor->Value < 8 ? uint64_t{1} << Factor->Value : 0);
-          if (Bytes != sizeof(int32_t))
-            return std::nullopt;
-          return TableReadValue{K::Scaled, 0, static_cast<uint16_t>(Bytes)};
-        };
-        Result = Scale(Right);
-        if (!Result && Op.Opcode == NdOp::INT_MULT)
-          Result = Scale(Left);
-        break;
-      }
-      case NdOp::LOAD: {
-        const NdVar &Address = Op.NumInputs >= 2 ? Op.Inputs[1] : Op.Inputs[0];
-        const auto At = ValueOf(Address);
-        if (At && At->K == K::SlotAddress && Op.Output.Size == At->Bytes)
-          Result =
-              TableReadValue{K::Slot, At->Value, At->Bytes, Op.Addr, Op.Seq};
-        break;
-      }
-      case NdOp::INT_SEXT: {
-        auto Slot = In(0);
-        if (Slot && Slot->K == K::Slot && Slot->Bytes == 4 &&
-            Op.Output.Size == 8) {
-          Slot->K = K::ExtendedSlot;
-          Result = Slot;
-        }
-        break;
-      }
-      default:
-        break;
-      }
-      if (const auto Key = tableReadStorage(Op.Output)) {
-        Values.erase(*Key);
-        if (Result && (Op.Output.isTemp() ||
-                       (Op.Output.Size == 8 && Op.Output.Offset % 8 == 0)))
-          Values.emplace(*Key, std::make_pair(*Result, Op.Output.Size));
-      }
+      State.step(Op);
     }
   }
   return std::nullopt;
+}
+
+/// The constants every path into each block leaves in a whole register:
+/// the address of a table hoisted out of a loop.  A block also entered
+/// another way, as \p Root says, starts with none.
+std::vector<std::map<uint64_t, uint64_t>>
+blockEntryConstants(const LowFunc &Func, llvm::ArrayRef<uint64_t> Preserved,
+                    const std::function<bool(const LowBlock &)> &Root) {
+  const size_t Count = Func.Blocks.size();
+  std::vector<std::map<uint64_t, uint64_t>> Entry(Count);
+  std::vector<bool> Reached(Count, false);
+  std::vector<size_t> Work;
+  for (size_t B = 0; B < Count; ++B)
+    if (Root(Func.Blocks[B])) {
+      Reached[B] = true;
+      Work.push_back(B);
+    }
+  while (!Work.empty()) {
+    const size_t B = Work.back();
+    Work.pop_back();
+    TableReadState State(Preserved);
+    State.seed(Entry[B]);
+    for (const LowOp &Op : Func.Blocks[B].Ops)
+      State.step(Op);
+    const std::map<uint64_t, uint64_t> Out = State.constants();
+    for (int S : Func.Blocks[B].Succs) {
+      if (S < 0 || static_cast<size_t>(S) >= Count || Root(Func.Blocks[S]))
+        continue;
+      std::map<uint64_t, uint64_t> &In = Entry[S];
+      if (!Reached[S]) {
+        Reached[S] = true;
+        In = Out;
+        Work.push_back(S);
+        continue;
+      }
+      bool Narrowed = false;
+      for (auto It = In.begin(); It != In.end();) {
+        const auto Other = Out.find(It->first);
+        if (Other == Out.end() || Other->second != It->second) {
+          It = In.erase(It);
+          Narrowed = true;
+        } else {
+          ++It;
+        }
+      }
+      if (Narrowed)
+        Work.push_back(S);
+    }
+  }
+  return Entry;
 }
 
 } // namespace
@@ -586,12 +679,82 @@ bool CFGBuilder::recoverOwnLabelTableBranches(const BinaryImage &Img,
     return &*Starts;
   };
 
+  const llvm::ArrayRef<uint64_t> Preserved =
+      getTargetRegInfo(Img.Arch).CalleeSaveRegs;
+  // A block entered another way than from its predecessors starts with no
+  // known register.
+  auto Root = [&](const LowBlock &Block) {
+    return Block.Preds.empty() || !Block.ExceptionalPreds.empty() ||
+           Block.StartAddr == Func.Entry ||
+           OrdinaryCFGRoots.count(Block.StartAddr) ||
+           isKnownFunctionEntry(Block.StartAddr);
+  };
+
+  // The table read of the jump ending block \p B on the graph as it stands:
+  // its block after the blocks each the only way into the next, starting
+  // with what every path leaves in the registers.
+  using EntryState = std::vector<std::map<uint64_t, uint64_t>>;
+  auto ReadTarget =
+      [&](size_t B, const EntryState &Entry) -> std::optional<TableReadValue> {
+    std::vector<size_t> Chain{B};
+    while (Chain.size() <= limits::kMaxOwnLabelTableReadBlocks) {
+      const LowBlock &Into = Func.Blocks[Chain.back()];
+      if (Into.Preds.size() != 1 || Into.StartAddr == Func.Entry)
+        break;
+      const int Pred = Into.Preds.front();
+      if (Pred < 0 || static_cast<size_t>(Pred) >= Func.Blocks.size() ||
+          std::find(Chain.begin(), Chain.end(), static_cast<size_t>(Pred)) !=
+              Chain.end())
+        break;
+      Chain.push_back(static_cast<size_t>(Pred));
+    }
+    std::reverse(Chain.begin(), Chain.end());
+    const auto Target =
+        tableReadTarget(Func, Chain, Entry[Chain.front()], Preserved);
+    if (!Target || Target->K != TableReadValue::RelativeTarget)
+      return std::nullopt;
+    return Target;
+  };
+  // A dispatch stands only while the graph still reads its table the same
+  // way: code its labels reach can enter its blocks another way, with another
+  // address in the register.  One withdrawn is not tried again.
+  std::set<va_t> Withdrawn;
+  auto Revalidate = [&] {
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      const EntryState Entry = blockEntryConstants(Func, Preserved, Root);
+      for (size_t B = 0; B < Func.Blocks.size(); ++B) {
+        const LowBlock &Block = Func.Blocks[B];
+        if (Block.Ops.empty() || Block.Ops.back().Opcode != NdOp::INDIR_BR)
+          continue;
+        const va_t Address = Block.Ops.back().Addr;
+        const auto Read = OwnLabelTableReads.find(Address);
+        if (Read == OwnLabelTableReads.end())
+          continue;
+        const auto Target = ReadTarget(B, Entry);
+        if (Target && Target->Value == Read->second.Base &&
+            Target->SlotReadAddr == Read->second.Slot.Addr &&
+            Target->SlotReadSeq == Read->second.Slot.Seq)
+          continue;
+        InsnRecord &Rec = Insns.at(Address);
+        Rec.JumpTableTargets.clear();
+        Rec.ValueDispatch = false;
+        OwnLabelTableReads.erase(Read);
+        Withdrawn.insert(Address);
+        Changed = true;
+      }
+      if (Changed)
+        rebuildBlocks(Func);
+    }
+  };
+
   // Each round dispatches the jumps the code decoded so far holds; the code
   // their labels reach can hold another (a `match` after a `match`).
   bool Recovered = false;
   for (uint32_t Round = 0; Round < limits::kMaxOwnLabelTableRounds; ++Round) {
     const std::set<va_t> *Lines = nullptr;
     bool Checked = false;
+    std::optional<EntryState> EntryConstants;
     std::vector<va_t> Explore;
     for (size_t B = 0; B < Func.Blocks.size(); ++B) {
       const LowBlock &Block = Func.Blocks[B];
@@ -610,24 +773,12 @@ bool CFGBuilder::recoverOwnLabelTableBranches(const BinaryImage &Img,
           Rec.ScalarBranchInput ||
           LostValidatedJumpTableBranches.count(Address) ||
           StackTableEvidenceIncompleteBranches.count(Address) ||
-          IncompleteBranchMarkerEvidenceIncomplete)
+          IncompleteBranchMarkerEvidenceIncomplete || Withdrawn.count(Address))
         continue;
-      // The jump's block, after the blocks each the only way into the next.
-      std::vector<size_t> Chain{B};
-      while (Chain.size() <= limits::kMaxOwnLabelTableReadBlocks) {
-        const LowBlock &Into = Func.Blocks[Chain.back()];
-        if (Into.Preds.size() != 1 || Into.StartAddr == Func.Entry)
-          break;
-        const int Pred = Into.Preds.front();
-        if (Pred < 0 || static_cast<size_t>(Pred) >= Func.Blocks.size() ||
-            std::find(Chain.begin(), Chain.end(), static_cast<size_t>(Pred)) !=
-                Chain.end())
-          break;
-        Chain.push_back(static_cast<size_t>(Pred));
-      }
-      std::reverse(Chain.begin(), Chain.end());
-      const auto Target = tableReadTarget(Func, Chain);
-      if (!Target || Target->K != TableReadValue::RelativeTarget)
+      if (!EntryConstants)
+        EntryConstants = blockEntryConstants(Func, Preserved, Root);
+      const auto Target = ReadTarget(B, *EntryConstants);
+      if (!Target)
         continue;
       const va_t Base = Target->Value;
       const Section *Holder = Img.getSectionFor(Base);
@@ -685,6 +836,7 @@ bool CFGBuilder::recoverOwnLabelTableBranches(const BinaryImage &Img,
     }
     splitBlocks();
     rebuildBlocks(Func);
+    Revalidate();
   }
   return Recovered;
 }

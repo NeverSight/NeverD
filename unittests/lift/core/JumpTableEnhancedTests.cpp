@@ -5302,8 +5302,10 @@ static fs::path ownLabelDispatchX64Obj() {
 // compares the slot, which holds each label as its offset from the table and
 // is the same number in the lifted program.  A label whose code reads a
 // register the caller keeps that no path to the jump has written is left out,
-// an address inside an instruction ends what the table is taken to hold, and
-// a table in writable memory gives no labels.
+// an address inside an instruction ends what the table is taken to hold, a
+// table address hoisted out of the loop is found where every path leaves it,
+// a dispatch that code its labels reach enters with another table's address
+// is withdrawn, and a table in writable memory gives no labels.
 TEST_F(JTE_X86_64, AnUnboundedOwnLabelTableDispatchesByValue) {
   auto ImageOrErr = neverd::loadBinary(ownLabelDispatchX64Obj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -5365,6 +5367,18 @@ TEST_F(JTE_X86_64, AnUnboundedOwnLabelTableDispatchesByValue) {
   ASSERT_EQ(InsideFunc.ValueDispatches.size(), 1u);
   EXPECT_EQ(InsideFunc.ValueDispatches.front().Targets,
             std::vector<neverd::va_t>{Label(Inside, 0)});
+
+  const neverd::va_t Hoisted = Inside + 4 * 4;
+  const neverd::LowFunc HoistedFunc = Build("jt_own_hoisted");
+  ASSERT_EQ(HoistedFunc.ValueDispatches.size(), 1u);
+  EXPECT_EQ(HoistedFunc.ValueDispatches.front().Targets,
+            (std::vector<neverd::va_t>{Label(Hoisted, 0), Label(Hoisted, 1),
+                                       Label(Hoisted, 2)}));
+
+  const neverd::LowFunc Shared = Build("jt_own_shared");
+  ASSERT_FALSE(Shared.Blocks.empty());
+  EXPECT_TRUE(Shared.ValueDispatches.empty());
+  EXPECT_TRUE(Shared.JumpTables.empty());
 
   const neverd::LowFunc Writable = Build("jt_own_writable");
   ASSERT_FALSE(Writable.Blocks.empty());

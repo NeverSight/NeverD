@@ -10,9 +10,14 @@
 # whose code reads %rbx, which its caller keeps and no path to the jump has
 # written: that edge would make %rbx an input, so only the other label is
 # kept.  jt_own_inside names, in its second slot, an address inside an
-# instruction, which ends what the table is taken to hold.  jt_own_writable
-# reads its table from writable memory, which the program may change, and
-# stays unresolved.
+# instruction, which ends what the table is taken to hold.  jt_own_hoisted
+# loads the table's address into %r12 before the loop its dispatch runs in,
+# as the compiler hoists it: every path into the loop leaves it there.
+# jt_own_shared's first table names code that loads a second table's address
+# and jumps back into the dispatch, which then reads either table: once that
+# code is decoded, the dispatch is withdrawn.  jt_own_writable reads its
+# table from writable memory, which the program may change, and stays
+# unresolved.
 
   .text
   .globl jt_own_enum
@@ -75,6 +80,52 @@ jt_own_inside:
   retq
   .size jt_own_inside, .-jt_own_inside
 
+  .globl jt_own_hoisted
+  .type jt_own_hoisted, @function
+  .p2align 4
+jt_own_hoisted:
+  pushq %r12
+  leaq .Loh_table(%rip), %r12
+  xorl %eax, %eax
+.Loh_loop:
+  movq (%rdi), %rcx
+  addq $8, %rdi
+  testq %rcx, %rcx
+  js .Loh_loop
+  movslq (%r12,%rcx,4), %rdx
+  addq %r12, %rdx
+  jmpq *%rdx
+.Loh_add:
+  addl $3, %eax
+  jmp .Loh_loop
+.Loh_sub:
+  subl $1, %eax
+  jmp .Loh_loop
+.Loh_done:
+  popq %r12
+  retq
+  .size jt_own_hoisted, .-jt_own_hoisted
+
+  .globl jt_own_shared
+  .type jt_own_shared, @function
+  .p2align 4
+jt_own_shared:
+  movq (%rdi), %rax
+  leaq .Los_one(%rip), %rcx
+  jmp .Los_dispatch
+.Los_dispatch:
+  movslq (%rcx,%rax,4), %rdx
+  addq %rcx, %rdx
+  jmpq *%rdx
+.Los_reload:
+  movq 8(%rdi), %rax
+  leaq .Los_two(%rip), %rcx
+  jmp .Los_dispatch
+.Los_ret:
+  movl $1, %eax
+  retq
+  .size jt_own_shared, .-jt_own_shared
+
   .globl jt_own_writable
   .type jt_own_writable, @function
   .p2align 4
@@ -111,6 +162,19 @@ jt_own_writable:
   .long .Loi_first-.Loi_table
   .long .Loi_wide+2-.Loi_table
   .long .Loi_first-.Loi_table
+  .long 0
+.Loh_table:
+  .long .Loh_add-.Loh_table
+  .long .Loh_sub-.Loh_table
+  .long .Loh_done-.Loh_table
+  .long 0
+.Los_one:
+  .long .Los_reload-.Los_one
+  .long .Los_ret-.Los_one
+  .long 0
+.Los_two:
+  .long .Los_ret-.Los_two
+  .long .Los_ret-.Los_two
   .long 0
 
   .data
