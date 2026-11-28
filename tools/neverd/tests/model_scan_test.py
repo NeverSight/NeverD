@@ -488,6 +488,38 @@ class ModelScan(unittest.TestCase):
             f.write_bytes(struct.pack("<Q", len(header)) + header + b"X" * 6)
             self.assertEqual(self.scan(f, code=1)["packages"][0]["gap_count"], 1)
 
+    def test_json_key_scope_and_nesting_boundaries(self):
+        config = self.root / "config.json"
+        # Reusing a key in sibling objects is valid, including objects in arrays.
+        config.write_bytes(
+            b'{"model_type":"example","quantization":[{"x":[null,true,false]},'
+            b'{"x":[-1,0,1.25,"str"]}]}'
+        )
+        pkg = self.scan(config)["packages"][0]
+        self.assertEqual(pkg["declared_architectures"], ["example"])
+
+        # Container-end events use the depth of their corresponding start.
+        def nested(count, content):
+            return b'{"x":' + b"[" * count + content + b"]" * count + b"}"
+
+        for data in [nested(63, b"0"), nested(64, b"")]:
+            config.write_bytes(data)
+            self.assertEqual(self.scan(config)["packages"][0]["gap_count"], 0)
+
+        for data, reason in [
+            (br'{"a":[{"b":1,"\u0062":2}]}', "duplicate JSON object key"),
+            (nested(64, b"0"), "JSON nesting exceeds limit"),
+            (nested(65, b""), "JSON nesting exceeds limit"),
+            (b"[]", "invalid JSON object"),
+            (b'{"a":1} trailing', "invalid JSON object"),
+            (b'{"a":1e1000}', "invalid JSON object"),
+            (b'{"a":"\xff"}', "invalid JSON object"),
+        ]:
+            with self.subTest(data=data):
+                config.write_bytes(data)
+                pkg = self.scan(config, code=1)["packages"][0]
+                self.assertEqual(pkg["coverage_gaps"][0]["reason"], reason)
+
     def test_weight_only_structure_requires_same_layer_and_matrix_evidence(self):
         names = ["attn_q", "attn_k", "attn_v", "attn_output"]
         tensors = [
