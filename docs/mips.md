@@ -125,6 +125,15 @@ The C calling-convention tests below exercise both paths in both byte orders.
 [LLVM change](https://github.com/NeverSight/llvm-project/pull/26) ·
 [Release archives](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r17).
 
+The r18 assembler accepts Clang's saved position-independent C assembly for
+MIPS16 and microMIPS R6. The MIPS16 call uses the word-scaled PC-relative
+GOT adjustment and the compact register call. For microMIPS R6 the
+assembler selects the 16-bit register move and orders the two registers of
+a compact equality branch so that it retains its condition. The MIPS
+operand parser looks up the custom parser range once per instruction.
+[LLVM change](https://github.com/NeverSight/llvm-project/pull/27) ·
+[Release archives](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r18).
+
 Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
@@ -342,8 +351,8 @@ memory size and 256-byte alignment of `PT_TLS`.
 The MIPS16 branch programs take both arms of a conditional and swap the
 two destinations in the replacement. The targets are more than 2 KiB ahead
 in the original layout and behind the new `section` placement. Each native
-build produces 1,652 executable images across 496 configurations, including
-1,156 updated images. The upgrade check uses r13, r14 and r15 to build one original
+build produces 1,808 executable images across 548 configurations, including
+1,260 updated images. The upgrade check uses r13, r14 and r15 to build one original
 per ABI and byte order. Twelve more r14 originals use `ld.lld -r` to combine
 the startup, the function and two helpers. Both helpers define the same
 COMDAT function and different weak implementations of `group_choice`.
@@ -384,6 +393,9 @@ in-place replacements, the assembler reserves the original input section
 extent after the new function's size directive. This preserves the PIC
 symbol flags and the linker's alignment bytes outside the original function.
 The section placement uses the replacement at its natural size.
+Together, the current and eight upgrade groups execute 2,054 whole ELFs
+per host, including 1,424 updated programs, and retain 686 relocatable
+objects for comparison.
 
 When the original build uses a static library in a partial link, keep the
 result of that `ld.lld -r` step as the manifest object. Rebuild it from the
