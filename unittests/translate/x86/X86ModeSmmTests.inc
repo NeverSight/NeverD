@@ -155,6 +155,7 @@ TEST_F(X86ModeInterruptTest, InactiveRsmDeliversOriginalUndefinedOpcode) {
 
 #if defined(__linux__) && defined(__x86_64__)
 TEST_F(X86ModeInterruptTest, SoftwareSmmSaveMapAndEditedRsmMatchKvm) {
+  unsigned Maps = 0;
   for (bool Wide : {true, false}) {
     SCOPED_TRACE(Wide);
     X64PagedNativeCPU Native;
@@ -274,7 +275,9 @@ TEST_F(X86ModeInterruptTest, SoftwareSmmSaveMapAndEditedRsmMatchKvm) {
     ASSERT_EQ(ioctl(Native.CPU, KVM_GET_SREGS, &Original), 0);
     EXPECT_EQ(Memory->controls().EFER, Original.efer);
     EXPECT_EQ(R.RFlags & ~uint64_t(0x10000), After.rflags & ~uint64_t(0x10000));
+    ++Maps;
   }
+  RecordProperty("kvm_save_maps", Maps);
 }
 #endif
 
@@ -348,4 +351,88 @@ TEST_F(X86ModeInterruptTest,
             EXPECT_EQ(bool(R.RFlags & 0x100), OutsideTF);
           }
         }
+}
+
+TEST_F(X86ModeInterruptTest, RsmChecksTheSaveImageBeforeBranchSingleStepping) {
+  const std::optional<bool> Profiles[] = {std::nullopt, false, true};
+  enum class Save { Valid, InvalidDebug, MissingPDPTE };
+  unsigned Cases = 0;
+  for (auto Profile : Profiles)
+    for (auto Image : {Save::Valid, Save::InvalidDebug, Save::MissingPDPTE}) {
+      SCOPED_TRACE(testing::Message()
+                   << "branch=" << (Profile ? int(*Profile) : -1)
+                   << " save=" << int(Image));
+      start(Mode::Long64);
+      Machine.SMM.emplace();
+      Machine.Debug.emplace();
+      Options.Legacy.Debug = Options.Long.DebugProfile =
+          X86InstructionDebugProfile::BranchWatchpoints;
+      Options.RsmCountsAsBranch = Profile;
+      auto &R = Machine.Core.Core.Core.Core.Core.Core;
+      R.GPR[4] = 0xf000;
+      auto Firmware = RAM;
+      Firmware.Memory.front().Bytes[0x38000] = 0x0f;
+      Firmware.Memory.front().Bytes[0x38001] = 0xaa;
+      Program = {{0x38000, Mode::Real16, {0x0f, 0xaa}}};
+      bindMemory();
+      auto Private =
+          llvm::cantFail(X86PagedMemory::create(Firmware, Features, Controls));
+      X86ModeExecution Execution(*Memory, Options, *Private);
+      ASSERT_TRUE(llvm::cantFail(Execution.systemManagementInterrupt(Machine))
+                      .EventAccepted);
+      R.RFlags = 0x102;
+      Machine.Debug->DebugCTL = kX86BranchTraceFlag;
+      const auto Edit = [&](uint64_t Address, uint64_t Value) {
+        ASSERT_EQ(Private->physicalMemory()
+                      .storeScalar(Address, GuestScalarWidth::I64, Value)
+                      .Status,
+                  GuestMemoryAccessStatus::Completed);
+      };
+      if (Image == Save::InvalidDebug)
+        ASSERT_NO_FATAL_FAILURE(Edit(0x3ff68, uint64_t{1} << 32));
+      if (Image == Save::MissingPDPTE) {
+        ASSERT_NO_FATAL_FAILURE(Edit(0x3fed0, 0));          // EFER without LMA.
+        ASSERT_NO_FATAL_FAILURE(Edit(0x3ff48, 0x20));       // CR4.PAE.
+        ASSERT_NO_FATAL_FAILURE(Edit(0x3ff50, 0x40000));    // Unbacked PDPT.
+        ASSERT_NO_FATAL_FAILURE(Edit(0x3ff58, 0x80000011)); // CR0.PG and PE.
+      }
+      uint64_t Budget = 1;
+      auto Result = Execution.run(Machine, Program, Budget);
+      ++Cases;
+      if (Image == Save::MissingPDPTE) {
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        EXPECT_EQ(Result->Status, X86LegacyExecutionStatus::BackingFault);
+        EXPECT_TRUE(Result->BackingFault.has_value());
+        EXPECT_EQ(Result->Completions, 0u);
+        EXPECT_FALSE(Machine.Shutdown);
+      } else if (Image == Save::InvalidDebug) {
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        EXPECT_EQ(Result->Status, X86LegacyExecutionStatus::Shutdown);
+        EXPECT_EQ(Result->Completions, 0u);
+        EXPECT_TRUE(Machine.Shutdown);
+      } else if (!Profile) {
+        ASSERT_FALSE(bool(Result));
+        EXPECT_NE(
+            llvm::toString(Result.takeError()).find("branch single-stepping"),
+            std::string::npos);
+      } else {
+        ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+        ASSERT_EQ(Result->Completions, 1u);
+        EXPECT_FALSE(Machine.SMM->Active);
+        EXPECT_EQ(Result->DeliveredVector, *Profile ? 1u : 0u);
+        EXPECT_EQ(Machine.Debug->DR6 & 0x4000, *Profile ? 0x4000u : 0u);
+        EXPECT_EQ(Machine.Debug->DebugCTL, *Profile ? 0u : kX86BranchTraceFlag);
+        if (*Profile) {
+          EXPECT_EQ(word(bytes(*Memory), uint32_t(R.GPR[4]), 8), 0x1000u);
+        } else {
+          EXPECT_EQ(R.PC, 0x1000u);
+        }
+        continue;
+      }
+      EXPECT_TRUE(Machine.SMM->Active);
+      EXPECT_EQ(R.PC, 0x8000u);
+      EXPECT_EQ(Machine.Debug->DR6 & 0x4000, 0u);
+      EXPECT_EQ(Machine.Debug->DebugCTL, kX86BranchTraceFlag);
+    }
+  RecordProperty("software_profile_cases", Cases);
 }
