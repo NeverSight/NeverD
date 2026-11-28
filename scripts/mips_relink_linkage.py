@@ -175,6 +175,16 @@ def verify_large_segments(image, profile, symtab):
 def inspect_linkage(image, profile, function, text):
     """Verify the actual callable pointer and floating-point ABI in each ET_EXEC."""
     symtab = image.get_section_by_name(".symtab")
+    if profile.linkage == "entry-stack":
+        start, = symtab.get_symbol_by_name("_start")
+        first = image["e_phoff"]
+        end = first + image["e_phnum"] * image["e_phentsize"]
+        owners = [seg for seg in image.iter_segments()
+                  if seg["p_type"] == "PT_LOAD" and seg["p_flags"] & 4
+                  and seg["p_offset"] <= first and end <= seg["p_offset"] + seg["p_filesz"]]
+        if image["e_entry"] != start["st_value"] or len(owners) != 1:
+            raise ValueError(f"{profile.name}: invalid Linux entry or unmapped program headers")
+        return
     if profile.c_pic:
         width = image.elfclass // 8
         order = "little" if profile.little else "big"
@@ -337,6 +347,20 @@ def verify_linkage_objects(folder, profile, hashes, digest):
                                     rel["r_info_ssym"], rel.entry.get("r_addend")))
             return refs, packed
 
+    if profile.linkage == "entry-stack":
+        if set(hashes) != {"start.o", "caller.o", "calc.o", "updated.o"}:
+            raise ValueError(f"{profile.name}: missing Linux entry objects")
+        start, _ = references("start.o", (".text.start",))
+        caller, _ = references("caller.o", (".text",))
+        address_kinds = (5, 6, 28, 29) if profile.abi == "n64" else (5, 6)
+        required = {(kind, name) for name in ("_start", "calc") for kind in address_kinds}
+        required.add((4, "calc"))  # R_MIPS_26 from the driver to the replaced function.
+        if start != {(4, "check_start")} or not required <= caller:
+            raise ValueError(f"{profile.name}: unexpected Linux entry or callee relocations")
+        for obj in ("calc.o", "updated.o"):
+            if references(obj, (".text.calc",))[0]:
+                raise ValueError(f"{profile.name}: unexpected relocations in {obj}")
+        return
     if profile.c_pic:
         if set(hashes) != {"caller.o", "calc.o", "updated.o"}:
             raise ValueError(f"{profile.name}: expected the PIC caller and both callees")

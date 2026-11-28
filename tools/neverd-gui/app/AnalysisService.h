@@ -43,7 +43,7 @@ public:
   /// Asks the replica to render functions ahead in idle time.
   void setRendersAhead(bool renders) { rendersAhead_ = renders; }
   /// Start the idle renderer if this project still has pages to compute.
-  void startIdleRenders();
+  void startIdleRenders(const QJsonObject &openingSnapshot = {});
   /// The owner can answer a read from what earlier sessions kept, so that a
   /// replica starts only for what they did not.
   void setOwnerReadsKept(bool reads) { ownerReadsKept_ = reads; }
@@ -65,6 +65,7 @@ private:
   void reset();
   void requestSnapshot();
   void startReplica();
+  void restoreSnapshot(QJsonObject snapshot);
   void sendPreparedRead();
   /// Asks the owner for the running read from what is kept, and starts the
   /// replica for what is not.
@@ -93,8 +94,7 @@ private:
   void ownerGave(const QJsonObject &response);
   /// Asks the owner what the store holds, once for a project state; a replica
   /// starts beside the owner where that is part of the renders.
-  void askKeptState(QueryService::QuerySpec::Priority priority =
-                        QueryService::QuerySpec::Visible);
+  void askKeptState(bool forIdlePreparation = false);
   bool canRenderAhead() const;
   /// \p response as this dispatcher's reads have it: the owner's project and
   /// revision, and no analysis state, which a replica's never is the owner's.
@@ -209,7 +209,9 @@ public:
   void setRendersAhead(bool renders) {
     lanes_.front().service->setRendersAhead(renders);
   }
-  void startIdleRenders() { lanes_.front().service->startIdleRenders(); }
+  void startIdleRenders(const QJsonObject &openingSnapshot = {}) {
+    lanes_.front().service->startIdleRenders(openingSnapshot);
+  }
   QString renderAheadState() const {
     return lanes_.front().service->renderAheadState();
   }

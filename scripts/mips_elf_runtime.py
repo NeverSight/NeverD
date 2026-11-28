@@ -1,6 +1,24 @@
 """Execution helpers for the MIPS ELF test programs."""
 
 
+def run_entry_stack(qemu, path, bias, run):
+    name = "NEVERD_RELINK_INPUT"
+    results = {}
+    for arg, offset in (("C", 0), ("H", 5)):
+        for value, addition in (("A", 0), ("B", 2)):
+            expected = bias + offset + addition
+            run([qemu, "-E", f"{name}={value}", path, arg], expected=expected)
+            results[f"{arg}/{value}"] = expected
+    for label, environment, args, expected in (
+        ("missing environment", ["-U", name], ["C"], 123),
+        ("unknown argument", ["-E", f"{name}=A"], ["Z"], 122),
+        ("missing argument", ["-E", f"{name}=A"], [], 121),
+    ):
+        run([qemu, *environment, path, *args], expected=expected)
+        results[label] = expected
+    return results
+
+
 def map_image(uc, image, pages, bias=0, *, enforce_permissions=False):
     if enforce_permissions:
         from elftools.elf.constants import P_FLAGS

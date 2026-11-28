@@ -1221,7 +1221,7 @@ ProjectHistory::committedRows(const std::string &table) const {
   return snapshot_->state.rows(table);
 }
 
-void ProjectHistory::verifyLoadedState(const Json &state) {
+bool ProjectHistory::matchesLoadedState(const Json &state) const {
   auto loaded = normalizedState(state);
   // The C ABI reconstructs original symbol names independently; only current
   // user rename values are part of the loaded edit-state identity here.
@@ -1235,7 +1235,11 @@ void ProjectHistory::verifyLoadedState(const Json &state) {
     matches &= snapshot_->state.Other.contains(name) &&
                (name == "renames" ? rows == renames
                                   : snapshot_->state.tableEquals(name, rows));
-  if (!matches && blocked_.empty())
+  return matches;
+}
+
+void ProjectHistory::verifyLoadedState(const Json &state) {
+  if (!matchesLoadedState(state) && blocked_.empty())
     blocked_ = "foreign_edits";
 }
 

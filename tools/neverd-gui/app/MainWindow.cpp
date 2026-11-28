@@ -1152,11 +1152,23 @@ MainWindow::Dock *MainWindow::chooserDock(ChooserKind kind) {
     connectPatchedBytes(view);
   connect(view, &ChooserView::activated, this,
           [this](Address address) { navigate(address); });
-  // Lists reload when a session opens; one first shown later loads now.
-  if (session_.loaded())
-    view->model().reload();
   auto *dock = makeDock(id, nullptr, view->model().iconName(), view);
   dock->setTitle(view->model().title());
+  if (kind == ChooserKind::Strings || kind == ChooserKind::StringReferences) {
+    // Restoring a desktop also constructs its hidden tabs. Scan the image
+    // when the user can see the results, including a restored current tab.
+    const auto updateVisibility = [dock, view] {
+      view->model().setPageVisible(dock->isOpen() &&
+                                   dock->dockWidget()->isCurrentTab());
+    };
+    updateVisibility();
+    connect(dock, &Dock::isCurrentTabChanged, view, updateVisibility,
+            Qt::QueuedConnection);
+    connect(dock, &Dock::isOpenChanged, view, updateVisibility,
+            Qt::QueuedConnection);
+  }
+  if (session_.loaded())
+    view->model().reload();
   return dock;
 }
 

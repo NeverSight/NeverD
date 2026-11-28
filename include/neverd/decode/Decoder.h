@@ -287,6 +287,14 @@ public:
       LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
       LowInstructionPreservedState *PreservedState = nullptr);
 
+  /// Exact target-value projection for ordinary unsegmented x64 r/m64 near
+  /// JMP. A constant slot is read once before the indirect branch. Returns
+  /// false without changing Ops for other or unsupported encodings.
+  bool liftX64MemoryJumpToLow(
+      const DecodedInsn &Insn, std::vector<LowOp> &Ops,
+      LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
+      LowInstructionPreservedState *PreservedState = nullptr);
+
   /// Exact scalar relocation operand consumed by the most recently lifted x86
   /// instruction, if any.  The occurrence is reset for every instruction.
   std::optional<RelocatedInstructionScalarOperandOccurrence>

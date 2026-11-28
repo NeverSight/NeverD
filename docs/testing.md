@@ -8998,6 +8998,11 @@ bionic's ptrace request an int.
 `CSymbolNames.ACallToTheFirstOfSameNamedDefinitionsTakesItsPrototype` gives a
 call to the first of two same-named definitions only that definition's
 parameters.
+`X86_64_DebugParams.CallsPassTheFrameAddressTheirArgumentHolds` decompiles
+`test_debug_frame_argument.exe`, whose callers set the first argument to the
+address of their buffer on both paths to one call: each call to a callee whose
+`-g` DWARF declares its parameters passes that address, as an integer and as a
+pointer, never a local that nothing assigns.
 `HighCStoreForwarding.ALandingPadStoresTheExceptionTheUnwinderHandsIt` keeps a
 landing pad's store of `eh_exception` after a call that returns and one that
 does not. `TypeRender.UnitsTakeTheSystemsOwnTypesFromItsHeaders` takes glibc's
@@ -9013,7 +9018,12 @@ typedef parameters need, and `IndirectCallsTakeNoSignatureFromTheirCaller`
 keeps the caller's signature off an indirect call inside it.
 `X86_32_DebugParams.ParametersAfterAPointerTakeTheNextSlot` decompiles
 `test_debug_params32.o`, built with `-g`, whose parameters follow a pointer of
-four bytes. `ReadsTheDefinitionsOfTheProgramsTypes` reads a unit's
+four bytes. `X86_64_DebugParams.LineTablesOnlyRecordNoSignature` decompiles
+`test_debug_line_tables.exe`, built with `-gline-tables-only` and a build ID:
+its DWARF names `dlt_add` and records no type, and the call still passes both
+arguments and `dlt_add` still returns its sum. The same code built with `-g`
+(`test_debug_full_signatures.exe`) keeps `void dfs_none(void)`.
+`ReadsTheDefinitionsOfTheProgramsTypes` reads a unit's
 local types definitions back in C as written, whole in C++, and in Rust and
 Go as far as their structures lay them out, saying why for the rest.
 `TheProgramsTypesSpellTheirRecordsAndTheirMembers` gives Rust and Go the

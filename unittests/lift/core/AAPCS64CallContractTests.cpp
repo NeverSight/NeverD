@@ -178,6 +178,73 @@ std::string body(const std::string &Source, const std::string &Name) {
   return Source.substr(Begin, Close + 2 - Begin);
 }
 
+TEST(AAPCS64CallContract, SelectedWindowsCallsRegisterOnlyCertifiedVeneers) {
+  BinaryImage Img;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  constexpr va_t Uncalled = Plt + 0x10;
+  constexpr va_t WrongSlot = Plt + 0x20;
+  constexpr va_t InsideFunction = Plt + 0x30;
+  Segment Code = codeSegment(".text", Text, 0x200);
+  const auto Call = [](va_t From, va_t To) {
+    return 0x94000000u | static_cast<uint32_t>((To - From) / sizeof(uint32_t));
+  };
+  place(Code, Text,
+        {PushFrame, Call(Text + 4, Plt), Call(Text + 8, WrongSlot),
+         Call(Text + 12, InsideFunction), PopFrame, Ret});
+  for (va_t At : {Plt, Uncalled, WrongSlot, InsideFunction}) {
+    const va_t Slot = At == WrongSlot ? Got + 8 : Got;
+    place(Code, At, {adrp(16, At, Slot), ldrX(16, 16, Slot), br(16)});
+  }
+  Img.Segments.push_back(std::move(Code));
+  Img.Imports.push_back({"IPHLPAPI.dll", "IcmpCloseHandle", 0, Got});
+  Img.KnownCodeRanges.emplace_back(InsideFunction - 4, InsideFunction + 12);
+  Img.LoadOnlyFunctionEntries.insert(Text);
+  for (bool HasSymbolSize : {false, true}) {
+    BinaryImage Selected = Img;
+    if (HasSymbolSize)
+      Selected.Symbols.push_back(Symbol::makeFunc(Text, 24));
+    runPostLoadDiscovery(Selected, "test");
+    EXPECT_EQ(Selected.findImportStubAt(Plt), &Selected.Imports.front());
+    EXPECT_EQ(Selected.findImportStubAt(Uncalled), nullptr);
+    EXPECT_EQ(Selected.findImportStubAt(WrongSlot), nullptr);
+    EXPECT_EQ(Selected.findImportStubAt(InsideFunction), nullptr);
+  }
+}
+
+TEST(AAPCS64CallContract, WholeWindowsSourceLeavesImportVeneersToTheLinker) {
+  BinaryImage Img;
+  Img.Format = BinaryFormat::COFF;
+  Img.Arch = Arch::AArch64;
+  Img.Bits = Bitness::Bits64;
+  Img.Segments.push_back(codeSegment(".text", Text, 0x200));
+  Img.Imports.push_back({"IPHLPAPI.dll", "IcmpCloseHandle", 0, Got});
+  ASSERT_TRUE(Img.recordImportStub(Plt, 0));
+  HighFunc Caller, Veneer;
+  Caller.Name = "caller";
+  Caller.Entry = Text;
+  Veneer.Name = "sub_10100";
+  Veneer.Entry = Plt;
+  CEmitterOptions Opts;
+  Opts.Format = Img.Format;
+  Opts.TheArch = Img.Arch;
+  Opts.Image = &Img;
+  Opts.WholeProgram = true;
+  const auto Source = [&](const std::vector<HighFunc> &Functions) {
+    std::string Result;
+    llvm::raw_string_ostream Out(Result);
+    EXPECT_TRUE(HighCEmitter().emit(Functions, Out, Opts));
+    return Result;
+  };
+  const std::string Mark = "neverd.entry: 0x10100";
+  EXPECT_EQ(Source({Caller, Veneer}).find(Mark), std::string::npos);
+  EXPECT_NE(Source({Veneer}).find(Mark), std::string::npos);
+
+  Img.Exports.push_back({"", 17, Plt});
+  EXPECT_NE(Source({Caller, Veneer}).find(Mark), std::string::npos);
+}
+
 TEST(AAPCS64CallContract, FloatingCallResultsSurviveViewsAndSharedReturns) {
   for (bool Double : {false, true})
     for (bool IntegerResult : {false, true}) {

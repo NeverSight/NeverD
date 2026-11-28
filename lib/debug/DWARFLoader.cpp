@@ -454,7 +454,8 @@ struct DWARFDebugContext::Impl {
   void parseCompileUnits(const llvm::object::ObjectFile &Object);
   void parseUnits(size_t Begin, size_t End);
   void parseFunction(llvm::DWARFDie Die, llvm::DWARFUnit *Unit,
-                     unsigned UnitIndex, RecordSignatureTypes &Records);
+                     bool UnitDescribesSignatures, unsigned UnitIndex,
+                     RecordSignatureTypes &Records);
   void parseFunctionLocals(llvm::DWARFDie Die,
                            llvm::ArrayRef<AddressRange> ScopeRanges,
                            std::vector<LocalObject> &Objects) const;
@@ -1332,6 +1333,40 @@ bool platformConvention(llvm::DWARFDie Die) {
 }
 
 /// Whether \p Die is of a Go unit.
+/// Whether \p Subprogram records its signature, itself or where its
+/// declaration or abstract instance does: a return type, a prototype, a
+/// parameter or `...`.
+bool describesOwnSignature(llvm::DWARFDie Subprogram) {
+  if (Subprogram.findRecursively(llvm::dwarf::DW_AT_type) ||
+      Subprogram.findRecursively(llvm::dwarf::DW_AT_prototyped))
+    return true;
+  for (llvm::DWARFDie Child : Subprogram.children()) {
+    const auto Tag = Child.getTag();
+    if (Tag == llvm::dwarf::DW_TAG_formal_parameter ||
+        Tag == llvm::dwarf::DW_TAG_unspecified_parameters)
+      return true;
+  }
+  return false;
+}
+
+/// Whether any subprogram of the unit under \p Root records its signature.
+/// A unit built with line tables only records none, whatever its functions
+/// take and return.
+bool unitDescribesSignatures(llvm::DWARFDie Root) {
+  std::vector<llvm::DWARFDie> Pending{Root};
+  while (!Pending.empty()) {
+    const llvm::DWARFDie Die = Pending.back();
+    Pending.pop_back();
+    for (llvm::DWARFDie Child : Die.children()) {
+      if (Child.getTag() != llvm::dwarf::DW_TAG_subprogram)
+        Pending.push_back(Child);
+      else if (describesOwnSignature(Child))
+        return true;
+    }
+  }
+  return false;
+}
+
 bool ofGoUnit(llvm::DWARFDie Die) {
   return Die.getLanguage() == llvm::dwarf::DW_LANG_Go;
 }
@@ -2223,6 +2258,7 @@ void DWARFDebugContext::Impl::parseFunctionLocals(
 
 void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
                                             llvm::DWARFUnit *Unit,
+                                            bool UnitDescribesSignatures,
                                             unsigned UnitIndex,
                                             RecordSignatureTypes &Records) {
   llvm::Expected<llvm::DWARFAddressRangesVector> DwarfRanges =
@@ -2277,6 +2313,13 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
   if (auto Go = goReturnValue(Die, Addr, Records)) {
     Sym.ReturnType = std::move(Go->first);
     ReturnState = Go->second;
+  } else if (ReturnType.TheStatus == DeclaredTypeResolution::Status::Absent &&
+             !UnitDescribesSignatures && !describesOwnSignature(Die)) {
+    // A unit built with line tables only (rustc's -Cdebuginfo=1, clang's
+    // -gline-tables-only, gcc's -g1) names its functions and records the type
+    // of none: its silence about this return is no void return.  The return
+    // stays unknown, no type as a names-only provider leaves it, and so does
+    // the declaration it would complete.
   } else if (ReturnType.TheStatus == DeclaredTypeResolution::Status::Absent) {
     // DWARF encodes a source-level void return by omitting DW_AT_type.
     ReturnState = {AuthenticatedReturnKind::NoValue, 0};
@@ -2341,12 +2384,14 @@ void DWARFDebugContext::Impl::parseUnits(size_t Begin, size_t End) {
       continue;
     const unsigned UnitIndex = static_cast<unsigned>(Index - 1);
     RecordSignatureTypes Records;
+    const bool UnitDescribesSignatures = unitDescribesSignatures(Root);
 
     std::function<void(llvm::DWARFDie)> Walk = [&](llvm::DWARFDie Die) {
       if (!Die.isValid())
         return;
       if (Die.getTag() == llvm::dwarf::DW_TAG_subprogram) {
-        parseFunction(Die, CU.get(), UnitIndex, Records);
+        parseFunction(Die, CU.get(), UnitDescribesSignatures, UnitIndex,
+                      Records);
         return;
       }
       if (Die.getTag() == llvm::dwarf::DW_TAG_variable)

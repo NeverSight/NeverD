@@ -5933,6 +5933,25 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
           throw std::invalid_argument("Indirect record or error-register "
                                       "source entries need a projection proof");
       });
+  // A PE import library supplies the definition of its named linker veneer.
+  // Keep it inspectable on its own. In a whole translation unit it is an
+  // external declaration, so linking the original import library supplies
+  // exactly one definition and the caller still reaches the imported API.
+  if (Opts.WholeProgram && Funcs.size() > 1 && Opts.Image &&
+      Opts.Format == BinaryFormat::COFF && Opts.TheArch == Arch::AArch64 &&
+      !Opts.Image->ImportStubIndices.empty()) {
+    for (size_t I = 0; I < Funcs.size(); ++I) {
+      const HighFunc &F = Funcs[I];
+      if (!Opts.Image->ImportStubIndices.contains(F.Entry) ||
+          Opts.userName(F.Entry) || Opts.Image->findExportAt(F.Entry) ||
+          !Opts.Image->statedFunctionNameAt(F.Entry).empty())
+        continue;
+      const Import *Imported = Opts.Image->findImportStubAt(F.Entry);
+      if (Imported && !Imported->Name.empty() &&
+          (F.Name == Imported->Name || isSynthesizedFuncName(F.Name)))
+        LeftOut[I] = true;
+    }
+  }
   // The records the code reads members of through others, as
   // `l->head->child` reads a node, which only a rendering finds: each
   // rendering asks the local types for those an earlier one found.
