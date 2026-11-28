@@ -882,6 +882,7 @@ TEST(NativeStackSpecialization,
   auto P = finiteCalls();
   auto Options = stackOptions();
   Options.MaxIndirectTargets = 1;
+  Options.MaxNativeReturnTargets = 2;
   auto Result = specializeInterpreter(P, {0x100}, Options);
   EXPECT_FALSE(Result.complete());
   EXPECT_TRUE(Result.Status == SpecializationStatus::UnresolvedControl ||
@@ -922,6 +923,23 @@ TEST(NativeStackSpecialization, FiniteInternalReturnsConsumeActualSlotOnce) {
   auto Limited = specializeInterpreter(P, {0x100}, Options);
   EXPECT_EQ(Limited.Status, SpecializationStatus::UnresolvedControl);
   EXPECT_TRUE(Limited.Residual.Blocks.empty());
+
+  Options.MaxNativeReturnTargets = 2;
+  auto Separate = specializeInterpreter(P, {0x100}, Options);
+  ASSERT_TRUE(Separate.complete()) << Separate.Diagnostic;
+  for (uint64_t Input : {uint64_t{0}, uint64_t{1}, uint64_t{42}, UINT64_MAX}) {
+    auto Run = execute(Separate.Residual, Input);
+    ASSERT_TRUE(Run);
+    EXPECT_EQ(Run->Value, Input & 1 ? Input + 17 : Input ^ 0x1234);
+    EXPECT_EQ(Run->Stack, 0x10000u);
+  }
+  Options.MaxControlTuples = 1;
+  auto NarrowControls = specializeInterpreter(P, {0x100}, Options);
+  ASSERT_TRUE(NarrowControls.complete()) << NarrowControls.Diagnostic;
+  Options.MaxNativeReturnTargets = 0;
+  auto Invalid = specializeInterpreter(P, {0x100}, Options);
+  EXPECT_EQ(Invalid.Status, SpecializationStatus::InvalidInput);
+  EXPECT_TRUE(Invalid.Residual.Blocks.empty());
 }
 
 StackProvider frameCursor(bool Spilled) {

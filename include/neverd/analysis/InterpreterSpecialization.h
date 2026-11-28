@@ -305,6 +305,17 @@ struct SpecializationFrameSlot {
   uint16_t Bytes = 0;
 };
 
+/// Candidate entry-frame byte identity at one physical successor. A value is
+/// used only when its incoming edge proves a singleton from materialized
+/// memory. This nomination carries no byte value or memory premise.
+struct SpecializationControlFramePartitionHint {
+  SpecializationCursor Cursor;
+  int64_t Offset = 0;
+
+  bool
+  operator==(const SpecializationControlFramePartitionHint &) const = default;
+};
+
 struct SpecializationFrameExclusion {
   /// Absolute, nonempty, nonwrapping half-open range [Begin, End).
   uint64_t Begin = 0;
@@ -637,6 +648,23 @@ struct SpecializationOptions {
   /// Source and native proof interfaces reject this raw-only contract.
   std::optional<SpecializationFrameSlot> EntryReturnSlot;
 
+  /// Local context identity for a proved entry-frame byte. Unlike a control
+  /// frame slot, this does not separate contexts at unrelated successors.
+  std::vector<SpecializationControlFramePartitionHint>
+      ControlFramePartitionHints;
+  /// Optional complete-domain cap for a live physical native RETURN word.
+  /// Absence retains MaxIndirectTargets for dispatch and MaxControlTuples for
+  /// word projection and joins. This does not enlarge ordinary indirect
+  /// dispatch or admit an unproved return address.
+  std::optional<uint32_t> MaxNativeReturnTargets;
+
+  uint32_t nativeReturnTargetLimit() const {
+    return MaxNativeReturnTargets.value_or(MaxIndirectTargets);
+  }
+  uint32_t nativeReturnWordLimit() const {
+    return MaxNativeReturnTargets.value_or(MaxControlTuples);
+  }
+
   bool hasRawEnvironment() const {
     return !X64CodeRegions.empty() || !X64ImportBindings.empty() ||
            !X64MachineExits.empty() || !EntryFrameExcludedObjects.empty() ||
@@ -762,6 +790,9 @@ struct SpecializationResult {
   uint32_t DiscoveredContextFields = 0;
   uint32_t ControlRefinements = 0;
   uint64_t DiscoveryVisits = 0;
+  std::vector<SpecializationControlFramePartitionHint>
+      ControlFramePartitionHints;
+  bool ControlFramePartitionHintsTruncated = false;
 
   bool complete() const { return Status == SpecializationStatus::Complete; }
 };

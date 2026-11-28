@@ -5558,6 +5558,20 @@ TEST(InterpreterSpecialization,
   EXPECT_FALSE(NarrowResult.complete());
   EXPECT_TRUE(NarrowResult.Residual.Blocks.empty());
 
+  Narrow.MaxNativeReturnTargets = 2;
+  const auto NativeLimit = specializeInterpreter(P, {0x100}, Narrow);
+  ASSERT_TRUE(NativeLimit.complete()) << NativeLimit.Diagnostic;
+  for (uint64_t Selector : {0u, 1u}) {
+    WideByteOracle Actual(llvm::endianness::little);
+    Actual.word(reg(8, 1), Selector);
+    Actual.word(reg(24), 1);
+    Actual.word(reg(32), 0x1008);
+    for (unsigned I = 0; I != 8; ++I)
+      Actual.Memory[0x1008 + I] = 0xa0 + I;
+    ASSERT_TRUE(Actual.run(NativeLimit.Residual)) << Actual.Diagnostic;
+    EXPECT_EQ(Actual.number(reg(0)), Selector ? 11u : 22u);
+  }
+
   P.Code.at(0x200).Ops[0].Inputs[2] = reg(16);
   const auto Unbounded = specializeInterpreter(P, {0x100}, O);
   EXPECT_FALSE(Unbounded.complete());
