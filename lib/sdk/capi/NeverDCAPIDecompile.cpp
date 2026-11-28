@@ -1090,21 +1090,8 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
   if (!Attached)
     Attached = HF;
 
-  std::vector<HighFunc> Single = {*Attached};
-  if (PlainC) {
-    // The plain-C view keeps every related function (e.g. C++ catch funclets)
-    // except termination handlers and filters gathered only to fill a clause.
-    Single.clear();
-    for (HighFunc &Func : Related)
-      if (!SEHFuncletSources.count(Func.Entry))
-        Single.push_back(std::move(Func));
-  }
-  std::string Out;
-  llvm::raw_string_ostream OS(Out);
-
-  CEmitterOptions Opts;
-  Opts.PrecallMemory = S->SourceOptions.PrecallMemory;
-  Opts.PrecallEntry = FuncEntry;
+  // Bind edits to the attached value graph while its statements are owned
+  // here. The plain-C unit takes ownership of those statements below.
   std::string VariableSnapshot =
       SourceMap || !S->SourceOptions.VariableTypes.empty() ||
               !S->SourceOptions.VariableEdits.empty()
@@ -1112,6 +1099,23 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
                 highVariableSnapshot(*Attached, S->SourceOptions.Symbolic),
                 S->SourceOptions)
           : std::string();
+  std::vector<HighFunc> Single;
+  if (PlainC) {
+    // The plain-C view keeps every related function (e.g. C++ catch funclets)
+    // except termination handlers and filters gathered only to fill a clause.
+    if (!SEHFuncletSources.empty())
+      std::erase_if(Related, [&](const HighFunc &Func) {
+        return SEHFuncletSources.count(Func.Entry);
+      });
+    Single = std::move(Related);
+  } else
+    Single.push_back(*Attached);
+  std::string Out;
+  llvm::raw_string_ostream OS(Out);
+
+  CEmitterOptions Opts;
+  Opts.PrecallMemory = S->SourceOptions.PrecallMemory;
+  Opts.PrecallEntry = FuncEntry;
   // The analysis's observations of every function. A specialization or an
   // edit gives the view its own; the view reads the rest in place, as a whole
   // image's run holds millions.
