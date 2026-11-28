@@ -134,6 +134,14 @@ operand parser looks up the custom parser range once per instruction.
 [LLVM change](https://github.com/NeverSight/llvm-project/pull/27) ·
 [Release archives](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r18).
 
+The r19 assembler rejects delayed zero-compare aliases and delayed branch
+macros on microMIPS R6. That ISA reuses the opcode space for compact
+branches. The pre-R6 aliases retain their delay slots, and standard MIPS R6
+retains its own encodings. The guest tests below execute both the taken and
+fall-through paths on R2 and R6.
+[LLVM change](https://github.com/NeverSight/llvm-project/pull/28) ·
+[Release archives](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r19).
+
 Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
@@ -351,8 +359,8 @@ memory size and 256-byte alignment of `PT_TLS`.
 The MIPS16 branch programs take both arms of a conditional and swap the
 two destinations in the replacement. The targets are more than 2 KiB ahead
 in the original layout and behind the new `section` placement. Each native
-build produces 1,808 executable images across 548 configurations, including
-1,260 updated images. The upgrade check uses r13, r14 and r15 to build one original
+build produces 1,958 executable images across 598 configurations, including
+1,360 updated images. The upgrade check uses r13, r14 and r15 to build one original
 per ABI and byte order. Twelve more r14 originals use `ld.lld -r` to combine
 the startup, the function and two helpers. Both helpers define the same
 COMDAT function and different weak implementations of `group_choice`.
@@ -386,9 +394,10 @@ replacement section to that size with MIPS16 NOPs. The function symbol
 keeps its shorter size. The original object and final link layout are
 reused, including the original linker's alignment bytes after the function.
 
-The r17 PIC upgrade keeps the original direct C caller and startup objects
-and assembles the replacement from compiler-generated text. It covers 26
-ABI, ISA and byte-order combinations across R2 and R6. For compressed
+The r17 and r18 PIC upgrades keep each release's original direct C caller
+and startup objects and assemble the replacement from compiler-generated
+text. Each covers 26 ABI, ISA and byte-order combinations across R2 and R6.
+For compressed
 in-place replacements, the assembler reserves the original input section
 extent after the new function's size directive. This preserves the PIC
 symbol flags and the linker's alignment bytes outside the original function.
@@ -402,8 +411,14 @@ beyond either GP endpoint must fail and preserve the previous output.
 These checks cover classic and microMIPS R2/R6 on all three ABIs and MIPS16
 R2 on o32, in both byte orders.
 
-Together, the current and eight upgrade groups exercise 2,132 whole ELFs
-per host, including 1,476 updated programs, and retain 764 relocatable
+The zero-compare branch fixtures call the same function with zero and one.
+They check both directions of two branches with observable additions
+following each branch. The R2 additions in the delay slots execute on the
+taken paths. The R6 compact branches skip those additions on the taken
+paths. All 24 classic and microMIPS configurations run both updates.
+
+Together, the current and nine upgrade groups exercise 2,282 whole ELFs
+per host, including 1,576 updated programs, and retain 914 relocatable
 objects for comparison.
 
 When the original build uses a static library in a partial link, keep the

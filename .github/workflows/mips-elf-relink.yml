@@ -111,13 +111,14 @@ jobs:
             --neverd build-check/bin/neverd$suffix --mc build-tools/bin/llvm-mc$suffix \
             --llc build-tools/bin/llc$suffix --lld build-tools/bin/ld.lld$suffix \
             --clang build-tools/bin/clang$suffix
-      - name: Relink original r13 through r17 executables with the current fork
+      - name: Relink original r13 through r18 executables with the current fork
         env:
           LLVM_R13: 24ced447e1718432292dc9d54b6eb229323409d1
           LLVM_R14: 6c769154fbe9db2fe9e2e2dc1b04bebfe64e1312
           LLVM_R15: 54143a8d7c037ee4c22f1f238bd4d50ca9a5fd00
           LLVM_R16: 66bcb9e672583193b1b725cccd0cee96f1b2b105
           LLVM_R17: 93a7e578d2b105139e938d1da8b502d0689a25a0
+          LLVM_R18: 7941990111b5e6c3510c222b6f695377d4a5f0de
         run: |
           suffix=
           if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
@@ -125,9 +126,10 @@ jobs:
           for tool in clang llc ld.lld llvm-ar llvm-mc llvm-readobj; do
             cp -L "build-tools/bin/$tool$suffix" "current-tools/$tool$suffix"
           done
-          for release in r17 r16 r15 r14 r13; do
+          for release in r18 r17 r16 r15 r14 r13; do
             c_calls=
             case "$release" in
+              r18) revision="$LLVM_R18"; c_calls=pic-saved-replacement ;;
               r17) revision="$LLVM_R17"; c_calls=pic-saved-replacement ;;
               r16) revision="$LLVM_R16"; c_calls=saved-replacement ;;
               r15) revision="$LLVM_R15"; c_calls=direct ;;
@@ -149,7 +151,7 @@ jobs:
               grep -F "$revision" "$root/clang.txt"
               python scripts/check_mips_elf_relink.py upgrade --root "$root-c" --c-calls "$c_calls" "${args[@]}"
             fi
-            case "$release" in r16|r17) continue ;; esac
+            case "$release" in r16|r17|r18) continue ;; esac
             python scripts/check_mips_elf_relink.py upgrade --root "$root" "${args[@]}"
             if [[ "$release" == r14 ]]; then
               python scripts/check_mips_elf_relink.py upgrade --root "$root-partial" --partial-link --archive-tool "current-tools/llvm-ar$suffix" "${args[@]}"
@@ -186,7 +188,7 @@ jobs:
           for host in Linux macOS Windows; do
             dir="products/relink-$host"
             test "$(cat "$dir/neverd.txt")" = "$(git rev-parse HEAD)"
-            for root in "$dir" "$dir/from-r13" "$dir/from-r14" "$dir/from-r15" "$dir/from-r15-c" "$dir/from-r16-c" "$dir/from-r17-c"; do
+            for root in "$dir" "$dir/from-r13" "$dir/from-r14" "$dir/from-r15" "$dir/from-r15-c" "$dir/from-r16-c" "$dir/from-r17-c" "$dir/from-r18-c"; do
               /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$root"
             done
             /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$dir/from-r14-partial" --partial-link

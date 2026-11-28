@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: f4cad4fb2911551a33587204eba278c27e3ac69d51bda87dfc2badd260be7b55 -->
+<!-- i18n-source: 0af0d83722aeab684a0e8227e901ca4146336762b19d4173eaf981456cf80116 -->
 
 <div align="center">
 
@@ -210,7 +210,7 @@ La primera configuración compila el fork LLVM localmente (a menudo 30–60 min)
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r18
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r19
 cmake --build build
 ```
 
@@ -226,19 +226,19 @@ El paquete publicado se elige según el host que ejecuta CMake:
 
 Cada archivo se verifica con el resumen fijado en `cmake/NeverDLLVMPrebuilt.cmake`, o con su `.sha256` publicado para etiquetas no descritas allí, antes de extraerlo en `~/.cache/neverd-llvm/<tag>/<arch>/` o `NEVERD_LLVM_PREBUILT_CACHE_DIR`. Para la versión predeterminada, `BUILDINFO.txt` también debe identificar el commit exacto del submódulo LLVM. La publicación usa ccache en macOS/Linux y sccache con la caché de GitHub Actions para clang-cl en Windows. Las cachés solo aceleran recompilaciones y nunca se publican como artefactos.
 
-La revisión predeterminada es `neverd-llvm-v23.0.0-r18`. La etiqueta Git, el destino de publicación, el commit de origen y los tres resúmenes de archivo forman una referencia de origen versionada e inmutable. Los directorios que conservan la etiqueta base antigua, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, `neverd-llvm-v23.0.0-r8`, `neverd-llvm-v23.0.0-r9`, `neverd-llvm-v23.0.0-r10`, `neverd-llvm-v23.0.0-r11`, `neverd-llvm-v23.0.0-r12`, `neverd-llvm-v23.0.0-r13`, `neverd-llvm-v23.0.0-r14`, `neverd-llvm-v23.0.0-r15`, `neverd-llvm-v23.0.0-r16` o `neverd-llvm-v23.0.0-r17` migran automáticamente a `r18`, salvo que se configure `NEVERD_LLVM_PREBUILT_SHA256`. `Prebuilt LLVM Audit` se ejecuta manualmente y llama a `scripts/audit_prebuilt_llvm_release.py` para comparar la referencia con la publicación actual de GitHub y cada archivo de suma de comprobación.
+La revisión predeterminada es `neverd-llvm-v23.0.0-r19`. La etiqueta Git, el destino de publicación, el commit de origen y los tres resúmenes de archivo forman una referencia de origen versionada e inmutable. Los directorios que conservan la etiqueta base antigua, `neverd-llvm-v23.0.0-r1`, `neverd-llvm-v23.0.0-r2`, `neverd-llvm-v23.0.0-r3`, `neverd-llvm-v23.0.0-r4`, `neverd-llvm-v23.0.0-r5`, `neverd-llvm-v23.0.0-r6`, `neverd-llvm-v23.0.0-r7`, `neverd-llvm-v23.0.0-r8`, `neverd-llvm-v23.0.0-r9`, `neverd-llvm-v23.0.0-r10`, `neverd-llvm-v23.0.0-r11`, `neverd-llvm-v23.0.0-r12`, `neverd-llvm-v23.0.0-r13`, `neverd-llvm-v23.0.0-r14`, `neverd-llvm-v23.0.0-r15`, `neverd-llvm-v23.0.0-r16`, `neverd-llvm-v23.0.0-r17` o `neverd-llvm-v23.0.0-r18` migran automáticamente a `r19`, salvo que se configure `NEVERD_LLVM_PREBUILT_SHA256`. `Prebuilt LLVM Audit` se ejecuta manualmente y llama a `scripts/audit_prebuilt_llvm_release.py` para comparar la referencia con la publicación actual de GitHub y cada archivo de suma de comprobación.
 
-Si cambia el fork de LLVM pero LLVM sigue indicando `23.0.0`, publique la siguiente revisión de paquete, `neverd-llvm-v23.0.0-r19` y luego `-r20`, sin sobrescribir publicaciones ni inventar la versión LLVM `23.0.1`:
+Si cambia el fork de LLVM pero LLVM sigue indicando `23.0.0`, publique la siguiente revisión de paquete, `neverd-llvm-v23.0.0-r20` y luego `-r21`, sin sobrescribir publicaciones ni inventar la versión LLVM `23.0.1`:
 
 ```bash
 gh workflow run neverd-release.yml \
   --repo NeverSight/llvm-project \
   --ref main \
-  -f release_tag=neverd-llvm-v23.0.0-r19 \
+  -f release_tag=neverd-llvm-v23.0.0-r20 \
   -f overwrite_existing_assets=false
 ```
 
-Tras completarse el flujo, actualice juntos la etiqueta predeterminada, el commit fijado y los tres resúmenes en `cmake/NeverDLLVMPrebuilt.cmake`. Cada revisión del paquete usa su propio directorio de caché; la revisión predeterminada actual se guarda en `.cache/neverd-llvm/neverd-llvm-v23.0.0-r18`. Un archivo obsoleto o republicado falla antes de extraerse. `overwrite_existing_assets` solo sirve para recuperación histórica y permanece desactivado en el flujo normal.
+Tras completarse el flujo, actualice juntos la etiqueta predeterminada, el commit fijado y los tres resúmenes en `cmake/NeverDLLVMPrebuilt.cmake`. Cada revisión del paquete usa su propio directorio de caché; la revisión predeterminada actual se guarda en `.cache/neverd-llvm/neverd-llvm-v23.0.0-r19`. Un archivo obsoleto o republicado falla antes de extraerse. `overwrite_existing_assets` solo sirve para recuperación histórica y permanece desactivado en el flujo normal.
 
 **Artefactos**
 
