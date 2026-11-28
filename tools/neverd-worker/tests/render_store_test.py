@@ -77,7 +77,7 @@ def check_opening_preparation(clients, executable, root):
         assert page["fixture_pages"] == 1 + extra, page
         end(replica, owner)
 
-    binary = root / ("costly-warm-page-prepare-views-" + NAME)
+    binary = root / ("costly-warm-page-" + NAME)
     binary.write_bytes(b"render store fixture")
     owner, writer = session(clients, executable, binary)
     render_ahead(writer, done)

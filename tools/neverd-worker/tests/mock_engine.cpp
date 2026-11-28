@@ -1094,7 +1094,8 @@ const char *neverd_warm_functions_json(neverd_session_t s,
   auto &state = *session(s);
   state.error.clear();
   maxFunctions = std::clamp(maxFunctions, 1, 4096);
-  if (state.path.find("prepare-views") != std::string::npos) {
+  if (state.path.find("prepare-views") != std::string::npos ||
+      state.path.find("costly-warm-page") != std::string::npos) {
     std::puts("fixture view preparation started");
     std::fflush(stdout);
     if (state.path.ends_with("prepare-views-fail.bin")) {
