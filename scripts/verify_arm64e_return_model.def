@@ -163,7 +163,29 @@
   ],
   "version_pattern": "Fast Models \\[([^ ]+) ",
   "staging_directory": "guests",
+  "signing_address": {
+    "profile": "observable-signing-address",
+    "test": "AArch64LiftedImage.ObservableSigningAddressesKeepBothIdentities",
+    "environment": "NEVERD_ARM64E_SIGNING_ADDRESS_FIXTURES",
+    "artifact_property": "signing_address_model_assembly",
+    "count_property": "exported_signing_address_bodies",
+    "assembly_hash_property": "assembly_sha256",
+    "inventory_property": "signing_address_inventory",
+    "inventory": "live-signing-modifier",
+    "legacy_bodies": 66,
+    "bodies": 96,
+    "joins": {
+      "profile": "joined-signing-address",
+      "test": "AArch64LiftedImage.JoinedSigningModifiersFollowEachIncomingPath",
+      "environment": "NEVERD_ARM64E_JOINED_SIGNING_FIXTURES",
+      "inventory": "scratch-free-signing-edges",
+      "bodies": 54,
+      "archived_inventories": {"path-proven-modifiers": 36}
+    }
+  },
   "commands": {
+    "build_signing_address": "build-signing-address",
+    "joined_addresses": "--joins",
     "build": "build",
     "run": "run",
     "tests": "--tests",

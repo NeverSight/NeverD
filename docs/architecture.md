@@ -1584,6 +1584,17 @@ entries and unwind frame starts; a frame that begins later, a chained row or a
 cold fragment cannot supply an independent callable identity. Next-entry bounds
 use those primary identities as well. Explicitly selecting code for analysis
 retains its separate decode and admission checks.
+GCC's hot/cold partitioning gives a function's `.text.unlikely` part an FDE of
+its own. The DWARF loader binds the part to the one function whose direct
+branches enter it with the frame its rules describe there, when the part
+begins inside that frame. A frameless function's part has no frame to begin
+inside, so its FDE starts with the entry rule as a function's does. That part
+is bound only when it ends in `ud2`, the trap of a path GCC isolated such as a
+store through a pointer it proved null, and nothing names it as a function:
+no symbol other than a `.cold` name, no direct call, no RIP-relative address
+and no relocated code pointer. An entry-like region that returns is a function
+tail-called once and stays one. Lua's reallymarkobject enters its isolated part
+from a jump table, which could not take a function entry as a case.
 COFF `IMAGE_SCN_CNT_CODE` is instruction-storage evidence independently of
 page execute permission. Ownership, selected pipeline entries and SDK batch
 selection share that distinction without changing the image's page flags.
@@ -3056,6 +3067,47 @@ offset. Both addresses move together. The proof-based
 recoveries run first and are unchanged; a dispatch by value claims no table
 storage, no index and no relocation suppression.
 
+A linked image holds no relocation for a relative table, so that list is empty
+for a jump through one, and nothing may bound the jump's index: Rust compiles a
+`match` on an enum's discriminant read from memory to `lea table(%rip), %rcx;
+movslq (%rcx,%rax,4), %rdx; add %rcx, %rdx; jmp *%rdx` with no compare, since
+the type allows no other value. After the scalar recoveries,
+`CFGBuilder::recoverOwnLabelTableBranches` reads such a jump's target back
+through the blocks that are each the only way into the next, starting with
+the constants every path into the first of them leaves in a register (a
+table address hoisted out of a loop; a call keeps only what the callee
+preserves): the table's address plus its 32-bit slot,
+read from a read-only, non-executable section.
+The labels are the table's leading slots, up to the first slot that names
+anything but code of the function, an instruction start of one linear decode
+of it, and no address inside an instruction recursive descent already decoded.
+The linear decode is kept only when every instruction recursive descent decoded
+in the function is one of its starts. Nothing proves how many slots the table
+has, so no index domain is claimed; a slot read past the table's end names
+code the machine would run for that index too, and only adds an edge. A jump
+whose index domain ran out of evidence still dispatches, since the dispatch
+claims no domain; one whose table evidence, or its function's marker evidence,
+ran out is left opaque. The labels are published as the jump's targets so that
+the code they reach is decoded, and a jump there through another such table (a
+`match` after a `match`, or a loop unrolled around one) dispatches the same
+way, round by round up to `kMaxOwnLabelTableRounds`; the linear decode is made
+once and checked again each round. After each round every dispatch is read
+again on the grown graph, and withdrawn for good if its table read changed:
+code its labels reach can enter its blocks another way, with another address
+in the register. The resolver's fixed point is not run
+again: that would retry proofs whose evidence ran out and drop the
+incompleteness they recorded. `dispatchUnprovedBranchesByValue` then keeps an
+edge only where the
+same callee-saved-register test admits it, and withdraws all of them if it
+cannot decide. The table's address is no address of the lifted program,
+so neither is the jump's value, but the slot is the same number in both: the
+dispatch's selector occurrence is the LOAD of the slot and its case keys are
+the labels' offsets from the table (`CFGBuilder::OwnLabelTableReads`). HighC
+and the LLVM emitter bind that occurrence through the switch selector plan,
+and the default arm still traps. No resolver stage sees such a dispatch, so it
+never counts as a published table, and losing its labels loses no validated
+one.
+
 A direct branch, or the end of a block, can reach an address where the image
 maps no code: data, bytes the file does not hold, the end of a section.
 `CFGBuilder` records the address in `LowFunc::TruncatedPathAddresses` and
@@ -4148,7 +4200,7 @@ DBI cannot be newer than Info. GUID and effective age must still match the PE.
 `PDBSectionIdentity.h` shares the native section checks: only a trailing
 resource/relocation suffix permits layout changes, and names and permissions
 must still agree. The name hint keeps its indexed GSI bucket lookup and does
-not construct a full debug context. NB10 retains its separate reader.
+not construct a full debug context. NB10 retains its separate reader. For Windows x64 and ARM64, a native PDB can authenticate an individual `void` or pointer return from an ordinary CodeView procedure. The scan requires an exact entry and a single executable contribution covering the whole procedure. Folded contributions and untranslated OMAP addresses provide no return declaration.
 
 `PDBDebugContext::inspect` owns manual PE/PDB validation. A missing CodeView
 identity allows machine- and section-checked inspection without changing the
@@ -11615,14 +11667,17 @@ A writer that copies an extended narrower value hides the extension: MSVC's
 ECX guard's lane names an opaque RCX occurrence. When neither identity binds
 such a lane, both queries retry rooted at the narrower value the lane carries
 unchanged, found through whole-width copies and extensions in the guard's
-block. The resolver still proves both, the narrow-lane bound check keeps the
-domain below that value's sign bit, and a failed retry changes nothing.
+block. The resolver still proves both, and a failed retry changes nothing.
 A narrow bound past the sign bit, such as GCC's `cmpb $0xb8, %dl; ja` before
 `movzbl %dl, %esi` in sqlite3VdbeExec, stands only when every index leaf of
 the selected guards reaches the table index zero-extended: a structural leaf,
-or one whose identity query also holds with sign extension excluded. Those
-queries spend a copy of the account, so a lane they cannot prove fails as
-before; a sign-extended lane keeps the dispatch unresolved. A compared byte
+or one whose identity also holds with sign extension excluded. That identity
+is the one that bound the leaf: its index query, the extended lane's query,
+or the lane source's. pcre2's set_start_bits compares the low lane of the
+register `movzbl` loaded and indexes with that register, a leaf only the
+extended lane binds. Those queries spend a copy of the account, so a lane
+they cannot prove fails as before; a sign-extended lane keeps the dispatch
+unresolved. A compared byte
 copied into the index's own lane before the compare (`mov %dl, %al`) is the
 index only when the index has that width or a later zero-extend covers the
 whole index: otherwise the index keeps its earlier upper bits, which no
@@ -11637,7 +11692,35 @@ predecessor's operations followed by its own, for at most
 `kMaxJumpTableGuardFlagSearchBlocks` blocks. This only proposes syntax: every
 definition unfolded there keeps its all-path definition query, so a second
 path into the block refuses the guard, and an index written after the compare
-is no longer the compared value.
+is no longer the compared value. A compare of a narrower low lane of the index
+register that the block never writes walks on the same way to the lane's
+definition, whose extension ties the lane to the index. sqlite's
+`sqlite3VdbeRecordCompareWithSkip` loads a byte with `movzbl`, bounds it with
+`cmp $9, %eax; ja`, and three blocks later with `cmp $6, %al; ja`, then
+indexes with `%rax`. Without that definition the lane was an unknown leaf, the
+dword guard admitted ten slots, and the dispatch stayed unresolved. The walk
+serves only a guard whose branch reaches the index's block, directly or by
+falling through blocks that only it enters and that leave the index register
+alone, and it keeps the blocks it walked only once the definition is in view.
+libzstd's sequence decoder also compares `%dl` after a shift, long before a
+dispatch that indexes with `%rdx`: that compare keeps the syntax it had,
+since unfolding it into the shift makes a condition the proof cannot use.
+The structural rule that a compared lane is the index looks for the lane's
+zero extension the same way: when the compare's block writes no byte of the
+register, it follows the blocks each entered only by falling through from
+the one before, and no call may run between the extension and the compare.
+It stops at a block also entered another way, as a function entry or a
+root of the proof such as a relocated label or a landing pad: that entry
+skips the extension, and no all-path query checks a structural leaf.
+Such a compare of the index lane also decides which view the proof keeps,
+since guards over different widths share no symbolic index: a full-width
+guard wins only when one of them is such a compare too, or no guard is.
+A routine of bash's command printer loads a field with
+`movl 0x18(%rbx), %eax`, tests `(%eax - 4) & ~4` on the full register and
+branches away on 4 and 8, and bounds `%eax` by twenty in the next block.
+Keeping that full-width test alone left two holes and no bound; the
+compare's view now bounds the dispatch, and dropping the test only enlarges
+the domain.
 The address-role proof takes a table load's scale from the role's own index
 occurrence first. An AArch64 extended-register operand widens the index into
 a temporary the same instruction scales. An x86 32-bit write widens it into
@@ -11694,6 +11777,17 @@ left, and a temporary counts only within its own instruction. Without the
 identity pcre2's parse_regex asked one session over 556 controlling
 conditions for such a dispatch; the session spent 339 Mi of the candidate
 account and did not finish, and the guard proof 362 Mi in all.
+A byte compared in memory is that leaf too when the index reloads it
+(`cmpb $0xc, 0x2(%r11); ja; movzbl 0x2(%r11), %edx`): a load of the same
+width through the same register and displacement, reached into the index by
+zero-extensions and same-width copies, in a block only the guard's
+fallthrough enters. Nothing between the two loads may write memory or that
+register, and no call may run before the index is used. These are the
+conditions under which the value resolver's reload search also reads one
+value; the address carrier and the memory-write test are its own helpers.
+pcre2_dfa_match's dispatch of this shape spent the whole 487 Mi left in its
+candidate account on the guard session, and two tables the function had
+proved were then withdrawn because that dispatch stayed open.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph
@@ -11701,7 +11795,17 @@ without treating depth exhaustion as a completed proof or skipping replay.
 When separate predecessor arms guard one selector, scalar comparison literals
 can propose a finite envelope even though no single guard dominates the load.
 The joined-domain query must prove every incoming value and a dense prefix;
-the proposal supplies no table capacity or range authority. A dominating
+the proposal supplies no table capacity or range authority. That envelope may
+reach 255 values, where an ordinary finite set stops at one 64-bit word. Each
+arm's solver proves the envelope, then reads one feasible coordinate per call
+from a model and excludes it; members an earlier arm proved are excluded
+first. The calls therefore follow the members, not the proposed envelope, and
+an unrelated wide literal elsewhere in the function costs a few calls. bash
+enters a 97-case dispatch this way from a zero byte that skips its range
+guard, and pcre2's set_start_bits a 173-case dispatch whose two entry paths
+each compare the opcode with 0xac. The ceiling stays below a byte lane's 256
+values, so a byte read on an unguarded path can be 255, a counterexample
+rather than a domain proved by width. A dominating
 equality, or a dominating signed upper bound, that is not itself an unsigned
 dense prefix does not discard those predecessor ranges: the same query proves
 the prefix and keeps the dominating edge constraints. A dominating range that
@@ -12509,6 +12613,40 @@ identity or source ABI. Successful classification emits an explicit
 `INDIR_CALL + RETURN` pair; HighIR cannot infer another tail call from a
 successorless `INDIR_BR`. An unresolved transfer without a usable switch
 remains an explicit failure path.
+
+An x86-64 candidate has no link register to restore: its caller's CALL left
+the return address on the stack, so `restoredX64IndirectTailFrames`
+(`X86/IndirectTailFrameX86.cpp`) requires every reaching path to leave RSP at
+its incoming value. The proof follows what each register and temporary
+derives from the incoming RSP: pushes, pops, constant adjustments, LEAVE and
+copies through RBP or a temporary carry an exact offset, and any other
+operation of a derived value, a partial or guarded write and a disagreeing
+join keep the derivation and lose the offset. A call keeps RSP and the
+registers both x86-64 conventions preserve. Landing pads and other roots
+enter at an unknown offset. An unknown or nonzero offset keeps the indirect
+branch. A value read from memory, an argument or a call's result derives
+from nothing here, so a jump whose RSP derives from nothing on every path
+resumes saved state on another stack, as `gogo<>`, longjmp and a fiber switch
+do, and stays a tail call, as does PLT0's jump through the DT_PLTGOT slot the
+dynamic linker fills with its lazy-binding resolver
+(`RuntimeCallablePointerSlotKind::ELFLazyResolver`), which receives the word
+PLT0 pushes. Before the condition, a jump inside its frame through a
+relative table the resolver could not bound became a call of its case labels
+in a stripped library, which no relocation names the table in: liblzma's
+encoder, libjq, gawk, sqlite3Parser and bash each had one. The proof also
+follows which registers and temporaries may hold an address of the function's
+own code, or a value read through or computed from a table of them: a value
+an instruction computes from constants alone that is such an address, or
+that starts read-only data whose first 32-bit offset from it, or whose first
+word, names the function's code, and anything derived from one. Only that
+computed value counts, since a RIP-relative operand starts from the next
+instruction's address, which lies in the function. A call keeps only the
+preserved registers' marks. A jump to such a value stays within the function
+whatever its frame, so a frameless function's unbounded relative table no
+longer becomes a call of its case labels. Writable memory is no such table,
+nor is a slot the loader fills, such as a Control Flow Guard dispatch slot: a
+GOT slot names its PLT stub until the dynamic linker binds it, and the stub's
+jump through it stays a tail call.
 
 The CLI parses commands in `tools/neverd`, creates a `neverd_session_t`, and
 calls the public API in `include/neverd/sdk/NeverDCAPI.h`. Engine state lives in
@@ -13700,7 +13838,19 @@ those slots shows they are no arguments (an -O0 spill near the call), so they
 end with it.
 That count is the named parameters of a variadic callee and zero for a callee
 nothing describes. Below it the callee reads the register, and the unknown
-value stays. The named count of an AAPCS64, Windows ARM64 or AAPCS32 variadic
+value stays. On System V x86-64 a direct callee nothing describes also ends
+its integer and floating registers at one that every way into the call
+leaves holding either such a leftover or the value the register entered the
+function with where no parameter arrives, and some way the former: neither
+the function nor its caller set it for an argument, and a compiler sets each
+argument of a call on every way to it. A write on any way keeps the
+register, since one call instruction can serve calls of different arity
+(`printf("%d", x)` and `printf("hi")` cross-jumped), as does a parameter's
+incoming value, which the function may pass on. sqlite's `parse.o` called
+`sqlite3ErrorMsg(pParse, "too many terms in compound SELECT")` with two more
+unknown values from such joins, and `printf.o` passed `sqlite3_value_int64`,
+which takes one pointer, two.
+The named count of an AAPCS64, Windows ARM64 or AAPCS32 variadic
 routine comes from its register save area, which spills the argument registers
 from the first unnamed one to the last (`MedFunc::VariadicFirstRegister`).
 Windows ARM64 has no va_list record: va_start spills x(first) through x7 to
@@ -19452,7 +19602,7 @@ for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
 
 ### Experimental RISC-V and PowerPC ELF analysis
 
-The ELF loader admits little-endian RV32I/ILP32 and RV64I/LP64, classic PPC32
+The ELF loader admits little-endian RISC-V ILP32, LP64, ILP32D and LP64D, classic PPC32
 System V, and PPC64 ELFv1 and ELFv2 in either byte order. On PPC32 the runtime
 jump table identifies the secure PLT's pointer slots or the classic BSS-PLT's
 executable entries. For a secure PIC stub, MedIR binds the call to a slot
@@ -19467,7 +19617,7 @@ reaching r2 and carries its saved value through the return edge. For ELFv2,
 reads the global prologue for its TOC and associates linkage stubs with
 eight-byte jump slots. MedIR checks the register required at the selected
 entry and tracks the native save and reload at 24(r1).
-RISC-V extension evidence belongs to the image. Decode,
+RISC-V extension evidence belongs to the image. The double-float ABI uses `fa0` through `fa7` for named floating arguments and `fa0`/`fa1` for results. Source placement also handles mixed scalar records and the integer convention for unnamed arguments. Decode,
 lift and function discovery share the physical instruction size and
 control-transfer semantics.
 Both families feed the existing LowIR, ABI recovery, HighC and LLVM backends.

@@ -38,6 +38,15 @@ struct AArch64UnwindRegister {
   bool operator==(const AArch64UnwindRegister &) const = default;
 };
 
+/// Every incoming path put its live LR's own signing PC in this GPR.
+/// PCs are image addresses, prior to the runtime slide.
+struct AArch64LiveSigningModifier {
+  unsigned Register;
+  dwarf_eh::AArch64RAKey Key;
+  llvm::SmallVector<va_t, 2> SigningPCs;
+  bool operator==(const AArch64LiveSigningModifier &) const = default;
+};
+
 struct AArch64RecoveredUnwindRow {
   uint64_t CodeOffset = 0;
   std::optional<unsigned> CFARegister;
@@ -52,6 +61,7 @@ struct AArch64RecoveredUnwindRow {
   std::optional<int64_t> FramePointerOffset;
   /// One authenticated entry instruction tail-branches before entering a scope.
   bool IsForwardingEntry = false;
+  std::optional<AArch64LiveSigningModifier> LiveSigningModifier;
 };
 
 struct AArch64UnwindRecoveryLimits {
@@ -114,6 +124,12 @@ std::optional<AArch64SystemCallerPlan>
 prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
                                 ExceptionAddressRange Range,
                                 va_t LoadedFrameStart);
+
+/// A snapshot at this exact instruction can resolve a live modifier at a
+/// control-flow join. The GPR must contain one of the proven, slid signing PCs.
+std::optional<AArch64SystemCallerPlan> prepareDarwinArm64eSystemCaller(
+    const AArch64RecoveredUnwindRow &Row, ExceptionAddressRange Range,
+    va_t LoadedFrameStart, llvm::ArrayRef<va_t> InterruptedGPRs);
 
 /// Bind the instruction and its recovery row to the language table and its
 /// actual load address. A forwarding range contains no cleanup. A protected

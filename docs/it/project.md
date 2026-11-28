@@ -1,6 +1,6 @@
 **Lingue**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 7a5404f829b6a5a34a3f24808dba0cb23589c828d24533a70789c03cf24cd87f -->
+<!-- i18n-source: 65a3c241a8b8275f8f2afcf61c262f54c2db5a0fd1e46824c63a903708fc981b -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ I target ELF sperimentali per le istruzioni intere supportano il lifting rigoros
 
 | Target | Profili ELF verificati |
 |---|---|
-| RISC-V | RV32I/ILP32 e RV64I/LP64 little-endian. Le informazioni ELF determinano le estensioni M, A e C per gli interi oppure le singole estensioni Zmmul, Zaamo, Zalrsc e Zca. L’attributo ISA del file ELF abilita anche Zba 1.0, Zbb 1.0 e Zbs 1.0. |
-| PowerPC | PPC32 System V e PPC64 ELFv1/ELFv2 in entrambi gli ordini dei byte. PPC32 supporta chiamate tra moduli tramite la PLT sicura e la BSS-PLT classica. Entrambe le ABI PPC64 supportano chiamate tra moduli tramite la PLT e cambi di TOC. ELFv1 usa descrittori di funzione ed ELFv2 supporta punti di ingresso globali e locali. Le operazioni scalari verificate comprendono la divisione con e senza segno, la moltiplicazione che restituisce la parola alta del prodotto e la moltiplicazione con segnalazione di overflow, inclusi gli effetti su CR0 e XER. Su PPC64 sono supportate anche le istruzioni con prefisso di POWER10 per sommare, caricare e memorizzare interi. |
+| RISC-V | RV32 (ILP32, ILP32D) e RV64 (LP64, LP64D) little-endian. Le informazioni ELF determinano le estensioni M, A e C per gli interi oppure le singole estensioni Zmmul, Zaamo, Zalrsc e Zca. L’attributo ISA del file ELF abilita anche Zba 1.0, Zbb 1.0, Zbs 1.0 e Zicond 1.0. Zicntr 2.0 abilita `rdcycle` e, su RV32, anche `rdcycleh`. |
+| PowerPC | PPC32 System V e PPC64 ELFv1/ELFv2 in entrambi gli ordini dei byte. PPC32 supporta chiamate tra moduli tramite la PLT sicura e la BSS-PLT classica. Entrambe le ABI PPC64 supportano chiamate tra moduli tramite la PLT e cambi di TOC. ELFv1 usa descrittori di funzione ed ELFv2 supporta punti di ingresso globali e locali. Le operazioni scalari verificate comprendono la divisione con e senza segno, la moltiplicazione che restituisce la parola alta del prodotto e la moltiplicazione con segnalazione di overflow, inclusi gli effetti su CR0 e XER. Su PPC64 sono supportate anche le istruzioni con prefisso di POWER10 per sommare, caricare e memorizzare interi. L’istruzione VMX `vaddubm` somma 16 coppie di byte modulo 256. |
 
 La riscrittura del codice nativo resta da implementare per questi profili. [Copertura di RISC-V e PowerPC (in inglese)](../riscv-powerpc.md)
 
@@ -182,8 +182,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -307,6 +305,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | conteggi | C predefinito per ogni funzione caricata; ogni corpo viene liberato dopo la verifica |
 | `decompile -llvm` | `.c` | Via LLVM IR + ottimizzatore |
 | `decompile --devirtualize` | `.c` + JSON opzionale | Recupero sperimentale di interpreti x64; richiede `--func`; [contratto ed esempi](interpreter-recovery.md) |
+| `java` | Java / IR della JVM / bytecode / JSON | [File di classe e JAR multiversione](../jvm-recovery.md) |
 | `python` | `.py` / JSON / componenti nativi | [Recupero degli artefatti CPython e PyInstaller](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Ricostruzione dei sorgenti Lua, LuaJIT e Luau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Sperimentale: [Android](android.md), [iOS](ios.md) |
@@ -343,8 +342,7 @@ Ripetere l’opzione per altri ingressi ambigui, usando `:arm` quando opportuno.
 | `funcs` | Funzioni scoperte |
 | `disasm` | Disassembla (`--func` nome o hex) |
 | `sym-explore` | Esplorazione limitata dei percorsi LowIR nativi (`--func`; output JSON) |
-| `audit` | Difetti di durata degli oggetti heap e letture non inizializzate dello stack locale (JSON) |
-| `hunt` | Overflow di copie pericolose con testimoni simbolici e prove aggiuntive di riproduzione `process-input-v1` quando è disponibile un piano completo (schema JSON v1) |
+| `scan` | [Verifica durata degli oggetti, inizializzazione, limiti e stringhe di formato (JSON)](../memory-safety-scan.md) |
 | `hex` | Hex dump a un indirizzo |
 | `cfg` / `callgraph` | CFG / call graph (JSON; DOT/SVG opzionale) |
 | `xrefs` | Cross-reference |

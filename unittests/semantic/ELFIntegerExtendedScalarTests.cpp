@@ -14,8 +14,10 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/IntegerRegisters.h"
+#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
@@ -27,6 +29,8 @@
 
 using namespace neverd;
 namespace {
+#include "../lift/fixtures/CycleVMX.inc"
+#include "../lift/fixtures/RISCVConditionalZero.inc"
 #include "ELFIntegerExtendedFixture.inc"
 
 TEST(PowerPCPrefixed, SignedD34AndFetchBoundaries) {
@@ -208,6 +212,153 @@ void expectRISCVResult(const BinaryImage &Img, Decoder &D, uint32_t Word,
   for (const auto &Op : Ops)
     ASSERT_TRUE(Emu.step(Op));
   EXPECT_EQ(Emu.getRegister(integerreg::gpr(Result)), Expected & Mask);
+  EXPECT_EQ(Emu.getRegister(integerreg::gpr(0)).value_or(0), 0u);
+}
+
+TEST(RISCVCycle, SamplesOncePerReadAcrossRV32Rollover) {
+  for (Arch A :
+       {Arch::RISCV32, Arch::RISCV32D, Arch::RISCV64, Arch::RISCV64D}) {
+    const bool Wide = isRISCV64(A);
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+    Img.RISCV.Zicntr = true;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    NdOpEmulator Emu(Img);
+    const uint64_t Samples[] = {0x12fffffffe, 0x12ffffffff, 0x1300000000,
+                                0x1300000001, 0x1300000002, 0x1300000003};
+    size_t Next = 0;
+    Emu.setRISCVCycleReader([&]() -> std::optional<uint64_t> {
+      if (Next == std::size(Samples))
+        return std::nullopt;
+      return Samples[Next++];
+    });
+    for (size_t I = 0; I <= std::size(Samples); ++I) {
+      const bool High = !Wide && I % 3 != 1;
+      const bool Discard = I == std::size(Samples) || (Wide && I == 3);
+      const uint32_t Word = Discard ? cycle_fixture::Discard
+                            : High  ? cycle_fixture::High
+                                    : cycle_fixture::Low;
+      uint8_t Code[4];
+      llvm::support::endian::write32le(Code, Word);
+      DecodedInsn Insn;
+      ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), 0x1000, Insn), 4);
+      std::vector<LowOp> Ops;
+      ASSERT_NO_THROW(D.liftToLow(Insn, Ops));
+      ASSERT_EQ(Ops.size(), 1u);
+      NdOpEmulator Unavailable(Img);
+      for (bool Strict : {false, true}) {
+        Unavailable.setStrictMode(Strict);
+        EXPECT_FALSE(Unavailable.step(Ops.front()));
+      }
+      EXPECT_EQ(Emu.step(Ops.front()), I < std::size(Samples));
+      EXPECT_EQ(Next, std::min(I + 1, std::size(Samples)));
+      if (Discard)
+        EXPECT_EQ(Emu.getRegister(integerreg::gpr(0)).value_or(0), 0u);
+      else
+        EXPECT_EQ(Emu.getRegister(integerreg::gpr(High ? 11 : 10)),
+                  Wide   ? Samples[I]
+                  : High ? Samples[I] >> 32
+                         : uint32_t(Samples[I]));
+    }
+  }
+}
+
+TEST(PowerPCVMX, ByteLanesWrapAndOverlappingOperandsReadTheirOldValues) {
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE,
+                 Arch::PPC64ELFv1, Arch::PPC64LEELFv1}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = isPowerPC64(A) ? Bitness::Bits64 : Bitness::Bits32;
+    const auto Order =
+        archLittleEndian(A) ? llvm::endianness::little : llvm::endianness::big;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    const auto &TRI = getTargetRegInfo(A);
+    EXPECT_EQ(TRI.FPReturnReg, ppc::vr(2));
+    for (unsigned N = 0; N < ppc::VectorCount; ++N) {
+      EXPECT_TRUE(TRI.isVectorReg(ppc::vr(N)));
+      EXPECT_EQ(TRI.isFPArgReg(ppc::vr(N), BinaryFormat::ELF),
+                N >= 2 && N <= 13);
+      EXPECT_EQ(TRI.isCallPreserved(ppc::vr(N), ppc::VectorBytes), N >= 20);
+    }
+    for (const auto &Form : vmx_fixture::Adds) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(A) << " " << std::hex << Form.Word);
+      uint8_t Code[4];
+      llvm::support::endian::write32(Code, Form.Word, Order);
+      DecodedInsn I;
+      ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), 0x1000, I), 4);
+      std::vector<LowOp> Ops;
+      ASSERT_NO_THROW(D.liftToLow(I, Ops));
+      ASSERT_EQ(Ops.size(), 1u);
+      NdOpEmulator Emu(Img);
+      Emu.setStrictMode(true);
+      std::vector<uint8_t> Left(ppc::VectorBytes), Right(ppc::VectorBytes),
+          Expected(ppc::VectorBytes);
+      for (unsigned N = 0; N < Left.size(); ++N) {
+        Left[N] = 255 - 7 * N;
+        Right[N] = Form.A == Form.B ? Left[N] : 1 + 19 * N;
+        Expected[N] = Left[N] + Right[N];
+      }
+      Emu.setRegisterBytes(ppc::vr(Form.A), Left);
+      Emu.setRegisterBytes(ppc::vr(Form.B), Right);
+      Emu.setRegister(integerreg::ppc::XER, 0x80000000);
+      Emu.setRegister(integerreg::ppc::crBit(0), 1);
+      ASSERT_TRUE(Emu.step(Ops.front()));
+      EXPECT_EQ(Emu.getRegisterBytes(ppc::vr(Form.Dst)), Expected);
+      EXPECT_EQ(Emu.getRegister(integerreg::ppc::XER), 0x80000000u);
+      EXPECT_EQ(Emu.getRegister(integerreg::ppc::crBit(0)), 1u);
+    }
+    for (uint32_t Word : vmx_fixture::Other) {
+      uint8_t Code[4];
+      llvm::support::endian::write32(Code, Word, Order);
+      DecodedInsn I;
+      if (D.decodeOneForLift(Code, sizeof(Code), 0x1000, I)) {
+        std::vector<LowOp> Ops;
+        EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+        EXPECT_TRUE(Ops.empty());
+      }
+    }
+  }
+}
+
+TEST(RISCVConditionalZero, FullWidthConditionsOverlapsAndZeroRegister) {
+  using namespace zicond_fixture;
+  for (Arch A : {Arch::RISCV32, Arch::RISCV64}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = A == Arch::RISCV64 ? Bitness::Bits64 : Bitness::Bits32;
+    Img.RISCV.Zicond = true;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    const uint64_t Mask = A == Arch::RISCV64 ? UINT64_MAX : UINT32_MAX;
+    const uint64_t X = UINT64_C(0xfedcba9880000001);
+    for (uint64_t Y : {UINT64_C(0), UINT64_C(1), UINT64_C(0x80000000),
+                       UINT64_C(0x100000000), UINT64_C(1) << 63, UINT64_MAX}) {
+      const uint64_t IfNonzero = (Y & Mask) ? X : 0;
+      const uint64_t IfZero = (Y & Mask) ? 0 : X;
+      expectRISCVResult(Img, D, Eqz, X, Y, IfNonzero);
+      expectRISCVResult(Img, D, Nez, X, Y, IfZero);
+      expectRISCVResult(Img, D, EqzIntoCond, X, Y, IfNonzero, 11);
+      expectRISCVResult(Img, D, NezIntoCond, X, Y, IfZero, 11);
+      expectRISCVResult(Img, D, EqzZeroCond, X, Y, 0);
+      expectRISCVResult(Img, D, NezZeroCond, X, Y, X);
+      expectRISCVResult(Img, D, EqzZeroData, X, Y, 0);
+      expectRISCVResult(Img, D, NezDiscard, X, Y, X);
+    }
+    for (uint32_t Word : NonZicond) {
+      uint8_t Code[4];
+      llvm::support::endian::write32le(Code, Word);
+      DecodedInsn I;
+      if (D.decodeOneForLift(Code, sizeof(Code), 0x1000, I)) {
+        std::vector<LowOp> Ops;
+        EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+        EXPECT_TRUE(Ops.empty());
+      }
+    }
+  }
 }
 
 TEST(RISCVBitManipulation, WordInputsAndBitIndicesUseTheirArchitecturalWidths) {

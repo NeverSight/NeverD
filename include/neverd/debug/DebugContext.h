@@ -395,6 +395,12 @@ public:
   /// Sorted exact entries with an address-bound user or platform declaration.
   /// A name-only symbol elsewhere in the image supplies no call contract.
   virtual llvm::ArrayRef<va_t> boundFunctionEntries() const { return {}; }
+
+  /// A provider may authenticate individual return declarations without
+  /// authenticating argument signatures or object extents.
+  virtual bool hasAuthenticatedReturnDeclarations() const {
+    return hasAuthenticatedFunctionSignatures();
+  }
 };
 
 class NullDebugContext : public DebugContext {

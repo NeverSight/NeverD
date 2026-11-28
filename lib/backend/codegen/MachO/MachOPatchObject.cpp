@@ -3048,21 +3048,44 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
   Pool.Alignment = arm64e::kPointerBytes;
   Pool.ReadOnlyAfterFixups = true;
   std::map<va_t, uint64_t> Slots;
-  uint64_t AddedBytes = 0;
+  // A joined authenticator can follow several numeric producers. Account for
+  // insertions at the instruction that grows, independently of producer order.
+  llvm::SmallVector<std::pair<va_t, uint64_t>> Growth;
+  for (const auto &Site : Addresses) {
+    if (Site.Form == MachOAddressForm::Expanded)
+      Growth.emplace_back(Site.Instruction, kInsnSize);
+    if (Site.expandsAuthentication())
+      Growth.emplace_back(Site.signingExpansionSite(),
+                          Site.Authentication->insertedWords() * kInsnSize);
+  }
+  llvm::sort(Growth);
+  uint64_t Size = 0;
+  for (auto &[Site, Bytes] : Growth)
+    Bytes = Size += Bytes;
+  const auto BeforeSite = [&](va_t PC) -> uint64_t {
+    auto It = llvm::lower_bound(
+        Growth, PC, [](const auto &G, va_t At) { return G.first < At; });
+    return It == Growth.begin() ? 0 : std::prev(It)->second;
+  };
   for (const auto &Fixup : Addresses) {
     while (Mappings.size() > 1 && Mappings[1].OriginalVA <= Fixup.Instruction) {
       Mappings = Mappings.drop_front();
-      AddedBytes = 0;
     }
     if (Mappings.empty() || Fixup.Instruction < Mappings.front().OriginalVA)
       return fail(kAddressSourceWord);
     const auto &Entry = Mappings.front();
     const auto &Sym = *EntrySymbols.at(Entry.OriginalVA);
-    const uint64_t Offset = Fixup.Instruction - Entry.OriginalVA + AddedBytes;
+    const auto InstalledOffset = [&](va_t At) {
+      return At - Entry.OriginalVA + BeforeSite(At) -
+             BeforeSite(Entry.OriginalVA);
+    };
+    const uint64_t Offset =
+        InstalledOffset(Fixup.Instruction) +
+        (Fixup.Authentication && Fixup.Authentication->PrepareAtSource
+             ? kInsnSize
+             : 0);
     const bool Pair = Fixup.Form == MachOAddressForm::PagePair;
     const bool Expanded = Fixup.Form == MachOAddressForm::Expanded;
-    if (Expanded)
-      AddedBytes += kInsnSize;
     const auto *Before =
         Original.readVA(Fixup.Instruction, Pair ? 2 * kInsnSize : kInsnSize);
     if (!Before || Object.Sections.at(Sym.Section) != Plan.TextSection ||
@@ -3080,6 +3103,29 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
     const va_t PC = Plan.TextVA + At;
     const va_t Target = Fixup.Target + Slide;
     const uint32_t Rd = Word & kRdMask;
+    if (Fixup.Authentication && Fixup.Authentication->RestoreSource) {
+      const auto &Auth = *Fixup.Authentication;
+      // The original register can be live on both sides of AUT. Its
+      // restoration begins after the local ADR and AUT, independent of
+      // the opcode or destination of the original address producer.
+      const auto Restore = InstalledOffset(Auth.Instruction) + 2 * kInsnSize;
+      if (!rangeInBounds(Restore, 2 * kInsnSize, Text->Size - Sym.Offset))
+        return fail(kAddressSourceWord);
+      const auto AtRestore = Sym.Offset + Restore;
+      const auto Reg = *Auth.ModifierRegister;
+      const auto Page = encodePCRelativeAddress(
+          AddressInstruction::ADRP, Reg, Plan.TextVA + AtRestore, Target);
+      const auto Add =
+          kAddImmediate64 | (Reg << kAddressBaseRegisterShift) | Reg;
+      const auto Imm = branch::A64AddImm12;
+      // Both signing instructions are in the image-relative compact-unwind
+      // range. Apply the same page reach check as an expanded address.
+      if (!Page)
+        return fail(kAddressPageReach);
+      const auto Low = uint32_t((Target & ~kPageMask) << Imm.Low);
+      Plan.Sites.push_back({&Sym, AtRestore, kADRP_Op | Reg, *Page, {}});
+      Plan.Sites.push_back({&Sym, AtRestore + kInsnSize, Add, Add | Low, {}});
+    }
     if (Pair || Expanded) {
       const auto Page =
           encodePCRelativeAddress(AddressInstruction::ADRP, Rd, PC, Target);

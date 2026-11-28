@@ -18,6 +18,9 @@
 namespace neverd::integerreg {
 constexpr uint64_t gpr(unsigned Index) { return (1 + Index) * 8; }
 constexpr uint64_t PC = gpr(32);
+namespace riscv {
+constexpr uint64_t fpr(unsigned Index) { return PC + (1 + Index) * 8; }
+} // namespace riscv
 namespace ppc {
 constexpr uint64_t LR = PC + 8;
 constexpr uint64_t CTR = LR + 8;

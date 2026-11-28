@@ -18,13 +18,18 @@
 #include "neverd/sbf/analysis/SBFAnalyzer.h"
 #include "neverd/sbf/analysis/SBFFunctionBody.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cassert>
 #include <map>
 #include <optional>
 #include <set>
@@ -83,6 +88,83 @@ bool isTakenSuccessor(const LowFunc &F, const LowBlock &B, size_t Index) {
     return F.Blocks[Succ].StartAddr == static_cast<va_t>(It->Inputs[0].Offset);
   }
   return Index == 0;
+}
+
+void emitNativeBlockDisassembly(llvm::json::OStream &J, Session &S,
+                                const LowBlock &B) {
+  va_t Cur = B.StartAddr;
+  while (Cur < B.EndAddr) {
+    const Segment *Seg = S.Img.getSegmentFor(Cur);
+    if (!Seg)
+      break;
+    uint64_t Off64 = Cur - Seg->VA;
+    if (Off64 >= Seg->Data.size())
+      break;
+    size_t Off = static_cast<size_t>(Off64);
+    size_t Avail = static_cast<size_t>(std::min<uint64_t>(
+        16, std::min<uint64_t>(B.EndAddr - Cur,
+                               std::min<uint64_t>(Seg->Size - Off64,
+                                                  Seg->Data.size() - Off))));
+    if (Avail == 0)
+      break;
+    const uint8_t *Bytes = Seg->Data.data() + Off;
+    DecodedInsn DI;
+    int Sz = S.Dec.decodeOne(Bytes, Avail, Cur, DI);
+    if (Sz <= 0)
+      break;
+    J.value(vaHex(Cur) + ": " + (DI.Raw ? DI.Raw->mnemonic : "") + " " +
+            (DI.Raw ? DI.Raw->op_str : ""));
+    Cur += Sz;
+  }
+}
+
+std::optional<va_t> guardedCTRSkip(const LowBlock &Block) {
+  if (Block.InstructionBoundaries.empty())
+    return std::nullopt;
+  const auto &Last = Block.InstructionBoundaries.back();
+  if (Last.Control != LowInstructionControl::Branch ||
+      !hasLowInstructionControlFlag(Last.ControlFlags,
+                                    LowInstructionControlFlag::Indirect) ||
+      !hasLowInstructionControlFlag(
+          Last.ControlFlags, LowInstructionControlFlag::InstructionGuard))
+    return std::nullopt;
+  // InstructionGuard authenticates one COND_BR that skips the transfer.
+  const auto Ops = llvm::ArrayRef(Block.Ops).slice(Last.FirstOp, Last.OpCount);
+  const auto Guard = llvm::find_if(
+      Ops, [](const LowOp &Op) { return Op.Opcode == NdOp::COND_BR; });
+  assert(Guard != Ops.end());
+  return Guard->Inputs[0].Offset;
+}
+
+void forEachNativeCFGEdge(
+    const LowFunc &F, Arch A,
+    llvm::function_ref<void(int, int, std::optional<bool>)> Emit) {
+  const bool PPC = isPowerPC(A);
+  llvm::SmallDenseMap<va_t, llvm::ArrayRef<va_t>> TakenTargets;
+  if (PPC)
+    for (const JumpTable &JT : F.JumpTables)
+      if (JT.OriginalAddressSelector && !JT.AnalysisOnly)
+        TakenTargets.try_emplace(JT.InsnAddr, JT.Targets);
+  for (const LowBlock &Block : F.Blocks) {
+    if (const auto Skip = PPC ? guardedCTRSkip(Block) : std::nullopt) {
+      const va_t Site = Block.InstructionBoundaries.back().Address;
+      const bool SkipAlsoTaken =
+          llvm::is_contained(TakenTargets.lookup(Site), *Skip);
+      for (int Succ : Block.Succs) {
+        const bool Fallthrough = F.Blocks[Succ].StartAddr == *Skip;
+        if (Fallthrough)
+          Emit(Block.Id, Succ, false);
+        if (!Fallthrough || SkipAlsoTaken)
+          Emit(Block.Id, Succ, true);
+      }
+      continue;
+    }
+    for (size_t I = 0; I < Block.Succs.size(); ++I)
+      Emit(Block.Id, Block.Succs[I],
+           Block.Succs.size() == 2
+               ? std::optional{isTakenSuccessor(F, Block, I)}
+               : std::nullopt);
+  }
 }
 } // namespace
 
@@ -312,65 +394,40 @@ const char *neverd_cfg_json(neverd_session_t Sess, neverd_va_t FuncEntry) {
     return dupStr(std::string("{}"));
   }
 
-  llvm::json::Array Nodes;
-  llvm::json::Array Edges;
-
-  for (const auto &B : F->Blocks) {
-    llvm::json::Object Node;
-    Node["id"] = B.Id;
-    Node["start"] = vaHex(B.StartAddr);
-    Node["end"] = vaHex(B.EndAddr);
-    Node["insn_count"] = static_cast<int64_t>(B.Ops.size());
-
-    llvm::json::Array DisasmLines;
-    va_t Cur = B.StartAddr;
-    while (Cur < B.EndAddr) {
-      const Segment *Seg = S->Img.getSegmentFor(Cur);
-      if (!Seg)
-        break;
-      uint64_t Off64 = Cur - Seg->VA;
-      if (Off64 >= Seg->Data.size())
-        break;
-      size_t Off = static_cast<size_t>(Off64);
-      size_t Avail = static_cast<size_t>(std::min<uint64_t>(
-          16, std::min<uint64_t>(B.EndAddr - Cur,
-                                 std::min<uint64_t>(Seg->Size - Off64,
-                                                    Seg->Data.size() - Off))));
-      if (Avail == 0)
-        break;
-      const uint8_t *Bytes = Seg->Data.data() + Off;
-      DecodedInsn DI;
-      int Sz = S->Dec.decodeOne(Bytes, Avail, Cur, DI);
-      if (Sz <= 0)
-        break;
-      std::string Line = vaHex(Cur) + ": " + (DI.Raw ? DI.Raw->mnemonic : "") +
-                         " " + (DI.Raw ? DI.Raw->op_str : "");
-      DisasmLines.push_back(Line);
-      Cur += Sz;
-    }
-    Node["disasm"] = std::move(DisasmLines);
-    Nodes.push_back(std::move(Node));
-
-    for (size_t I = 0; I < B.Succs.size(); ++I) {
-      llvm::json::Object Edge;
-      Edge["from"] = B.Id;
-      Edge["to"] = B.Succs[I];
-      if (B.Succs.size() == 2)
-        Edge["type"] = isTakenSuccessor(*F, B, I) ? "true" : "false";
-      else
-        Edge["type"] = "unconditional";
-      Edges.push_back(std::move(Edge));
-    }
-  }
-
-  llvm::json::Object Root;
-  Root["name"] = jsonSafeText(F->Name);
-  Root["entry"] = vaHex(F->Entry);
-  if (F->AnalysisOnly)
-    Root["analysis_only"] = true;
-  Root["nodes"] = std::move(Nodes);
-  Root["edges"] = std::move(Edges);
-  return dupStr(jsonToString(llvm::json::Value(std::move(Root))));
+  // Stream in the same sorted key order as a json::Object.
+  std::string Buf;
+  llvm::raw_string_ostream OS(Buf);
+  llvm::json::OStream J(OS);
+  J.object([&] {
+    if (F->AnalysisOnly)
+      J.attribute("analysis_only", true);
+    J.attributeArray("edges", [&] {
+      forEachNativeCFGEdge(
+          *F, S->Img.Arch, [&](int From, int To, std::optional<bool> Taken) {
+            J.object([&] {
+              J.attribute("from", From);
+              J.attribute("to", To);
+              J.attribute("type", Taken ? (*Taken ? "true" : "false")
+                                        : "unconditional");
+            });
+          });
+    });
+    J.attribute("entry", vaHex(F->Entry));
+    J.attribute("name", jsonSafeText(F->Name));
+    J.attributeArray("nodes", [&] {
+      for (const LowBlock &B : F->Blocks)
+        J.object([&] {
+          J.attributeArray("disasm",
+                           [&] { emitNativeBlockDisassembly(J, *S, B); });
+          J.attribute("end", vaHex(B.EndAddr));
+          J.attribute("id", B.Id);
+          J.attribute("insn_count", static_cast<int64_t>(B.Ops.size()));
+          J.attribute("start", vaHex(B.StartAddr));
+        });
+    });
+  });
+  OS.flush();
+  return dupStr(Buf);
 }
 
 const char *neverd_cfg_dot(neverd_session_t Sess, const char *InputPath,
@@ -488,16 +545,14 @@ const char *neverd_cfg_dot(neverd_session_t Sess, const char *InputPath,
   for (const auto &B : Target->Blocks)
     OS << "  bb" << B.Id << " [label=\"BB" << B.Id << " (0x"
        << llvm::utohexstr(B.StartAddr) << ")\"];\n";
-  for (const auto &B : Target->Blocks)
-    for (size_t J = 0; J < B.Succs.size(); ++J) {
-      std::string Color = Styled ? "\"#569cd6\"" : "blue";
-      if (B.Succs.size() == 2)
-        Color = isTakenSuccessor(*Target, B, J)
-                    ? (Styled ? "\"#4ec9b0\"" : "green")
-                    : (Styled ? "\"#f44747\"" : "red");
-      OS << "  bb" << B.Id << " -> bb" << B.Succs[J] << " [color=" << Color
-         << "];\n";
-    }
+  forEachNativeCFGEdge(
+      *Target, R.Img.Arch, [&](int From, int To, std::optional<bool> Taken) {
+        const char *Color = Styled ? "\"#569cd6\"" : "blue";
+        if (Taken)
+          Color = *Taken ? (Styled ? "\"#4ec9b0\"" : "green")
+                         : (Styled ? "\"#f44747\"" : "red");
+        OS << "  bb" << From << " -> bb" << To << " [color=" << Color << "];\n";
+      });
   OS << "}\n";
   return dupStr(Buf);
 }

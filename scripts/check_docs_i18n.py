@@ -696,8 +696,9 @@ TESTING_REQUIRED_TOKENS = (
     "UBSAN_OPTIONS",
 )
 MEMORY_SAFETY_REQUIRED_TOKENS = (
-    "neverd audit",
-    "neverd hunt",
+    "neverd scan",
+    "--analyzer=audit",
+    "--analyzer=hunt",
     "UNKNOWN",
     "UNSAFE",
     "name_source",
@@ -711,8 +712,8 @@ MEMORY_SAFETY_REQUIRED_TOKENS = (
     "--solver-conflicts",
     "capacity_kind",
     "corroboration",
-    "neverd_session_audit_json",
-    "neverd_session_hunt_json",
+    "neverd_session_scan_json",
+    "Session.scan()",
 )
 UNPACK_REQUIRED_TOKENS = (
     "neverd unpack",

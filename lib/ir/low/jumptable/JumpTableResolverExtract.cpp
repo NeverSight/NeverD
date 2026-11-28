@@ -764,6 +764,19 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
         Rec.IsIndirect) {
       JT.OriginalAddressSelector = Rec.ScalarBranchInput.has_value();
       JT.ValueDispatch = JT.MutatedUnsafe = Rec.ValueDispatch;
+      // A jump through a relative table of this function's code adds the
+      // table's address to the slot it read.  That address is no address of
+      // the lifted program, but the slot is the same number in both, and it
+      // holds each label as its offset from the table: compare the slot.
+      if (const auto Read = OwnLabelTableReads.find(Addr);
+          Rec.ValueDispatch && Read != OwnLabelTableReads.end()) {
+        JT.SelectorUseRefs.push_back(Read->second.Slot);
+        for (va_t Target : JT.Targets)
+          JT.CaseLabels.push_back(static_cast<int32_t>(
+              static_cast<uint32_t>(Target - Read->second.Base)));
+        Func.ValueDispatches.push_back(std::move(JT));
+        continue;
+      }
       // A logical dispatch on the original numeric branch value. There is no
       // physical table, LOAD, slot map or relocation-suppression authority.
       // Bind the exact use after SSA; never infer a selector by register name.

@@ -21,10 +21,12 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
 #include "neverd/ir/low/LowIntrinsicOutputs.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/low/X86/X86CompactShape.h"
 #include "neverd/lift/IntegerRegisters.h"
+#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/APFloat.h"
@@ -656,6 +658,33 @@ bool NdOpEmulator::executeIntrinsic(const LowOp &Op) {
   // masked-memory executors with different memory ownership.
   if (MIPSReservationGranule && Id != Intrinsic::RequireAligned)
     return false;
+  if (const auto *Read = riscv::cycleRead(Id)) {
+    if (!Read->admits(Img.Arch) || Op.NumInputs != 1 ||
+        (!Op.Output.isReg() && !Op.Output.isTemp()) ||
+        Op.Output.Size != Img.getPointerSize() || !RISCVCycleReader)
+      return false;
+    const auto Sample = RISCVCycleReader();
+    if (!Sample)
+      return false;
+    writeOutput(Op.Output, Read->HighHalf ? *Sample >> 32 : *Sample);
+    return true;
+  }
+  if (Id == Intrinsic::PPCVaddubm) {
+    if (!isPowerPC(Img.Arch) || Op.NumInputs != 3 ||
+        (!Op.Output.isReg() && !Op.Output.isTemp()) ||
+        Op.Output.Size != ppc::VectorBytes ||
+        Op.Inputs[1].Size != ppc::VectorBytes ||
+        Op.Inputs[2].Size != ppc::VectorBytes ||
+        !knownOperandBytes(Op.Inputs[1], 0, ppc::VectorBytes) ||
+        !knownOperandBytes(Op.Inputs[2], 0, ppc::VectorBytes))
+      return false;
+    auto Bytes = readOperandBytes(Op.Inputs[1]);
+    const auto Right = readOperandBytes(Op.Inputs[2]);
+    for (unsigned I = 0; I != ppc::VectorBytes; ++I)
+      Bytes[I] += Right[I];
+    writeOutputBytes(Op.Output, Bytes);
+    return true;
+  }
   if (Id == Intrinsic::X86AMXState) {
     const auto Shape = x86AmxLowShape(Op, Img.Arch);
     if (Img.Arch != Arch::X64 || !x86AmxShapeIsValid(Shape))

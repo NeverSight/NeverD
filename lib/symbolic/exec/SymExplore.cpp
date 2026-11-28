@@ -25,6 +25,7 @@
 #include "neverd/symbolic/SymExplore.h"
 
 #include "neverd/ir/low/LowAlignmentGuard.h"
+#include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/symbolic/SymExec.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -823,6 +824,15 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
         }
         if (isDefaultAddressAlignmentGuard(Op)) {
           Exec.assume(alignmentPrecondition(Ctx, Exec, Op));
+          Result = StepResult::Continue;
+        } else if (Opts.WordCheckTarget != Arch::Unknown && !Opts.Concolic &&
+                   Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 2 &&
+                   Op.Inputs[0].Offset ==
+                       uint64_t(Intrinsic::MIPSRequireWord) &&
+                   mipsScalarLowShapeIsValid(Op, Opts.WordCheckTarget)) {
+          const SymRef Value = Exec.operandValue(Op.Inputs[1]);
+          Exec.assume(
+              Ctx.mkEq(Value, Ctx.mkSExt(Ctx.mkExtract(Value, 0, 32), 64)));
           Result = StepResult::Continue;
         } else {
           Result = Exec.step(Op, CallEffect ? &*CallEffect : nullptr);

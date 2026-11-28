@@ -19,8 +19,8 @@
 using namespace llvm;
 using namespace neverd::lua;
 namespace {
-json::Array fixtures() {
-  auto File = MemoryBuffer::getFile(LUA_DUMP_MANIFEST);
+json::Array fixtures(StringRef Path = LUA_DUMP_MANIFEST) {
+  auto File = MemoryBuffer::getFile(Path);
   if (!File)
     return {};
   auto Document = json::parse((*File)->getBuffer());
@@ -103,6 +103,94 @@ TEST(LuaRecovery, OwnedCompilerDumps) {
     }
   }
 }
+TEST(LuaRecovery, ReleaseInstructionsAndSourceMatchCompilerFixtures) {
+  auto Rows = fixtures(LUA_RELEASE_MANIFEST);
+  ASSERT_EQ(Rows.size(), 33u);
+  for (const auto &V : Rows) {
+    const auto &Row = *V.getAsObject();
+    SCOPED_TRACE(Row.getString("id")->str());
+    auto Data = bytes(Row);
+    auto Report = analyze(Data, *Row.getString("profile"));
+    ASSERT_EQ(Report.getString("status"), "reconstructed_source");
+    EXPECT_EQ(Report.getString("input_sha256"), Row.getString("sha256"));
+    bool Luau = Row.getString("dialect") == "luau";
+    if (Luau)
+      EXPECT_EQ(Report.getObject("evidence")->getInteger("bytecode_version"),
+                static_cast<unsigned char>(Data.front()));
+    auto &Functions = *Report.getArray("functions");
+    auto &Listing = *Row.getArray("instructions");
+    ASSERT_EQ(Functions.size(), Listing.size());
+    for (size_t F = 0; F < Functions.size(); ++F) {
+      const auto &Function = *Functions[F].getAsObject();
+      EXPECT_EQ(Function.getString("status"), "reconstructed_source");
+      EXPECT_FALSE(Function.getString("source")->empty());
+      auto &Expected = *Listing[F].getAsArray();
+      unsigned At = 0;
+      for (const auto &Value : *Function.getArray("instructions")) {
+        auto &Instruction = *Value.getAsObject();
+        int64_t Offset = *Instruction.getInteger("offset");
+        ASSERT_GE(Offset, 0);
+        ASSERT_LT(size_t(Offset), Data.size());
+        if (Luau && Instruction.getString("opcode") == "PREPVARARGS") {
+          EXPECT_EQ(Instruction.getInteger("pc"), 0);
+          continue;
+        }
+        ASSERT_LT(At, Expected.size());
+        auto &Pair = *Expected[At++].getAsArray();
+        if (auto PC = Pair[0].getAsInteger())
+          EXPECT_EQ(Instruction.getInteger("pc"), PC);
+        EXPECT_EQ(Instruction.getString("opcode"), Pair[1].getAsString());
+      }
+      EXPECT_EQ(At, Expected.size());
+    }
+    auto Cut = analyze(StringRef(Data).drop_back(), *Row.getString("profile"));
+    EXPECT_NE(Cut.getString("status"), "reconstructed_source");
+  }
+}
+
+TEST(LuaRecovery, LegacyRelocationsFramesAndVersionBoundaries) {
+  for (const auto &V : fixtures(LUA_RELEASE_MANIFEST)) {
+    auto &Row = *V.getAsObject();
+    auto Id = *Row.getString("id");
+    SCOPED_TRACE(Id.str());
+    if (Id == "puc/2.4/arithmetic") {
+      auto Data = bytes(Row);
+      auto Last = Data.rfind('V');
+      ASSERT_LT(Last, Data.size() - 2);
+      Data[Last + 1] = Data[Last + 2] = 0;
+      EXPECT_EQ(analyze(Data).getString("status"), "malformed");
+    } else if (Id == "puc/3.2.2/functions") {
+      auto Data = bytes(Row);
+      auto R = analyze(Data);
+      auto &Function = *R.getArray("functions")->back().getAsObject();
+      auto PC = *Function.getArray("instructions")
+                     ->front()
+                     .getAsObject()
+                     ->getInteger("offset");
+      ASSERT_GE(PC, 2);
+      Data[PC - 2] = 1; // The child has two fixed parameters.
+      EXPECT_EQ(analyze(Data).getString("status"), "malformed");
+    } else if (Id == "luajit/1.0.3") {
+      auto Report = analyze(bytes(Row));
+      EXPECT_EQ(Report.getString("status"), "reconstructed_source");
+      EXPECT_EQ(Report.getObject("evidence")->getString("prototype_layout"),
+                "Lua 5.1 alpha");
+    } else if (Id == "luajit/2.0") {
+      auto Data = bytes(Row);
+      ASSERT_GT(Data.size(), 4u);
+      Data[4] |= 8;
+      EXPECT_EQ(analyze(Data).getString("status"), "unsupported");
+    } else if (Id == "luau/0.748") {
+      auto Data = bytes(Row);
+      EXPECT_EQ(analyze(Data).getString("status"), "unsupported");
+      EXPECT_EQ(analyze(Data, "luau-0.659").getString("status"), "unsupported");
+      Data[0] = 100;
+      EXPECT_EQ(analyze(Data, "luau-upstream").getString("status"),
+                "unsupported");
+    }
+  }
+}
+
 TEST(LuaRecovery, SourceProfilesAndCancellation) {
   std::string Source = "\xEF\xBB\xBF-- owned\r\nreturn 7\r\n";
   auto R = recover(Source, ".lua", "auto", [] { return false; });
@@ -148,7 +236,9 @@ TEST(LuaRecovery, SerializedReportAtExportLimit) {
   ASSERT_NE(Root, nullptr);
   EXPECT_EQ(Root->getString("status"), "budget_exceeded");
   EXPECT_EQ(Root->getString("input_sha256"), InputHash);
-  EXPECT_TRUE(Root->getNull("root"));
+  const auto *RootID = Root->get("root");
+  ASSERT_NE(RootID, nullptr);
+  EXPECT_EQ(RootID->kind(), json::Value::Null);
   ASSERT_NE(Root->getArray("functions"), nullptr);
   EXPECT_TRUE(Root->getArray("functions")->empty());
   const auto *Diagnostics = Root->getArray("diagnostics");

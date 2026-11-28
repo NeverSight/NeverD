@@ -18,11 +18,16 @@
 using namespace llvm;
 using namespace neverd::python;
 
+bool Code::isModule() const {
+  return Name->Data == "<module>" ||
+         (Id == 0 && (Version == 8 || (Version < 205 && Name->Data == "?")));
+}
+
 Emitter::Emitter(Job &J, Function &F, std::vector<Function> &All,
                  std::vector<Body> &Bodies)
     : J(J), F(F), C(*F.Node.Body), Functions(All), Bodies(Bodies),
-      Result(Bodies[C.Id]), NextLine(C.Name->Data == "<module>" ? 1 : 2),
-      Module(C.Name->Data == "<module>") {}
+      Result(Bodies[C.Id]), NextLine(C.isModule() ? 1 : 2),
+      Module(C.isModule()) {}
 void Emitter::reject(StringRef Why) const {
   unsupported(C.Bytes->DataOffset +
                   (Current < F.Code.size() ? F.Code[Current].Byte : 0),
@@ -34,7 +39,7 @@ void Emitter::invalid(StringRef Why) const {
             Why);
 }
 size_t Emitter::target(size_t P) const {
-  return F.Starts[*F.Code[P].Target / 2];
+  return F.Starts[*F.Code[P].Target / (C.Version < 306 ? 1 : 2)];
 }
 size_t Emitter::normalized(size_t P) const {
   auto It = EquivalentExits.find(P);
@@ -111,13 +116,18 @@ std::string Emitter::signature(const Code &Child, StringRef Name,
 }
 void Emitter::nested(unsigned Indent, const Expr &Def, StringRef Target) {
   auto &Child = *Def.Value->Body;
-  if (Child.Name->Data != Target || Functions[Child.Id].Error ||
-      Bodies[Child.Id].ComprehensionBody)
+  if (Functions[Child.Id].Decoded && !Functions[Child.Id].Error &&
+      Bodies[Child.Id].Text.empty() && !Bodies[Child.Id].ComprehensionBody)
+    throw Failure{"disassembly_only",
+                  C.Bytes->DataOffset + F.Code[Current].Byte,
+                  "Nested function is available as disassembly"};
+  if ((Child.Version != 8 && Child.Name->Data != Target) ||
+      Functions[Child.Id].Error || Bodies[Child.Id].ComprehensionBody)
     reject("Nested definition has an unqualified body or binding");
   auto Header = signature(Child, Target, Def);
   auto &Body = Bodies[Child.Id].Text;
   Functions[Child.Id].Source = Header + "\n" + Body;
-  Functions[Child.Id].BindingKnown = true;
+  Functions[Child.Id].BindingName = Target.str();
   line(Indent, Header);
   StringRef Tail = Body;
   while (!Tail.empty()) {
@@ -184,7 +194,7 @@ void Emitter::block(size_t B, size_t E, unsigned Depth) {
     auto &I = F.Code[P];
     Op O = I.Opcode;
     if (expression(P, E, S)) {
-      if (S.size() > C.Stack)
+      if (C.Version >= 105 && S.size() > C.Stack)
         invalid("Operands exceed declared stack size");
       continue;
     }
@@ -334,14 +344,15 @@ void Emitter::block(size_t B, size_t E, unsigned Depth) {
 }
 void Emitter::run() {
   F.Lines.assign(F.Code.size(), 0);
-  if ((C.Flags & ~0x2ffu) ||
-      (Module ? bool(C.Flags & 0x2bf) : (C.Flags & 3) != 3))
+  if (C.Version >= 103 &&
+      ((C.Flags & ~0x2ffu) ||
+       (Module ? bool(C.Flags & 0x2bf) : (C.Flags & 3) != 3)))
     reject("Unqualified code-object flags or scope");
   if (C.Name->Data == "<listcomp>") {
     comprehension();
     return;
   }
-  if (!Module && !identifier(C.Name->Data))
+  if (!Module && C.Version != 8 && !identifier(C.Name->Data))
     reject("Unqualified code-object kind");
   unsigned D = Module ? 0 : 1;
   if (!Module && !C.Consts->Items.empty() &&
@@ -363,7 +374,9 @@ void Emitter::run() {
   if (Result.Text.empty())
     line(D, "pass");
   F.Source = Module ? Result.Text
-                    : signature(C, C.Name->Data, Expr{}) + "\n" + Result.Text;
+                    : signature(C, C.Version == 8 ? "_function" : C.Name->Data,
+                                Expr{}) +
+                          "\n" + Result.Text;
   for (auto &L : F.Lines)
     if (L >= NextLine)
       L = 0;
@@ -373,14 +386,15 @@ void neverd::python::render(Job &J, std::vector<Function> &Functions,
   std::vector<Body> Bodies(Functions.size());
   for (size_t N = Functions.size(); N; --N) {
     auto &F = Functions[N - 1];
-    if (F.Error || F.Node.Body->Version == 311)
+    if (F.Error || (F.Node.Body->Version != 310 && !prepareSource(F)))
       continue;
     try {
       Emitter(J, F, Functions, Bodies).run();
     } catch (const Failure &E) {
-      if (E.Status != "malformed" && E.Status != "unsupported")
+      if (E.Status == "malformed" || E.Status == "unsupported")
+        F.Error = E;
+      else if (E.Status != "disassembly_only")
         throw;
-      F.Error = E;
       F.Source.clear();
       F.Lines.clear();
       Bodies[N - 1] = {};
@@ -415,23 +429,29 @@ void neverd::python::render(Job &J, std::vector<Function> &Functions,
                      {"first_line", C.FirstLine},
                      {"status", Status},
                      {"decode_complete", F.Decoded},
-                     {"instructions", instructionRows(F)},
                      {"diagnostics", std::move(Diagnostics)}};
-    if (C.Version == 311) {
-      Row["instructions"] = std::move(F.DiskInstructions);
+    if (C.Version == 8) {
+      Row["name"] = C.isModule()            ? "<module>"
+                    : F.BindingName.empty() ? "<code>"
+                                            : F.BindingName;
+      Row["name_evidence"] =
+          F.BindingName.empty() ? "unavailable" : "function_binding";
+    }
+    attachInstructionRows(J, F, Row);
+    if (C.Version >= 311) {
       Row["exception_regions"] = std::move(F.ExceptionRegions);
       Row["qualified_name"] = C.QualifiedName->Data.str();
-      if (!F.Error) {
-        Row["status"] = "disassembly_only";
-        if (Overall == "reconstructed_source")
-          Overall = "disassembly_only";
-      }
+    }
+    if (!F.Error && F.Source.empty()) {
+      Row["status"] = "disassembly_only";
+      if (Overall == "reconstructed_source")
+        Overall = "disassembly_only";
     } else if (!F.Error) {
       Row["source"] = std::move(F.Source);
-      if (C.Name->Data != "<module>" && C.Name->Data != "<listcomp>") {
+      if (!C.isModule() && C.Name->Data != "<listcomp>") {
         Row["signature_evidence"] =
-            F.BindingKnown ? "function_binding" : "code_parameters";
-        if (!F.BindingKnown)
+            F.BindingName.empty() ? "code_parameters" : "function_binding";
+        if (F.BindingName.empty())
           Row.getArray("diagnostics")
               ->emplace_back(json::Object{
                   {"message",

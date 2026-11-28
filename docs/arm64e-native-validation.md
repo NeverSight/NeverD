@@ -2686,9 +2686,8 @@ lifted IR. Each case builds an Apple-linked input and its publication at O0
 and O2. A third pair at O2 uses a register for authentication and return.
 For that pair, the tests decode the installed ADR at the cleanup and at the
 leaf return and check its destination against the signing instruction in
-the installed function. A separate publication case returns or stores the
-signing address on one branch. It checks that the publisher refuses to
-change the address observed by its caller.
+the installed function. The observable-address tests below exercise a caller
+that also receives that address as a return value or through a memory slot.
 
 Set `NEVERD_ARM64E_PERSONALITY_NATIVE=1` to run the language checks on
 Apple Silicon with an arm64 caller loading the arm64e images. The existing
@@ -2717,6 +2716,141 @@ The hardware delivery counter was zero on all three hosts.
 [Per-case evidence](evidence/arm64e-explicit-personality-2026-11-27.json) ·
 [Apple-linked controls](https://github.com/gmh5225/test_mac_intel/actions/runs/45937609347) ·
 [Release Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/45940557627)
+
+### Publishing a signing address that is also program data
+
+A Darwin function can materialize its signing PC for two different uses.
+An `AUTIASPPC`, `AUTIBSPPC`, `RETAASPPC` or `RETABSPPC` needs the PC where
+its own LR was signed. A copy returned in X0 or written to a caller's
+slot retains the source image address, including its slide. NeverD keeps
+the ordinary address relocation and encodes the authentication against the
+installed signing instruction. A backwards immediate leaves the source
+register intact. A forward signer can use a separate, proven-dead Darwin
+scratch register. The final Mach-O verifier decodes the emitted consumer
+and checks both addresses against the actual layout.
+
+The regression publishes Apple-linked IA and IB images at O0 and publishes
+the resulting images again at O2. It covers conditional returns and stores,
+paired stores, copies on either side of authentication, an ADRP/ADD pair
+and authenticated returns. For a forward signer, an indexed DWARF row
+starting at the original AUT now starts at the extra modifier instruction
+in the installed image. This also preserves the row if an unwind starts
+between the modifier setup and AUT. The test keeps X16 and X17 live and
+checks stores through both registers after authentication.
+
+When every scratch register is live after a forward authentication, the
+publisher sets the original modifier register to the installed signing PC for
+the AUT. On fallthrough, an ADRP/ADD pair restores the caller-visible address
+in that same register. This also works when the address already went through a
+copy or store and when the original signer is outside ADR range. A direct
+branch or landing pad targeting the following original instruction lands past
+the pair. The next DWARF row and LSDA guard boundary take effect at the first
+restore instruction because LR is already authenticated there.
+
+At an authenticated return, a scratch register containing a copy of the address
+can supply the modifier if its value is dead at the return. The original value
+in X0 still reaches the caller. On a second lift the publisher follows the original entry's
+forwarding chain, verifies the retained signing word and checks both register
+operands and the target of the restore pair.
+
+Several ordinary branches may enter the same authenticator. On each path the
+publisher traces the full-width modifier and LR back to the address producer
+and signing instruction. Their PCs and IA or IB key must agree on that path.
+For one common signer it can use a backwards immediate. For distinct signers
+it can prepare a local modifier on each incoming arm while keeping the source
+address available for a return or store. A borrowed register must survive
+from every preparation to the authenticator and its original value must be
+dead. A branch straight to AUT that skips the address producer still rejects
+publication for both keys.
+
+At a join with distinct signers, an interrupted register snapshot can identify
+the signing PC for a live LR. The four-argument
+`prepareDarwinArm64eSystemCaller` checks the proven GPR against the incoming
+signing PCs at the supplied load address. A static query at that PC remains
+unknown. After a matching AUT at the original SP, instruction recovery can
+establish an unsigned LR on all paths. A wrong key or a clobbered modifier
+cannot establish this post-authentication state.
+
+When all temporary registers are live, the publisher can route a direct
+incoming edge to its own PC-relative AUT or authenticated return. Each edge
+must prove one matching key and signing PC. Fallthrough keeps its own copy. The caller retains the numerical source address.
+Independent materializations of the same signing address also keep its numeric source
+value when their uses prove an observable store. A shared,
+position-independent prefix can run on each route when its unwind and
+language scope agree with the authenticator. The final image check resolves
+each direct target, decodes each authentication against the installed signer
+and compares the duplicated prefix with the source instructions.
+
+A compact saved-register frame can use a PC-relative authenticated return
+without materializing the signing address as data. The publisher keeps its
+compact unwind recipe. When the function does reference a signing address in
+old storage, both lifting and publication check the retained instruction and
+follow its owning entry to the current function. An address can be materialized
+after the last authentication in the function.
+
+Full-width MOV and ADD/SUB by zero carry a joined signing-PC relation
+through a register copy. A full-width self-copy of LR also preserves the
+relation between LR and its modifier. A partial copy or nonzero adjustment cannot
+supply that proof.
+
+The unwind analysis also recognizes a full-width literal load from an
+immutable, dyld-rebased slot as a possible signing address. Recovery checks
+the loaded address against the recorded signer. A wrong address, a writable
+slot or a literal without rebase provenance leaves the LR state unknown.
+
+Use `verify_arm64e_return_model.py build-signing-address --tests BINARY
+--output GUESTS` to export the original and published instruction words on
+Apple Silicon. The corresponding `run --model FVP --guests GUESTS --output
+REPORT` executes those bodies at EL0 and EL1 with all four EnPACM/EnPACM0
+settings and checks a disabled-feature control.
+Add `--joins` to the export command for the multi-entry fixtures.
+
+In the initial LLVM r6 run, the M4 Max published 44 images and verified 80
+signing rows. All 223 image and asynchronous-unwind cases, 63 adjacent
+cases and 40 implicit-unwind tests passed. The 32 explicit language-frame cases
+exercised Darwin personalities with 288 exceptions and 720 pairs of search and
+cleanup observations. The Arm FVP executed 66 original and published function
+bodies with both caller inputs at EL0 and EL1 in each EnPACM configuration
+(1,056 invocations). Native x1 delivery remains on the hardware checklist below.
+[Validation record](evidence/arm64e-observable-signing-address-2026-11-27.json) ·
+[Release model run](https://github.com/gmh5225/test_mac_intel/actions/runs/45969329510)
+
+The live-register regression published 64 images and checked 116 signed or
+unsigned unwind rows on the M4 Max. IA and IB each rejected the independent
+entry with an ambiguous modifier. The 223 image and asynchronous-unwind
+cases, 63 adjacent cases and 40 portable cases all passed with zero skips.
+The Arm model executed 96 original and published bodies, for 1,536 calls.
+The same job replayed the archived 66-body guest for another 1,056 calls.
+Both runs checked both exception levels, all four EnPACM settings and the
+disabled-feature control.
+[Release evidence](evidence/arm64e-live-signing-modifier-2026-11-27.json) ·
+[Arm model and archived guest replay](https://github.com/gmh5225/test_mac_intel/actions/runs/45978541273)
+
+For the multi-entry cases, the M4 Max published 24 images across two
+generations and checked 96 unwind rows. At shared authenticators with
+distinct signers, 60 register snapshots selected the expected slid PC.
+Twelve contradictory or incomplete paths and the two original IA/IB branches
+that skip the modifier assignment were rejected. On GitHub’s virtual Apple M1 runner,
+all 224 image and asynchronous-unwind tests, 63 adjacent tests and 42
+portable unwind tests passed with zero skips. The Arm FVP executed 36
+original and published bodies with both caller inputs at EL0 and EL1 in all
+four EnPACM configurations (576 calls). The same run replayed the earlier
+96- and 66-body guests and their disabled-feature controls.
+[Release evidence](evidence/arm64e-joined-signing-address-2026-11-27.json) ·
+[Arm model execution](https://github.com/gmh5225/test_mac_intel/actions/runs/45997050094) ·
+[Hosted macOS Release run](https://github.com/gmh5225/test_mac_intel/actions/runs/45989233449)
+
+Across nine joined-signing fixtures, including three with every candidate
+scratch register live, O0 publication and O2 republication produced 36 images.
+The tests checked 152 signing rows, resolved 72 interrupted signing PCs, and
+rejected 16 incomplete or conflicting cases. The clean r6 macOS Release run
+passed 329 tests with zero skips. The Arm FVP executed the 54 original and
+published bodies with two caller inputs at EL0 and EL1 under four EnPACM
+settings (864 calls). The independent M4 and hosted Release exports both passed this matrix. The disabled-feature control and the three
+archived guest inventories also passed.
+[Validation record](evidence/arm64e-scratch-free-signing-2026-11-28.json) ·
+[Hosted Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46046283283) ·
+[Arm FVP execution](https://github.com/gmh5225/test_mac_intel/actions/runs/46051104410)
 
 ### Native x1 runner qualification
 

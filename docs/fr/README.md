@@ -1,6 +1,6 @@
 **Langues**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 60734d2802eb560e54b24aa381d8afac817379bfeb83be79327e965e54f95431 -->
+<!-- i18n-source: c68704413f06d9d793750e97be2b119c003a1dc3b2cbfdc781b859f6a7c3eaa0 -->
 
 [← Projet NeverD](project.md)
 
@@ -40,12 +40,13 @@ Les guides anglais se trouvent directement dans `docs/`. Les traductions sont re
 | [Environnements de processus macOS/iOS](darwin-emulation.md) | Démarrage Mach-O, plateformes appareil et simulateur, services Darwin et règles de pages |
 | [macOS HVF](macos-hvf.md) | Exécution matérielle avec l’ISA de l’hôte, droits de signature, packaging et validation |
 | [Émulation des pilotes Windows](driver-emulation.md) | Cycle WDM/KMDF x64 borné, requêtes, scénarios matériels, SEH, sous-ensembles PnP, choix du moteur et limites |
-| [Audit et chasse de sûreté mémoire](memory-safety.md) | Analyse de durée de vie du tas et de débordement de copie : contrat d’identité par format, catalogue puits/sources, verdicts, budgets et schéma JSON |
+| [Analyse de sûreté mémoire](memory-safety.md) | Analyse de durée de vie du tas et de débordement de copie : contrat d’identité par format, catalogue puits/sources, verdicts, budgets et schéma JSON |
 | [SDK de plugins de processus (anglais)](../process-plugin-sdk.md) | Assistant Python autonome, protocole et exemples indépendants |
 | [Couche Tools (anglais)](../tools-layer.md) | Appels exacts, étapes figées des consommateurs et registres des opérations |
 | [Plugins de processus GUI (anglais)](../gui-plugins.md) | Gestionnaire, menus, résultats et protocole des fournisseurs |
 | [Hôte NPH de plugins de processus (anglais)](../plugin-host.md) | Propriétaires partagés, admission des tâches, protocole et durée de vie des processus |
 | [Plugins natifs](plugins.md) | ABI de descripteur en C pur, callbacks et événements, procédure de compilation/liaison, découverte et règles de compatibilité |
+| [Récupération des artefacts Java](../jvm-recovery.md) | Versions des fichiers de classe, sélection dans les JAR, IR typée et reconstruction des méthodes Java |
 | [Récupération des artefacts Python](../python-recovery.md) | Versions de CPython, composants PyInstaller, analyse native et validation du code source |
 | [Plugins Python](python-plugins.md) | Création, API de session et d’événements, isolation, tests et publication |
 | [Vue d’ensemble mobile](mobile.md) | CLI expérimentale Android/iOS, entrées, sorties, rapports et limites |

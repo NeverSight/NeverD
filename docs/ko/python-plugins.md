@@ -123,19 +123,16 @@ for flip in report.flips:
 
 레지스터 오프셋은 NeverD 레지스터 파일의 바이트 오프셋이며 네이티브 포인터나 레지스터 번호가 아닙니다. 보고서는 항상 비완전하며 UNSAT, 솔버 제한, 투영 거부 및 재실행 거부는 예외가 아닌 형식화된 반전 결과로 남습니다.
 
-### 메모리 안전성 감사와 헌트
+### 메모리 안전성 검사
 
 `session.scan()`은 두 분석을 실행하고 탐지 결과와 분석 범위를 하나의 보고서로 반환합니다. [통합 스캔 안내서(영어)](../memory-safety-scan.md).
 
-`session.audit()`와 `session.hunt()`는 파싱된 JSON 보고서를 반환합니다(CLI와 같은 스키마). 리프트된 네이티브 세션이 필요합니다.
-
 ```python
-audit = session.audit()
-hunt = session.hunt(max_paths=64, max_steps=1 << 16)
-print(audit.get("ok"), hunt.get("findings"))
+report = session.scan(max_paths=64, max_steps=1 << 16)
+print(report["verdict"], report["analyzers"])
 ```
 
-EVM 및 SBF 세션은 이러한 호출을 거부합니다.
+EVM 및 SBF 입력에서 선택한 분석기는 `unsupported` 상태를 반환합니다.
 
 변경 불가능한 여섯 이벤트는 `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE`, `PATCH_APPLIED`입니다. 콜백 중 payload 문자열이 복사되며 해당 이벤트 종류와 관계없는 필드는 `None`입니다.
 

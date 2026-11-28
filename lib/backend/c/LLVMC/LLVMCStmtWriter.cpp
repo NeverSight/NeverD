@@ -57,6 +57,7 @@
 #include "neverd/backend/MIPS/MIPSScalarFPSource.h"
 #include "neverd/backend/MachineInstructionText.h"
 #include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
+#include "neverd/backend/RISCV/RISCVCycleSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/NativeVectorCall.h"
@@ -5061,6 +5062,25 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
   if (!IA)
     return false;
+  if (isRISCV(Opts.TheArch)) {
+    const riscv::CycleRead *Read = nullptr;
+#define NEVERD_RISCV_CYCLE(Id, Value, Word, High, Text)                        \
+  if (IA->getAsmString() == Text " $0")                                        \
+    Read = riscv::cycleRead(Intrinsic::Id);
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+    if (Read) {
+      if (!Read->admits(Opts.TheArch) || !IA->hasSideEffects() ||
+          IA->getConstraintString() != "=r" || !Call.arg_empty() ||
+          !Call.getType()->isIntegerTy(
+              getTargetRegInfo(Opts.TheArch).PointerSize * 8))
+        throw std::invalid_argument("invalid RISC-V cycle read assembly");
+      emitIndent(Indent);
+      if (!Call.use_empty())
+        OS << Name << " = ";
+      OS << riscv::cycleSource(*Read) << ";\n";
+      return true;
+    }
+  }
   auto *Divide = Call.getMetadata(ppc::DivisionMarker);
   auto *Product = Call.getMetadata(ppc::HighProductMarker);
   if (auto *MD = Divide ? Divide : Product) {

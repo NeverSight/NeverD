@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ProcessInputReplay.h"
+#include "ScanReportTestSupport.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ir/low/LowIR.h"
@@ -99,6 +100,15 @@ TEST(SafetyReport, PipelineCoverageRejectsPartialFunctionLifts) {
   EXPECT_NE(Error->find("0x3000"), std::string::npos);
   EXPECT_NE(Error->find("rejected-incomplete"), std::string::npos);
 
+  Result.FunctionAudits.back().Disposition =
+      neverd::PipelineFunctionDisposition::MedIRFailed;
+  Result.FunctionAudits.back().Diagnostic = "return target was not proven";
+  const auto MedError = validatePipelineCoverage(Result);
+  ASSERT_TRUE(MedError.has_value());
+  EXPECT_NE(
+      MedError->find("0x3000 (med-ir-failed) return target was not proven"),
+      std::string::npos);
+
   // Older producers may still report a rejection based on missing unwind
   // metadata. Such an omitted body cannot count as complete coverage, even
   // without a loader-authenticated function entry.
@@ -130,6 +140,14 @@ TEST(SafetyReport, PipelineCoverageMatchesAcceptedFunctionIdentities) {
   DuplicateAudit.MedFuncs[0].Entry = 0x1000;
   DuplicateAudit.MedFuncs[1].Entry = 0x2000;
   EXPECT_TRUE(validatePipelineCoverage(DuplicateAudit).has_value());
+
+  // A function can use an address one byte below the invalid VA sentinel.
+  constexpr neverd::va_t kHighEntry = neverd::InvalidVA - 1;
+  DuplicateAudit.FunctionAudits[1] = accepted(kHighEntry);
+  DuplicateAudit.LowFuncs[1].Entry = DuplicateAudit.MedFuncs[1].Entry =
+      kHighEntry;
+  std::swap(DuplicateAudit.MedFuncs[0].Entry, DuplicateAudit.MedFuncs[1].Entry);
+  EXPECT_FALSE(validatePipelineCoverage(DuplicateAudit).has_value());
 
   neverd::PipelineResult CrossedInventories;
   CrossedInventories.FunctionAudits = {accepted(0x1000)};
@@ -483,6 +501,26 @@ TEST(SafetyReport, PipelineCoverageRequiresExactCallInventory) {
   Result.MedFuncs.front().CallInfos.front().TargetAddr = kTarget;
   EXPECT_FALSE(validatePipelineCoverage(Result).has_value());
 
+  // A PPC64 ELFv2 branch can name the local entry of the exact symbol
+  // recorded in MedIR. Adjacent interior addresses still fail coverage.
+  neverd::BinaryImage Img;
+  Img.Arch = neverd::Arch::PPC64LE;
+  Result.SourceImage = &Img;
+  auto &RawTarget =
+      Result.LowFuncs.front().Blocks.front().Ops.front().Inputs[0];
+  RawTarget.Offset = kTarget + 8;
+  Error = validatePipelineCoverage(Result, &Img);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+  Img.PPC64EntryContexts[kTarget].LocalEntryOffset = 8;
+  EXPECT_FALSE(validatePipelineCoverage(Result, &Img).has_value());
+  RawTarget.Offset = kTarget + 4;
+  Error = validatePipelineCoverage(Result, &Img);
+  ASSERT_TRUE(Error.has_value());
+  EXPECT_NE(Error->find("incomplete-call-inventory"), std::string::npos);
+  RawTarget.Offset = kTarget;
+  Result.SourceImage = nullptr;
+
   Result.LowFuncs.front().Blocks.front().Ops.push_back(
       Result.LowFuncs.front().Blocks.front().Ops.front());
   Error = validatePipelineCoverage(Result);
@@ -541,9 +579,9 @@ TEST(SafetyReport, PipelineCoverageRequiresExactCallInventory) {
 }
 
 TEST(SafetyReport, JsonCarriesSchemaAndAggregateVerdict) {
-  SafetyReport Report;
+  ScanReport Scan(ScanSelection::Hunt, ScanState::Completed);
+  auto &Report = Scan.Analyzers.back().Report;
   Report.AnalysisComplete = true;
-  Report.Origin = Track::Hunt;
   Report.Format = "ELF";
   Report.Arch = "x86_64";
 
@@ -557,19 +595,21 @@ TEST(SafetyReport, JsonCarriesSchemaAndAggregateVerdict) {
   Unsafe.TheConfidence = Confidence::High;
   Report.Findings.push_back(Unsafe);
 
-  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Scan));
   ASSERT_TRUE(static_cast<bool>(Parsed));
   const llvm::json::Object *Root = Parsed->getAsObject();
   ASSERT_NE(Root, nullptr);
   EXPECT_EQ(Root->getInteger("schema_version"), 1);
   EXPECT_EQ(Root->getString("verdict"), "UNSAFE");
-  EXPECT_EQ(Root->getString("confidence"), "HIGH");
+  const auto *Hunt = neverd::test::scanAnalyzer(*Root, "hunt");
+  ASSERT_NE(Hunt, nullptr);
+  EXPECT_EQ(Hunt->getString("verdict"), "UNSAFE");
 }
 
 TEST(SafetyReport, JsonCarriesReachabilityWithoutChangingVerdict) {
-  SafetyReport Report;
+  ScanReport Scan(ScanSelection::Hunt, ScanState::Completed);
+  auto &Report = Scan.Analyzers.back().Report;
   Report.AnalysisComplete = true;
-  Report.Origin = Track::Hunt;
 
   Finding Unsafe;
   Unsafe.TheVerdict = Verdict::Unsafe;
@@ -595,20 +635,23 @@ TEST(SafetyReport, JsonCarriesReachabilityWithoutChangingVerdict) {
   Dead.Reachability.Reason = "no path from a known entry";
   Report.Findings.push_back(std::move(Dead));
 
-  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Scan));
   ASSERT_TRUE(static_cast<bool>(Parsed));
   const llvm::json::Object *Root = Parsed->getAsObject();
   ASSERT_NE(Root, nullptr);
   EXPECT_EQ(Root->getString("verdict"), "UNSAFE");
-  EXPECT_EQ(Root->getInteger("control_reachable"), 2);
-  EXPECT_EQ(Root->getInteger("attacker_reachable"), 1);
-  EXPECT_EQ(Root->getInteger("unreachable"), 1);
-  EXPECT_EQ(Root->getInteger("reachability_unknown"), 0);
-
-  const llvm::json::Array *Findings = Root->getArray("findings");
-  ASSERT_NE(Findings, nullptr);
-  const llvm::json::Object *Reach =
-      (*Findings)[0].getAsObject()->getObject("reachability");
+  const auto Findings = neverd::test::scanFindings(*Root);
+  ASSERT_EQ(Findings.size(), 3u);
+  for (const auto *Finding : Findings)
+    ASSERT_NE(Finding->getObject("reachability"), nullptr);
+  const auto *Reach = Findings[0]->getObject("reachability");
+  EXPECT_EQ(Findings[1]->getObject("reachability")->getString("status"),
+            "REACHABLE");
+  EXPECT_EQ(
+      Findings[1]->getObject("reachability")->getString("attacker_control"),
+      "BOUNDED");
+  EXPECT_EQ(Findings[2]->getObject("reachability")->getString("status"),
+            "UNREACHABLE");
   ASSERT_NE(Reach, nullptr);
   EXPECT_EQ(Reach->getString("status"), "REACHABLE");
   EXPECT_EQ(Reach->getString("attacker_control"), "TAINTED");
@@ -617,7 +660,8 @@ TEST(SafetyReport, JsonCarriesReachabilityWithoutChangingVerdict) {
 }
 
 TEST(SafetyReport, ReachabilityEntryAtVirtualAddressZeroIsSerialized) {
-  SafetyReport Report;
+  ScanReport Scan(ScanSelection::Hunt, ScanState::Completed);
+  auto &Report = Scan.Analyzers.back().Report;
   Report.AnalysisComplete = true;
   Finding FindingAtZero;
   FindingAtZero.FuncEntry = 0;
@@ -627,22 +671,22 @@ TEST(SafetyReport, ReachabilityEntryAtVirtualAddressZeroIsSerialized) {
   FindingAtZero.Reachability.Kind = SafetyEntryKind::Image;
   Report.Findings.push_back(std::move(FindingAtZero));
 
-  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Scan));
   ASSERT_TRUE(static_cast<bool>(Parsed));
-  const llvm::json::Array *Findings =
-      Parsed->getAsObject()->getArray("findings");
-  ASSERT_NE(Findings, nullptr);
-  const llvm::json::Object *Entry = (*Findings)[0]
-                                        .getAsObject()
-                                        ->getObject("reachability")
-                                        ->getObject("entry");
+  ASSERT_NE(Parsed->getAsObject(), nullptr);
+  const auto Findings = neverd::test::scanFindings(*Parsed->getAsObject());
+  ASSERT_EQ(Findings.size(), 1u);
+  ASSERT_NE(Findings.front()->getObject("reachability"), nullptr);
+  const auto *Entry =
+      Findings.front()->getObject("reachability")->getObject("entry");
   ASSERT_NE(Entry, nullptr);
   EXPECT_EQ(Entry->getString("va"), "0x0");
   EXPECT_EQ(Entry->getString("name"), "start");
 }
 
 TEST(SafetyReport, UnknownDominatesSafeAtTheRoot) {
-  SafetyReport Report;
+  ScanReport Scan(ScanSelection::Hunt, ScanState::Completed);
+  auto &Report = Scan.Analyzers.back().Report;
   Report.AnalysisComplete = true;
   Finding Safe;
   Safe.TheVerdict = Verdict::Safe;
@@ -653,38 +697,41 @@ TEST(SafetyReport, UnknownDominatesSafeAtTheRoot) {
   Unknown.TheConfidence = Confidence::Low;
   Report.Findings.push_back(Unknown);
 
-  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Scan));
   ASSERT_TRUE(static_cast<bool>(Parsed));
   const llvm::json::Object *Root = Parsed->getAsObject();
   ASSERT_NE(Root, nullptr);
   EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
-  EXPECT_EQ(Root->getString("confidence"), "LOW");
+  EXPECT_EQ(Root->getBoolean("coverage_complete"), true);
 }
 
 TEST(SafetyReport, DefaultReportFailsClosed) {
   llvm::Expected<llvm::json::Value> Parsed =
-      llvm::json::parse(toJson(SafetyReport{}));
+      llvm::json::parse(toJson(ScanReport(ScanSelection::Both)));
   ASSERT_TRUE(static_cast<bool>(Parsed));
   const llvm::json::Object *Root = Parsed->getAsObject();
   ASSERT_NE(Root, nullptr);
   EXPECT_FALSE(Root->getBoolean("ok").value_or(true));
   EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
-  EXPECT_EQ(Root->getString("confidence"), "LOW");
+  EXPECT_EQ(Root->getBoolean("coverage_complete"), false);
 }
 
 TEST(SafetyReport, MissingAnalysisInputCannotAggregateToSafe) {
   AnalysisInput In;
-  SafetyReport Report = runHunt(In, SinkCatalog::defaults(), SafetyBudgets{});
-  EXPECT_FALSE(Report.AnalysisComplete);
+  ScanReport Scan = runScan(In, SinkCatalog::defaults(), SafetyBudgets{},
+                            ScanSelection::Hunt);
+  EXPECT_FALSE(Scan.Analyzers.back().Report.AnalysisComplete);
 
-  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Scan));
   ASSERT_TRUE(static_cast<bool>(Parsed));
   const llvm::json::Object *Root = Parsed->getAsObject();
   ASSERT_NE(Root, nullptr);
   EXPECT_FALSE(Root->getBoolean("ok").value_or(true));
   EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
-  EXPECT_EQ(Root->getString("confidence"), "LOW");
-  EXPECT_FALSE(Root->getString("error").value_or("").empty());
+  EXPECT_EQ(Root->getBoolean("coverage_complete"), false);
+  const auto *Hunt = neverd::test::scanAnalyzer(*Root, "hunt");
+  ASSERT_NE(Hunt, nullptr);
+  EXPECT_FALSE(Hunt->getString("error").value_or("").empty());
 }
 
 TEST(SafetyReport, CoverageProofCannotBeReusedForDetachedArtifacts) {
@@ -722,7 +769,8 @@ TEST(SafetyReport, CoverageProofCannotBeReusedForAnotherImage) {
 }
 
 TEST(SafetyReport, SymbolicWitnessStatesWhetherItIsReplayable) {
-  SafetyReport Report;
+  ScanReport Scan(ScanSelection::Hunt, ScanState::Completed);
+  auto &Report = Scan.Analyzers.back().Report;
   Report.AnalysisComplete = true;
   Finding F;
   F.TheVerdict = Verdict::Unsafe;
@@ -731,13 +779,13 @@ TEST(SafetyReport, SymbolicWitnessStatesWhetherItIsReplayable) {
   F.SymbolicModel.push_back({0, "copy_len", 64, "0x11"});
   Report.Findings.push_back(std::move(F));
 
-  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Scan));
   ASSERT_TRUE(static_cast<bool>(Parsed));
   const llvm::json::Object *Root = Parsed->getAsObject();
   ASSERT_NE(Root, nullptr);
-  const llvm::json::Array *Findings = Root->getArray("findings");
-  ASSERT_NE(Findings, nullptr);
-  const llvm::json::Object *FindingObject = Findings->front().getAsObject();
+  const auto Findings = neverd::test::scanFindings(*Root);
+  ASSERT_EQ(Findings.size(), 1u);
+  const llvm::json::Object *FindingObject = Findings.front();
   ASSERT_NE(FindingObject, nullptr);
   const llvm::json::Object *Evidence = FindingObject->getObject("evidence");
   ASSERT_NE(Evidence, nullptr);
@@ -791,7 +839,8 @@ TEST(SafetyReport, SerializesValidatedLiteralProcessInputReplay) {
       buildProcessInputReplay(std::move(Candidate), Model);
   ASSERT_TRUE(Built.Plan.has_value()) << Built.Reason;
 
-  SafetyReport Report;
+  ScanReport Scan(ScanSelection::Hunt, ScanState::Completed);
+  auto &Report = Scan.Analyzers.back().Report;
   Report.AnalysisComplete = true;
   Finding F;
   F.TheVerdict = Verdict::Unsafe;
@@ -801,14 +850,14 @@ TEST(SafetyReport, SerializesValidatedLiteralProcessInputReplay) {
   F.Replay = std::move(Built.Plan);
   Report.Findings.push_back(std::move(F));
 
-  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Scan));
   ASSERT_TRUE(static_cast<bool>(Parsed));
   const llvm::json::Object *Root = Parsed->getAsObject();
   ASSERT_NE(Root, nullptr);
   EXPECT_EQ(Root->getInteger("schema_version"), 1);
-  const llvm::json::Array *Findings = Root->getArray("findings");
-  ASSERT_NE(Findings, nullptr);
-  const llvm::json::Object *FindingObject = Findings->front().getAsObject();
+  const auto Findings = neverd::test::scanFindings(*Root);
+  ASSERT_EQ(Findings.size(), 1u);
+  const llvm::json::Object *FindingObject = Findings.front();
   ASSERT_NE(FindingObject, nullptr);
   const llvm::json::Object *Evidence = FindingObject->getObject("evidence");
   ASSERT_NE(Evidence, nullptr);
@@ -918,7 +967,8 @@ TEST(SafetyReport, ReplayValidationChecksByteBudgetsAndSourceArithmetic) {
 }
 
 TEST(SafetyReport, RejectsMutatedReplayPlanAtSerialization) {
-  SafetyReport Report;
+  ScanReport Scan(ScanSelection::Hunt, ScanState::Completed);
+  auto &Report = Scan.Analyzers.back().Report;
   Report.AnalysisComplete = true;
   Finding F;
   F.Witness.push_back({"source", "unsupported"});
@@ -926,12 +976,13 @@ TEST(SafetyReport, RejectsMutatedReplayPlanAtSerialization) {
   F.Replay->Version = 2;
   Report.Findings.push_back(std::move(F));
 
-  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Scan));
   ASSERT_TRUE(static_cast<bool>(Parsed));
   const llvm::json::Object *Root = Parsed->getAsObject();
   ASSERT_NE(Root, nullptr);
-  const llvm::json::Object *FindingObject =
-      Root->getArray("findings")->front().getAsObject();
+  const auto Findings = neverd::test::scanFindings(*Root);
+  ASSERT_EQ(Findings.size(), 1u);
+  const auto *FindingObject = Findings.front();
   ASSERT_NE(FindingObject, nullptr);
   const llvm::json::Object *Evidence = FindingObject->getObject("evidence");
   ASSERT_NE(Evidence, nullptr);
@@ -950,19 +1001,20 @@ TEST(SafetyReport, UnsupportedProcessSourcesRemainExplicitlyNonReplayable) {
            "network input is not supported by process-input-v1",
            "custom or ambiguous input is not supported by process-input-v1",
        }) {
-    SafetyReport Report;
+    ScanReport Scan(ScanSelection::Hunt, ScanState::Completed);
+    auto &Report = Scan.Analyzers.back().Report;
     Finding F;
     F.Witness.push_back({"source", "candidate"});
     F.ReplayReason = Reason;
     Report.Findings.push_back(std::move(F));
 
-    llvm::Expected<llvm::json::Value> Parsed =
-        llvm::json::parse(toJson(Report));
+    llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Scan));
     ASSERT_TRUE(static_cast<bool>(Parsed));
     const llvm::json::Object *Root = Parsed->getAsObject();
     ASSERT_NE(Root, nullptr);
-    const llvm::json::Object *FindingObject =
-        Root->getArray("findings")->front().getAsObject();
+    const auto Findings = neverd::test::scanFindings(*Root);
+    ASSERT_EQ(Findings.size(), 1u);
+    const auto *FindingObject = Findings.front();
     ASSERT_NE(FindingObject, nullptr);
     const llvm::json::Object *Evidence = FindingObject->getObject("evidence");
     ASSERT_NE(Evidence, nullptr);
@@ -974,20 +1026,20 @@ TEST(SafetyReport, UnsupportedProcessSourcesRemainExplicitlyNonReplayable) {
 }
 
 TEST(SafetyReport, PreservesUnsignedCapacityRange) {
-  SafetyReport Report;
+  ScanReport Scan(ScanSelection::Hunt, ScanState::Completed);
+  auto &Report = Scan.Analyzers.back().Report;
   Finding F;
   F.TheVerdict = Verdict::Unknown;
   F.Capacity = std::numeric_limits<uint64_t>::max();
   Report.Findings.push_back(std::move(F));
 
-  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Scan));
   ASSERT_TRUE(static_cast<bool>(Parsed));
   const llvm::json::Object *Root = Parsed->getAsObject();
   ASSERT_NE(Root, nullptr);
-  const llvm::json::Array *Findings = Root->getArray("findings");
-  ASSERT_NE(Findings, nullptr);
-  ASSERT_EQ(Findings->size(), 1u);
-  const llvm::json::Object *FindingObject = Findings->front().getAsObject();
+  const auto Findings = neverd::test::scanFindings(*Root);
+  ASSERT_EQ(Findings.size(), 1u);
+  const llvm::json::Object *FindingObject = Findings.front();
   ASSERT_NE(FindingObject, nullptr);
   const llvm::json::Value *Capacity = FindingObject->get("capacity");
   ASSERT_NE(Capacity, nullptr);
@@ -995,7 +1047,8 @@ TEST(SafetyReport, PreservesUnsignedCapacityRange) {
 }
 
 TEST(SafetyReport, CapacityPrecisionIsStableAndStorageIsNotReportedExact) {
-  SafetyReport Report;
+  ScanReport Scan(ScanSelection::Hunt, ScanState::Completed);
+  auto &Report = Scan.Analyzers.back().Report;
   for (const CapacityPrecision Precision :
        {CapacityPrecision::Unknown, CapacityPrecision::ContainerUpperBound,
         CapacityPrecision::StorageExact, CapacityPrecision::TypedBufferExact}) {
@@ -1006,17 +1059,16 @@ TEST(SafetyReport, CapacityPrecisionIsStableAndStorageIsNotReportedExact) {
     Report.Findings.push_back(std::move(F));
   }
 
-  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Report));
+  llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(toJson(Scan));
   ASSERT_TRUE(static_cast<bool>(Parsed));
-  const llvm::json::Array *Findings =
-      Parsed->getAsObject()->getArray("findings");
-  ASSERT_NE(Findings, nullptr);
-  ASSERT_EQ(Findings->size(), 4u);
+  ASSERT_NE(Parsed->getAsObject(), nullptr);
+  const auto Findings = neverd::test::scanFindings(*Parsed->getAsObject());
+  ASSERT_EQ(Findings.size(), 4u);
   constexpr std::array<const char *, 4> Precisions = {
       "unknown", "container_upper_bound", "storage_exact",
       "typed_buffer_exact"};
-  for (size_t Index = 0; Index < Findings->size(); ++Index) {
-    const llvm::json::Object *Object = (*Findings)[Index].getAsObject();
+  for (size_t Index = 0; Index < Findings.size(); ++Index) {
+    const llvm::json::Object *Object = Findings[Index];
     ASSERT_NE(Object, nullptr);
     EXPECT_EQ(Object->getString("capacity_precision"), Precisions[Index]);
     EXPECT_EQ(Object->getString("capacity_kind"),
@@ -1113,7 +1165,9 @@ TEST(SafetyReport, AuditScannedCountsAllocationSitesNotOnlyFindings) {
   neverd::PipelineResult Pipeline;
   buildAllocationFixture(Pipeline);
   AnalysisInput In = validatedInput(Img, Pipeline);
-  SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
+  const auto Scan = runScan(In, SinkCatalog::defaults(), SafetyBudgets{},
+                            ScanSelection::Audit);
+  const auto &Report = Scan.Analyzers.front().Report;
   EXPECT_EQ(Report.Scanned, 2u);
   ASSERT_EQ(Report.Findings.size(), 1u);
   EXPECT_EQ(Report.Findings[0].Class, VulnClass::HeapLeak);
@@ -1181,7 +1235,9 @@ TEST(SafetyReport, ReachableAuditCandidateIsSymbolicallyCorroborated) {
   Pipeline.MedFuncs.push_back(std::move(F));
   Pipeline.LowFuncs.push_back(std::move(LF));
   AnalysisInput In = validatedInput(Img, Pipeline);
-  SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
+  const auto Scan = runScan(In, SinkCatalog::defaults(), SafetyBudgets{},
+                            ScanSelection::Audit);
+  const auto &Report = Scan.Analyzers.front().Report;
   ASSERT_EQ(Report.Findings.size(), 1u);
   EXPECT_EQ(Report.Findings[0].TheVerdict, Verdict::Unsafe)
       << Report.Findings[0].Corroboration << ": " << Report.Findings[0].Detail;
@@ -1245,7 +1301,9 @@ TEST(SafetyReport, UnmodelledAuditPathFailsClosed) {
   Pipeline.MedFuncs.push_back(std::move(F));
   Pipeline.LowFuncs.push_back(std::move(LF));
   AnalysisInput In = validatedInput(Img, Pipeline);
-  SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
+  const auto Scan = runScan(In, SinkCatalog::defaults(), SafetyBudgets{},
+                            ScanSelection::Audit);
+  const auto &Report = Scan.Analyzers.front().Report;
   ASSERT_EQ(Report.Findings.size(), 1u);
   EXPECT_EQ(Report.Findings[0].TheVerdict, Verdict::Unknown);
   EXPECT_EQ(Report.Findings[0].TheConfidence, Confidence::Low);
@@ -1382,7 +1440,9 @@ TEST(SafetyReport, NonNullLeakPathSurvivesANullComparison) {
   Pipeline.MedFuncs.push_back(std::move(F));
   Pipeline.LowFuncs.push_back(std::move(LF));
   AnalysisInput In = validatedInput(Img, Pipeline);
-  SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
+  const auto Scan = runScan(In, SinkCatalog::defaults(), SafetyBudgets{},
+                            ScanSelection::Audit);
+  const auto &Report = Scan.Analyzers.front().Report;
   ASSERT_EQ(Report.Findings.size(), 1u);
   EXPECT_EQ(Report.Findings[0].Class, VulnClass::HeapLeak);
   EXPECT_EQ(Report.Findings[0].TheVerdict, Verdict::Unsafe);
@@ -1519,7 +1579,9 @@ TEST(SafetyReport, NullOnlyDoubleFreeIsInfeasibleForAnAllocation) {
   Pipeline.MedFuncs.push_back(std::move(F));
   Pipeline.LowFuncs.push_back(std::move(LF));
   AnalysisInput In = validatedInput(Img, Pipeline);
-  SafetyReport Report = runAudit(In, SinkCatalog::defaults(), SafetyBudgets{});
+  const auto Scan = runScan(In, SinkCatalog::defaults(), SafetyBudgets{},
+                            ScanSelection::Audit);
+  const auto &Report = Scan.Analyzers.front().Report;
   EXPECT_TRUE(Report.Findings.empty());
 }
 

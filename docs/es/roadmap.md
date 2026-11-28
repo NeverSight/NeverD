@@ -68,7 +68,7 @@ Programas **Solana eBPF / SBF** con la misma semántica strict.
 
 ---
 
-## 4. Auditoría y caza de seguridad de memoria
+## 4. Análisis de seguridad de memoria
 
 Analizar un binario levantado en busca de defectos de vida del montón (fuga, doble liberación, uso después de liberar) y desbordamientos de copias peligrosas, en JSON estructurado, con un modelo acotado del solver para un desbordamiento demostrado. El análisis corre sobre el IR independiente del formato y la vista de identidad compartida, de modo que **PE, ELF y Mach-O son objetivos equivalentes**, y reutiliza la ejecución simbólica y el solver de vectores de bits internos — sin solver externo ni contenedor.
 
@@ -79,16 +79,14 @@ Analizar un binario levantado en busca de defectos de vida del montón (fuga, do
 | Evidencia de alcanzabilidad | Estado de control desde entradas conocidas más un punto fijo independiente del atacante y un testigo exacto de raíz/cadena de llamadas |
 | Contrato de identidad | Resolución de sumideros por formato (IAT PE, PLT ELF, bind dyld Mach-O) y fuentes de nombres PDB / DWARF / MAP |
 
-**Estado:** Phase 1 está implementada para PE, ELF y Mach-O. P0 incluye análisis de mundo cerrado para el ciclo de vida del heap y copias peligrosas, además de evidencia aditiva del esquema v1 con reproducción `process-input-v1` para valores literales exactos del entorno y el primer consumo de entrada estándar; los demás tipos siguen sin ser reproducibles e incluyen el motivo. P1 cubre desbordamientos de pila/global, lecturas locales no inicializadas y cadenas de formato. Los efectos de llamada desconocidos o parcialmente aplicables permanecen UNKNOWN. La cobertura de veredictos e identidad queda fijada por [`unittests/safety`](../../unittests/safety) y el extremo a extremo [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), que ejecuta en cada host la matriz obligatoria PE/ELF/Mach-O × x86-64/AArch64. Véase [Auditoría y caza de seguridad de memoria](memory-safety.md).
+**Estado:** Phase 1 está implementada para PE, ELF y Mach-O. P0 incluye análisis de mundo cerrado para el ciclo de vida del heap y copias peligrosas, además de evidencia aditiva del esquema v1 con reproducción `process-input-v1` para valores literales exactos del entorno y el primer consumo de entrada estándar; los demás tipos siguen sin ser reproducibles e incluyen el motivo. P1 cubre desbordamientos de pila/global, lecturas locales no inicializadas y cadenas de formato. Los efectos de llamada desconocidos o parcialmente aplicables permanecen UNKNOWN. La cobertura de veredictos e identidad queda fijada por [`unittests/safety`](../../unittests/safety) y el extremo a extremo [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp), que ejecuta en cada host la matriz obligatoria PE/ELF/Mach-O × x86-64/AArch64. Véase [Análisis de seguridad de memoria](memory-safety.md).
 
 El corte interprocedimental actual añade `reachability.status` y
 `reachability.attacker_control` al esquema v1 sin cambiar el `verdict`
 independiente. Informa raíces `application`, `image` o `export`, cadenas internas
 exactas y estados UNKNOWN que fallan cerrado. Los presupuestos de profundidad y
 resumen `max_call_depth` y `max_summary_iterations` están disponibles por la API
-C, ambos comandos CLI y ambos métodos Python. Por tanto, `control_reachable` y
-`attacker_reachable` son recuentos de
-alcanzabilidad, no recuentos alternativos de veredictos.
+C, `neverd scan` y `Session.scan()`.
 
 Las superficies de análisis y los planes P2 usan límites versionados con estado explícito:
 
@@ -137,5 +135,5 @@ conservadora sigue en curso. Sin fechas comprometidas.
 | Decode/lifting EVM legacy | Completo hasta Fusaka; cubierto por regresión |
 | Reconstrucción fuente EVM | En curso — basada en evidencia y conservadora |
 | Descompilación Solana eBPF (SBF) | Completa — v0-v4, C, Rust y LLVM; cubierta por regresión |
-| Auditoría y caza de seguridad de memoria | Phase 1 y corte de alcanzabilidad desde entradas conocidas completos; `lowir-concolic-v1` y `binary-sanitizer-v1` en Darwin son experimentales; el `process-replay-v1` nativo sigue no disponible tras su adaptador fail-closed de Phase 0 |
+| Análisis de seguridad de memoria | Phase 1 y corte de alcanzabilidad desde entradas conocidas completos; `lowir-concolic-v1` y `binary-sanitizer-v1` en Darwin son experimentales; el `process-replay-v1` nativo sigue no disponible tras su adaptador fail-closed de Phase 0 |
 | Endurecimiento motor y producto | Continuo |

@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>查看 JVM 类和 JAR 文件…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>查看 Java 字节码、带类型的中间表示和重建的方法</translation>
+    </message>
+    <message>
         <source>Memory Safety Scan...</source>
         <translation>内存安全扫描...</translation>
     </message>
@@ -11188,16 +11196,16 @@ Your previous graph is still available.</source>
         <translation>分析器(&amp;A)</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit 和 Hunt</translation>
+        <source>All checks</source>
+        <translation>全部检查</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>生命周期与初始化</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>边界与格式字符串</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11257,6 +11265,109 @@ Your previous graph is still available.</source>
     </message>
 </context>
 <context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>查看 JVM 类和 JAR 文件</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>浏览…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>制品</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>JAR 基础条目</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>启用预览特性</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>运行时</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>本地依赖项…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>清除</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>依赖项</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>类或成员</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>方法</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>查看清单</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>分析所选项</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Java 源码</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>字节码</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>带类型的中间表示</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>证据</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>字节码映射</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>复制视图</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>导出视图…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>导出报告…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>打开 JVM 制品</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>所选运行时视图</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>所有方法</translation>
+    </message>
+</context>
+<context>
     <name>neverd::gui::ScriptRecoveryDialog</name>
     <message>
         <source>Recover Lua source</source>
@@ -11281,6 +11392,10 @@ Your previous graph is still available.</source>
     <message>
         <source>LuaJIT</source>
         <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>上游 Luau</translation>
     </message>
     <message>
         <source>Upstream Luau 0.659</source>

@@ -7003,12 +7003,10 @@ void expectRejectedInteriorRelay(const InteriorPointerFixture &Fixture,
         break;
       }
     }
-  // The AArch64 relay still owns its 48-byte frame and saved LR. Rejecting
-  // destinations cannot grant tail-call identity while that frame is live.
-  if (Fixture.Image.Arch == Arch::AArch64)
-    EXPECT_EQ(Control, (std::vector<NdOp>{NdOp::INDIR_BR}));
-  else
-    EXPECT_EQ(Control, (std::vector<NdOp>{NdOp::INDIR_CALL, NdOp::RETURN}));
+  // The relay still owns its frame: AArch64's 48 bytes and saved LR, x86-64's
+  // saved RBP and 16 bytes. Rejecting destinations cannot grant tail-call
+  // identity while that frame is live.
+  EXPECT_EQ(Control, (std::vector<NdOp>{NdOp::INDIR_BR}));
 }
 
 MedFunc makeReturnFunction(llvm::StringRef Name, va_t Entry,

@@ -13,8 +13,12 @@
 #include "PathIndex.h"
 #include "ZipInternal.h"
 
+#include "neverd/support/SHA256.h"
 #include "neverd/web/Error.h"
 #include "neverd/web/Limits.h"
+
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringRef.h"
 
 #include <algorithm>
 #include <bit>
@@ -33,7 +37,7 @@ uint32_t word(std::string_view Bytes, uint64_t Offset, unsigned Size) {
   return Result;
 }
 
-void extra(std::string_view Bytes, bool Central) {
+void extra(std::string_view Bytes, bool Central, bool Jar) {
   std::set<uint16_t> Seen;
   while (!Bytes.empty()) {
     const auto Tag = word(Bytes, 0, 2), Length = word(Bytes, 2, 2);
@@ -43,10 +47,14 @@ void extra(std::string_view Bytes, bool Central) {
       throw Error("zip_duplicate_extra");
     // Timestamp/UID records do not affect content, paths or stream framing.
     // Alternate names, links, ZIP64 and encryption extensions need profiles.
-    if (Tag != 0x5455 && Tag != 0x7875 && Tag != 0x000a)
+    if (Tag != 0x5455 && Tag != 0x7875 && Tag != 0x000a &&
+        !(Jar && Tag == 0xcafe))
       throw Error("zip_unsupported_extra");
     const auto Data = Bytes.substr(4, Length);
-    if (Tag == 0x5455) {
+    if (Tag == 0xcafe) {
+      if (Length)
+        throw Error("zip_invalid_jar_marker");
+    } else if (Tag == 0x5455) {
       const auto Flags = word(Data, 0, 1);
       const auto Stored = Central ? Flags & 1 : Flags;
       if ((Flags & ~7U) || Length != 1 + 4 * std::popcount(Stored))
@@ -76,7 +84,13 @@ struct Record {
 class ZipReader {
   PackageArchive &A;
   uint64_t Budget, Metadata = 0, Declared = 0;
-  ArchivePathIndex Paths{Metadata};
+  ArchivePathIndex Paths;
+  bool Jar;
+  llvm::function_ref<bool()> Stop;
+  void check() const {
+    if (Stop && Stop())
+      throw Error("cancelled");
+  }
   uint64_t CentralOffset = 0, CentralSize = 0, Count = 0;
   std::vector<Record> Records;
 
@@ -123,6 +137,7 @@ class ZipReader {
     const auto Bytes = A.Original.read(CentralOffset, CentralSize);
     uint64_t Offset = 0;
     for (uint64_t I = 0; I < Count; ++I) {
+      check();
       if (Offset > Bytes.size() || Bytes.size() - Offset < 46)
         throw Error("zip_truncated_central");
       auto H = std::string_view(Bytes).substr(Offset);
@@ -159,7 +174,7 @@ class ZipReader {
            std::any_of(M.Path.begin(), M.Path.end(),
                        [](unsigned char C) { return C >= 0x80; })))
         throw Error("zip_unsupported_name_encoding");
-      extra(H.substr(46 + NameSize, ExtraSize), true);
+      extra(H.substr(46 + NameSize, ExtraSize), true, Jar);
       const auto Host = word(H, 4, 2) >> 8;
       const auto Attributes = word(H, 38, 4);
       if (Host != 0 && Host != 3 && Host != 19)
@@ -176,7 +191,9 @@ class ZipReader {
       M.Executable = !Directory && (Mode & 0111);
       if (Directory) {
         M.Path.pop_back();
-        if (M.Size || M.StoredSize || R.CRC || M.Compression || (R.Flags & 9))
+        if (M.Size || R.CRC || (R.Flags & 1) ||
+            (Jar ? (M.Compression != 0 && M.Compression != 8)
+                 : (M.StoredSize || M.Compression || (R.Flags & 8))))
           throw Error("zip_invalid_directory");
       } else {
         if (M.Size > MaxPackageArchiveFileBytes || M.Size > Budget - Declared)
@@ -210,6 +227,7 @@ class ZipReader {
     });
     uint64_t Next = 0;
     for (const auto I : Order) {
+      check();
       auto &M = A.Members[I];
       const auto &R = Records[I];
       if (M.LocalHeaderOffset != Next || Next > CentralOffset ||
@@ -229,7 +247,7 @@ class ZipReader {
       const auto Name = M.Kind == "directory" ? M.Path + '/' : M.Path;
       if (std::string_view(Fields).substr(0, NameSize) != Name)
         throw Error("zip_local_central_mismatch");
-      extra(std::string_view(Fields).substr(NameSize), false);
+      extra(std::string_view(Fields).substr(NameSize), false, Jar);
       Next += NameSize + ExtraSize;
       M.StoredOffset = Next;
       if (M.StoredSize > CentralOffset - Next)
@@ -265,28 +283,40 @@ class ZipReader {
 
   void payloads() {
     BlobStore Store(Budget);
+    SHA256Stream ExpandedHash;
     uint64_t Steps = 0;
     for (uint64_t I = 0; I < A.Members.size(); ++I) {
+      check();
       auto &M = A.Members[I];
-      if (!M.available())
+      if (!M.available() && !(Jar && M.Kind == "directory"))
         continue;
       M.Offset = A.ExpandedBytes;
+      SHA256Stream MemberHash;
+      auto Append = [&](std::string_view Bytes) {
+        Store.append(Bytes);
+        MemberHash.update(Bytes);
+        ExpandedHash.update(Bytes);
+      };
       decodeZipMember(A.Original.slice(M.StoredOffset, M.StoredSize),
-                      M.Compression, M.Size, Records[I].CRC, Store, Steps);
+                      M.Compression, M.Size, Records[I].CRC, Append, Steps,
+                      Stop);
+      if (M.available())
+        M.BlobHash = llvm::toHex(MemberHash.final(), true);
       A.ExpandedBytes += M.Size;
     }
     Store.seal();
     A.Expanded = Store.whole();
-    A.ExpandedHash = A.Expanded.digest();
+    A.ExpandedHash = llvm::toHex(ExpandedHash.final(), true);
     for (auto &M : A.Members)
-      if (M.available()) {
+      if (M.available())
         M.Content = A.Expanded.slice(M.Offset, M.Size);
-        M.BlobHash = M.Content.digest();
-      }
   }
 
 public:
-  ZipReader(PackageArchive &A, uint64_t Budget) : A(A), Budget(Budget) {}
+  ZipReader(PackageArchive &A, uint64_t Budget,
+            std::string (*PathKey)(std::string_view), bool Jar,
+            llvm::function_ref<bool()> Stop)
+      : A(A), Budget(Budget), Paths(Metadata, PathKey), Jar(Jar), Stop(Stop) {}
   void run() {
     terminal();
     central();
@@ -296,7 +326,45 @@ public:
 };
 } // namespace
 
-void readZipArchive(PackageArchive &Archive, uint64_t ExpandedBudget) {
-  ZipReader(Archive, ExpandedBudget).run();
+void readZipArchive(PackageArchive &Archive, uint64_t ExpandedBudget,
+                    std::string (*PathKey)(std::string_view), bool Jar,
+                    llvm::function_ref<bool()> Stop) {
+  ZipReader(Archive, ExpandedBudget, PathKey, Jar, Stop).run();
+}
+PackageArchive readJarArchive(std::string_view Bytes, uint64_t ExpandedBudget,
+                              llvm::function_ref<bool()> Stop) {
+  auto JarPath = [](std::string_view Path) {
+    llvm::StringRef Text(Path);
+    if (Text.size() >
+            ::neverd::limits::web::kPathPolicyArchivePathKeyPathSizeLimit ||
+        Text.contains('\\') || Text.contains(':'))
+      throw Error("unsafe_member_name");
+    do {
+      auto [Part, Tail] = Text.split('/');
+      if (Part.empty() || Part == "." || Part == ".." ||
+          Part.find_if([](unsigned char C) { return C < 32 || C == 127; }) !=
+              llvm::StringRef::npos ||
+          Text.ends_with('/'))
+        throw Error("unsafe_member_name");
+      Text = Tail;
+    } while (!Text.empty());
+    return std::string(Path);
+  };
+  if (Stop && Stop())
+    throw Error("cancelled");
+  if (Bytes.size() > Limits::HardInputBytes ||
+      ExpandedBudget > MaxPackageArchiveBytes)
+    throw Error("package_archive_invalid_input");
+  BlobStore Store(Bytes.size());
+  Store.append(Bytes);
+  Store.seal();
+  PackageArchive A;
+  A.Format = "jar";
+  A.Profile = "jvm-zip32-v1";
+  A.Original = Store.whole();
+  A.BlobHash = sha256(Bytes);
+  A.ID = identity("package-archive", {A.BlobHash, A.Profile});
+  readZipArchive(A, ExpandedBudget, JarPath, true, Stop);
+  return A;
 }
 } // namespace neverd::web

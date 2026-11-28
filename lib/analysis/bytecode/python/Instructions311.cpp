@@ -86,7 +86,10 @@ public:
   }
 };
 
-std::vector<std::optional<unsigned>> sourceLines(Job &J, const Code &C) {
+} // namespace
+
+std::vector<std::optional<unsigned>>
+neverd::python::locationLines(Job &J, const Code &C) {
   const size_t Units = C.Bytes->Data.size() / 2;
   std::vector<std::optional<unsigned>> Lines;
   Lines.reserve(Units);
@@ -123,7 +126,8 @@ std::vector<std::optional<unsigned>> sourceLines(Job &J, const Code &C) {
   return Lines;
 }
 
-json::Array exceptionRegions(Job &J, const Code &C, ArrayRef<int> Starts) {
+json::Array neverd::python::exceptionRegions(Job &J, const Code &C,
+                                             ArrayRef<int> Starts) {
   TableReader R(*C.Exceptions);
   json::Array Regions;
   unsigned Previous = 0;
@@ -149,17 +153,15 @@ json::Array exceptionRegions(Job &J, const Code &C, ArrayRef<int> Starts) {
   }
   return Regions;
 }
-} // namespace
-
 void neverd::python::decode311(Job &J, Function &F) {
   const Code &C = *F.Node.Body;
   StringRef Bytes = C.Bytes->Data;
   J.charge(J.Instructions, Bytes.size() / 2, limits::kInstructions,
            C.Bytes->DataOffset);
-  auto Lines = sourceLines(J, C);
+  auto Lines = locationLines(J, C);
   std::vector<int> Starts(Bytes.size() / 2, -1);
   SmallVector<unsigned> Targets;
-  json::Array Rows;
+  std::vector<InstructionRecord> Rows;
   for (unsigned PC = 0; PC < Bytes.size();) {
     unsigned Start = PC, ID;
     uint32_t Arg = 0;
@@ -248,25 +250,16 @@ void neverd::python::decode311(Job &J, Function &F) {
     if (!Valid)
       malformed(At, "Invalid CPython 3.11 instruction operand");
     Starts[Start / 2] = Rows.size();
-    json::Object Row{{"pc", Start},           {"offset", At},
-                     {"opcode_pc", OpcodePC}, {"bytes", PC - Start},
-                     {"opcode", L.Name},      {"opcode_value", ID},
-                     {"operand", Arg},        {"cache_units", L.Caches}};
-    json::Array Edges;
-    if (L.Successor == Flow::Next) {
-      if (PC == Bytes.size())
-        malformed(At, "Fallthrough leaves code object");
-      Edges.emplace_back(PC);
-    }
-    if (Target) {
-      Row["target"] = *Target;
-      if (Edges.empty() || *Target != PC)
-        Edges.emplace_back(*Target);
-    }
-    if (Lines[Start / 2])
-      Row["original_line"] = *Lines[Start / 2];
-    Row["successors"] = std::move(Edges);
-    Rows.emplace_back(std::move(Row));
+    if (L.Successor == Flow::Next && PC == Bytes.size())
+      malformed(At, "Fallthrough leaves code object");
+    auto &Row =
+        Rows.emplace_back(InstructionRecord{L.Name, At, Start, PC, ID, Arg});
+    Row.Target = Target;
+    Row.OriginalLine = Lines[Start / 2];
+    Row.OpcodePC = OpcodePC;
+    Row.CacheUnits = L.Caches;
+    Row.Complete = true;
+    Row.FallsThrough = L.Successor == Flow::Next;
   }
   for (unsigned PC : Targets)
     if (Starts[PC / 2] < 0)

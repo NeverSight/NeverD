@@ -1,6 +1,6 @@
 **اللغات**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](project.md)
 
-<!-- i18n-source: 7a5404f829b6a5a34a3f24808dba0cb23589c828d24533a70789c03cf24cd87f -->
+<!-- i18n-source: 65a3c241a8b8275f8f2afcf61c262f54c2db5a0fd1e46824c63a903708fc981b -->
 
 <div align="center" dir="rtl">
 
@@ -68,8 +68,8 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 
 | الهدف | ملفات ELF التي جرى التحقق منها |
 |---|---|
-| RISC-V | يدعم RV32I/ILP32 وRV64I/LP64 بترتيب البايتات من الأقل أهمية إلى الأعلى. تحدد معلومات ELF امتدادات M وA والجزء الصحيح من C أو الامتدادات المنفردة Zmmul وZaamo وZalrsc وZca. تفعّل سمة ISA في ملف ELF أيضًا امتدادات Zba 1.0 وZbb 1.0 وZbs 1.0. |
-| PowerPC | يدعم PPC32 System V وPPC64 ELFv1/ELFv2 بكلا ترتيبي البايتات. يدعم PPC32 الاستدعاءات بين الوحدات عبر PLT الآمن وBSS-PLT التقليدي. يدعم كلا الإصدارين من واجهة PPC64 الاستدعاءات بين الوحدات عبر PLT وتبديل جدول المحتويات TOC. يستخدم ELFv1 واصفات الدوال ويدعم ELFv2 نقاط الدخول العامة والمحلية. تشمل العمليات القياسية التي جرى التحقق منها القسمة بإشارة وبدون إشارة، والضرب الذي يعيد الكلمة العليا من الناتج، والضرب الذي يكشف تجاوز السعة، بما في ذلك آثار هذه العمليات على CR0 وXER. يدعم PPC64 أيضًا تعليمات POWER10 ذات البادئة لجمع الأعداد الصحيحة وتحميلها وتخزينها. |
+| RISC-V | يدعم RV32 (ILP32, ILP32D) وRV64 (LP64, LP64D) بترتيب البايتات من الأقل أهمية إلى الأعلى. تحدد معلومات ELF امتدادات M وA والجزء الصحيح من C أو الامتدادات المنفردة Zmmul وZaamo وZalrsc وZca. تفعّل سمة ISA في ملف ELF أيضًا امتدادات Zba 1.0 وZbb 1.0 وZbs 1.0 وZicond 1.0. يدعم Zicntr 2.0 التعليمة `rdcycle` ويدعم أيضًا `rdcycleh` على RV32. |
+| PowerPC | يدعم PPC32 System V وPPC64 ELFv1/ELFv2 بكلا ترتيبي البايتات. يدعم PPC32 الاستدعاءات بين الوحدات عبر PLT الآمن وBSS-PLT التقليدي. يدعم كلا الإصدارين من واجهة PPC64 الاستدعاءات بين الوحدات عبر PLT وتبديل جدول المحتويات TOC. يستخدم ELFv1 واصفات الدوال ويدعم ELFv2 نقاط الدخول العامة والمحلية. تشمل العمليات القياسية التي جرى التحقق منها القسمة بإشارة وبدون إشارة، والضرب الذي يعيد الكلمة العليا من الناتج، والضرب الذي يكشف تجاوز السعة، بما في ذلك آثار هذه العمليات على CR0 وXER. يدعم PPC64 أيضًا تعليمات POWER10 ذات البادئة لجمع الأعداد الصحيحة وتحميلها وتخزينها. تجمع تعليمة VMX ‏`vaddubm` كلّ زوج من أزواج البايتات الستة عشر بترديد 256. |
 
 إعادة كتابة الشيفرة الأصلية لهذه الأنماط ما زالت قيد العمل. [نطاق دعم RISC-V وPowerPC (بالإنجليزية)](../riscv-powerpc.md)
 
@@ -181,8 +181,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -306,6 +304,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | أعداد | C الافتراضي لكل دالة محمّلة؛ يُحرّر جسم كل دالة بعد التحقق منه |
 | `decompile -llvm` | `.c` | عبر LLVM IR + المحسّن |
 | `decompile --devirtualize` | `.c` + JSON اختياري | استعادة تجريبية لمفسّرات x64؛ تتطلب `--func`؛ [العقد والأمثلة](interpreter-recovery.md) |
+| `java` | Java / تمثيل JVM الوسيط / البايت كود / JSON | [ملفات class وأرشيفات JAR متعددة الإصدارات](../jvm-recovery.md) |
 | `python` | `.py` / JSON / مكوّنات أصلية | [استعادة ملفات CPython وPyInstaller](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [استعادة مصادر Lua وLuaJIT وLuau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | تجريبي: [Android](android.md), [iOS](ios.md) |
@@ -342,8 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | الدوال المكتشفة |
 | `disasm` | تفكيك (`--func` اسم أو hex) |
 | `sym-explore` | استكشاف محدود لمسارات LowIR الأصلية (`--func`؛ خرج JSON) |
-| `audit` | عيوب عمر كائنات الكومة وقراءات المكدس المحلي غير المهيأ (JSON) |
-| `hunt` | تجاوزات النسخ الخطرة مع شواهد رمزية وأدلة إعادة تشغيل إضافية من نوع `process-input-v1` عند توفر خطة كاملة (مخطط JSON v1) |
+| `scan` | [فحص عمر الكائنات والتهيئة والحدود وسلاسل التنسيق (JSON)](../memory-safety-scan.md) |
 | `hex` | تفريغ hex عند عنوان |
 | `cfg` / `callgraph` | CFG / رسم استدعاء (JSON؛ DOT/SVG اختياري) |
 | `xrefs` | مراجع متقاطعة |

@@ -23,7 +23,10 @@
 
 namespace neverd {
 
-/// Construct the shared, bounded scalar semantics for one straight path.
+/// Construct scalar semantics for one authenticated straight path. Removed
+/// direct edges supply no path predicates. ReadImage may supply only
+/// independently proved immutable loads. Unknown writes receive distinct
+/// inputs, register bytes overlap, and temporaries are instruction local.
 /// The context owns the result; failure supplies no partial expression.
 symbolic::SymRef symbolicScalarExpression(
     symbolic::SymContext &Ctx, llvm::ArrayRef<LowOp> Operations,
@@ -31,28 +34,19 @@ symbolic::SymRef symbolicScalarExpression(
     llvm::function_ref<std::optional<uint64_t>(const LowOp &, uint64_t)>
         ReadImage = {});
 
-/// Operations precede the query on one authenticated straight path. The caller
-/// owns any removed direct edges; no path predicate supplies values. ReadImage
-/// may supply only independently proved immutable image loads. Unknown writes
-/// receive distinct inputs; register bytes overlap and temporaries are
-/// instruction local. Only exact symbolic derivations may publish a constant.
-/// The caller separately authenticates its address role and revalidates changed
-/// blocks.
-std::optional<uint64_t> constantScalarExpression(
-    llvm::ArrayRef<LowOp> Operations, const NdVar &Value, va_t QueryInstruction,
-    size_t &RemainingWork,
-    llvm::function_ref<std::optional<uint64_t>(const LowOp &, uint64_t)>
-        ReadImage = {});
+/// Only an exact derivation may publish a constant. The caller authenticates
+/// its address role and revalidates changed blocks.
+std::optional<uint64_t> constantScalarExpression(symbolic::SymContext &Ctx,
+                                                 symbolic::SymRef Expression,
+                                                 size_t &RemainingWork);
 
 /// A sorted, complete finite cover of the expression's possible values.
 /// Independent child domains may overapproximate correlated operands. No
 /// observation or path predicate removes a possible value. The caller must
 /// authenticate every covered address and retain the actual runtime selector.
-std::optional<std::vector<uint64_t>> finiteScalarExpression(
-    llvm::ArrayRef<LowOp> Operations, const NdVar &Value, va_t QueryInstruction,
-    size_t &RemainingWork,
-    llvm::function_ref<std::optional<uint64_t>(const LowOp &, uint64_t)>
-        ReadImage = {});
+std::optional<std::vector<uint64_t>>
+finiteScalarExpression(symbolic::SymContext &Ctx, symbolic::SymRef Expression,
+                       size_t &RemainingWork);
 
 } // namespace neverd
 

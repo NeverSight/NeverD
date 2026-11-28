@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 7a5404f829b6a5a34a3f24808dba0cb23589c828d24533a70789c03cf24cd87f -->
+<!-- i18n-source: 65a3c241a8b8275f8f2afcf61c262f54c2db5a0fd1e46824c63a903708fc981b -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ Die experimentellen Integer-ELF-Ziele unterstützen striktes Lifting, die Rekons
 
 | Ziel | Geprüfte ELF-Profile |
 |---|---|
-| RISC-V | RV32I/ILP32 und RV64I/LP64 in Little Endian. Die ELF-Angaben bestimmen die Erweiterungen M, A und Integer-C oder die einzelnen Erweiterungen Zmmul, Zaamo, Zalrsc und Zca. Das ISA-Attribut der ELF-Datei aktiviert auch Zba 1.0, Zbb 1.0 und Zbs 1.0. |
-| PowerPC | PPC32 System V und PPC64 ELFv1/ELFv2 in beiden Byte-Reihenfolgen. PPC32 unterstützt modulübergreifende Aufrufe über die Secure PLT und die klassische BSS-PLT. Beide PPC64-ABIs unterstützen modulübergreifende PLT-Aufrufe und TOC-Wechsel. ELFv1 verwendet Funktionsdeskriptoren, ELFv2 unterstützt globale und lokale Einsprungpunkte. Die geprüften Skalaroperationen umfassen die Division mit und ohne Vorzeichen, die Multiplikation mit Ausgabe des oberen Produktworts und die Multiplikation mit Überlaufanzeige sowie deren Auswirkungen auf CR0 und XER. Für PPC64 unterstützt der Lifter auch die präfigierten POWER10-Befehle für Ganzzahladdition, Laden und Speichern. |
+| RISC-V | RV32 (ILP32, ILP32D) und RV64 (LP64, LP64D) in Little Endian. Die ELF-Angaben bestimmen die Erweiterungen M, A und Integer-C oder die einzelnen Erweiterungen Zmmul, Zaamo, Zalrsc und Zca. Das ISA-Attribut der ELF-Datei aktiviert auch Zba 1.0, Zbb 1.0, Zbs 1.0 und Zicond 1.0. Zicntr 2.0 ermöglicht `rdcycle` und auf RV32 zusätzlich `rdcycleh`. |
+| PowerPC | PPC32 System V und PPC64 ELFv1/ELFv2 in beiden Byte-Reihenfolgen. PPC32 unterstützt modulübergreifende Aufrufe über die Secure PLT und die klassische BSS-PLT. Beide PPC64-ABIs unterstützen modulübergreifende PLT-Aufrufe und TOC-Wechsel. ELFv1 verwendet Funktionsdeskriptoren, ELFv2 unterstützt globale und lokale Einsprungpunkte. Die geprüften Skalaroperationen umfassen die Division mit und ohne Vorzeichen, die Multiplikation mit Ausgabe des oberen Produktworts und die Multiplikation mit Überlaufanzeige sowie deren Auswirkungen auf CR0 und XER. Für PPC64 unterstützt der Lifter auch die präfigierten POWER10-Befehle für Ganzzahladdition, Laden und Speichern. Der VMX-Befehl `vaddubm` addiert 16 Bytepaare jeweils modulo 256. |
 
 Das Umschreiben von nativem Code steht für diese Profile noch aus. [Unterstützung für RISC-V und PowerPC (Englisch)](../riscv-powerpc.md)
 
@@ -183,8 +183,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -308,6 +306,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | Zähler | Standard-C für jede geladene Funktion; jeder Funktionsrumpf wird nach der Prüfung freigegeben |
 | `decompile -llvm` | `.c` | Über LLVM IR + Optimizer |
 | `decompile --devirtualize` | `.c` + optionales JSON | Experimentelle x64-Interpreterrekonstruktion; benötigt `--func`; [Vertrag und Beispiele](interpreter-recovery.md) |
+| `java` | Java / JVM-IR / Bytecode / JSON | [Klassendateien und Multi-Release-JARs](../jvm-recovery.md) |
 | `python` | `.py` / JSON / native Komponenten | [Wiederherstellung von CPython- und PyInstaller-Artefakten](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Quelltextrekonstruktion für Lua, LuaJIT und Luau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Experimentell: [Android](android.md), [iOS](ios.md) |
@@ -344,8 +343,7 @@ Wiederholen Sie die Option für weitere mehrdeutige Einstiege, gegebenenfalls mi
 | `funcs` | Gefundene Funktionen |
 | `disasm` | Disassemblieren (`--func` Name oder Hex) |
 | `sym-explore` | Begrenzte Pfaderkundung für natives LowIR (`--func`; JSON-Ausgabe) |
-| `audit` | Heap-Lebensdauerfehler und uninitialisierte lokale Stack-Lesezugriffe (JSON) |
-| `hunt` | Gefährliche Kopierüberläufe mit symbolischen Zeugen und zusätzlichen `process-input-v1`-Wiedergabenachweisen bei vollständigem Plan (JSON-Schema v1) |
+| `scan` | [Objektlebensdauer, Initialisierung, Bereichsgrenzen und Formatstrings prüfen (JSON)](../memory-safety-scan.md) |
 | `hex` | Hex-Dump an einer Adresse |
 | `cfg` / `callgraph` | CFG / Callgraph (JSON; DOT/SVG optional) |
 | `xrefs` | Querverweise |

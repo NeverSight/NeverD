@@ -2879,7 +2879,7 @@ struct CFGBuilder::ResolverGraphCache {
     bool Complete;
     std::vector<bool> Results;
     std::vector<bool> Completions;
-    std::vector<uint64_t> Masks;
+    std::vector<JumpTableFeasibleSet> Masks;
     std::vector<std::optional<va_t>> Addresses;
     size_t Work;
     size_t Bytes;
@@ -2999,7 +2999,7 @@ struct CFGBuilder::ResolverGraphCache {
   static std::optional<size_t> valueBatchBytes(
       const std::vector<JumpTableValueQuery> &Queries,
       const std::vector<bool> &Results, const std::vector<bool> *Completions,
-      const std::vector<uint64_t> *Masks,
+      const std::vector<JumpTableFeasibleSet> *Masks,
       const std::vector<std::optional<va_t>> *Addresses, bool Capacity) {
     size_t Bytes = sizeof(ValueBatch) + 8 * sizeof(void *);
     if (!accountValueVector(Bytes, Queries, Capacity) ||
@@ -3065,7 +3065,7 @@ struct CFGBuilder::ResolverGraphCache {
                           uint32_t Depth, size_t MatchBudget, bool Complete,
                           const std::vector<bool> &Results,
                           const std::vector<bool> *Completions,
-                          const std::vector<uint64_t> *Masks,
+                          const std::vector<JumpTableFeasibleSet> *Masks,
                           const std::vector<std::optional<va_t>> *Addresses,
                           size_t ColdWork) const {
     const auto EstimatedContext =
@@ -3104,7 +3104,7 @@ struct CFGBuilder::ResolverGraphCache {
                      Complete,
                      Results,
                      Completions ? *Completions : std::vector<bool>{},
-                     Masks ? *Masks : std::vector<uint64_t>{},
+                     Masks ? *Masks : std::vector<JumpTableFeasibleSet>{},
                      Addresses ? *Addresses
                                : std::vector<std::optional<va_t>>{},
                      ColdWork,
@@ -5365,7 +5365,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     const std::vector<va_t> *CandidateTargetsOverride, size_t *GraphWorkBudget,
     size_t LocalMatchEvidenceLimit,
     const std::set<va_t> *CandidateBranchesSharingTargets,
-    std::vector<uint64_t> *QueryUnsignedFeasibleMasks,
+    std::vector<JumpTableFeasibleSet> *QueryUnsignedFeasibleMasks,
     uint32_t ResolverDepthLimit,
     const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
     bool UseGroupContext, ResolverQueryScope *ReadOnlyScope,
@@ -5433,7 +5433,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   if (QueryAnalysisComplete)
     QueryAnalysisComplete->assign(Queries.size(), false);
   if (QueryUnsignedFeasibleMasks)
-    QueryUnsignedFeasibleMasks->assign(Queries.size(), 0);
+    QueryUnsignedFeasibleMasks->assign(Queries.size(), JumpTableFeasibleSet{});
   if (QueryConstantAddresses)
     QueryConstantAddresses->assign(Queries.size(), std::nullopt);
   if (!JumpTableProofContextComplete || !CurrentImg || Queries.empty())
@@ -9008,71 +9008,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           // `movzx edx, byte [rbp-0x38]` reloads next.  Otherwise the LOAD
           // defines its own occurrence, which a later use of it may compare
           // but a distinct reload cannot borrow guard evidence from.
-          const auto MayWriteMemory = [](const LowOp &Op) {
-            return Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
-                   Op.Opcode == NdOp::ATOMIC_ADD ||
-                   Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
-                   Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-                   Op.Opcode == NdOp::INTRINSIC ||
-                   Op.MemoryOrdering != NdMemoryOrdering::None;
-          };
           const auto SameLoad = [&](const LowOp &Op) {
             return Op.Opcode == NdOp::LOAD && Op.NumInputs == Def.NumInputs &&
                    Op.Output.Size == Def.Output.Size &&
                    Op.MemoryAddressSpace == Def.MemoryAddressSpace;
           };
-          // The full guest register and constant displacement a LOAD's
-          // address carries inside its own instruction: the register itself,
-          // or a temp built from it by same-width copies and constant adds.
           // Two loads whose addresses carry the same register and
           // displacement, with no write of that register between them, read
-          // the same address even when the register's own value (a loop
-          // cursor) has no closed form.
-          auto loadAddressCarrier =
-              [&](const std::vector<LowOp> &Ops, int Before, va_t InsnAddr,
-                  NdVar Value) -> std::optional<std::pair<NdVar, uint64_t>> {
-            uint64_t Displacement = 0;
-            for (unsigned N = 0; N < limits::kMaxQuasiCopyDepth; ++N) {
-              if (!consumeEvidence())
-                return std::nullopt;
-              if (Value.isReg())
-                return Value.Size == CurrentImg->getPointerSize()
-                           ? std::optional(std::pair{Value, Displacement})
-                           : std::nullopt;
-              if (!Value.isTemp())
-                return std::nullopt;
-              int Writer = -1;
-              for (int K = Before - 1; K >= 0 && Ops[K].Addr == InsnAddr; --K) {
-                if (!consumeEvidence())
-                  return std::nullopt;
-                if (Ops[K].Output.Space == Value.Space &&
-                    Ops[K].Output.Offset == Value.Offset) {
-                  Writer = K;
-                  break;
-                }
-              }
-              if (Writer < 0)
-                return std::nullopt;
-              const LowOp &Transport = Ops[Writer];
-              if (Transport.Opcode == NdOp::COPY && Transport.NumInputs == 1 &&
-                  Transport.Output.Size == Value.Size &&
-                  Transport.Inputs[0].Size == Value.Size) {
-                Value = Transport.Inputs[0];
-              } else if (Transport.Opcode == NdOp::INT_ADD &&
-                         Transport.NumInputs == 2 &&
-                         Transport.Output.Size == Value.Size &&
-                         Value.Size == CurrentImg->getPointerSize() &&
-                         Transport.Inputs[0].isConst() !=
-                             Transport.Inputs[1].isConst()) {
-                const bool ConstantFirst = Transport.Inputs[0].isConst();
-                Displacement += Transport.Inputs[ConstantFirst ? 0 : 1].Offset;
-                Value = Transport.Inputs[ConstantFirst ? 1 : 0];
-              } else {
-                return std::nullopt;
-              }
-              Before = Writer;
-            }
-            return std::nullopt;
+          // the same address (detail::loadAddressCarrier).
+          auto loadAddressCarrier = [&](const std::vector<LowOp> &Ops,
+                                        int Before, va_t InsnAddr,
+                                        NdVar Value) {
+            return detail::loadAddressCarrier(
+                Ops, Before, InsnAddr, Value, CurrentImg->getPointerSize(),
+                [&] { return consumeEvidence(); });
           };
           const std::optional<std::pair<NdVar, uint64_t>> LoadCarrier =
               HasFrameSlot ? std::nullopt
@@ -9097,7 +9046,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
               const ResolverFlowBlock &Searching = Graph.Blocks[SearchBlock];
               for (int J = SearchEnd - 1; J >= 0 && !Stop; --J) {
                 const LowOp &Op = Searching.Ops[J];
-                if (!consumeEvidence() || MayWriteMemory(Op)) {
+                if (!consumeEvidence() || detail::mayWriteMemory(Op)) {
                   Stop = true;
                   break;
                 }
@@ -9834,14 +9783,15 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   auto provesUnsignedUpperBound = [&](const ResolverValue &Value,
                                       uint64_t Bound, bool &ProofComplete,
                                       bool ExactModuloRecipeOnly = false,
-                                      uint64_t *FeasibleMask = nullptr,
+                                      JumpTableFeasibleSet *FeasibleMask =
+                                          nullptr,
                                       bool RetainGuards = false) {
     ProofComplete = false;
     const bool RetainPathPredicates = FeasibleMask || RetainGuards;
     const uint16_t MaximumSize =
         ExactModuloRecipeOnly ? 2 * sizeof(uint64_t) : sizeof(uint64_t);
     if (!Value || Value->Size == 0 || Value->Size > MaximumSize || Bound == 0 ||
-        (FeasibleMask && Bound > 64))
+        (FeasibleMask && Bound > JumpTableFeasibleSet::Capacity))
       return false;
 
     const uint32_t Width = uint32_t(Value->Size) * 8u;
@@ -10475,7 +10425,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         Counterexample,
         Incomplete,
       };
-      uint64_t Mask = 0;
+      JumpTableFeasibleSet Mask;
       // Symbolize the complete selector before proving any merge arm, then
       // freeze the original-node prefix.  Full reciprocal-division recipe
       // matching may intern theorem nodes; the fixed prefix prevents a failed
@@ -10486,7 +10436,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           Ctx.numNodes() > std::numeric_limits<uint32_t>::max())
         return false;
       const size_t SelectorExpressionNodeCount = Ctx.numNodes();
-      size_t ReservedSolverQueries = 0;
+      size_t SolverQueries = 0;
       if (!consumeSymbolWork(2))
         return false;
       std::vector<ResolverValue> SyntheticValues;
@@ -10627,37 +10577,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           }
         }
         const std::optional<llvm::APInt> ConstantIndex = Ctx.asConst(Index);
-        size_t RemainingLeafSolverQueries = 0;
-        bool LeafSolverQueriesReserved = false;
-        auto consumeLeafSolverQuery = [&] {
-          if (!LeafSolverQueriesReserved) {
-            const size_t PerLeaf =
-                ConstantIndex ? 1 : static_cast<size_t>(Bound) + 1;
-            if (PerLeaf >
-                    ::neverd::limits::ir::
-                            kJumpTableResolverSliceMaxFiniteSetSolverQueries -
-                        ReservedSolverQueries ||
-                !consumeSymbolWork(PerLeaf))
-              return false;
-            ReservedSolverQueries += PerLeaf;
-            RemainingLeafSolverQueries = PerLeaf;
-            LeafSolverQueriesReserved = true;
-          }
-          if (RemainingLeafSolverQueries == 0 || !consumeSymbolWork(3))
+        // Every solver call of the proof takes one unit of its shared ceiling
+        // and also debits the local and candidate symbolic accounts.
+        auto consumeSolverQuery = [&] {
+          if (SolverQueries ==
+                  ::neverd::limits::ir::
+                      kJumpTableResolverSliceMaxFiniteSetSolverQueries ||
+              !consumeSymbolWork(3))
             return false;
-          --RemainingLeafSolverQueries;
+          ++SolverQueries;
           return true;
-        };
-        auto constrainQuery = [&](symbolic::SymRef Query) {
-          if (!PathPredicate)
-            return Query;
-          if (!consumeSymbolWork(2))
-            return symbolic::SymRef{};
-          return Ctx.mkAnd(PathPredicate, Query);
         };
         if (ConstantIndex) {
           if (PathPredicate) {
-            if (!consumeLeafSolverQuery())
+            if (!consumeSolverQuery())
               return FeasibleProofOutcome::Incomplete;
             const solver::SatResult ConstraintResult = solver::checkSat(
                 Ctx, PathPredicate, nullptr, makeSolverOptions());
@@ -10669,7 +10602,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           if (ConstantIndex->getActiveBits() > 64 ||
               ConstantIndex->getZExtValue() >= Bound)
             return FeasibleProofOutcome::Counterexample;
-          Mask |= uint64_t{1} << ConstantIndex->getZExtValue();
+          Mask.set(ConstantIndex->getZExtValue());
           return FeasibleProofOutcome::Proven;
         }
         bool RecipeIncomplete = false;
@@ -10721,45 +10654,73 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             RecipeIncomplete = false;
         }
         if (ExactRecipe) {
-          Mask |= Bound == 64 ? std::numeric_limits<uint64_t>::max()
-                              : (uint64_t{1} << Bound) - 1;
+          Mask.setPrefix(Bound);
           return FeasibleProofOutcome::Proven;
         }
         if (RecipeIncomplete)
           return FeasibleProofOutcome::Incomplete;
+        // One incremental solver holds this arm's path predicate. Prove the
+        // envelope under an assumption, then read one feasible coordinate per
+        // call from a model and exclude it until no value is left. Members an
+        // earlier arm proved cannot change the union, so they are excluded
+        // first: each later call is one new member or the last. The calls
+        // follow the members, not the proposed envelope.
+        solver::SolverOptions ModelOptions = makeSolverOptions();
+        ModelOptions.BuildModel = true;
+        solver::BitVectorSolver Solver(Ctx, ModelOptions);
+        if (PathPredicate && !Solver.assertTrue(PathPredicate))
+          return FeasibleProofOutcome::Incomplete;
         const bool FullWidthEnvelope =
             Width < 64 && Bound >= (uint64_t{1} << Width);
         if (!FullWidthEnvelope) {
-          if (!consumeLeafSolverQuery())
+          if (!consumeSolverQuery() || !consumeSymbolWork(2))
             return FeasibleProofOutcome::Incomplete;
-          symbolic::SymRef Counterexample = constrainQuery(
-              Ctx.mkNot(Ctx.mkUlt(Index, Ctx.mkConst(Width, Bound))));
-          if (!Counterexample)
-            return FeasibleProofOutcome::Incomplete;
-          const solver::SatResult Result = solver::checkSat(
-              Ctx, Counterexample, nullptr, makeSolverOptions());
+          const symbolic::SymRef Outside =
+              Ctx.mkNot(Ctx.mkUlt(Index, Ctx.mkConst(Width, Bound)));
+          const solver::SatResult Result =
+              Solver.check(llvm::ArrayRef<symbolic::SymRef>(Outside));
           if (Result == solver::SatResult::Sat)
             return FeasibleProofOutcome::Counterexample;
           if (Result != solver::SatResult::Unsat)
             return FeasibleProofOutcome::Incomplete;
         }
-        for (uint64_t Coordinate = 0; Coordinate < Bound; ++Coordinate) {
-          if (Width < 64 && Coordinate >= (uint64_t{1} << Width))
+        for (uint64_t Low = 0; Low < Bound; ++Low) {
+          if (!Mask.test(Low))
             continue;
-          if (!consumeLeafSolverQuery())
+          uint64_t High = Low;
+          while (High + 1 < Bound && Mask.test(High + 1))
+            ++High;
+          if (!consumeSymbolWork(4))
             return FeasibleProofOutcome::Incomplete;
-          symbolic::SymRef CoordinateQuery =
-              constrainQuery(Ctx.mkEq(Index, Ctx.mkConst(Width, Coordinate)));
-          if (!CoordinateQuery)
+          const symbolic::SymRef Known =
+              Low == High
+                  ? Ctx.mkEq(Index, Ctx.mkConst(Width, Low))
+                  : Ctx.mkAnd(Ctx.mkUle(Ctx.mkConst(Width, Low), Index),
+                              Ctx.mkUle(Index, Ctx.mkConst(Width, High)));
+          if (!Solver.assertFalse(Known))
             return FeasibleProofOutcome::Incomplete;
-          const solver::SatResult Result = solver::checkSat(
-              Ctx, CoordinateQuery, nullptr, makeSolverOptions());
-          if (Result == solver::SatResult::Sat)
-            Mask |= uint64_t{1} << Coordinate;
-          else if (Result != solver::SatResult::Unsat)
+          Low = High;
+        }
+        for (;;) {
+          if (!consumeSolverQuery())
+            return FeasibleProofOutcome::Incomplete;
+          const solver::SatResult Result = Solver.check();
+          if (Result == solver::SatResult::Unsat)
+            return FeasibleProofOutcome::Proven;
+          if (Result != solver::SatResult::Sat)
+            return FeasibleProofOutcome::Incomplete;
+          const llvm::APInt Member =
+              Ctx.eval(Index, Solver.model().asVarValues(Ctx));
+          // The envelope and the exclusions already rule out every other
+          // answer; one would mean the model and the formula disagree.
+          if (Member.getActiveBits() > 64 || Member.getZExtValue() >= Bound ||
+              Mask.test(Member.getZExtValue()) || !consumeSymbolWork(2))
+            return FeasibleProofOutcome::Incomplete;
+          Mask.set(Member.getZExtValue());
+          if (!Solver.assertDistinct(Index,
+                                     Ctx.mkConst(Width, Member.getZExtValue())))
             return FeasibleProofOutcome::Incomplete;
         }
-        return FeasibleProofOutcome::Proven;
       };
       const FeasibleProofOutcome Outcome = ProveFeasible(Value, 0);
       if (Outcome == FeasibleProofOutcome::Incomplete)
@@ -10768,7 +10729,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       if (Outcome == FeasibleProofOutcome::Counterexample)
         return false;
       *FeasibleMask = Mask;
-      return Mask != 0;
+      return !Mask.none();
     }
 
     std::vector<symbolic::SymRef> PathConstraints;
@@ -10935,7 +10896,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       if (Mask && StateComplete) {
         Results[QueryIndex] = true;
         if (QueryUnsignedFeasibleMasks)
-          (*QueryUnsignedFeasibleMasks)[QueryIndex] = *Mask;
+          (*QueryUnsignedFeasibleMasks)[QueryIndex] =
+              JumpTableFeasibleSet::fromLowWord(*Mask);
       }
       if (!StateComplete)
         markIncomplete(QueryIndex);
@@ -11186,8 +11148,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       // an ordinary mask or a shared physical table.
       if (JoinedFiniteSet && !CandidateValue.Value->ContainsPredecessorMerge)
         continue;
+      // Only a joined predecessor domain may prove the wider envelope.
+      const uint64_t MaximumEnvelope =
+          JoinedFiniteSet ? limits::kMaxJumpTableJoinedDomainValues
+                          : limits::kMaxJumpTableFeasibleSetValues;
+      if (Query.UnsignedUpperBound > MaximumEnvelope) {
+        markIncomplete(QueryIndex);
+        continue;
+      }
       bool ProofComplete = false;
-      uint64_t FeasibleMask = 0;
+      JumpTableFeasibleSet FeasibleMask;
       Results[QueryIndex] = provesUnsignedUpperBound(
           CandidateValue.Value, Query.UnsignedUpperBound, ProofComplete,
           /*ExactModuloRecipeOnly=*/false, &FeasibleMask);
@@ -11554,7 +11524,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                 false);
     if (QueryUnsignedFeasibleMasks)
       std::fill(QueryUnsignedFeasibleMasks->begin(),
-                QueryUnsignedFeasibleMasks->end(), 0);
+                QueryUnsignedFeasibleMasks->end(), JumpTableFeasibleSet{});
     if (QueryConstantAddresses)
       std::fill(QueryConstantAddresses->begin(), QueryConstantAddresses->end(),
                 std::nullopt);

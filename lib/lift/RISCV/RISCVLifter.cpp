@@ -18,6 +18,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
@@ -28,7 +29,7 @@ using llvm::SignExtend32;
 using llvm::SignExtend64;
 
 va_t atXLen(Arch A, va_t Value) {
-  return A == Arch::RISCV32 ? uint32_t(Value) : Value;
+  return isRISCV32(A) ? uint32_t(Value) : Value;
 }
 
 va_t auipcAddress(Arch A, uint32_t Word, va_t PC) {
@@ -44,7 +45,7 @@ std::optional<uint32_t> word(Arch A, RISCVProfile P, const cs_insn &I) {
     return llvm::support::endian::read32le(I.bytes);
   if (I.size == 2 && P.hasCompressed())
     return expandCompressed(llvm::support::endian::read16le(I.bytes),
-                            A == Arch::RISCV64);
+                            isRISCV64(A), P);
   return std::nullopt;
 }
 
@@ -80,7 +81,7 @@ IntegerControl branch(Arch A, uint32_t W, va_t PC) {
 struct State : IntegerLiftState {
   using IntegerLiftState::IntegerLiftState;
   NdVar read(unsigned Rs) { return Rs ? reg(Rs) : imm(0); }
-  void write(unsigned Rd, NdVar V, bool Signed = false) {
+  void write(unsigned Rd, const NdVar &V, bool Signed = false) {
     if (Rd)
       emit(NdOp::COPY, reg(Rd), {resize(V, Width, Signed)});
   }
@@ -258,9 +259,101 @@ bool bitManipulation(State &S, RISCVProfile P, uint32_t W, bool Imm, bool Word,
   return true;
 }
 
+// Floating loads, stores, moves and sign injection transfer the IEEE encoding
+// without changing rounding mode or exception flags. Preserve the payload bits.
+bool floating(State &S, RISCVProfile P, uint32_t W) {
+  const unsigned Op = W & 127, Rd = W >> 7 & 31, F = W >> 12 & 7;
+  const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
+  const unsigned FLen = P.DoubleFloat ? 8 : 4;
+  const auto Reg = [FLen](unsigned Index) {
+    return NdVar::reg(integerreg::riscv::fpr(Index), FLen);
+  };
+  const auto Write = [&](unsigned Dest, NdVar Value) {
+    if (Value.Size < FLen)
+      Value = S.op(NdOp::CONCAT, NdVar::scalar(UINT32_MAX, 4), Value, 8);
+    S.emit(NdOp::COPY, Reg(Dest), {Value});
+  };
+  if (Op == opcode::LoadFP || Op == opcode::StoreFP) {
+    if (!((F == 2 && P.SingleFloat) || (F == 3 && P.DoubleFloat)))
+      return false;
+    const bool Load = Op == opcode::LoadFP;
+    const unsigned Bytes = 1u << F;
+    const uint64_t Disp = SignExtend64<12>(Load ? W >> 20 : (F7 << 5) | Rd);
+    NdVar Address = S.read(R1);
+    if (Disp)
+      Address = S.op(NdOp::INT_ADD, Address, S.imm(Disp));
+    if (Load)
+      Write(Rd, S.load(Address, Bytes));
+    else
+      S.emit(NdOp::STORE, {}, {Address, S.resize(Reg(R2), Bytes)});
+    return true;
+  }
+  const unsigned Format = F7 & 3;
+  if (!(Format == 0 ? P.SingleFloat : Format == 1 && P.DoubleFloat))
+    return false;
+  const unsigned Bytes = Format ? 8 : 4;
+  const unsigned Function = F7 >> 2;
+  if ((Function == 28 || Function == 30) && !F && !R2 && Bytes <= S.Width) {
+    if (Function == 28) // FMV.X.W / FMV.X.D
+      S.write(Rd, S.resize(Reg(R1), Bytes), true);
+    else // FMV.W.X / FMV.D.X
+      Write(Rd, S.resize(S.read(R1), Bytes));
+    return true;
+  }
+  if (Function != 4 || F > 2)
+    return false;
+  const auto Read = [&](unsigned Source) {
+    NdVar Bits = Reg(Source);
+    if (Bytes == FLen)
+      return Bits;
+    // A narrow arithmetic operand with invalid NaN boxing is a canonical NaN.
+    NdVar Top = S.makeTemp(4);
+    S.emit(NdOp::SUBBYTES, Top, {Bits, NdVar::scalar(4, 4)});
+    return S.select(S.op(NdOp::INT_EQUAL, Top, NdVar::scalar(UINT32_MAX, 4), 1),
+                    S.resize(Bits, Bytes), NdVar::scalar(0x7fc00000, 4));
+  };
+  NdVar Left = Read(R1);
+  if (R1 == R2) {
+    if (F != 0)
+      Left = S.op(F == 1 ? NdOp::FLOAT_NEG : NdOp::FLOAT_ABS, Left);
+    Write(Rd, Left);
+    return true;
+  }
+  const NdVar SignMask = NdVar::scalar(uint64_t(1) << (Bytes * 8 - 1), Bytes);
+  NdVar Signs = Read(R2);
+  if (F == 1)
+    Signs = S.op(NdOp::INT_NOT, Signs);
+  else if (F == 2)
+    Signs = S.op(NdOp::INT_XOR, Signs, Left);
+  const NdVar Magnitude =
+      S.op(NdOp::INT_AND, Left, S.op(NdOp::INT_NOT, SignMask));
+  Write(Rd,
+        S.op(NdOp::INT_OR, Magnitude, S.op(NdOp::INT_AND, Signs, SignMask)));
+  return true;
+}
+
+bool liftCycleRead(State &S, Arch A, uint32_t W, unsigned Rd) {
+  Intrinsic Id;
+  switch (W & opcode::ExceptRdMask) {
+#define NEVERD_RISCV_CYCLE(Name, Value, Word, High, Text)                      \
+  case Word:                                                                   \
+    Id = Intrinsic::Name;                                                      \
+    break;
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+  default:
+    return false;
+  }
+  if (!cycleRead(Id)->admits(A))
+    return false;
+  S.emitIntrinsic(Id, Rd ? S.reg(Rd) : S.makeTemp(S.Width), {});
+  return true;
+}
+
 bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
   const unsigned Op = W & 127, Rd = W >> 7 & 31, F = W >> 12 & 7;
   const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
+  if (Op == opcode::LoadFP || Op == opcode::StoreFP || Op == opcode::OpFP)
+    return floating(S, P, W);
   const uint64_t Immediate = SignExtend64<12>(W >> 20);
   NdVar X = S.read(R1);
   NdVar Y = S.read(R2);
@@ -345,8 +438,9 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
 
   const bool Imm = Op == opcode::OpImm || Op == opcode::OpImm32;
   const bool Word = Op == opcode::OpImm32 || Op == opcode::Op32;
-  if ((!Imm && Op != opcode::Op && Op != opcode::Op32) ||
-      (Word && S.Width != 8))
+  if (!Imm && Op != opcode::Op && Op != opcode::Op32)
+    return Op == opcode::System && P.Zicntr && liftCycleRead(S, A, W, Rd);
+  if (Word && S.Width != 8)
     return false;
   if (F7 && P.Zbb && basicBitManipulation(S, W, Imm, Word, Rd, X, Y))
     return true;
@@ -371,8 +465,16 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
       Function &= ~1u;
     if (Function == 32 && (F == 5 || (F == 0 && !Imm)))
       Alternate = true;
-    else if (Function)
-      return false;
+    else if (Function) {
+      const unsigned Form = W & opcode::RegisterFormMask;
+      if (!P.Zicond || (Form != opcode::CzeroEqz && Form != opcode::CzeroNez))
+        return false;
+      NdVar Zero = S.imm(0);
+      NdOp Test =
+          Form == opcode::CzeroEqz ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL;
+      S.write(Rd, S.select(S.op(Test, Y, Zero, 1), Zero, X));
+      return true;
+    }
   }
   constexpr NdOp ALU[] = {NdOp::INT_ADD,  NdOp::INT_LEFT, NdOp::INT_SLESS,
                           NdOp::INT_LESS, NdOp::INT_XOR,  NdOp::INT_RIGHT,
@@ -410,7 +512,7 @@ IntegerControl control(Arch A, RISCVProfile P, const cs_insn &I) {
 }
 
 void lift(Arch A, RISCVProfile P, const cs_insn &I, std::vector<LowOp> &Ops) {
-  State S(I.address, I.size, Ops, A == Arch::RISCV64 ? 8 : 4);
+  State S(I.address, I.size, Ops, isRISCV64(A) ? 8 : 4);
   if (auto W = word(A, P, I); W && integer(S, A, P, *W)) {
     if (S.OpsStart == Ops.size())
       S.emit(NdOp::NOP, {}, {});

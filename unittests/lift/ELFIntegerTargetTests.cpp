@@ -33,17 +33,22 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 #include <algorithm>
 #include <cstddef>
+#include <filesystem>
 #include <tuple>
 #include <vector>
 
 using namespace neverd;
 namespace {
+#include "fixtures/CycleVMX.inc"
+#include "fixtures/RISCVConditionalZero.inc"
+
 struct LinkedImage {
   static constexpr va_t Entry = 0x10100;
   bool Wide, Little;
@@ -53,8 +58,7 @@ struct LinkedImage {
       Bytes[Offset + (Little ? I : N - 1 - I)] = V >> (8 * I);
   }
   explicit LinkedImage(Arch A)
-      : Wide(A == Arch::RISCV64 || isPowerPC64(A)),
-        Little(archLittleEndian(A)) {
+      : Wide(isRISCV64(A) || isPowerPC64(A)), Little(archLittleEndian(A)) {
     using namespace llvm::ELF;
     std::copy_n(ElfMagic, 4, Bytes.begin());
     Bytes[EI_CLASS] = Wide ? ELFCLASS64 : ELFCLASS32;
@@ -66,7 +70,11 @@ struct LinkedImage {
     put(20, EV_CURRENT, 4);
     put(24, Entry, Ptr);
     put(24 + Ptr, Header, Ptr);
-    put(Wide ? 48 : 36, isPowerPC64(A) ? 2 : 0, 4);
+    put(Wide ? 48 : 36,
+        hasRISCVDoubleABI(A) ? EF_RISCV_FLOAT_ABI_DOUBLE
+        : isPowerPC64(A)     ? 2
+                             : 0,
+        4);
     put(Wide ? 52 : 40, Header, 2);
     put(Wide ? 54 : 42, Wide ? 56 : 32, 2);
     put(Wide ? 56 : 44, 1, 2);
@@ -254,9 +262,12 @@ TEST(RegisterPairShift, OnlyTheZeroCountEdgeCanForwardTheInputPair) {
 }
 
 void checkLeafReturnWidth(Arch A, llvm::ArrayRef<uint32_t> Words,
-                          unsigned ResultBytes, bool Compressed = false) {
+                          unsigned ResultBytes, bool Compressed = false,
+                          llvm::StringRef ISA = {}) {
   LinkedImage File(A);
   File.setWords(Words);
+  if (!ISA.empty())
+    File.riscvAttributes(ISA);
   if (Compressed)
     File.put(offsetof(llvm::ELF::Elf32_Ehdr, e_flags), llvm::ELF::EF_RISCV_RVC,
              sizeof(llvm::ELF::Elf32_Word));
@@ -281,6 +292,56 @@ void checkLeafReturnWidth(Arch A, llvm::ArrayRef<uint32_t> Words,
       ASSERT_TRUE(R.HighFuncs.front().ReturnType);
       EXPECT_EQ(R.HighFuncs.front().ReturnType->Size, ResultBytes);
     }
+  }
+}
+
+TEST(RISCVCycle, RegisterPairRequiresAStableHighWord) {
+  using namespace cycle_fixture;
+  for (Arch A : {Arch::RISCV32, Arch::RISCV32D}) {
+    llvm::StringRef ISA = hasRISCVDoubleABI(A)
+                              ? "rv32i2p1_f2p2_d2p2_zicntr2p0_zicsr2p0"
+                              : "rv32i2p1_zicntr2p0_zicsr2p0";
+    checkLeafReturnWidth(A, Read64, 8, false, ISA);
+    checkLeafReturnWidth(A, WrongEdge, 4, false, ISA);
+    checkLeafReturnWidth(A, Overwritten, 4, false, ISA);
+  }
+}
+
+TEST(PowerPCVMX, UnusedVectorArgumentKeepsItsRegisterPosition) {
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    const auto Registers =
+        getTargetRegInfo(A).floatingParamRegs(BinaryFormat::ELF);
+    for (uint32_t Word :
+         {vmx_fixture::UnusedFirst, vmx_fixture::UnusedMiddle}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(A) << " " << std::hex << Word);
+      LinkedImage File(A);
+      File.setWords({Word, vmx_fixture::Return});
+      auto Img = ELFLoader().loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
+      llvm::LLVMContext Ctx;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      auto R = Pipeline().run(*Img, Ctx, Options);
+      ASSERT_TRUE(R.Success) << R.Error;
+      ASSERT_EQ(R.MedFuncs.size(), 1u);
+      const MedFunc &F = R.MedFuncs.front();
+      ASSERT_EQ(F.Params.size(), 3u);
+      ASSERT_EQ(F.TypedParams.size(), F.Params.size());
+      for (size_t I = 0; I != F.Params.size(); ++I) {
+        EXPECT_EQ(F.Params[I].RegOff, Registers[I]);
+        ASSERT_TRUE(F.TypedParams[I].Type);
+        EXPECT_EQ(F.TypedParams[I].Type->Kind, NdTypeKind::Vector);
+      }
+    }
+  }
+}
+
+TEST(PowerPCVMX, IntegerResultTakesPrecedenceOverVectorScratch) {
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    checkLeafReturnWidth(A, vmx_fixture::ReturnsGPR, isPowerPC64(A) ? 8 : 4);
+    checkLeafReturnWidth(A, vmx_fixture::EarlierGPR, isPowerPC64(A) ? 8 : 4);
   }
 }
 
@@ -452,7 +513,7 @@ TEST_P(ELFIntegerTarget, RejectsUnknownABIInBothPublicEntrypoints) {
     EXPECT_EQ(llvm::toString(Img.takeError()), Rows[0].Reason);
   };
   LinkedImage File(A);
-  for (unsigned Flags : isRISCV(A) ? std::vector<unsigned>{2, 4, 8, 0x80000000u}
+  for (unsigned Flags : isRISCV(A) ? std::vector<unsigned>{2, 6, 8, 0x80000000u}
                         : isPowerPC64(A) ? std::vector<unsigned>{0, 1, 3}
                                          : std::vector<unsigned>{0x80000000u}) {
     File.put(File.Wide ? 48 : 36, Flags, 4);
@@ -694,6 +755,189 @@ TEST(RISCVProfile, ELFAttributesAdmitEachExtensionIndependently) {
   }
 }
 
+TEST(RISCVProfile, DoubleABIFollowsFileFlagsAndRejectsIncompatibleISA) {
+  for (const Arch Base : {Arch::RISCV32, Arch::RISCV64}) {
+    LinkedImage File(Base);
+    const Arch Hard = isRISCV32(Base) ? Arch::RISCV32D : Arch::RISCV64D;
+    File.put(File.Wide ? 48 : 36, llvm::ELF::EF_RISCV_FLOAT_ABI_DOUBLE, 4);
+    auto Image = ELFLoader().loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    EXPECT_EQ(Image->Arch, Hard);
+    EXPECT_TRUE(Image->RISCV.SingleFloat && Image->RISCV.DoubleFloat);
+    std::vector<LoadCandidate> Rows;
+    ELFLoader::identify(File.buffer(), Rows);
+    ASSERT_EQ(Rows.size(), 1u);
+    EXPECT_TRUE(Rows[0].Loadable);
+    EXPECT_EQ(Rows[0].TheArch, Hard);
+    const auto &Info = getTargetRegInfo(Hard);
+    EXPECT_EQ(Info.PointerSize, isRISCV32(Base) ? 4 : 8);
+    EXPECT_EQ(Info.FPParamRegs.size(), 8u);
+    EXPECT_EQ(Info.FPABIRegWidth, 8u);
+    EXPECT_EQ(Info.FPReturnReg, integerreg::riscv::fpr(10));
+    EXPECT_TRUE(Info.isCallPreserved(integerreg::riscv::fpr(8), 8));
+    EXPECT_FALSE(Info.isCallPreserved(integerreg::riscv::fpr(10), 8));
+    EXPECT_TRUE(getTargetRegInfo(Base).FPParamRegs.empty());
+
+    File.riscvAttributes(isRISCV32(Base) ? "rv32i2p1" : "rv64i2p1");
+    auto Conflict = ELFLoader().loadBuffer(File.buffer());
+    ASSERT_FALSE(bool(Conflict));
+    const auto Message = llvm::toString(Conflict.takeError());
+    EXPECT_NE(Message.find("double-float"), std::string::npos);
+    Rows.clear();
+    ELFLoader::identify(File.buffer(), Rows);
+    ASSERT_EQ(Rows.size(), 1u);
+    EXPECT_FALSE(Rows[0].Loadable);
+    EXPECT_EQ(Rows[0].Reason, Message);
+  }
+}
+
+TEST(RISCVProfile, DoubleABIPlacesNamedAndVariadicArgumentsInIndependentBanks) {
+  using K = SourceABICarrierKind;
+  using integerreg::gpr;
+  using integerreg::riscv::fpr;
+  const auto Double = NdType::makeFloat(8);
+  for (Arch A : {Arch::RISCV32D, Arch::RISCV64D}) {
+    const auto &TRI = getTargetRegInfo(A);
+    const auto Word = NdType::makeInt(TRI.PointerSize);
+    std::vector<TypeRef> Args{Word};
+    Args.insert(Args.end(), 9, Double);
+    auto Params = placeSourceParameters(A, BinaryFormat::ELF, Double, Args);
+    ASSERT_TRUE(Params);
+    ASSERT_EQ(Params->Parameters.size(), Args.size());
+    EXPECT_EQ(Params->Parameters[0][0].Location.RegisterOffset, gpr(10));
+    for (unsigned I = 0; I < 8; ++I) {
+      const auto &Lane = Params->Parameters[I + 1].front().Location;
+      EXPECT_EQ(Lane.Kind, K::FloatingRegister);
+      EXPECT_EQ(Lane.RegisterOffset, fpr(10 + I));
+      EXPECT_EQ(Lane.ValueBytes, 8u);
+    }
+    EXPECT_EQ(Params->Parameters.back().front().Location.RegisterOffset,
+              gpr(11));
+    auto Half = placeSourceParameters(A, BinaryFormat::ELF, Double,
+                                      {Word, NdType::makeFloat(2)});
+    ASSERT_TRUE(Half);
+    ASSERT_EQ(Half->Parameters.size(), 2u);
+    EXPECT_EQ(Half->Parameters[1][0].Location.RegisterOffset, fpr(10));
+    EXPECT_EQ(Half->Parameters[1][0].Location.ValueBytes, 2u);
+    auto Mixed = NdType::makeStruct({Double, Word}, TRI.PointerSize);
+    ASSERT_TRUE(Mixed);
+    Mixed->Passing = NdRecordPassing::ByValue;
+    auto MixedArgs =
+        placeSourceParameters(A, BinaryFormat::ELF, Double, {Mixed});
+    ASSERT_TRUE(MixedArgs);
+    ASSERT_EQ(MixedArgs->Parameters.size(), 1u);
+    ASSERT_EQ(MixedArgs->Parameters[0].size(), 2u);
+    EXPECT_EQ(MixedArgs->Parameters[0][0].Location.RegisterOffset, fpr(10));
+    EXPECT_EQ(MixedArgs->Parameters[0][1].Location.RegisterOffset, gpr(10));
+    EXPECT_EQ(MixedArgs->Parameters[0][1].Offset, 8u);
+    auto Union = NdType::makeStruct({NdType::makeFloat(4)}, TRI.PointerSize);
+    ASSERT_TRUE(Union);
+    Union->IsUnion = true;
+    auto Nested = NdType::makeStruct({Union}, TRI.PointerSize);
+    ASSERT_TRUE(Nested);
+    Nested->Passing = NdRecordPassing::ByValue;
+    auto NestedArgs =
+        placeSourceParameters(A, BinaryFormat::ELF, Double, {Nested});
+    ASSERT_TRUE(NestedArgs);
+    ASSERT_EQ(NestedArgs->Parameters.size(), 1u);
+    EXPECT_EQ(NestedArgs->Parameters[0][0].Location.RegisterOffset, gpr(10));
+    auto Pair = NdType::makeComplex(8);
+    auto ReturnPair = placeSourceParameters(A, BinaryFormat::ELF, Pair, {Word});
+    ASSERT_TRUE(ReturnPair);
+    EXPECT_FALSE(ReturnPair->ResultPointer);
+    EXPECT_EQ(ReturnPair->Parameters[0][0].Location.RegisterOffset, gpr(10));
+
+    auto Var = placeSourceParameters(A, BinaryFormat::ELF, Double,
+                                     {Word, Double, Double}, true, 2);
+    ASSERT_TRUE(Var);
+    ASSERT_EQ(Var->Parameters.size(), 3u);
+    EXPECT_EQ(Var->Parameters[1][0].Location.RegisterOffset, fpr(10));
+    EXPECT_EQ(Var->Parameters[2][0].Location.Kind, K::IntegerRegister);
+    EXPECT_EQ(Var->Parameters[2][0].Location.RegisterOffset,
+              gpr(isRISCV32(A) ? 12 : 11));
+  }
+}
+
+TEST(RISCVProfile, LinkedDoubleCallerConsumesBothFloatingArgumentsAndResult) {
+  for (const char *Name : {"riscv32-ilp32d", "riscv64-lp64d"}) {
+    SCOPED_TRACE(Name);
+    const auto File =
+        std::filesystem::path(__FILE__).parent_path().parent_path() /
+        "safety/fixtures/elf-profiles/binaries" / Name;
+    auto Image = ELFLoader().load(File);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.LiftMode = true;
+    Options.NoOpt = true; // Inspect the call before the LLVM inliner runs.
+    Options.EmitDumpOutput = false;
+    auto Result = Pipeline().run(*Image, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_NE(Result.LlvmModule, nullptr);
+    EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+    const auto *ABI = llvm::dyn_cast_or_null<llvm::MDString>(
+        Result.LlvmModule->getModuleFlag("target-abi"));
+    ASSERT_NE(ABI, nullptr);
+    EXPECT_EQ(ABI->getString(), isRISCV32(Image->Arch) ? "ilp32d" : "lp64d");
+    const auto *Callee = Result.LlvmModule->getFunction("signed_second");
+    const auto *Caller = Result.LlvmModule->getFunction("write_result");
+    ASSERT_NE(Callee, nullptr);
+    ASSERT_NE(Caller, nullptr);
+    ASSERT_EQ(Callee->arg_size(), 2u);
+    EXPECT_TRUE(Callee->getArg(0)->getType()->isDoubleTy());
+    EXPECT_TRUE(Callee->getArg(1)->getType()->isDoubleTy());
+    EXPECT_TRUE(Callee->getReturnType()->isDoubleTy());
+    const llvm::CallBase *Call = nullptr;
+    for (const auto &Block : *Caller)
+      for (const auto &I : Block)
+        if (const auto *CB = llvm::dyn_cast<llvm::CallBase>(&I);
+            CB && CB->getCalledFunction() == Callee)
+          Call = CB;
+    ASSERT_NE(Call, nullptr);
+    ASSERT_EQ(Call->arg_size(), 2u);
+    EXPECT_NE(Call->getArgOperand(0), Call->getArgOperand(1));
+    EXPECT_FALSE(Call->use_empty());
+  }
+}
+
+TEST(RISCVProfile, FloatingTransfersPreservePayloadsAndValidateNaNBoxes) {
+  using integerreg::riscv::fpr;
+  for (Arch A : {Arch::RISCV32D, Arch::RISCV64D}) {
+    BinaryImage Image;
+    Image.Arch = A;
+    Image.Bits = isRISCV32(A) ? Bitness::Bits32 : Bitness::Bits64;
+    Image.RISCV.SingleFloat = Image.RISCV.DoubleFloat = true;
+    Decoder Decoder;
+    ASSERT_TRUE(Decoder.selectMode(Image, 0x1000));
+    NdOpEmulator Emu(Image);
+    Emu.setStrictMode(true);
+    const auto Run = [&](uint32_t Word) {
+      uint8_t Bytes[4];
+      llvm::support::endian::write32le(Bytes, Word);
+      DecodedInsn Insn;
+      ASSERT_EQ(Decoder.decodeOneForLift(Bytes, 4, 0x1000, Insn), 4);
+      std::vector<LowOp> Ops;
+      Decoder.liftToLow(Insn, Ops);
+      for (const auto &Op : Ops)
+        ASSERT_TRUE(Emu.step(Op));
+    };
+    Emu.setRegister(fpr(11), UINT64_C(0x7ff0000000000042));
+    Emu.setRegister(fpr(12), UINT64_C(0x8000000000000000));
+    Run(0x22c58553); // fsgnj.d fa0,fa1,fa2
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xfff0000000000042));
+    Emu.setRegister(fpr(11), UINT64_C(0x00000000bf800000));
+    Run(0x20b58553); // fsgnj.s fa0,fa1,fa1
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff7fc00000));
+    Emu.setRegister(fpr(11), UINT64_C(0xffffffffbf800000));
+    Run(0x20b58553);
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffffbf800000));
+    Run(0xe0050553); // fmv.x.w a0,fa0
+    EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)),
+              isRISCV64(A) ? UINT64_C(0xffffffffbf800000)
+                           : UINT64_C(0xbf800000));
+  }
+}
+
 TEST(RISCVProfile, ReusedDecoderTracksExtensionEvidenceAndHalfwordBoundaries) {
   const uint8_t Addi[] = {0x05, 0x05}; // c.addi a0,1
   const uint8_t Mul[] = {0x33, 0x05, 0xb5, 0x02};
@@ -727,8 +971,20 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
     bool Zba = false;
     bool Zbs = false;
     bool Zbb = false;
+    bool Zicond = false;
+    bool Zicntr = false;
   };
   const AttributeCase Cases[] = {
+      {.Attribute = "", .Features = "+i"},
+      {.Attribute = "_zicsr2p0", .Features = "+i"},
+      {.Attribute = "_zicntr2p0_zicsr2p0",
+       .Features = "+i,+zicntr",
+       .Zicntr = true},
+      {.Attribute = "_zicond1p0", .Features = "+i,+zicond", .Zicond = true},
+      {.Attribute = "_c2p0_zicond1p0",
+       .Features = "+i,+c,+zicond",
+       .Compressed = true,
+       .Zicond = true},
       {"_zba1p0", "+i,+zba", false, false, false, false, false, true},
       {"_zbs1p0", "+i,+zbs", false, false, false, false, false, false, true},
       {"_zba1p0_zbs1p0", "+i,+zba,+zbs", false, false, false, false, false,
@@ -757,17 +1013,26 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
       auto Img = ELFLoader().loadBuffer(File.buffer());
       ASSERT_TRUE(bool(Img)) << llvm::toString(Img.takeError());
       ASSERT_TRUE(D.init(*Img));
+      // A 32-bit instruction may start after a compressed instruction.
+      const va_t PC = File.Entry + (C.Compressed ? 2 : 0);
       const auto Check = [&](uint32_t Word, bool Expected) {
         uint8_t Code[4];
         llvm::support::endian::write32le(Code, Word);
         DecodedInsn I;
-        ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), File.Entry, I), 4);
+        ASSERT_EQ(D.decodeOneForLift(Code, sizeof(Code), PC, I), 4);
         std::vector<LowOp> Ops;
         if (Expected)
           EXPECT_NO_THROW(D.liftToLow(I, Ops));
         else
           EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
       };
+      Check(cycle_fixture::Low, C.Zicntr);
+      Check(cycle_fixture::Discard, C.Zicntr);
+      Check(cycle_fixture::High, C.Zicntr && A == Arch::RISCV32);
+      for (uint32_t Word : cycle_fixture::Other)
+        Check(Word, false);
+      Check(zicond_fixture::Eqz, C.Zicond);
+      Check(zicond_fixture::Nez, C.Zicond);
       Check(0x20b52533, C.Zba);         // sh1add a0,a0,a1
       Check(0x60b51533, C.Zbb);         // rol a0,a0,a1
       Check(0x28b51533, C.Zbs);         // bset a0,a0,a1
@@ -792,7 +1057,9 @@ TEST(RISCVProfile, SplitExtensionsControlLiftingAndLLVMFeatures) {
       EXPECT_EQ(Body->getFnAttribute("target-features").getValueAsString(),
                 C.Features);
     }
-    for (const char *Version : {"_zmmul1p1", "_zba1p1", "_zbb1p1", "_zbs2p0"}) {
+    for (const char *Version :
+         {"_zmmul1p1", "_zba1p1", "_zbb1p1", "_zbs2p0", "_zicond1p1",
+          "_zicond2p0", "_zicntr2p1", "_zicntr3p0"}) {
       LinkedImage Unsupported(A);
       Unsupported.riscvAttributes(Base + Version);
       auto Bad = ELFLoader().loadBuffer(Unsupported.buffer());

@@ -894,7 +894,7 @@ class NeverDSafetyOptions(ctypes.Structure):
 
 
 class NeverDScanOptions(ctypes.Structure):
-    """Layout of the additive unified scan options."""
+    """Layout of neverd_scan_options."""
     _fields_ = [
         ("struct_size", ctypes.c_size_t),
         ("analysis", ctypes.POINTER(NeverDSafetyOptions)),
@@ -1147,7 +1147,6 @@ _C_TYPES: dict[str, object] = {
     "const neverd_lowir_concolic_options_v1 *": ctypes.POINTER(
         NeverDLowIRConcolicOptionsV1
     ),
-    "const neverd_safety_options *": ctypes.POINTER(NeverDSafetyOptions),
     "const neverd_scan_options *": ctypes.POINTER(NeverDScanOptions),
     "const neverd_driver_options_v1 *": ctypes.POINTER(NeverDDriverOptionsV1),
     "const neverd_sanitize_options_v1 *": ctypes.POINTER(NeverDSanitizeOptionsV1),
@@ -1256,6 +1255,12 @@ _declare("neverd_module_set_lookup_symbol_json", "const char *",
 _declare("neverd_session_load", "int", ["neverd_session_t", "const char *"])
 _declare("neverd_session_load_cancellable", "int",
          ["neverd_session_t", "const char *", "neverd_cancel_probe_fn", "void *"])
+_declare(
+    "neverd_jvm_recover_json_v1",
+    "const char *",
+    ["const char *", "const char *", "neverd_cancel_probe_fn", "void *"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare(
     "neverd_python_recover_json_v1",
     "const char *",
@@ -2003,24 +2008,6 @@ _declare(
 _declare(
     "neverd_session_scan_json", "const char *",
     ["neverd_session_t", "const neverd_scan_options *"],
-    ownership=Ownership.OWNED_STRING,
-)
-_declare(
-    "neverd_session_audit_json",
-    "const char *",
-    [
-        "neverd_session_t",
-        "const neverd_safety_options *",
-    ],
-    ownership=Ownership.OWNED_STRING,
-)
-_declare(
-    "neverd_session_hunt_json",
-    "const char *",
-    [
-        "neverd_session_t",
-        "const neverd_safety_options *",
-    ],
     ownership=Ownership.OWNED_STRING,
 )
 _declare(

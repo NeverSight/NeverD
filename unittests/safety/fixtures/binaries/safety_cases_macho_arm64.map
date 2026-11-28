@@ -11,43 +11,43 @@
 [  7] /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/system/libsystem_malloc.tbd
 # Sections:
 # Address	Size    	Segment	Section
-0x100000448	0x00000380	__TEXT	__text
-0x1000007C8	0x0000006C	__TEXT	__stubs
-0x100000834	0x00000014	__TEXT	__cstring
-0x100000848	0x00000060	__TEXT	__unwind_info
+0x100000460	0x00000380	__TEXT	__text
+0x1000007E0	0x0000006C	__TEXT	__stubs
+0x10000084C	0x00000014	__TEXT	__cstring
+0x100000860	0x00000060	__TEXT	__unwind_info
 0x100004000	0x00000048	__DATA_CONST	__got
 # Symbols:
 # Address	Size    	File  Name
 0x100000000	0x00000000	[  0] __mh_execute_header
-0x100000448	0x00000040	[  1] _tainted_stack_overflow
-0x100000488	0x00000064	[  1] _tainted_heap_overflow
-0x1000004EC	0x00000044	[  1] _bounded_copy_is_safe
-0x100000530	0x00000060	[  1] _strlen_guarded_copy
-0x100000590	0x00000024	[  1] _leaks_memory
-0x1000005B4	0x00000048	[  1] _leak_on_one_path
-0x1000005FC	0x0000003C	[  1] _guarded_free
-0x100000638	0x00000034	[  1] _double_frees
-0x10000066C	0x00000038	[  1] _uses_after_free
-0x1000006A4	0x0000002C	[  1] _balanced_alloc
-0x1000006D0	0x00000050	[  1] _main
-0x100000720	0x00000014	[  2] _interproc_forward_outer
-0x100000734	0x00000020	[  2] _interproc_budget_entry
-0x100000754	0x0000001C	[  2] _interproc_isolation_entry
-0x100000770	0x00000020	[  2] _interproc_dead_tainted_helper
-0x100000790	0x0000001C	[  3] _interproc_forward_inner
-0x1000007AC	0x0000001C	[  3] _interproc_isolation_leaf
-0x1000007C8	0x0000000C	[  7] _free.stub
-0x1000007D4	0x0000000C	[  5] _getenv.stub
-0x1000007E0	0x0000000C	[  7] _malloc.stub
-0x1000007EC	0x0000000C	[  5] _memcpy.stub
-0x1000007F8	0x0000000C	[  5] _puts.stub
-0x100000804	0x0000000C	[  6] _read.stub
-0x100000810	0x0000000C	[  5] _strcpy.stub
-0x10000081C	0x0000000C	[  5] _strlen.stub
-0x100000828	0x0000000C	[  5] _strncpy.stub
-0x100000834	0x00000008	[  1] literal string: PAYLOAD
-0x10000083C	0x00000006	[  1] literal string: EARLY
-0x100000842	0x00000006	[  2] literal string: CLEAN
+0x100000460	0x00000040	[  1] _tainted_stack_overflow
+0x1000004A0	0x00000064	[  1] _tainted_heap_overflow
+0x100000504	0x00000044	[  1] _bounded_copy_is_safe
+0x100000548	0x00000060	[  1] _strlen_guarded_copy
+0x1000005A8	0x00000024	[  1] _leaks_memory
+0x1000005CC	0x00000048	[  1] _leak_on_one_path
+0x100000614	0x0000003C	[  1] _guarded_free
+0x100000650	0x00000034	[  1] _double_frees
+0x100000684	0x00000038	[  1] _uses_after_free
+0x1000006BC	0x0000002C	[  1] _balanced_alloc
+0x1000006E8	0x00000050	[  1] _main
+0x100000738	0x00000014	[  2] _interproc_forward_outer
+0x10000074C	0x00000020	[  2] _interproc_budget_entry
+0x10000076C	0x0000001C	[  2] _interproc_isolation_entry
+0x100000788	0x00000020	[  2] _interproc_dead_tainted_helper
+0x1000007A8	0x0000001C	[  3] _interproc_forward_inner
+0x1000007C4	0x0000001C	[  3] _interproc_isolation_leaf
+0x1000007E0	0x0000000C	[  7] _free.stub
+0x1000007EC	0x0000000C	[  5] _getenv.stub
+0x1000007F8	0x0000000C	[  7] _malloc.stub
+0x100000804	0x0000000C	[  5] _memcpy.stub
+0x100000810	0x0000000C	[  5] _puts.stub
+0x10000081C	0x0000000C	[  6] _read.stub
+0x100000828	0x0000000C	[  5] _strcpy.stub
+0x100000834	0x0000000C	[  5] _strlen.stub
+0x100000840	0x0000000C	[  5] _strncpy.stub
+0x10000084C	0x00000008	[  1] literal string: PAYLOAD
+0x100000854	0x00000006	[  1] literal string: EARLY
+0x10000085A	0x00000006	[  2] literal string: CLEAN
 0x100004000	0x00000008	[  7] _free.got
 0x100004008	0x00000008	[  5] _getenv.got
 0x100004010	0x00000008	[  7] _malloc.got

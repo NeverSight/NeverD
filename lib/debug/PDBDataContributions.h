@@ -5,8 +5,8 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Read-only storage intervals from PDB section contributions. These describe
-/// linked storage, not individual C objects or buffer capacities.
+/// PDB section contributions describe linked code and storage ranges.
+/// The procedure reader requires a single owner for its complete extent.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -31,7 +31,22 @@ struct ModuleRange {
   uint16_t Module = 0;
   uint16_t Section = 0;
   bool ReadOnlyData = false;
+  bool ExclusiveCode = false;
 };
+
+/// Folded or overlapping contributions cannot identify one procedure owner.
+inline void excludeSharedCode(llvm::MutableArrayRef<ModuleRange> Ranges) {
+  for (size_t Begin = 0; Begin < Ranges.size();) {
+    size_t Next = Begin + 1;
+    va_t End = Ranges[Begin].End;
+    while (Next < Ranges.size() && Ranges[Next].Start < End)
+      End = std::max(End, Ranges[Next++].End);
+    if (Next > Begin + 1)
+      for (auto &Range : Ranges.slice(Begin, Next - Begin))
+        Range.ExclusiveCode = false;
+    Begin = Next;
+  }
+}
 
 /// Consume validated, start-sorted contributions. An overlapping component
 /// containing code, writable storage or contradictory sections supplies no

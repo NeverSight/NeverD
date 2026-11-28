@@ -2,7 +2,9 @@
 """Execute PowerPC conditional calls and local CTR transfers before and after projection."""
 
 import argparse
+import json
 from pathlib import Path
+import re
 import subprocess
 from tempfile import TemporaryDirectory
 
@@ -13,14 +15,14 @@ from extended_scalar import image_base_option, project
 from roundtrip import DATA, RETURN, STACK, compile_elf, machine
 
 PROFILES = ("powerpc", "powerpcle", "powerpc64", "powerpc64le")
-FUNCTIONS = ("direct_call", "lr_call", "ctr_call", "ctr_jump", "ctr_join")
+FUNCTIONS = ("direct_call", "lr_call", "ctr_call", "ctr_jump", "ctr_join", "ctr_select")
 SOURCE = Path(__file__).with_name("powerpc-conditional-branches.S")
 
 
 def execute(path, profile, descriptors, names):
-    cpu, symbols = machine(path, profile)
     endian = "little" if profile.endswith("le") else "big"
     for name in names:
+        cpu, symbols = machine(path, profile, power8=name == "ctr_select")
         entry = symbols[name]
         toc = 0
         if descriptors:
@@ -46,15 +48,46 @@ def execute(path, profile, descriptors, names):
                 cpu.emu_start(entry, RETURN, count=1000)
                 result = cpu.reg_read(reg.UC_PPC_REG_3)
                 count = int.from_bytes(cpu.mem_read(DATA, 4), endian)
-                increment = sum(higher) if alternate else 9
-                delta = (increment if value == 0 else 0) if call else (
-                    7 if value == 0 and (name == "ctr_jump" or not choice) else 1)
+                if call:
+                    increment = sum(higher) if alternate else 9
+                    delta = increment if value == 0 else 0
+                elif value:
+                    delta = 1
+                elif name == "ctr_select":
+                    delta = 19 if choice else 7
+                else:
+                    delta = 7 if name == "ctr_jump" or not choice else 1
                 expected = (RETURN, STACK + 2048, value + delta,
                             19 + (1 + int(alternate)) * int(call and value == 0))
                 actual = (cpu.reg_read(reg.UC_PPC_REG_PC), cpu.reg_read(reg.UC_PPC_REG_1),
                           result, count)
                 if actual != expected:
                     raise AssertionError((profile, name, value, choice, actual, expected))
+
+
+def check_graph(neverd, image, name):
+    command = [neverd, "cfg", "--func", name, image]
+    graph = json.loads(subprocess.check_output([*command, "--json"], text=True))
+    branch, = [node for node in graph["nodes"]
+               if node["disasm"][-1].split(": ", 1)[1].split()[0].endswith("ctr")]
+    skip = int(branch["end"], 16)
+    after = sorted((int(node["start"], 16), node["id"]) for node in graph["nodes"]
+                   if int(node["start"], 16) >= skip)
+    if after[0][0] != skip or len(after) != (3 if name == "ctr_select" else 2):
+        raise AssertionError((name, after))
+    expected = [(idx, "true") for _, idx in after[1:]]
+    expected.append((after[0][1], "false"))
+    if name == "ctr_join":
+        expected.append((after[0][1], "true"))
+    observed = [(edge["to"], edge["type"]) for edge in graph["edges"]
+                if edge["from"] == branch["id"]]
+    if sorted(observed) != sorted(expected):
+        raise AssertionError((name, observed, expected))
+    dot = subprocess.check_output([*command, "--dot"], text=True)
+    edges = re.findall(rf"bb{branch['id']} -> bb(\d+) \[color=(\w+)\]", dot)
+    colors = [(str(idx), "green" if role == "true" else "red") for idx, role in expected]
+    if sorted(edges) != sorted(colors):
+        raise AssertionError((name, edges, colors))
 
 
 def check(args, work, profile):
@@ -64,6 +97,8 @@ def check(args, work, profile):
     compile_elf(args, work, profile, SOURCE, original, FUNCTIONS[0], extra_flags=flags)
     execute(original, profile, descriptors, FUNCTIONS)
     print(profile, "original passed", flush=True)
+    for name in ("ctr_jump", "ctr_join", "ctr_select"):
+        check_graph(args.neverd, original, name)
     with original.open("rb") as stream:
         old_code = ELFFile(stream).get_section_by_name(".text")["sh_addr"]
     placement = image_base_option(args.ld)
@@ -83,6 +118,23 @@ def check(args, work, profile):
                     raise AssertionError("original code is still mapped")
             execute(rebuilt, profile, descriptors, FUNCTIONS)
             print(profile, route, opt, "passed", flush=True)
+
+    unknown = work / "unknown.elf"
+    compile_elf(args, work, profile, SOURCE, unknown, "ctr_select",
+                extra_flags=[*flags, "-DUNKNOWN_CTR_ARM"])
+    reason = "no proven local target set"
+    for route in ([], ["--llvm"]):
+        result = subprocess.run([args.neverd, "decompile", *route, "--func", "ctr_select",
+                                 unknown, "-o", work / "unknown.c"], capture_output=True, text=True)
+        if not result.returncode or reason not in result.stderr:
+            raise AssertionError((profile, route, result.returncode, result.stderr))
+    module = work / "unknown.ll"
+    subprocess.run([args.neverd, "lift", unknown, "-o", module], check=True)
+    lines = module.read_text().splitlines()
+    if (not any(line.startswith("; neverd.not-lifted: ctr_select ") and reason in line
+                for line in lines) or
+            any(line.startswith("define ") and "@ctr_select(" in line for line in lines)):
+        raise AssertionError((profile, "unproven CTR target in lifted module"))
 
 
 def main():

@@ -45,6 +45,21 @@ struct ResolverGraphCacheTestAccess {
     bool operator==(const Answer &) const = default;
   };
 
+  /// These queries' feasible sets lie below 64, so each is kept as one word.
+  static std::vector<uint64_t>
+  lowWords(const std::vector<CFGBuilder::JumpTableFeasibleSet> &Sets) {
+    std::vector<uint64_t> Words;
+    for (const auto &Set : Sets) {
+      EXPECT_LE(Set.bitWidth(), 64u);
+      uint64_t Word = 0;
+      for (unsigned Value = 0; Value < 64; ++Value)
+        if (Set.test(Value))
+          Word |= uint64_t{1} << Value;
+      Words.push_back(Word);
+    }
+    return Words;
+  }
+
   enum class LoadCase {
     Single,
     Reload,
@@ -1391,20 +1406,23 @@ struct ResolverGraphCacheTestAccess {
                       bool WantQueryComplete = true, bool WantMasks = false) {
     Answer A;
     A.Remaining = Budget;
+    std::vector<CFGBuilder::JumpTableFeasibleSet> Sets;
     A.Values = B.tableValuesMatchAtUses(
         Queries, WantComplete ? &A.Complete : nullptr,
         WantQueryComplete ? &A.QueryComplete : nullptr, InvalidVA, nullptr,
-        &A.Remaining, MatchLimit, nullptr, WantMasks ? &A.Masks : nullptr,
-        Depth);
+        &A.Remaining, MatchLimit, nullptr, WantMasks ? &Sets : nullptr, Depth);
+    A.Masks = lowWords(Sets);
     return A;
   }
 
   static Answer unmeteredBatch(CFGBuilder &B,
                                const std::vector<Query> &Queries) {
     Answer A;
+    std::vector<CFGBuilder::JumpTableFeasibleSet> Sets;
     A.Values = B.tableValuesMatchAtUses(Queries, &A.Complete, &A.QueryComplete,
                                         InvalidVA, nullptr, nullptr, 0, nullptr,
-                                        &A.Masks);
+                                        &Sets);
+    A.Masks = lowWords(Sets);
     return A;
   }
 
@@ -1417,10 +1435,12 @@ struct ResolverGraphCacheTestAccess {
               va_t Branch = 0x100, bool Budgeted = true) {
     Answer A;
     A.Remaining = Budget;
+    std::vector<CFGBuilder::JumpTableFeasibleSet> Sets;
     A.Values = B.tableValuesMatchAtUses(
         Queries, &A.Complete, &A.QueryComplete, Branch, Targets,
-        Budgeted ? &A.Remaining : nullptr, 0, SharedBranches, &A.Masks, Depth,
+        Budgeted ? &A.Remaining : nullptr, 0, SharedBranches, &Sets, Depth,
         Edges, true, ReadOnlyScope);
+    A.Masks = lowWords(Sets);
     return A;
   }
 
@@ -2409,10 +2429,12 @@ struct ResolverGraphCacheTestAccess {
                              size_t MatchLimit = 0, bool WantAddresses = true) {
     Answer A;
     A.Remaining = Budget;
+    std::vector<CFGBuilder::JumpTableFeasibleSet> Sets;
     A.Values = B.tableValuesMatchAtUses(
         Queries, &A.Complete, &A.QueryComplete, InvalidVA, nullptr,
-        &A.Remaining, MatchLimit, nullptr, &A.Masks, Depth, nullptr, true,
-        nullptr, WantAddresses ? &A.Addresses : nullptr);
+        &A.Remaining, MatchLimit, nullptr, &Sets, Depth, nullptr, true, nullptr,
+        WantAddresses ? &A.Addresses : nullptr);
+    A.Masks = lowWords(Sets);
     return A;
   }
   static std::optional<bool> peBase(CFGBuilder &B, const BinaryImage &Image,

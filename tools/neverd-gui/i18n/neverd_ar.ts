@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>فحص أصناف JVM وملفات JAR…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>فحص تعليمات Java البايتية والتمثيل الوسيط المزوّد بالأنواع والطرق المعاد بناؤها</translation>
+    </message>
+    <message>
         <source>Memory Safety Scan...</source>
         <translation>فحص سلامة الذاكرة...</translation>
     </message>
@@ -11368,16 +11376,16 @@ Your previous graph is still available.</source>
         <translation>أدوات ال&amp;تحليل</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit وHunt</translation>
+        <source>All checks</source>
+        <translation>كل الفحوص</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>عمر الكائنات والتهيئة</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>الحدود وسلاسل التنسيق</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11437,6 +11445,109 @@ Your previous graph is still available.</source>
     </message>
 </context>
 <context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>فحص أصناف JVM وملفات JAR</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>استعراض…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>الملف المراد تحليله</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>المدخلات الأساسية في JAR</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>تفعيل ميزات المعاينة</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>بيئة التشغيل</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>التبعيات المحلية…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>مسح</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>التبعيات</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>الصنف أو العضو</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>الطريقة</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>فحص المحتويات</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>تحليل التحديد</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>إلغاء</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>مصدر Java</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>التعليمات البايتية</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>التمثيل الوسيط المزوّد بالأنواع</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>الأدلة</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>تعيينات التعليمات البايتية</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>نسخ العرض</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>تصدير العرض…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>تصدير التقرير…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>فتح ملف JVM</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>عرض بيئة التشغيل المحددة</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>جميع الطرق</translation>
+    </message>
+</context>
+<context>
     <name>neverd::gui::ScriptRecoveryDialog</name>
     <message>
         <source>Recover Lua source</source>
@@ -11461,6 +11572,10 @@ Your previous graph is still available.</source>
     <message>
         <source>LuaJIT</source>
         <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>Luau الرسمي</translation>
     </message>
     <message>
         <source>Upstream Luau 0.659</source>

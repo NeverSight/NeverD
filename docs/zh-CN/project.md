@@ -1,6 +1,6 @@
 **语言**: [English](../../README.md) | [简体中文](project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 7a5404f829b6a5a34a3f24808dba0cb23589c828d24533a70789c03cf24cd87f -->
+<!-- i18n-source: 65a3c241a8b8275f8f2afcf61c262f54c2db5a0fd1e46824c63a903708fc981b -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 
 | 目标 | 已验证的 ELF 配置 |
 |---|---|
-| RISC-V | 小端 RV32I/ILP32 和 RV64I/LP64。根据 ELF 中的标记选择 M、A、整数 C，或单独的 Zmmul、Zaamo、Zalrsc 和 Zca 扩展。ELF ISA 属性也可启用 Zba 1.0、Zbb 1.0 和 Zbs 1.0。 |
-| PowerPC | 大端和小端 PPC32 System V 及 PPC64 ELFv1/ELFv2。PPC32 支持通过 secure PLT 和传统 BSS-PLT 进行跨模块调用。两种 PPC64 ABI 均支持跨模块 PLT 调用和 TOC 切换。ELFv1 使用函数描述符，ELFv2 支持全局入口和本地入口。已验证有符号和无符号除法、返回乘积高字的乘法、报告溢出的乘法，以及这些指令对 CR0 和 XER 的影响。PPC64 还支持 POWER10 带前缀的整数加法、加载和存储指令。 |
+| RISC-V | 小端 RV32（ILP32、ILP32D） 和 RV64（LP64、LP64D）。根据 ELF 中的标记选择 M、A、整数 C，或单独的 Zmmul、Zaamo、Zalrsc 和 Zca 扩展。ELF ISA 属性也可启用 Zba 1.0、Zbb 1.0、Zbs 1.0 和 Zicond 1.0。Zicntr 2.0 支持 `rdcycle`，RV32 还支持 `rdcycleh`。 |
+| PowerPC | 大端和小端 PPC32 System V 及 PPC64 ELFv1/ELFv2。PPC32 支持通过 secure PLT 和传统 BSS-PLT 进行跨模块调用。两种 PPC64 ABI 均支持跨模块 PLT 调用和 TOC 切换。ELFv1 使用函数描述符，ELFv2 支持全局入口和本地入口。已验证有符号和无符号除法、返回乘积高字的乘法、报告溢出的乘法，以及这些指令对 CR0 和 XER 的影响。PPC64 还支持 POWER10 带前缀的整数加法、加载和存储指令。 VMX 的 `vaddubm` 对 16 对字节分别做模 256 加法。 |
 
 这些架构配置的原生代码重写仍待实现。 [RISC-V 和 PowerPC 支持范围（英文）](../riscv-powerpc.md)
 
@@ -181,8 +181,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -306,6 +304,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 统计 | 对每个已加载函数生成默认 C；检查后即释放该函数体 |
 | `decompile -llvm` | `.c` | 经 LLVM IR + 优化器 |
 | `decompile --devirtualize` | `.c` + 可选 JSON | 实验性 x64 解释器恢复；需要 `--func`；[契约与示例](interpreter-recovery.md) |
+| `java` | Java / JVM IR / 字节码 / JSON | [class 文件与多版本 JAR](../jvm-recovery.md) |
 | `python` | `.py` / JSON / 原生组件 | [CPython 与 PyInstaller 产物恢复](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Lua、LuaJIT 和 Luau 源码恢复](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 实验性: [Android](android.md), [iOS](ios.md) |
@@ -342,8 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 发现的函数 |
 | `disasm` | 反汇编（`--func` 名称或十六进制） |
 | `sym-explore` | 有界原生 LowIR 路径探索（`--func`；JSON 输出） |
-| `audit` | 堆对象生命周期缺陷和未初始化局部栈读取（JSON） |
-| `hunt` | 危险拷贝越界及符号见证；存在完整方案时附加 `process-input-v1` 重放证据（JSON schema v1） |
+| `scan` | [检查对象生命周期、初始化、访问边界和格式字符串，输出 JSON](../memory-safety-scan.md) |
 | `hex` | 按地址十六进制转储 |
 | `cfg` / `callgraph` | CFG / 调用图（JSON；可选 DOT/SVG） |
 | `xrefs` | 交叉引用 |

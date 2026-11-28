@@ -1585,7 +1585,17 @@ byte lane with `cmpb $0x81, %dl; ja`: indexed by the lane zero-extended, the
 dispatch reads all 130 slots, while sign extension after the compare, into
 the compared register before it, or to 32 bits before the implicit
 zero-extend keeps it unresolved, as does a byte copied into the low lane of
-an index whose upper bits come from the caller. `JTE_X86_64.ReloadThroughAnUnchangedCursorKeepsTheCompareBound`
+an index whose upper bits come from the caller.
+`JTE_X86_64.LoadedByteLanePastTheSignBitBoundsAZeroExtendedIndex` compares
+the low lane of the register a byte was loaded into, which is the index:
+loaded with `movzbl` (bound through the extended lane) or `movzbq` (through
+the lane source), each dispatch reads all 130 slots, while `movsbl; cltq`,
+`movsbq` and a bare `movsbl` keep theirs unresolved.
+`JTE_X86_64.ByteComparedOnEachEntryPathBoundsAJoinedDomain` enters a
+dispatch on two paths that each load a byte with `movzbl` and compare it with
+`cmpb $0xac`: the joined domain reads all 173 slots, while a sign-extended
+second byte, a second path without a compare, or a signed `jg` on it keeps
+the dispatch unresolved. `JTE_X86_64.ReloadThroughAnUnchangedCursorKeepsTheCompareBound`
 reloads the byte a loop compared under a cursor its cases advance: the
 dispatch reads its six slots, while reloading the next byte or reloading
 after replacing the cursor stays unresolved.
@@ -1595,6 +1605,31 @@ relay block that keeps them: both dispatches read their eight slots, while an
 index changed after the compare, a second compare into the `ja` block that
 admits 101 values, or an address of the `ja` block that .data holds, stays
 unresolved.
+`JTE_X86_64.LaneGuardFindsItsExtensionInAnEarlierBlock` bounds a byte that
+`movzbl` loaded by ten with `cmp $9, %eax` and, one block and three blocks
+later, by seven with `cmp $6, %al` before the dispatch indexes with `%rax`:
+both dispatches read their seven slots. A second path into the lane compare
+that loads all of `%rax`, a load of all of `%rax` before both compares, or a
+write of `%ah` between them stays unresolved.
+`JTE_X86_64.LaneCompareBoundWinsOverAWideTest` loads `%eax` with `movl`,
+tests `(%eax - 4) & ~4` on the full register in the next block and bounds
+`%eax` by ten in the one after: the dispatch reads its ten slots. A second
+path into the compare that loads all of `%rax`, a call between the load and
+the compare, or an address of the compare block that .data holds stays
+unresolved.
+`JTE_X86_64.AnUnboundedOwnLabelTableDispatchesByValue` jumps through relative
+tables that nothing bounds, as Rust matches a discriminant read from memory:
+the jump dispatches by value on the three labels of six slots, comparing the
+LOAD of the slot with the labels' offsets from the table. A label that reads
+`%rbx` before any path to the jump wrote it is left out, a slot that names an
+address inside an instruction ends the table, a table address loaded into
+`%r12` before a loop is found at its dispatch, a dispatch that one of its
+labels re-enters with another table's address is withdrawn, and a table in
+`.data` gives no labels. `x64swx_enumbyte0`, `3` and `5` in `NeverDSwitchXformTests` run the
+same shape from C, an unreachable default on a byte argument, through the lift,
+recompile and emulation and compare the results; `x64swx_enumload` runs eight
+such switches in a row on bytes read back from the stack, whose domains run out
+of evidence.
 `JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
 whose first state is a constant: scalar recovery first takes its dispatch as a
 direct branch and withdraws that guess when the cases loop back, and the
@@ -1620,6 +1655,18 @@ dispatches whose index takes the compared lane after the guard
 `cmpl $5, %r11d; ja`): both read their six slots, while twins that change
 the lane between the guard and the index (`incb %sil`, `incl %r11d`) stay
 unresolved.
+`JTE_X86_64.AReloadOfTheComparedByteIsTheIndex` reloads a byte compared in
+memory as the index (`cmpb $5, 2(%rdi); ja; movzbl 2(%rdi), %eax`) and reads
+its six slots under the same limit. With the full allowance, a store or an
+address-register write between the loads, another displacement or width, a
+sign-extending reload of a byte the guard admits up to 0x81, a call or a
+change after the reload, a second way into the reload block and a reload
+block whose address is data keep their dispatches unproved. Deleting the
+memory-write, register-write, displacement, width, zero-extension or
+later-write check lets its twin publish a table. The call and second-path
+twins are refused before the guard is read as well: the dispatch after the
+call lifts as an indirect tail call, and the second path leaves the guard
+controlling nothing.
 `JTE_X86_64.LoopCarriedTokenDispatchFitsASmallCandidateAccount` builds a
 lexer loop whose 64 arms each recompute a token dispatched through
 `lea -0x107(%r13), %eax; cmp $63, %eax; ja` and checks its 64 slots under a
@@ -4840,6 +4887,19 @@ and group log 6 generate 917,516 factors. Use `--counted` for their exact
 multiplicities and `--reference` for the interpolated polynomial. The
 611-factor native fixture exercises blocks of 32 with three remaining copies
 in both source views.
+
+Group logs 7 and 8 use twelve overlapping word expressions with both signed
+and unsigned slices. Some rows have four differently weighted fields and
+several incomplete blocks survive. To reproduce a constrained run, generate
+width 65,536, case 7, group log 8 and pass it to `neverd simplify` with
+`--width=65536 --max-work=65536`. With the same case and group log, width
+14,680,111 generates 1,572,880 factors across 317 distinct rows. Use
+`--exhaustive` to simplify it or generate its compact form with `--counted`.
+
+`SymMBAResiduePowers.SparseFieldRunsStayFactoredWithinBudget` exercises 65
+overlapping signed and unsigned coordinates with short repeated powers. Its
+65,536-work run compares the result with direct evaluation, including an even
+singleton beside the repeated odd factors.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
@@ -12867,6 +12927,27 @@ refusal cases on incoming frame bytes whose writer is outside the function.
 `GeneratedSourceExecutesJoinedEqualityAndRange` runs the register and frame
 variants through HighC and optimized/unoptimized LLVMC, compiling the generated
 x64 ELF C at O0/O2 with undefined-behavior traps and independent expected values.
+`JumpTableJoinedGuard.WideJoinedDomainsKeepEveryCase` uses bash's shape: a zero
+byte enters the dispatch past its range guard. Sizes 63, 64, 65, 97, 128,
+129, 173 and 255 cross each word of the feasible set and reach the joined
+ceiling, and each keeps every slot. `WideJoinedDomainsRefuseUnboundedOrHoledPaths`
+refuses 256 cases of a 16-bit value, whose literal is past the ceiling (256
+byte cases are bounded by the byte's own width), an equality path that reads
+one slot past the table, and a 255-case dispatch that a second path enters
+with an unchecked byte, which can be 255.
+`AWideLiteralElsewhereKeepsASmallJoinedDomain` raises the proposed envelope
+to the ceiling with an unrelated compare and still proves the three slots.
+`GeneratedSourceExecutesAWideJoinedDomain` compiles and runs the 97-case
+function from all three C routes at O0/O2.
+`X86_64ColdFragment.TheLoaderBindsAFramelessTrapPart` loads GCC 15.2's output
+for the shape of Lua's reallymarkobject, linked with and without symbols. Its
+isolated trap part begins with the entry rule and is bound in both copies.
+`AFramelessTrapPartIsACaseOfItsSwitch` decompiles the stripped copy: the
+dispatch is a switch whose isolated path traps, not a call through the table,
+and the part has no definition of its own.
+`EntryLikePartsSomethingNamesStayFunctions` binds a control part and keeps as
+functions a part that is also called, one that returns and one a relocated
+pointer names; the control part's own symbol keeps it a function too.
 `JumpTableFiniteSelector.ExactSingletonReplayPreservesAProvedSibling`
 uses i386 and x64 consumers sharing one relocated table. The exact singleton
 keeps its finite replay without poisoning the independently bounded sibling's
@@ -16045,6 +16126,12 @@ trap on a register earlier calls left behind, and no incoming stack slot taken
 for the routine's open arity. `MedCallLeftovers.JoinsOfCallClobbersOnly`
 checks which clobbers and joins `ValuesLeftByCalls` names, loops and exception
 entries included.
+`X86_64_CallAbi.AnUndescribedCalleeTakesNoRegisterNothingSetForIt` decompiles
+GCC's call of an undescribed external after a branch that may call another,
+in a function that receives no parameter in those registers: through HighC
+and LLVM C each call passes its one set argument and no unknown value.
+`MedABIPass.CallClobberPhisDoNotInventTrailingArguments` keeps a join that a
+write on one way sets.
 `CallsTakeNoIncomingRegisterAnEarlierCallChanged` links, for x86-64, i386,
 ARM and AArch64, a routine that reads four argument registers with callers
 that declare it with one, calling it after another call, after a join of two
@@ -16117,6 +16204,20 @@ in a live frame, and after an `svc`.
 the `__release_weak` shape through HighC, LLVM-C and unoptimized LLVM-C: none
 keeps the unresolved-branch trap, each calls through the loaded vtable slot,
 and the HighC compiles for AArch64.
+`X64IndirectTailFrame.RestoredStackPointerKeepsTheTailCall` links and strips
+x86-64 jumps that leave RSP at its incoming value (nothing pushed, pops,
+LEAVE after a realignment, an added-back frame, `lea -8(%rbp), %rsp`, a
+balanced diamond and loop) or at nothing derived from it (a fiber switch to an
+argument's stack, RSP loaded from memory): each becomes `INDIR_CALL + RETURN`.
+`LiveOrUnknownStackPointerKeepsTheBranch` keeps the indirect branch inside a
+live frame, through an unbounded relative table inside one, after a push on
+one of two paths, after an unrestored realignment or a register adjustment,
+after LEAVE reads an RBP a call result moved, and after a pushing loop.
+`LazyBindingResolverJumpKeepsTheTailCall` keeps the library's PLT0 jump to
+the lazy-binding resolver a tail call after its push.
+`OwnLabelTableKeepsTheBranch` keeps the branch through an unbounded relative
+table of the function's own labels with nothing pushed, and through one whose
+base RBX keeps across a call, after popping RBX.
 `LowIntrinsicMemoryOperands.DecodeOnlyTheLiftedShapes` rejects width, ordering
 and segment mismatches and intrinsics without a memory contract.
 

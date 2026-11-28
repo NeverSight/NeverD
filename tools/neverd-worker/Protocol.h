@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -109,6 +110,14 @@ public:
 private:
   std::string text_;
 };
+/// A script reply can frame its encoded payload while retaining the SDK
+/// status used to distinguish cancellation from completion.
+struct EncodedScriptReport {
+  std::string Status;
+  EncodedJson Payload;
+};
+std::optional<EncodedScriptReport> tryEncodeScriptReport(std::string_view Text);
+
 /// A listing page as `listing` writes it, for a client that keeps pages: its
 /// fields, and each line as written (Listing::pageLines).
 struct ListingPage {

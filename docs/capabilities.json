@@ -184,7 +184,6 @@
           "neverd_segments_json",
           "neverd_session_analyze",
           "neverd_session_arch_name",
-          "neverd_session_audit_json",
           "neverd_session_base_addr",
           "neverd_session_bitness",
           "neverd_session_create",
@@ -200,7 +199,6 @@
           "neverd_session_file_path",
           "neverd_session_file_size",
           "neverd_session_format_name",
-          "neverd_session_hunt_json",
           "neverd_session_import_count",
           "neverd_session_input_sha256",
           "neverd_session_inspect_map_json",
@@ -525,41 +523,6 @@
           "neverd annotate --symbol-path",
           "neverd annotate --text",
           "neverd annotate --v",
-          "neverd audit",
-          "neverd audit --arm-function-mode",
-          "neverd audit --auto",
-          "neverd audit --download-symbols",
-          "neverd audit --dwarf",
-          "neverd audit --json",
-          "neverd audit --load-base",
-          "neverd audit --load-entry",
-          "neverd audit --load-offset",
-          "neverd audit --load-size",
-          "neverd audit --loader",
-          "neverd audit --map",
-          "neverd audit --map-unchecked",
-          "neverd audit --max-call-depth",
-          "neverd audit --max-loop",
-          "neverd audit --max-paths",
-          "neverd audit --max-steps",
-          "neverd audit --max-summary-iterations",
-          "neverd audit --no-debug",
-          "neverd audit --no-dwarf",
-          "neverd audit --no-map",
-          "neverd audit --no-pdb",
-          "neverd audit --no-symtab",
-          "neverd audit --o",
-          "neverd audit --pdb",
-          "neverd audit --pdb-unverified",
-          "neverd audit --platform",
-          "neverd audit --processor",
-          "neverd audit --sig-base",
-          "neverd audit --sig-dir",
-          "neverd audit --sig-file",
-          "neverd audit --sinks",
-          "neverd audit --solver-conflicts",
-          "neverd audit --sources",
-          "neverd audit --symbol-path",
           "neverd bookmarks",
           "neverd bookmarks --add",
           "neverd bookmarks --arm-function-mode",
@@ -959,41 +922,6 @@
           "neverd hex --symbol-path",
           "neverd hex --text-encoding",
           "neverd hex --v",
-          "neverd hunt",
-          "neverd hunt --arm-function-mode",
-          "neverd hunt --auto",
-          "neverd hunt --download-symbols",
-          "neverd hunt --dwarf",
-          "neverd hunt --json",
-          "neverd hunt --load-base",
-          "neverd hunt --load-entry",
-          "neverd hunt --load-offset",
-          "neverd hunt --load-size",
-          "neverd hunt --loader",
-          "neverd hunt --map",
-          "neverd hunt --map-unchecked",
-          "neverd hunt --max-call-depth",
-          "neverd hunt --max-loop",
-          "neverd hunt --max-paths",
-          "neverd hunt --max-steps",
-          "neverd hunt --max-summary-iterations",
-          "neverd hunt --no-debug",
-          "neverd hunt --no-dwarf",
-          "neverd hunt --no-map",
-          "neverd hunt --no-pdb",
-          "neverd hunt --no-symtab",
-          "neverd hunt --o",
-          "neverd hunt --pdb",
-          "neverd hunt --pdb-unverified",
-          "neverd hunt --platform",
-          "neverd hunt --processor",
-          "neverd hunt --sig-base",
-          "neverd hunt --sig-dir",
-          "neverd hunt --sig-file",
-          "neverd hunt --sinks",
-          "neverd hunt --solver-conflicts",
-          "neverd hunt --sources",
-          "neverd hunt --symbol-path",
           "neverd identify",
           "neverd identify --json",
           "neverd imports",
@@ -1787,9 +1715,7 @@
           "neverd_renames_json",
           "neverd_sections_json",
           "neverd_segments_json",
-          "neverd_session_audit_json",
           "neverd_session_debug_info_json",
-          "neverd_session_hunt_json",
           "neverd_session_inspect_map_json",
           "neverd_session_inspect_pdb_json",
           "neverd_session_load_diagnostics_json",
@@ -2013,7 +1939,6 @@
           "Session.annotation",
           "Session.annotations",
           "Session.architecture",
-          "Session.audit",
           "Session.base_address",
           "Session.bitness",
           "Session.call_paths",
@@ -2043,7 +1968,6 @@
           "Session.functions",
           "Session.headers",
           "Session.hex_dump",
-          "Session.hunt",
           "Session.import_count",
           "Session.imports",
           "Session.ir",
@@ -2986,13 +2910,30 @@
       "owner": "safety",
       "targets": [
         "x86_64",
-        "aarch64"
+        "aarch64",
+        "mips",
+        "mipsel",
+        "mips64",
+        "mips64el",
+        "mips64n32",
+        "mips64n32el",
+        "powerpc",
+        "powerpcle",
+        "powerpc64",
+        "powerpc64le",
+        "powerpc64-elfv1",
+        "powerpc64le-elfv1",
+        "riscv32",
+        "riscv64",
+        "riscv32-ilp32d",
+        "riscv64-lp64d"
       ],
       "docs": [
         "docs/memory-safety-scan.md"
       ],
       "limitations": [
-        "Static Audit and Hunt properties within the admitted lift, catalog and budgets. Incomplete coverage is explicit."
+        "Static Audit and Hunt properties within the admitted lift, catalog and budgets. Incomplete coverage is explicit.",
+        "MIPS, PowerPC and RISC-V coverage is qualified on linked ELF images. RISC-V admits ILP32, LP64, ILP32D and LP64D. The double-float controls cover register transfers, sign injection and floating memory operations. On MIPS64r2 n32 the static verifier checks the signed-word precondition for the stack read. Historical MIPS III o32 accesses that require runtime MMU translation report unsupported coverage."
       ],
       "tests": [
         {
@@ -3022,6 +2963,28 @@
           "target": "NeverDSafetyTests",
           "source": "unittests/safety/SafetyReportTests.cpp",
           "filter": "SafetyScan.EmptyBudgetLimitedReportIsUnknown",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDSafetyTests",
+          "source": "unittests/safety/SafetyReportTests.cpp",
+          "filter": "SafetyReport.PipelineCoverageRequiresExactCallInventory",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSTests",
+          "source": "unittests/lift/mips/MIPSLoaderTests.cpp",
+          "filter": "MIPSMixedWidthLoader.ELF32ImportSlotRequiresWordTransfers",
           "platforms": [
             "darwin",
             "linux",
@@ -5524,14 +5487,122 @@
       }
     },
     {
+      "id": "jvm.source-recovery",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "bytecode",
+      "targets": [
+        "JVM class-file majors 45 through 71, including short early Code records",
+        "Base and explicitly selected multi-release JAR views",
+        "Kotlin metadata observations independent of Java bytecode"
+      ],
+      "docs": [
+        "docs/jvm-recovery.md"
+      ],
+      "limitations": [
+        "Issue #1035. Java reconstruction is a per-method subset. Unproven regions retain bytecode and diagnostics.",
+        "Dependencies use explicit ordered local inputs. Dynamic linkage, reflection and JNI bindings remain symbolic."
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.CompilerVersionsInstructionsAndExceptionRanges",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.SelectionPreviewAndJobLimits",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.SyntheticCodeTypesSwitchesAndOpaqueRecords",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.PhysicalJarMembersAndExplicitRuntimeSelection",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.OrderedLocalHierarchyAndContentCache",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDJVMRecoveryTests",
+          "source": "unittests/jvm/JVMRecoveryTests.cpp",
+          "filter": "JVMRecovery.BootstrapMetadataAndNativeRelations",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [
+          "neverd_jvm_recover_json_v1"
+        ],
+        "python": [],
+        "cli": [
+          "neverd java",
+          "neverd java --json",
+          "neverd java --inventory",
+          "neverd java --release",
+          "neverd java --enable-preview",
+          "neverd java --class",
+          "neverd java --method",
+          "neverd java --component",
+          "neverd java --dependency",
+          "neverd java --view",
+          "neverd java --o"
+        ],
+        "json": [
+          "neverd_jvm_recover_json_v1"
+        ]
+      }
+    },
+    {
       "id": "lua.source-recovery",
       "kind": "analysis",
       "status": "experimental",
       "owner": "bytecode",
       "targets": [
-        "PUC Lua 5.1–5.5",
-        "LuaJIT dump v2",
-        "Upstream Luau 0.659 bytecode v6/type v3"
+        "PUC Lua 2.4–5.5 bytecode and earlier text sources",
+        "LuaJIT 1.0/1.1 PUC chunks and independent 2.x dump v1/v2",
+        "Upstream Luau bytecode v1–v14, type encodings v1–v3, and pinned 0.659"
       ],
       "docs": [
         "docs/lua-recovery.md"
@@ -5546,6 +5617,17 @@
           "target": "NeverDLuaRecoveryTests",
           "source": "unittests/lua/LuaRecoveryTests.cpp",
           "filter": "LuaRecovery.OwnedCompilerDumps",
+          "platforms": [
+            "darwin",
+            "linux",
+            "windows"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDLuaRecoveryTests",
+          "source": "unittests/lua/LuaRecoveryTests.cpp",
+          "filter": "LuaRecovery.ReleaseInstructionsAndSourceMatchCompilerFixtures",
           "platforms": [
             "darwin",
             "linux",
@@ -5609,8 +5691,8 @@
       "status": "experimental",
       "owner": "bytecode",
       "targets": [
-        "CPython 3.10.16 disk wordcode",
-        "CPython 3.11.11 disk wordcode",
+        "CPython 0.9.8 and 0.9.9 disk bytecode",
+        "CPython 1.0–1.6, 2.0–2.7 and 3.0–3.15 disk bytecode",
         "PyInstaller onefile, onedir and PYZ",
         "Python sources and native extensions"
       ],
@@ -5618,7 +5700,7 @@
         "docs/python-recovery.md"
       ],
       "limitations": [
-        "Issue #1022. Qualified CPython 3.10 regions publish source. CPython 3.11 publishes disassembly and exception-table evidence. The release matrix lists unvalidated versions and packaging profiles.",
+        "Issue #1022. Source coverage is per function and release. The release matrix records compiler fixtures for the qualified disk layouts.",
         "Original source retains its bytes. Native images use the native analysis backend. Unsupported functions keep their own diagnostics."
       ],
       "tests": [

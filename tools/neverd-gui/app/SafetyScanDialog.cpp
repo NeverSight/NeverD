@@ -35,9 +35,9 @@ SafetyScanDialog::SafetyScanDialog(QueryService &Service, QWidget *Parent)
   auto *controls = new QHBoxLayout;
   auto *label = new QLabel(tr("&Analyzers"), this);
   Analyzers = new QComboBox(this);
-  Analyzers->addItem(tr("Audit and Hunt"), "both");
-  Analyzers->addItem(tr("Audit"), "audit");
-  Analyzers->addItem(tr("Hunt"), "hunt");
+  Analyzers->addItem(tr("All checks"), "both");
+  Analyzers->addItem(tr("Lifetime and initialization"), "audit");
+  Analyzers->addItem(tr("Bounds and format strings"), "hunt");
   label->setBuddy(Analyzers);
   controls->addWidget(label);
   controls->addWidget(Analyzers);
@@ -124,12 +124,16 @@ void SafetyScanDialog::start() {
 }
 
 void SafetyScanDialog::showReport(const QJsonObject &Report) {
+  const auto analyzerLabel = [this](const QString &name) {
+    const int index = Analyzers->findData(name);
+    return index < 0 ? name : Analyzers->itemText(index);
+  };
   QStringList status{tr("Verdict: %1").arg(Report.value("verdict").toString())};
   const auto analyzers = Report.value("analyzers").toObject();
   for (auto it = analyzers.begin(); it != analyzers.end(); ++it) {
     const auto track = it.value().toObject();
     status << tr("%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)")
-                  .arg(it.key(), track.value("state").toString())
+                  .arg(analyzerLabel(it.key()), track.value("state").toString())
                   .arg(track.value("scanned").toInteger())
                   .arg(track.value("skipped").toInteger())
                   .arg(track.value("unknown").toInteger());
@@ -143,7 +147,8 @@ void SafetyScanDialog::showReport(const QJsonObject &Report) {
     const auto observations = row.value("observations").toArray();
     QStringList sources;
     for (const auto &observation : observations) {
-      const QString name = observation.toObject().value("analyzer").toString();
+      const QString name =
+          analyzerLabel(observation.toObject().value("analyzer").toString());
       if (!sources.contains(name))
         sources.append(name);
     }

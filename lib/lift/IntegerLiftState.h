@@ -30,17 +30,17 @@ struct IntegerLiftState : LiftStateBase {
   NdVar imm(uint64_t Value) const {
     return NdVar::scalar(Width == 4 ? uint32_t(Value) : Value, Width);
   }
-  NdVar op(NdOp Opcode, NdVar A) {
+  NdVar op(NdOp Opcode, const NdVar &A) {
     NdVar Out = makeTemp(A.Size);
     emit(Opcode, Out, {A});
     return Out;
   }
-  NdVar op(NdOp Opcode, NdVar A, NdVar B, uint16_t Bytes = 0) {
+  NdVar op(NdOp Opcode, const NdVar &A, const NdVar &B, uint16_t Bytes = 0) {
     NdVar Out = makeTemp(Bytes ? Bytes : A.Size);
     emit(Opcode, Out, {A, B});
     return Out;
   }
-  NdVar resize(NdVar V, uint16_t Size, bool Signed = false) {
+  NdVar resize(const NdVar &V, uint16_t Size, bool Signed = false) {
     if (V.Size == Size)
       return V;
     NdVar Out = makeTemp(Size);

@@ -687,23 +687,35 @@ TEST(AllocLifetime, MayAliasFreeDoesNotProveAllocationReleased) {
   EXPECT_FALSE(has(Fs, VulnClass::UseAfterFree));
 }
 
-TEST(AllocLifetime, NullCheckedConditionalFreeIsNotAHeapLeakWithoutReturnType) {
+static void checkNullCheckedConditionalFree(Arch A) {
   constexpr va_t MallocVA = 0x108;
   constexpr va_t FreeVA = 0x118;
+  SCOPED_TRACE(static_cast<int>(A));
+  BinaryImage Img;
+  Img.Arch = A;
+  Img.Format = BinaryFormat::ELF;
+  const auto &TRI = getTargetRegInfo(A);
+  const MedVar Handle = isMIPSN32(A) ? mkReg(TRI.IntReturnReg, 1) : temp(1);
   FB B("guarded_free", 0x100);
   int Entry = B.block();
   int Release = B.block();
   int Exit = B.block();
-  B.call(Entry, "malloc", temp(1), {MedVar::makeConst(32, 8)}, 0x9000,
-         MallocVA);
-  B.op(Entry, NdOp::INT_EQUAL, temp(5, 1), {temp(1), MedVar::makeConst(0, 8)});
+  B.call(Entry, "malloc", Handle, {MedVar::makeConst(32, TRI.PointerSize)},
+         0x9000, MallocVA);
+  MedVar Pointer = Handle;
+  if (isMIPSN32(A)) {
+    Pointer = temp(6, TRI.PointerSize);
+    B.op(Entry, NdOp::SUBBYTES, Pointer, {Handle, MedVar::makeConst(0, 4)});
+  }
+  B.op(Entry, NdOp::INT_EQUAL, temp(5, 1),
+       {Pointer, MedVar::makeConst(0, TRI.PointerSize)});
   B.succ(Entry, Release);
   B.succ(Entry, Exit);
-  B.call(Release, "free", temp(9), {temp(1)}, 0x9100, FreeVA);
+  B.call(Release, "free", temp(9), {Handle}, 0x9100, FreeVA);
   B.succ(Release, Exit);
   PhiNode Returned;
   Returned.Output = temp(2);
-  Returned.Args = {{Entry, temp(1)}, {Release, temp(9)}};
+  Returned.Args = {{Entry, Handle}, {Release, temp(9)}};
   B.F.Blocks[Exit].Phis.push_back(std::move(Returned));
   B.ret(Exit, {temp(2)});
 
@@ -718,10 +730,20 @@ TEST(AllocLifetime, NullCheckedConditionalFreeIsNotAHeapLeakWithoutReturnType) {
   LowEntry.StartAddr = B.F.Entry;
   LowEntry.EndAddr = 0x110;
   LowEntry.Succs = {Release, Exit};
+  const NdVar Result = NdVar::reg(TRI.IntReturnReg, TRI.FullRegWidth);
   LowEntry.Ops.push_back(
-      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9000, 8)}, MallocVA));
+      lowOp(NdOp::CALL, Result, {NdVar::cst(0x9000, 8)}, MallocVA));
+  NdVar LowPointer = Result;
+  if (isMIPSN32(A)) {
+    LowPointer = NdVar::tmp(0x400, TRI.PointerSize);
+    LowEntry.Ops.push_back(
+        lowOp(NdOp::SUBBYTES, LowPointer, {Result, NdVar::cst(0, 4)}, 0x10A));
+  }
   LowEntry.Ops.push_back(lowOp(NdOp::INT_EQUAL, NdVar::reg(1, 1),
-                               {NdVar::reg(0, 8), NdVar::cst(0, 8)}, 0x10A));
+                               {LowPointer, NdVar::cst(0, TRI.PointerSize)},
+                               0x10A));
+  if (isMIPSN32(A))
+    LowEntry.Ops.back().Seq = 1;
   LowEntry.Ops.push_back(lowOp(
       NdOp::COND_BR, NdVar{}, {NdVar::cst(0x120, 8), NdVar::reg(1, 1)}, 0x10C));
 
@@ -732,7 +754,7 @@ TEST(AllocLifetime, NullCheckedConditionalFreeIsNotAHeapLeakWithoutReturnType) {
   LowRelease.Preds = {Entry};
   LowRelease.Succs = {Exit};
   LowRelease.Ops.push_back(
-      lowOp(NdOp::CALL, NdVar::reg(0, 8), {NdVar::cst(0x9100, 8)}, FreeVA));
+      lowOp(NdOp::CALL, Result, {NdVar::cst(0x9100, 8)}, FreeVA));
   LowRelease.Ops.push_back(
       lowOp(NdOp::BRANCH, NdVar{}, {NdVar::cst(0x120, 8)}, 0x11C));
 
@@ -743,8 +765,6 @@ TEST(AllocLifetime, NullCheckedConditionalFreeIsNotAHeapLeakWithoutReturnType) {
   LowExit.Preds = {Entry, Release};
   LowExit.Ops.push_back(lowOp(NdOp::RETURN, NdVar{}, {}, 0x120));
 
-  BinaryImage Img;
-  Img.Arch = Arch::X64;
   std::vector<MedFunc> MedFuncs{B.F};
   std::vector<LowFunc> LowFuncs{std::move(LF)};
   AnalysisInput In;
@@ -752,8 +772,14 @@ TEST(AllocLifetime, NullCheckedConditionalFreeIsNotAHeapLeakWithoutReturnType) {
   In.MedFuncs = &MedFuncs;
   In.LowFuncs = &LowFuncs;
 
-  EXPECT_FALSE(has(auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{}),
-                   VulnClass::HeapLeak));
+  const auto Findings = auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
+  if (const auto *Leak = find(Findings, VulnClass::HeapLeak))
+    ADD_FAILURE() << Leak->Detail << " " << Leak->Corroboration;
+}
+
+TEST(AllocLifetime, NullCheckedConditionalFreeIsNotAHeapLeakWithoutReturnType) {
+  for (const Arch A : {Arch::X64, Arch::MIPS64N32, Arch::MIPS64N32EL})
+    checkNullCheckedConditionalFree(A);
 }
 
 TEST(AllocLifetime, CatalogSourceResultCanCorroborateConditionalLeakPath) {
@@ -5433,6 +5459,37 @@ TEST(AllocLifetime, MissingAllocationResultFailsClosed) {
   ASSERT_NE(Leak, nullptr);
   EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
   EXPECT_EQ(Leak->TheConfidence, Confidence::Low);
+}
+
+TEST(AllocLifetime, N32OnlyTheABIResultRegisterCarriesAWideHeapHandle) {
+  for (const Arch A : {Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Format = BinaryFormat::ELF;
+    const auto &TRI = getTargetRegInfo(A);
+    const MedVar Result = mkReg(TRI.IntReturnReg, 1, TRI.FullRegWidth);
+    const MedVar Argument =
+        mkReg(TRI.integerParamRegs(Img.Format).front(), 1, TRI.FullRegWidth);
+    for (const MedVar &Output : {Result, Argument, temp(1, 8)}) {
+      FB B("f", 0x100);
+      const int Block = B.block();
+      B.call(Block, "malloc", Output, {MedVar::makeConst(16, 4)});
+      const MedVar Passed = mkReg(Argument.RegOff, 2, TRI.FullRegWidth);
+      B.op(Block, NdOp::COPY, Passed, {Output});
+      B.call(Block, "free", {}, {Passed});
+      B.ret(Block, {});
+      const auto Findings = audit({B.F}, &Img);
+      const Finding *Leak = find(Findings, VulnClass::HeapLeak);
+      if (Output.Kind == MedVar::Reg && Output.RegOff == TRI.IntReturnReg) {
+        EXPECT_EQ(Leak, nullptr);
+      } else {
+        ASSERT_NE(Leak, nullptr);
+        EXPECT_EQ(Leak->TheVerdict, Verdict::Unknown);
+        EXPECT_EQ(Leak->Detail,
+                  "allocation result has incompatible target pointer width");
+      }
+    }
+  }
 }
 
 TEST(AllocLifetime, NarrowAllocationResultFailsClosed) {

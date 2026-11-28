@@ -66,7 +66,7 @@ EIP-3540은 Stagnant라 확정 mainnet behavior로 다루지 않습니다. 자�
 
 ---
 
-## 4. 메모리 안전성 감사와 헌트
+## 4. 메모리 안전성 검사
 
 리프트된 바이너리에서 힙 수명 결함(누수, 이중 해제, 해제 후 사용)과 위험한 복사 오버플로를 분석하고 구조화된 JSON으로 보고합니다. 증명된 오버플로에는 유계 솔버 모델을 붙입니다. 분석은 형식에 의존하지 않는 IR과 공유 신원 뷰에서 동작하므로 **PE, ELF, Mach-O는 동등한 대상**이며, 자체 기호 실행과 비트벡터 솔버를 재사용합니다. 외부 솔버나 컨테이너는 없습니다.
 
@@ -77,15 +77,12 @@ EIP-3540은 Stagnant라 확정 mainnet behavior로 다루지 않습니다. 자�
 | 도달 가능성 증거 | 알려진 진입점의 제어 상태, 독립적인 공격자 제어 고정점, 정확한 루트/호출 체인 증거 |
 | 신원 계약 | 형식별 싱크 해석(PE IAT, ELF PLT, Mach-O dyld bind)과 PDB / DWARF / MAP 이름 출처 |
 
-**상태:** PE, ELF, Mach-O의 Phase 1 구현이 완료되었습니다. P0은 힙 수명과 위험한 복사에 대한 폐쇄 세계 분석 및 정확한 리터럴 환경 값과 첫 표준 입력 소비를 위한 schema v1의 추가 `process-input-v1` 재생 증거를 포함합니다. 다른 입력 종류는 이유와 함께 재생 불가로 남습니다. P1은 스택/전역 오버플로, 미초기화 로컬 읽기, 형식 문자열을 다룹니다. 알 수 없거나 일부만 적용 가능한 호출 효과는 UNKNOWN입니다. 판정과 신원 커버리지는 [`unittests/safety`](../../unittests/safety)와 모든 호스트에서 필수 PE/ELF/Mach-O × x86-64/AArch64 6셀 fixture 매트릭스를 실행하는 종단 간 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)로 고정됩니다. 자세한 내용은 [메모리 안전성 감사와 헌트](memory-safety.md).
+**상태:** PE, ELF, Mach-O의 Phase 1 구현이 완료되었습니다. P0은 힙 수명과 위험한 복사에 대한 폐쇄 세계 분석 및 정확한 리터럴 환경 값과 첫 표준 입력 소비를 위한 schema v1의 추가 `process-input-v1` 재생 증거를 포함합니다. 다른 입력 종류는 이유와 함께 재생 불가로 남습니다. P1은 스택/전역 오버플로, 미초기화 로컬 읽기, 형식 문자열을 다룹니다. 알 수 없거나 일부만 적용 가능한 호출 효과는 UNKNOWN입니다. 판정과 신원 커버리지는 [`unittests/safety`](../../unittests/safety)와 모든 호스트에서 필수 PE/ELF/Mach-O × x86-64/AArch64 6셀 fixture 매트릭스를 실행하는 종단 간 [`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp)로 고정됩니다. 자세한 내용은 [메모리 안전성 검사](memory-safety.md).
 
 현재 프로시저 간 슬라이스는 독립적인 `verdict`를 바꾸지 않고 schema v1에
 `reachability.status`와 `reachability.attacker_control`을 추가합니다.
 `application`, `image`, `export` 루트, 정확한 내부 호출 체인, fail-closed UNKNOWN
-상태를 보고합니다. `max_call_depth`와 `max_summary_iterations` 예산은 C API, 두 CLI
-명령, 두 Python 메서드에서 설정할 수 있습니다. 따라서 `control_reachable`과
-`attacker_reachable`은 도달
-가능성 집계이며 별도의 판정 집계가 아닙니다.
+상태를 보고합니다. `max_call_depth`와 `max_summary_iterations` 예산은 C API, `neverd scan`, `Session.scan()`에서 설정할 수 있습니다.
 
 P2 분석 표면과 계획은 명시적 상태가 있는 버전 경계를 사용합니다.
 
@@ -122,5 +119,5 @@ EVM source reconstruction은 계속 진행 중입니다. 출시일을 약속하�
 | EVM legacy decode/lifting | Fusaka까지 완료; 회귀 테스트 적용 |
 | EVM source reconstruction | 진행 중 — evidence-backed, 보수적 |
 | Solana eBPF (SBF) 디컴파일 | 완료 — v0-v4, C, Rust, LLVM; 회귀 테스트 완료 |
-| 메모리 안전성 감사와 헌트 | Phase 1 및 알려진 진입점 도달 가능성 슬라이스 완료; `lowir-concolic-v1`과 Darwin `binary-sanitizer-v1`은 실험적; 네이티브 `process-replay-v1`은 fail-closed Phase 0 어댑터 뒤에서 아직 제공되지 않음 |
+| 메모리 안전성 검사 | Phase 1 및 알려진 진입점 도달 가능성 슬라이스 완료; `lowir-concolic-v1`과 Darwin `binary-sanitizer-v1`은 실험적; 네이티브 `process-replay-v1`은 fail-closed Phase 0 어댑터 뒤에서 아직 제공되지 않음 |
 | 엔진·제품 강화 | 지속 |

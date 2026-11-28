@@ -55,7 +55,7 @@ std::string Emitter::literal(const Object &O, unsigned Depth) {
   }
   case Object::Long:
     J.charge(J.Text, O.Digits.size() + 2, limits::kTextBytes, O.Offset);
-    return "(" + O.Digits + ")";
+    return "(" + O.Digits + (C.Version < 300 ? "L)" : ")");
   case Object::Float: {
     if (!std::isfinite(O.Real))
       reject("Non-finite float constant");
@@ -70,12 +70,17 @@ std::string Emitter::literal(const Object &O, unsigned Depth) {
     J.charge(J.Text, 6 * O.Data.size() + 2, limits::kTextBytes, O.Offset);
     std::string S;
     raw_string_ostream OS(S);
+    if (C.Version < 300) {
+      if (!llvm::all_of(O.Data, [](unsigned char B) { return B < 128; }))
+        reject("Non-ASCII Unicode literal requires a legacy source encoding");
+      OS << 'u';
+    }
     OS << json::Value(O.Data);
     return S;
   }
   case Object::Bytes: {
     J.charge(J.Text, O.Data.size() * 4, limits::kTextBytes, O.Offset);
-    std::string S = "b'";
+    std::string S = C.Version >= 206 ? "b'" : "'";
     for (unsigned char B : O.Data) {
       S += "\\x";
       S += hexdigit(B >> 4);
@@ -204,9 +209,21 @@ bool Emitter::expression(size_t &P, size_t End, Stack &S) {
     return true;
   }
   switch (O) {
+  case Op::PushNull:
+    S.push_back({Expr::NullCallSlot});
+    break;
+  case Op::SmallInteger:
+    Push(std::to_string(I.Arg));
+    break;
+  case Op::CommonConstant:
   case Op::LOAD_CONST: {
+    static const Object Common[] = {{Object::None},
+                                    {Object::Unicode},
+                                    {Object::True},
+                                    {Object::False},
+                                    {.Type = Object::Int, .Number = -1}};
     Expr V{Expr::Constant};
-    V.Value = C.Consts->Items[I.Arg];
+    V.Value = O == Op::CommonConstant ? &Common[I.Arg] : C.Consts->Items[I.Arg];
     S.push_back(std::move(V));
     break;
   }
@@ -299,9 +316,13 @@ bool Emitter::expression(size_t &P, size_t End, Stack &S) {
   case Op::MAKE_FUNCTION: {
     if (I.Arg & ~11u)
       reject("Unqualified function annotations or flags");
-    auto Qual = pop(S), K = pop(S);
-    if (Qual.Type != Expr::Constant || Qual.Value->Type != Object::Unicode ||
-        K.Type != Expr::Constant || K.Value->Type != Object::CodeObject)
+    if (C.Version >= 303 && C.Version <= 310) {
+      auto Qual = pop(S);
+      if (Qual.Type != Expr::Constant || Qual.Value->Type != Object::Unicode)
+        invalid("Invalid function qualified name");
+    }
+    auto K = pop(S);
+    if (K.Type != Expr::Constant || K.Value->Type != Object::CodeObject)
       invalid("Invalid function construction operands");
     Expr Def{Expr::Definition};
     Def.Value = K.Value;
@@ -315,7 +336,11 @@ bool Emitter::expression(size_t &P, size_t End, Stack &S) {
         invalid("Missing closure tuple");
       Free = std::move(V.Values);
     }
-    if (Free.size() != Child.Free->Items.size())
+    size_t FreeCount =
+        Child.Free ? Child.Free->Items.size()
+                   : llvm::count_if(Child.LocalKinds->Data,
+                                    [](unsigned char K) { return K & 0x80; });
+    if (Free.size() != FreeCount)
       invalid("Closure arity mismatch");
     for (size_t N = 0; N < Free.size(); ++N)
       if (Free[N] != Child.Free->Items[N]->Data)
@@ -360,6 +385,7 @@ bool Emitter::expression(size_t &P, size_t End, Stack &S) {
     Push("(yield " + A + ")");
     break;
   }
+  case Op::CallWithSlot:
   case Op::CALL_FUNCTION:
   case Op::CALL_METHOD:
   case Op::CALL_FUNCTION_KW: {
@@ -388,7 +414,16 @@ bool Emitter::expression(size_t &P, size_t End, Stack &S) {
       V = Keys[N] + "=" + V;
     }
     auto Callable = pop(S);
-    if ((O == Op::CALL_METHOD) != (Callable.Type == Expr::Method))
+    if (O == Op::CallWithSlot && Callable.Type != Expr::Method) {
+      if (C.Version >= 313) {
+        if (Callable.Type != Expr::NullCallSlot)
+          reject("Call receiver has no proven function binding");
+        Callable = pop(S);
+      } else if (pop(S).Type != Expr::NullCallSlot)
+        reject("Call receiver has no proven function binding");
+    }
+    if (O != Op::CallWithSlot &&
+        (O == Op::CALL_METHOD) != (Callable.Type == Expr::Method))
       invalid("Call opcode disagrees with method lookup");
     auto Callee = Callable.Type == Expr::Method ? std::move(Callable.Text)
                                                 : text(std::move(Callable));

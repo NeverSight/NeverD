@@ -144,6 +144,9 @@ public:
   llvm::ArrayRef<va_t> boundFunctionEntries() const override {
     return BoundFunctionEntries;
   }
+  bool hasAuthenticatedReturnDeclarations() const override {
+    return Inner.hasAuthenticatedReturnDeclarations();
+  }
   bool hasAuthenticatedFunctionSignatures() const override {
     return Inner.hasAuthenticatedFunctionSignatures();
   }

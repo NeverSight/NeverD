@@ -1,27 +1,30 @@
-# RISC-V and PowerPC integer ELF analysis
+# RISC-V and PowerPC ELF analysis
 
 ## Experimental ELF profiles
 
 | ELF machine | Class and byte order | ABI used for integer arguments and returns | Encoding |
 | --- | --- | --- | --- |
-| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbb, Zbs |
-| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbb, Zbs |
-| PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset |
-| PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Classic scalar and POWER10 prefixed fixed-point forms |
+| RISC-V | ELF32, little-endian | ILP32, a0–a7, word result in a0, double-word result in a0/a1 | RV32I, M, A, integer C, Zba, Zbb, Zbs, Zicond, Zicntr cycle reads |
+| RISC-V | ELF64, little-endian | LP64, a0–a7, result in a0 | RV64I, M, A, integer C, Zba, Zbb, Zbs, Zicond, Zicntr cycle reads |
+| RISC-V | ELF32 or ELF64, little-endian | ILP32D or LP64D, eight floating argument registers and two floating result registers | Integer profile plus F/D loads, stores, register transfers and sign injection, including compressed floating memory forms |
+| PowerPC | ELF32, big- or little-endian | Classic System V, r3–r10, word result in r3, double-word result in r3/r4 | Fixed-width scalar subset and VMX byte addition |
+| PowerPC64 | ELF64, big- or little-endian | ELFv1 or explicit ELFv2, r3–r10, result in r3 | Classic scalar, POWER10 prefixed fixed-point forms and VMX byte addition |
 
-For RISC-V, the ELF class selects XLEN. The loader accepts the integer ABI and
+For RISC-V, the ELF class selects XLEN. The float ABI flag selects the integer or double-float calling convention. A double-float image with an explicit ISA attribute must advertise D. The loader
 reads normalized `Tag_RISCV_arch` attributes for M, A and their integer
 subextensions. Zmmul permits multiplication, Zaamo permits atomic
 read-modify-write operations, and Zalrsc permits load-reserved/store-conditional.
 LLVM functions retain the evidenced features, including Zca on a Zca-only
 image. An explicit stack alignment must match the 16-byte ILP32/LP64
-convention. Either the RVC ELF
+convention, including its D variants. Either the RVC ELF
 flag or the C/Zca attribute permits halfword instruction boundaries. Without
 extension evidence the decoder uses the base integer profile. A 32-bit
 instruction can follow a 16-bit instruction at a halfword address. The lifter
 uses the physical instruction length for the link address.
 [Unprivileged ISA, 20260120](https://docs.riscv.org/reference/isa/v20260120/unpriv/unpriv-index.html).
 [RISC-V ELF psABI](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/).
+
+The double-float ABI passes named floating values in `fa0`–`fa7` while integer arguments independently consume `a0`–`a7`. A qualifying one- or two-member record can use both register files. Unnamed variadic arguments follow the integer convention. Single-precision register values are NaN-boxed in the 64-bit floating register file. Loads, stores and raw register moves retain payload bits. Sign injection checks narrow operand boxing. [RISC-V hardware floating-point calling convention](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#_hardware_floating_point_calling_convention).
 
 Zba 1.0 enables the three XLEN-wide shift-and-add forms. On RV64,
 `add.uw`, `sh1add.uw`, `sh2add.uw`, `sh3add.uw` and `slli.uw`
@@ -34,6 +37,19 @@ extension, `orc.b` and `rev8`. RV64 word rotates sign-extend bit 31. Word
 counts examine the low 32 bits, and counting the leading or trailing zeros
 of a zero word yields 32. The ELF ISA attribute selects each extension.
 [RISC-V Bit Manipulation specification](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
+
+Zicond 1.0 adds `czero.eqz` and `czero.nez`. They compare the whole second
+source register with zero. When the named condition holds, the result is
+zero. Otherwise the result is the first source register. Linked ELF inputs
+need the `zicond1p0` ISA attribute, and rebuilt LLVM functions retain
+`+zicond`. [RISC-V Zicond specification](https://docs.riscv.org/reference/isa/unpriv/zicond.html).
+
+With the Zicntr 2.0 ELF attribute, `rdcycle` reads XLEN bits from the guest
+cycle counter with either the integer or double-float ABI. On RV32, `rdcycleh` reads its upper 32 bits. Each instruction
+samples separately, including a read whose destination is x0. Native C and
+LLVM projections read the guest CSR. LowIR emulation accepts a caller-supplied
+64-bit counter reader and stops if a sample is unavailable.
+[RISC-V counter extensions](https://docs.riscv.org/reference/isa/unpriv/counters.html).
 
 Linked RV32 and RV64 executables and shared libraries support the default
 psABI PLT. The loader reads `R_RISCV_JUMP_SLOT` from the program's dynamic
@@ -132,6 +148,11 @@ the counter update and materializes the PC without introducing a callee.
 For a conditional CTR jump, LowIR retains the register target and the
 fallthrough. Source and LLVM projections require a proven set of local taken
 targets, including cases where the fallthrough is also a taken target.
+An `isel` can choose between local label addresses before `mtctr`. Both
+addresses are checked after alignment, independently of the condition on
+`bcctr`. An unknown selectable address leaves the target set unresolved.
+The native CFG marks each taken CTR edge as true and the fallthrough as false.
+When both reach one block, JSON and DOT show both edges.
 An untyped register callback forwards the integer argument registers on the
 taken edge. ELFv1 descriptor and ELFv2 global-entry checks apply there.
 [Power ISA, Book I, Branch Processor](https://openpowerfoundation.org/specifications/isa/).
@@ -143,13 +164,18 @@ currently rejected. [OpenPOWER ELFv2 ABI](https://openpower.foundation/specifica
 The scalar encodings and flag definitions follow Books I and II of versions
 2.07b and 3.1c of the ISA. [OpenPOWER ISA](https://openpowerfoundation.org/specifications/isa/).
 
+PowerPC `vaddubm` adds corresponding bytes in two VMX registers modulo
+256. Each byte discards its carry. The sixteen lanes have the same addition
+semantics in either byte order. The AltiVec ABI passes vectors in v2 through
+v13 and returns a vector in v2. [AltiVec Programming Environments Manual](https://www.nxp.com/docs/en/reference-manual/ALTIVECPOWERISAPEM.pdf).
+
 ## Analysis coverage
 
 | Stage | RISC-V | PowerPC |
 | --- | --- | --- |
 | Identify and load | ELF class, machine, flags and attributes | ELF class, machine, ABI flag and byte order |
-| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences and atomics | Integer ALU, signed and unsigned word/doubleword division, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
-| CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer register arguments | Direct and conditional branches, CTR loops, conditional direct and indirect calls, CTR jumps and guarded LR returns, integer register arguments |
+| Decode and lift | Integer ALU and word operations, loads/stores, branches, jumps, multiply/divide, integer compressed forms, fences, atomics, cycle reads and the floating transfers and sign operations above | Integer ALU, signed and unsigned word/doubleword division, VMX modulo byte addition, per-lane population counts, CR compares and bit operations, LR/CTR transfers, carry and overflow forms, rotates/masks, ordinary, update-form and byte-reversed loads/stores, reservations and barriers |
+| CFG and calling convention | Direct and indirect jumps/calls, return through ra, integer and double-float ABI argument registers | Direct and conditional branches, CTR loops, conditional direct and indirect calls, CTR jumps and guarded LR returns, integer register arguments |
 | Source and LLVM | HighC, LLVM IR and LLVM-derived C for the qualified integer subset | Same stages in target byte order |
 | Native rewrite | Unsupported | Unsupported |
 
@@ -228,13 +254,13 @@ displacement and boundary rules for a PC-relative linkage stub.
 [Power ISA, Book I](https://openpowerfoundation.org/specifications/isa/).
 
 The strict lifters report unsupported instructions at their original VA.
-RISC-V system/CSR, FP, V and vendor extensions, along with PowerPC VLE, SPE,
-VMX, VSX, other prefixed forms and system instructions, still require lifting support.
+Other RISC-V system and CSR instructions, rounded floating arithmetic, V and vendor extensions still
+require lifting support. Additional PowerPC VMX operations, VLE, SPE, VSX,
+other prefixed forms and system instructions also remain outside this profile.
 Relative relocations write the link-time pointer in target byte order.
 Full-width absolute relocations retain the symbol and addend. RISC-V and
 ELFv2 jump slots retain their import binding. PPC32 PIC stubs require a
-proven r30-relative jump slot. FP arguments, variadic and
-aggregate calls require separate ABI coverage. Link objects with relocations
+proven r30-relative jump slot. PowerPC floating arguments, variadic and aggregate calls require separate ABI coverage. Link objects with relocations
 against allocated sections before analysis. Raw firmware mapping and native
 guest execution have separate entry points and coverage.
 
@@ -341,6 +367,8 @@ C projections use the `-fno-strict-aliasing` flag specified in their prelude.
 
 The conditional-transfer fixture checks original machine execution and
 relocated HighC, LLVM C and LLVM IR rebuilds at both optimization levels.
+It varies the `isel` choice independently of the branch condition and checks
+the diagnostic when one of the selectable addresses comes from a parameter.
 Use GNU PowerPC64 ld with `--ppc64-abi elfv1 --profiles powerpc64 powerpc64le`
 to exercise descriptors in both byte orders.
 
@@ -349,9 +377,24 @@ python3 unittests/lift/elf-integer/conditional_branches.py \
   --neverd /path/to/neverd --clang /path/to/clang --ld /path/to/ld.lld
 ```
 
+The counter and VMX fixture links each rebuilt callee to a separately compiled
+native caller. ILP32, ILP32D, LP64 and LP64D runs read the guest counter under
+QEMU. RV32 also repeats its high/low/high loop across a forced rollover. PowerPC callers exercise two-argument addition and a three-argument function
+that leaves its first vector unused. Both check all 65,536 unsigned byte pairs
+on PPC32 and PPC64 in both byte orders. Pass `--elfv1-ld /path/to/powerpc64-linux-gnu-ld`
+to exercise ELFv1 function descriptors as well.
+
+```sh
+python3 unittests/lift/elf-integer/counter_vmx.py \
+  --neverd build-release/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld \
+  --qemu-dir /usr/bin
+```
+
 The extended scalar fixture runs linked RV32, RV64 and both byte orders of
-POWER10 PPC64 under Linux QEMU user mode. A separately compiled scalar
-oracle checks return values and each byte of the PPC64 stores. It runs again
+POWER10 PPC64 under Linux QEMU user mode. For Zicond, the RV32 and RV64
+fixtures combine both instructions in a branchless select. A caller compiled
+for the base ISA checks zero, nonzero and high-bit-only conditions. The PPC64
+oracle checks return values and each byte of the stores. It runs again
 after recompiling HighC, LLVM-derived C and LLVM IR at `-O0` and `-O2`, with
 the original code and data addresses outside the rebuilt mappings.
 

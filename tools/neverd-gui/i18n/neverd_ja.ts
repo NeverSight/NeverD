@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>JVM クラスと JAR を調べる…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Java バイトコード、型付き中間表現、復元したメソッドを表示</translation>
+    </message>
+    <message>
         <source>Memory Safety Scan...</source>
         <translation>メモリ安全性スキャン...</translation>
     </message>
@@ -11188,16 +11196,16 @@ Your previous graph is still available.</source>
         <translation>解析器(&amp;A)</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit と Hunt</translation>
+        <source>All checks</source>
+        <translation>すべての検査</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>オブジェクトの寿命と初期化</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>境界と書式文字列</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11257,6 +11265,109 @@ Your previous graph is still available.</source>
     </message>
 </context>
 <context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>JVM クラスと JAR を調べる</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>参照…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>解析対象</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>JAR の基本エントリ</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>プレビューを有効にする</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>ランタイム</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>ローカルの依存ファイル…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>クリア</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>依存ファイル</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>クラスまたはメンバー</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>メソッド</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>一覧を取得</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>選択項目を解析</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>キャンセル</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Java ソース</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>バイトコード</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>型付き中間表現</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>根拠</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>バイトコードの対応</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>ビューをコピー</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>ビューをエクスポート…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>レポートをエクスポート…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>JVM ファイルを開く</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>選択したランタイムのビュー</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>すべてのメソッド</translation>
+    </message>
+</context>
+<context>
     <name>neverd::gui::ScriptRecoveryDialog</name>
     <message>
         <source>Recover Lua source</source>
@@ -11281,6 +11392,10 @@ Your previous graph is still available.</source>
     <message>
         <source>LuaJIT</source>
         <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>公式 Luau</translation>
     </message>
     <message>
         <source>Upstream Luau 0.659</source>

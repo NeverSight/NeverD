@@ -1389,6 +1389,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   PotentialJumpTableBranches.clear();
   EverPublishedJumpTableBranches.clear();
   LostValidatedJumpTableBranches.clear();
+  OwnLabelTableReads.clear();
   StackTableEvidenceIncompleteBranches.clear();
   FrameLabelTableSources.clear();
   IndexDomainEvidenceIncompleteBranches.clear();
@@ -1673,6 +1674,12 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
           It != Insns.end() && It->second.IsBranch && It->second.IsIndirect &&
           !It->second.IsCall && It->second.JumpTableTargets.empty())
         LostValidatedJumpTableBranches.insert(Addr);
+  // A jump through a table of this function's own code that nothing bounds
+  // dispatches by value on the labels the table's leading slots name.  The
+  // resolver's fixed point is complete and stays as it is: running it again
+  // would retry proofs whose evidence ran out and forget the incompleteness
+  // it recorded.
+  recoverOwnLabelTableBranches(Img, Dec, Func);
   convertIndirectTailCalls(Func);
   dispatchUnprovedBranchesByValue(Img, Func);
   closeRegistrationCxxContinuations(Img, Dec, Func);

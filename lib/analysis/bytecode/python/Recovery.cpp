@@ -8,6 +8,7 @@
 /// distinct native backend for compiled images.
 //===----------------------------------------------------------------------===//
 
+#include "../ReportStream.h"
 #include "Artifacts.h"
 
 #include "neverd/support/SHA256.h"
@@ -89,9 +90,6 @@ fs::path filePath(StringRef S) {
 std::string portable(const fs::path &P) {
   auto U = P.generic_u8string();
   return {U.begin(), U.end()};
-}
-unsigned profileVersion(StringRef Profile) {
-  return Profile == "cpython-3.10" ? 310 : Profile == "cpython-3.11" ? 311 : 0;
 }
 void checkProfile(StringRef Profile, unsigned Version, size_t At) {
   if (auto Requested = profileVersion(Profile);
@@ -298,7 +296,8 @@ void Job::inspect(unsigned Id, StringRef B, StringRef Name, unsigned Depth,
   StringRef Ext = sys::path::extension(Name);
   if (B.starts_with(StringRef("PYZ\0", 4))) {
     if (B.size() >= 8) {
-      unsigned Tag = pythonVersion(support::endian::read16le(B.data() + 4));
+      unsigned Tag = pythonVersion(support::endian::read32le(B.data() + 4),
+                                   profileVersion(Profile));
       if (Version && Tag && Tag != Version)
         malformed(4, "PYZ magic conflicts with enclosing runtime");
       checkProfile(Profile, Tag, 4);
@@ -306,11 +305,13 @@ void Job::inspect(unsigned Id, StringRef B, StringRef Name, unsigned Depth,
     pyz(*this, Id, B, Depth);
     return;
   }
-  if (RawCode) {
+  bool HasPycMagic =
+      B.size() >= 4 && pythonVersion(support::endian::read32le(B.data()));
+  if (RawCode && !HasPycMagic) {
     R["kind"] = "marshalled_code";
     R["backend"] = "python";
     R["python_version_tag"] = Version;
-    if (Version != 310 && Version != 311)
+    if (!knownVersion(Version))
       unsupported(0, "Unqualified packaging runtime for raw code");
     checkProfile(Profile, Version, 0);
     if (!selected(*this, Id)) {
@@ -321,40 +322,19 @@ void Job::inspect(unsigned Id, StringRef B, StringRef Name, unsigned Depth,
     return;
   }
   if (Ext.equals_insensitive(".pyc") ||
-      (B.size() >= 4 && B.substr(2, 2) == "\r\n" &&
-       pythonVersion(support::endian::read16le(B.data())) &&
-       !Ext.equals_insensitive(".py"))) {
+      (HasPycMagic && (RawCode || !Ext.equals_insensitive(".py")))) {
     R["kind"] = "pyc";
     R["backend"] = "python";
-    if (B.size() < 4 || B.substr(2, 2) != "\r\n")
-      malformed(0, "Invalid or truncated pyc magic");
-    unsigned Magic = support::endian::read16le(B.data());
-    R["magic"] = Magic;
-    unsigned Tag = pythonVersion(Magic);
-    if (!Tag)
-      unsupported(0, "Unqualified CPython magic and code layout");
+    unsigned Tag;
+    size_t Header = pycHeader(*this, R, B, Tag);
     checkProfile(Profile, Tag, 0);
-    if (B.size() < 16)
-      malformed(B.size(), "Truncated pyc header");
-    unsigned Flags = support::endian::read32le(B.data() + 4);
-    if (Flags != 0 && Flags != 1 && Flags != 3)
-      malformed(4, "Invalid pyc invalidation flags");
-    R["header_mode"] = Flags == 0   ? "timestamp"
-                       : Flags == 1 ? "unchecked_hash"
-                                    : "checked_hash";
-    if (Flags)
-      R["source_hash"] = toHex(B.substr(8, 8), true);
-    else {
-      R["timestamp"] = support::endian::read32le(B.data() + 8);
-      R["source_size"] = support::endian::read32le(B.data() + 12);
-    }
-    R["optimization"] = "unknown";
-    R["dialect"] = Tag == 310 ? "CPython 3.10" : "CPython 3.11";
+    if (Version && Version != Tag)
+      malformed(0, "Python magic conflicts with enclosing runtime");
     if (!selected(*this, Id)) {
       R["status"] = "available";
       return;
     }
-    recoverCode(*this, Id, B, 16, Tag);
+    recoverCode(*this, Id, B, Header, Tag);
     return;
   }
   if (Ext.equals_insensitive(".py")) {
@@ -367,7 +347,7 @@ void Job::inspect(unsigned Id, StringRef B, StringRef Name, unsigned Depth,
     }
     return;
   }
-  auto Cookie = B.rfind(StringRef(CookieMagic, sizeof(CookieMagic)));
+  auto Cookie = findArchiveCookie(B);
   if (Cookie != StringRef::npos) {
     archive(*this, Id, B, Cookie, Depth);
     return;
@@ -596,7 +576,17 @@ void fromPath(Job &J, StringRef Path) {
       throw;
   }
 }
+json::Object fileReport(Job &J, StringRef Path, int Component) {
+  if (Component >= 0)
+    J.Selection = Component;
+  return run(J, [&] {
+    if (Component < -1)
+      unsupported(0, "Invalid component selection");
+    fromPath(J, Path);
+  });
+}
 } // namespace
+
 json::Object neverd::python::recover(StringRef Bytes, StringRef Name,
                                      StringRef Profile, Cancel Stop,
                                      int Component) {
@@ -622,13 +612,7 @@ json::Object neverd::python::recover(StringRef Bytes, StringRef Name,
 json::Object neverd::python::recoverFile(StringRef Path, StringRef Profile,
                                          Cancel Stop, int Component) {
   Job J{Profile, Stop};
-  if (Component >= 0)
-    J.Selection = Component;
-  return run(J, [&] {
-    if (Component < -1)
-      unsupported(0, "Invalid component selection");
-    fromPath(J, Path);
-  });
+  return fileReport(J, Path, Component);
 }
 json::Object neverd::python::exportNative(StringRef Path, StringRef Profile,
                                           unsigned Id, StringRef Expected,
@@ -669,35 +653,18 @@ json::Object neverd::python::exportNative(StringRef Path, StringRef Profile,
   return json::Object{{"status", "exported"}, {"sha256", Expected.str()}};
 }
 namespace {
-// Preserve the small, buffered writes from the JSON formatter while bounding
-// the backing string even when the full inventory cannot fit in a worker reply.
-class ReportStream final : public raw_ostream {
-  std::string &Text;
-  bool Full = false;
-
-  void write_impl(const char *Data, size_t Size) override {
-    if (Full)
-      return;
-    if (Size > limits::kReportBytes - Text.size()) {
-      Full = true;
-      return;
-    }
-    Text.append(Data, Size);
-  }
-  uint64_t current_pos() const override { return Text.size(); }
-
-public:
-  explicit ReportStream(std::string &Text) : Text(Text) {}
-  bool exceeded() const { return Full; }
-};
-} // namespace
-
-std::string neverd::python::serializeReport(json::Object Report) {
+std::string serialize(json::Object Report,
+                      ArrayRef<FunctionInstructions> Tables) {
   json::Value Value(std::move(Report));
   std::string Text;
   {
-    ReportStream OS(Text);
-    OS << Value;
+    neverd::bytecode::ReportStream OS(Text, limits::kReportBytes);
+    if (Tables.empty())
+      OS << Value;
+    else {
+      json::OStream JSON(OS);
+      writeInstructionReport(JSON, *Value.getAsObject(), Tables);
+    }
     OS.flush();
     if (!OS.exceeded())
       return Text;
@@ -727,4 +694,18 @@ std::string neverd::python::serializeReport(json::Object Report) {
   OS << json::Value(std::move(Summary));
   OS.flush();
   return Text;
+}
+} // namespace
+
+std::string neverd::python::serializeReport(json::Object Report) {
+  return serialize(std::move(Report), {});
+}
+
+std::string neverd::python::recoverFileJSON(StringRef Path, StringRef Profile,
+                                            Cancel Stop, int Component) {
+  Job J{Profile, Stop};
+  std::vector<FunctionInstructions> Tables;
+  J.InstructionTables = &Tables;
+  auto Report = fileReport(J, Path, Component);
+  return serialize(std::move(Report), Tables);
 }

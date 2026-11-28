@@ -73,8 +73,8 @@ structured C, LLVM IR and LLVM-derived C for these profiles.
 
 | Target | Qualified ELF profiles |
 |---|---|
-| RISC-V | Little-endian RV32I/ILP32 and RV64I/LP64. ELF evidence selects M, A and integer C, or the individual Zmmul, Zaamo, Zalrsc and Zca extensions. The ELF ISA attribute also enables Zba 1.0, Zbb 1.0 and Zbs 1.0. |
-| PowerPC | Big- and little-endian PPC32 System V and PPC64 ELFv1/ELFv2. PPC32 supports cross-module calls through secure PLTs and the classic BSS-PLT. Both PPC64 ABIs support cross-module PLT calls and TOC switches. ELFv1 uses function descriptors and ELFv2 supports global and local entries. The scalar subset covers signed and unsigned division, high-word multiplication and overflow-reporting multiplication, including their CR0 and XER effects. PPC64 also lifts POWER10 prefixed integer addition, loads and stores. |
+| RISC-V | Little-endian RV32 (ILP32, ILP32D) and RV64 (LP64, LP64D). ELF evidence selects M, A and integer C, or the individual Zmmul, Zaamo, Zalrsc and Zca extensions. The ELF ISA attribute also enables Zba 1.0, Zbb 1.0, Zbs 1.0 and Zicond 1.0. Zicntr 2.0 enables `rdcycle` and, on RV32, `rdcycleh`. |
+| PowerPC | Big- and little-endian PPC32 System V and PPC64 ELFv1/ELFv2. PPC32 supports cross-module calls through secure PLTs and the classic BSS-PLT. Both PPC64 ABIs support cross-module PLT calls and TOC switches. ELFv1 uses function descriptors and ELFv2 supports global and local entries. The scalar subset covers signed and unsigned division, high-word multiplication and overflow-reporting multiplication, including their CR0 and XER effects. PPC64 also lifts POWER10 prefixed integer addition, loads and stores. VMX `vaddubm` adds 16 byte lanes modulo 256. |
 
 Native rewriting remains open for these profiles. See [RISC-V and PowerPC coverage](docs/riscv-powerpc.md).
 
@@ -184,8 +184,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -339,6 +337,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | counts | Default C for every loaded function; each body is dropped after it is checked |
 | `decompile -llvm` | `.c` | Via LLVM IR + optimizer |
 | `decompile --devirtualize` | `.c` + optional JSON | Experimental x64 interpreter recovery; requires `--func`; [contract and examples](docs/interpreter-recovery.md) |
+| `java` | Java / JVM IR / bytecode / JSON | [Class files and multi-release JARs](docs/jvm-recovery.md) |
 | `python` | `.py` / JSON / native components | [CPython and PyInstaller artifact recovery](docs/python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Lua, LuaJIT and Luau source recovery](docs/lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Experimental: [Android](docs/android.md), [iOS](docs/ios.md) |
@@ -382,8 +381,7 @@ setting as `neverd_session_set_arm_function_mode()`.
 | `funcs` | Discovered functions |
 | `disasm` | Disassemble (`--func` name or hex) |
 | `sym-explore` | Bounded native LowIR path exploration (`--func`; JSON output) |
-| `audit` | Heap-lifetime defects and uninitialized local stack reads (JSON) |
-| `hunt` | Dangerous-copy overflows with symbolic witnesses and additive `process-input-v1` replay evidence when a complete plan is available (JSON schema v1) |
+| `scan` | [Check object lifetime, initialization, bounds and format strings (JSON)](docs/memory-safety-scan.md) |
 | `hex` | Hex dump at an address |
 | `cfg` / `callgraph` | CFG / call graph (JSON; DOT/SVG optional) |
 | `xrefs` | Cross-references |

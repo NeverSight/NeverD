@@ -1,6 +1,6 @@
 **Языки**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 7a5404f829b6a5a34a3f24808dba0cb23589c828d24533a70789c03cf24cd87f -->
+<!-- i18n-source: 65a3c241a8b8275f8f2afcf61c262f54c2db5a0fd1e46824c63a903708fc981b -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ CLI, интеграторы и ИИ-агенты используют один �
 
 | Архитектура | Проверенные профили ELF |
 |---|---|
-| RISC-V | RV32I/ILP32 и RV64I/LP64 с порядком байтов от младшего к старшему. Сведения из ELF определяют расширения M, A и целочисленную часть C либо отдельные расширения Zmmul, Zaamo, Zalrsc и Zca. Атрибут ISA в ELF также включает Zba 1.0, Zbb 1.0 и Zbs 1.0. |
-| PowerPC | PPC32 System V и PPC64 ELFv1/ELFv2 с обоими порядками байтов. PPC32 поддерживает межмодульные вызовы через secure PLT и классическую BSS-PLT. Оба ABI PPC64 поддерживают межмодульные вызовы через PLT и переключение TOC. ELFv1 использует дескрипторы функций, а ELFv2 поддерживает глобальные и локальные точки входа. Проверены деление со знаком и без знака, умножение с выдачей старшего слова произведения и умножение с контролем переполнения, а также влияние этих операций на CR0 и XER. На PPC64 также поддерживаются префиксные инструкции POWER10 для сложения, загрузки и сохранения целых чисел. |
+| RISC-V | RV32 (ILP32, ILP32D) и RV64 (LP64, LP64D) с порядком байтов от младшего к старшему. Сведения из ELF определяют расширения M, A и целочисленную часть C либо отдельные расширения Zmmul, Zaamo, Zalrsc и Zca. Атрибут ISA в ELF также включает Zba 1.0, Zbb 1.0, Zbs 1.0 и Zicond 1.0. Zicntr 2.0 поддерживает `rdcycle`, а на RV32 также `rdcycleh`. |
+| PowerPC | PPC32 System V и PPC64 ELFv1/ELFv2 с обоими порядками байтов. PPC32 поддерживает межмодульные вызовы через secure PLT и классическую BSS-PLT. Оба ABI PPC64 поддерживают межмодульные вызовы через PLT и переключение TOC. ELFv1 использует дескрипторы функций, а ELFv2 поддерживает глобальные и локальные точки входа. Проверены деление со знаком и без знака, умножение с выдачей старшего слова произведения и умножение с контролем переполнения, а также влияние этих операций на CR0 и XER. На PPC64 также поддерживаются префиксные инструкции POWER10 для сложения, загрузки и сохранения целых чисел. Инструкция VMX `vaddubm` складывает 16 пар байтов по модулю 256. |
 
 Перезапись машинного кода для этих профилей ещё не реализована. [Поддержка RISC-V и PowerPC (на английском)](../riscv-powerpc.md)
 
@@ -182,8 +182,6 @@ cmake --build build
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
 ./build/bin/neverd scan binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -307,6 +305,7 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | счётчики | C по умолчанию для каждой загруженной функции; тело освобождается после проверки |
 | `decompile -llvm` | `.c` | Через LLVM IR + оптимизатор |
 | `decompile --devirtualize` | `.c` + необязательный JSON | Экспериментальное восстановление интерпретаторов x64; нужен `--func`; [контракт и примеры](interpreter-recovery.md) |
+| `java` | Java / IR JVM / байт-код / JSON | [Файлы классов и мультиверсионные JAR](../jvm-recovery.md) |
 | `python` | `.py` / JSON / нативные компоненты | [Восстановление артефактов CPython и PyInstaller](../python-recovery.md) |
 | `lua` | `.lua` / `.luau` / JSON | [Восстановление исходного кода Lua, LuaJIT и Luau](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Экспериментально: [Android](android.md), [iOS](ios.md) |
@@ -343,8 +342,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | Найденные функции |
 | `disasm` | Дизассемблирование (`--func` имя или hex) |
 | `sym-explore` | Ограниченное исследование путей нативного LowIR (`--func`; вывод JSON) |
-| `audit` | Ошибки времени жизни объектов кучи и чтение неинициализированного локального стека (JSON) |
-| `hunt` | Выход за границы опасных копирований с символьными свидетелями и дополнительными доказательствами воспроизведения `process-input-v1` при наличии полного плана (схема JSON v1) |
+| `scan` | [Проверка времени жизни и инициализации объектов, границ и строк формата (JSON)](../memory-safety-scan.md) |
 | `hex` | Hex dump по адресу |
 | `cfg` / `callgraph` | CFG / граф вызовов (JSON; опционально DOT/SVG) |
 | `xrefs` | Перекрёстные ссылки |

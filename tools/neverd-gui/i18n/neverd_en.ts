@@ -4,6 +4,14 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>Inspect JVM classes and JARs…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Inspect Java bytecode, typed IR and reconstructed methods</translation>
+    </message>
+    <message>
         <source>Memory Safety Scan...</source>
         <translation>Memory Safety Scan...</translation>
     </message>
@@ -11224,16 +11232,16 @@ Your previous graph is still available.</translation>
         <translation>&amp;Analyzers</translation>
     </message>
     <message>
-        <source>Audit and Hunt</source>
-        <translation>Audit and Hunt</translation>
+        <source>All checks</source>
+        <translation>All checks</translation>
     </message>
     <message>
-        <source>Audit</source>
-        <translation>Audit</translation>
+        <source>Lifetime and initialization</source>
+        <translation>Lifetime and initialization</translation>
     </message>
     <message>
-        <source>Hunt</source>
-        <translation>Hunt</translation>
+        <source>Bounds and format strings</source>
+        <translation>Bounds and format strings</translation>
     </message>
     <message>
         <source>Findings</source>
@@ -11293,6 +11301,109 @@ Your previous graph is still available.</translation>
     </message>
 </context>
 <context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>Inspect JVM classes and JARs</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Browse…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>Artifact</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>Base JAR entries</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>Enable preview</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>Runtime</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>Local dependencies…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Clear</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Dependencies</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>Class or member</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>Method</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>Inspect inventory</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>Analyze selection</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Java source</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>Bytecode</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>Typed IR</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Evidence</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Bytecode mappings</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>Copy view</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>Export view…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Export report…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>Open JVM artifact</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>Selected runtime view</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>All methods</translation>
+    </message>
+</context>
+<context>
     <name>neverd::gui::ScriptRecoveryDialog</name>
     <message>
         <source>Recover Lua source</source>
@@ -11317,6 +11428,10 @@ Your previous graph is still available.</translation>
     <message>
         <source>LuaJIT</source>
         <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>Upstream Luau</translation>
     </message>
     <message>
         <source>Upstream Luau 0.659</source>

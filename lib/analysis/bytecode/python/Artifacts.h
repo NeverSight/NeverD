@@ -10,6 +10,8 @@
 #ifndef NEVERD_ANALYSIS_BYTECODE_PYTHON_ARTIFACTS_H
 #define NEVERD_ANALYSIS_BYTECODE_PYTHON_ARTIFACTS_H
 
+#include "InstructionReport.h"
+
 #include "neverd/analysis/PythonRecovery.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -68,6 +70,8 @@ struct Job {
                bool RawCode = false);
   std::optional<unsigned> Selection, NativeSelection;
   std::string NativeBytes;
+  // The serialized API keeps typed rows until it writes the report.
+  std::vector<FunctionInstructions> *InstructionTables = nullptr;
 };
 
 std::string hash(llvm::StringRef Bytes);
@@ -75,16 +79,18 @@ bool safeMemberName(llvm::StringRef Name);
 void archive(Job &J, unsigned Id, llvm::StringRef Bytes, size_t Cookie,
              unsigned Depth);
 void pyz(Job &J, unsigned Id, llvm::StringRef Bytes, unsigned Depth);
-inline constexpr char CookieMagic[] = {'M', 'E', 'I', 12, 11, 10, 11, 14};
-inline constexpr unsigned Magic310 = 3439;
-inline constexpr unsigned Magic311 = 3495;
-inline unsigned pythonVersion(unsigned Magic) {
-  return Magic == Magic310 ? 310 : Magic == Magic311 ? 311 : 0;
-}
+size_t findArchiveCookie(llvm::StringRef Bytes);
+unsigned profileVersion(llvm::StringRef Profile);
+unsigned pythonVersion(uint32_t Signature, unsigned Requested = 0);
+std::string dialectName(unsigned Version);
+bool knownVersion(unsigned Version);
+size_t pycHeader(Job &J, llvm::json::Object &Component, llvm::StringRef Bytes,
+                 unsigned &Version);
 
 struct Object;
 struct Code {
   unsigned Version, Id, Args, PosOnly, KwOnly, Locals, Stack, Flags, FirstLine;
+  bool isModule() const;
   Object *Bytes, *Consts, *Names, *Vars, *Free, *Cells, *Filename, *Name,
       *Lines;
   Object *LocalKinds = nullptr, *QualifiedName = nullptr, *Exceptions = nullptr;
@@ -99,6 +105,9 @@ struct Object {
     Int,
     Long,
     Float,
+    Complex,
+    Slice,
+    StopIteration,
     Unicode,
     Bytes,
     Tuple,
@@ -123,7 +132,8 @@ class Marshal {
   size_t Position;
   unsigned Version;
   std::deque<Object> Nodes;
-  std::vector<Object *> References;
+  std::vector<Object *> References, Interned;
+  Object EmptyTuple{Object::Tuple}, EmptyLines{Object::Bytes}, Unnamed;
   std::vector<Object *> Codes;
   llvm::StringRef take(size_t Size);
   unsigned count();
@@ -138,10 +148,14 @@ public:
   llvm::ArrayRef<Object *> codes() const { return Codes; }
 };
 
-enum class Op : uint8_t {
+enum class Op : uint16_t {
 #define PYTHON_OPCODE(ID, NAME, OPERAND) NAME = ID,
 #include "Opcodes310.def"
 #undef PYTHON_OPCODE
+  SmallInteger = 256,
+  CommonConstant,
+  PushNull,
+  CallWithSlot,
 };
 struct Instruction {
   Op Opcode;
@@ -156,15 +170,21 @@ struct Function {
   std::vector<unsigned> Lines;
   std::string Source;
   std::optional<Failure> Error;
-  llvm::json::Array DiskInstructions, ExceptionRegions;
-  bool Decoded = false, BindingKnown = false;
+  std::vector<InstructionRecord> DiskInstructions;
+  llvm::json::Array ExceptionRegions;
+  bool Decoded = false;
+  std::string BindingName;
   explicit Function(const Object &Node) : Node(Node) {}
 };
 llvm::StringRef mnemonic(Op Opcode);
 void decode(Job &J, Function &F);
 void decode311(Job &J, Function &F);
+std::vector<std::optional<unsigned>> locationLines(Job &J, const Code &C);
+llvm::json::Array exceptionRegions(Job &J, const Code &C,
+                                   llvm::ArrayRef<int> Starts);
+void decodeRelease(Job &J, Function &F);
+bool prepareSource(Function &F);
 void render(Job &J, std::vector<Function> &Functions, unsigned Component);
-llvm::json::Array instructionRows(const Function &F);
 void recoverCode(Job &J, unsigned Id, llvm::StringRef Bytes, size_t At,
                  unsigned Version);
 } // namespace neverd::python

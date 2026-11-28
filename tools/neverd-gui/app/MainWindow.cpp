@@ -25,6 +25,7 @@
 #include "HighlightLocks.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
+#include "JVMRecoveryDialog.h"
 #include "JumpDialog.h"
 #include "Language.h"
 #include "LineageDialog.h"
@@ -2187,6 +2188,13 @@ void MainWindow::connectActions() {
     comparison_->raise();
     comparison_->activateWindow();
   });
+  on(ActionId::FileJVMRecovery, [this] {
+    if (!jvmRecovery_)
+      jvmRecovery_ = new JVMRecoveryDialog(session_.workerPath(), this);
+    jvmRecovery_->show();
+    jvmRecovery_->raise();
+    jvmRecovery_->activateWindow();
+  });
   on(ActionId::FilePythonRecovery, [this] {
     if (!pythonRecovery_) {
       pythonRecovery_ = new ScriptRecoveryDialog(session_.workerPath(), this,
@@ -2782,6 +2790,7 @@ void MainWindow::updateActions() {
                         name == QLatin1String("FileOpen") ||
                         name == QLatin1String("FilePackageReview") ||
                         name == QLatin1String("FileLuaRecovery") ||
+                        name == QLatin1String("FileJVMRecovery") ||
                         name == QLatin1String("FilePythonRecovery") ||
                         name == QLatin1String("FileCompare") ||
                         name == QLatin1String("FileExit") ||

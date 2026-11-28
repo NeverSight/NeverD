@@ -508,8 +508,10 @@ ReachingStackValues reachingStackValues(
     if (It == Blocks.end())
       return Result;
     State ExceptionalPrefixes;
-    State Next = transfer(*It->second, It->second->Ops.size(), In[Id],
-                          &ExceptionalPrefixes);
+    // Only an exceptional edge can consume the union of intermediate states.
+    State Next = transfer(
+        *It->second, It->second->Ops.size(), In[Id],
+        It->second->ExceptionalSuccs.empty() ? nullptr : &ExceptionalPrefixes);
     if (same(Out[Id], Next) && same(ExceptionalOut[Id], ExceptionalPrefixes))
       continue;
     Out[Id] = Next;

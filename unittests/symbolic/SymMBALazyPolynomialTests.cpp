@@ -17,10 +17,13 @@
 #include "neverd/symbolic/SymMBA.h"
 #include "neverd/symbolic/SymParse.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <random>
 #include <string>
 #include <utility>
@@ -342,6 +345,49 @@ TEST(SymMBALazyPolynomial, DenseCarryEmissionKeepsMeasuredWorkCeilings) {
   }
 }
 
+// Both fixtures add a high-bit product to two independently encoded sums.
+// Prove each sum at the original width, then the remaining product. Removing
+// one occurrence of each addend preserves multiplicity in modular addition.
+void checkCarrySumProof(SymContext &Ctx, SymRef Input, SymRef Output,
+                        unsigned Width) {
+  solver::Z3SolverOptions Options;
+  Options.TimeoutMs = 30000;
+  auto Prove = [&](SymRef A, SymRef B) {
+    solver::Z3Solver Verifier(Ctx, Options);
+    ASSERT_TRUE(Verifier.assertDistinct(A, B));
+    EXPECT_EQ(Verifier.check(), solver::SatResult::Unsat)
+        << Verifier.reasonUnknown();
+  };
+  auto Remainder = [&](SymRef Sum,
+                       llvm::ArrayRef<SymRef> Known) -> std::optional<SymRef> {
+    if (Ctx.op(Sum) != SymOp::Add)
+      return std::nullopt;
+    llvm::SmallVector<SymRef, 8> Terms(Ctx.operands(Sum));
+    for (SymRef Term : Known) {
+      auto It = llvm::find(Terms, Term);
+      if (It == Terms.end())
+        return std::nullopt;
+      Terms.erase(It);
+    }
+    return Terms.empty() ? Ctx.mkZero(Width) : Ctx.mkAdd(Terms);
+  };
+
+  const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+  const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+  const auto Parity = Ctx.mkXor(X, Y);
+  const auto Carry = Ctx.mkMul(Ctx.mkConst(Width, 2), Ctx.mkAnd(X, Y));
+  const auto Either = Ctx.mkOr(Z, W), Both = Ctx.mkAnd(Z, W);
+  const auto Before = Remainder(Input, {Parity, Carry, Either, Both});
+  const auto After = Remainder(Output, {X, Y, Z, W});
+  if (!Before || !After) {
+    Prove(Input, Output);
+    return;
+  }
+  Prove(Ctx.mkAdd(Parity, Carry), Ctx.mkAdd(X, Y));
+  Prove(Ctx.mkAdd(Either, Both), Ctx.mkAdd(Z, W));
+  Prove(*Before, *After);
+}
+
 TEST(SymMBALazyPolynomial, SharedParityGuardsKeepBothBranchesExact) {
   for (unsigned Width : {8u, 16u, 32u, 64u, 65u, 128u, 257u})
     for (bool Complement : {false, true}) {
@@ -355,14 +401,8 @@ TEST(SymMBALazyPolynomial, SharedParityGuardsKeepBothBranchesExact) {
       EXPECT_LT(Result.Work, Options.MaxWork);
       EXPECT_LT(Result.SizeAfter, Result.SizeBefore);
       checkFullWidthOracle(Ctx, F, Result.Expr);
-      if (Width <= 64 && solver::Z3Solver::available()) {
-        solver::Z3SolverOptions VerifyOptions;
-        VerifyOptions.TimeoutMs = 30000;
-        solver::Z3Solver Verifier(Ctx, VerifyOptions);
-        EXPECT_EQ(Verifier.checkDistinct(F.Input, Result.Expr),
-                  solver::SatResult::Unsat)
-            << Verifier.reasonUnknown();
-      }
+      if (Width <= 64 && solver::Z3Solver::available())
+        checkCarrySumProof(Ctx, F.Input, Result.Expr, Width);
     }
 }
 
@@ -508,14 +548,8 @@ TEST(SymMBALazyPolynomial, ScaledComplementsFinishWithoutRepeatedProofSearch) {
     EXPECT_LT(Result.Work, 2200u);
     EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
     checkFullWidthOracle(Ctx, F, Result.Expr);
-    if (solver::Z3Solver::available()) {
-      solver::Z3SolverOptions VerifyOptions;
-      VerifyOptions.TimeoutMs = 30000;
-      solver::Z3Solver Verifier(Ctx, VerifyOptions);
-      EXPECT_EQ(Verifier.checkDistinct(F.Input, Result.Expr),
-                solver::SatResult::Unsat)
-          << Verifier.reasonUnknown();
-    }
+    if (solver::Z3Solver::available())
+      checkCarrySumProof(Ctx, F.Input, Result.Expr, Width);
   }
 }
 

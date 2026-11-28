@@ -44,12 +44,17 @@ namespace neverd {
 void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
   if (!CurrentImg)
     return;
-  const bool NeedsFrameGuard = CurrentImg->Arch == Arch::AArch64;
+  const bool NeedsFrameGuard =
+      CurrentImg->Arch == Arch::AArch64 || CurrentImg->Arch == Arch::X64;
   // Coverage is published on LowFunc later in build(), so consult the current
-  // decode/lift account before granting a reaching-state condition here.
+  // decode/lift account before granting a reaching-state condition here. An
+  // unsupported instruction's effects are unknown. On x86-64 a decode failure
+  // or a path leaving the image only ends that path, which then reaches no
+  // branch; the AArch64 proof keeps its stricter account.
   const bool FrameProofAdmitted =
-      NeedsFrameGuard && DecodeFailureAddresses.empty() &&
-      UnsupportedInstructionAddresses.empty() && TruncatedPathAddresses.empty();
+      NeedsFrameGuard && UnsupportedInstructionAddresses.empty() &&
+      (CurrentImg->Arch != Arch::AArch64 ||
+       (DecodeFailureAddresses.empty() && TruncatedPathAddresses.empty()));
   // The proof reads Func, which the loop leaves as it is until the blocks are
   // rebuilt after it, so it runs once a candidate first asks.  Most functions
   // have no candidate.
@@ -60,11 +65,15 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
       if (AuthoritativeCurrentFuncRange)
         OwnedCode = {AuthoritativeCurrentFuncRange->first,
                      AuthoritativeCurrentFuncRange->second};
-      RestoredFrames = FrameProofAdmitted
-                           ? restoredAArch64IndirectTailFrames(
-                                 Func, CurrentImg->abiFormat(), OwnedCode,
-                                 limits::kMaxIndirectTailFrameWork, CurrentImg)
-                           : std::set<va_t>{};
+      if (!FrameProofAdmitted)
+        RestoredFrames.emplace();
+      else if (CurrentImg->Arch == Arch::AArch64)
+        RestoredFrames = restoredAArch64IndirectTailFrames(
+            Func, CurrentImg->abiFormat(), OwnedCode,
+            limits::kMaxIndirectTailFrameWork, CurrentImg);
+      else
+        RestoredFrames = restoredX64IndirectTailFrames(
+            Func, *CurrentImg, OwnedCode, limits::kMaxIndirectTailFrameWork);
     }
     return RestoredFrames->count(Addr) != 0;
   };
@@ -72,8 +81,9 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
   for (auto &[Addr, Rec] : Insns) {
     // A lack of jump-table targets alone cannot establish a tail call. An
     // AArch64 candidate must also restore its incoming SP and link word on
-    // every reaching path. Existing table identity/quarantine guards still own
-    // dispatch classification; this frame condition supplies no callee ABI.
+    // every reaching path, and an x86-64 candidate its incoming RSP. Existing
+    // table identity/quarantine guards still own dispatch classification;
+    // this frame condition supplies no callee ABI.
     if (!Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall || Rec.IsRet ||
         Rec.IsCond || Rec.RejectedScalarBranch || Rec.RejectedComputedTargets ||
         !Rec.JumpTableTargets.empty() || (NeedsFrameGuard && !Restored(Addr)) ||
