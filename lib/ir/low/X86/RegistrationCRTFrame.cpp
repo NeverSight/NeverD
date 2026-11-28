@@ -98,6 +98,19 @@ const LowInstructionBoundary *precedingInstruction(const LowBlock &Block,
 std::optional<uint32_t> pushedScalarArgument(const BinaryImage &Image,
                                              const LowBlock &Block, va_t Call,
                                              bool AllowGetter, size_t &Work);
+
+std::optional<uint32_t> pushedImageAddress(const BinaryImage &Image,
+                                           const LowInstructionBoundary *Push,
+                                           size_t &Work) {
+  if (!Push || Push->Size != 5)
+    return std::nullopt;
+  const auto Bytes =
+      readRelocatedPE32CodeBytes(Image, Push->Address, 5, {Push->Address + 1},
+                                 Work, limits::kMaxRegistrationEHStateWork);
+  if (!Bytes || (*Bytes)[0] != 0x68)
+    return std::nullopt;
+  return readLE<uint32_t>(Bytes->data() + 1);
+}
 } // namespace
 
 std::optional<va_t> checkedCRTCallSlot(const BinaryImage &Image,
@@ -153,14 +166,10 @@ bool hasBindingPreservingKernelArgument(const BinaryImage &Image,
     return false;
   if (*Call == KernelStartupCall::SetExceptionFilter ||
       *Call == KernelStartupCall::InitializeSList) {
-    if (Push->Size != 5)
+    const auto Pushed = pushedImageAddress(Image, Push, Work);
+    if (!Pushed)
       return false;
-    const auto Limit = limits::kMaxRegistrationEHStateWork;
-    const auto Bytes = readRelocatedPE32CodeBytes(
-        Image, Push->Address, 5, {Push->Address + 1}, Work, Limit);
-    if (!Bytes || (*Bytes)[0] != 0x68)
-      return false;
-    const auto Address = readLE<uint32_t>(Bytes->data() + 1);
+    const auto Address = *Pushed;
     if (*Call == KernelStartupCall::InitializeSList) {
       // The Win32 SLIST_HEADER occupies one aligned eight-byte cell. Check
       // the whole output, including the last byte, against every import.
@@ -173,7 +182,8 @@ bool hasBindingPreservingKernelArgument(const BinaryImage &Image,
     }
     // Installation records the pointer in Windows. A later unhandled
     // exception has its own dispatch and handler obligations.
-    return readImmutablePE32CodeBytes(Image, Address, 1, {}, Work, Limit)
+    return readImmutablePE32CodeBytes(Image, Address, 1, {}, Work,
+                                      limits::kMaxRegistrationEHStateWork)
         .has_value();
   }
   if (Push->Size != 1)
@@ -246,11 +256,23 @@ bool hasBindingPreservingCRTArgument(const BinaryImage &Image,
     return false;
   const llvm::StringRef Name = Import->Name;
   const bool Stream = Name == "__acrt_iob_func";
-  if ((!Stream && Name != "_set_app_type" && Name != "_set_fmode" &&
-       Name != "_set_new_mode") ||
+  const bool ExitTable = Name == "_initialize_onexit_table";
+  if ((!Stream && !ExitTable && Name != "_set_app_type" &&
+       Name != "_set_fmode" && Name != "_set_new_mode") ||
       !registration_abi::checkedRegistrationImportStackPop(Image, Slot) ||
-      checkedCRTCallSlot(Image, Op, Work) != Slot)
+      checkedCallSlot(Image, Op, Work, ExitTable) != Slot)
     return false;
+  if (ExitTable) {
+    const auto Table = pushedImageAddress(
+        Image, precedingInstruction(Block, Op.Addr, Work), Work);
+    // The UCRT initializer can write the three PE32 pointer fields. It
+    // neither allocates entries nor calls any registered function.
+    return Table &&
+           registration_abi::hasResidentRegistrationData(
+               Image, FrameValue::imageAddress(*Table), true, Work) &&
+           registration_abi::hasSEHCallbackImageMemory(
+               Image, *Table, 3 * sizeof(uint32_t), true, Work);
+  }
   const auto Value = pushedScalarArgument(Image, Block, Op.Addr, !Stream, Work);
   if (!Value)
     return false;

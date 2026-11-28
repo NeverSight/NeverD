@@ -763,6 +763,42 @@ TEST(RegistrationCRTFrame, XCPT4PrintfObtainsTheStandardOutputStream) {
   FAIL() << "missing original standard stream call";
 }
 
+TEST(RegistrationCRTFrame, XCPT4ExitTableInitializationOwnsAllThreeWords) {
+  using namespace registration_state;
+  for (bool Selected : {false, true}) {
+    auto Image = loadXCPT4(Selected);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(*Image));
+    const auto Caller = CFGBuilder().buildIntegerFrameProof(
+        *Image, Dec, 0x407001, "initialize exit tables");
+    const std::map<va_t, va_t> Tables = {{0x407030, 0x40b200},
+                                         {0x40703f, 0x40b20c}};
+    std::set<va_t> Seen;
+    size_t Work = 0;
+    for (const auto &Block : Caller.Blocks)
+      for (const auto &Op : Block.Ops) {
+        auto Table = Tables.find(Op.Addr);
+        if (Op.Opcode != NdOp::CALL || Table == Tables.end())
+          continue;
+        SCOPED_TRACE(::testing::Message() << Selected << '/' << Op.Addr);
+        ASSERT_TRUE(Seen.insert(Op.Addr).second);
+        const auto Slot = checkedCRTCallSlot(*Image, Op, Work);
+        ASSERT_EQ(Slot, 0x4080a4u);
+        EXPECT_TRUE(
+            hasBindingPreservingCRTArgument(*Image, Block, Op, *Slot, Work));
+        // An import starting at the last byte overlaps the third write.
+        auto Extra = Image->Imports.front();
+        Extra.IATAddr = Table->second + 11;
+        Image->Imports.push_back(Extra);
+        EXPECT_FALSE(
+            hasBindingPreservingCRTArgument(*Image, Block, Op, *Slot, Work));
+        Image->Imports.pop_back();
+      }
+    EXPECT_EQ(Seen.size(), Tables.size());
+  }
+}
+
 TEST(RegistrationCRTFrame, XCPT4StartupModesRequireTheirActualArgument) {
   using namespace registration_state;
   struct Invocation {
