@@ -2978,6 +2978,20 @@ may describe a separately saved return address. The input is refused when the
 live register at a signer has lost the caller's return or already holds a
 signature. Each other exit retains its own independently proved unwind row.
 
+On the M4 Max, all 68 valid direct publications succeeded and all 68 invalid
+attempts left no output. On the same inputs the prior development revision
+rejected 40 valid attempts, accepted 16 invalid attempts and produced incorrect
+exit rows for 20 original images. The regression checked 510 exit rows across
+original and published images, plus 136 interrupted stack snapshots in the
+original images.
+
+The Arm model ran all six combinations of signing path and exit for each of
+the 136 new original or published bodies. Across EL0, EL1 and the four
+EnPACM settings, the full inventory made 14,880 calls. Seven archived
+inventories and all eight disabled-feature controls also passed.
+[Qualification record](evidence/arm64e-cross-block-signing-2026-11-29.json) ·
+[Arm model run](https://github.com/gmh5225/test_mac_intel/actions/runs/46168244442)
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,
