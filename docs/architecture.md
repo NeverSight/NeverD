@@ -326,17 +326,37 @@ share descriptor/frame decisions. Recursive delivery owns #DF classification,
 CR2 publication and shutdown. `X64PagedExecution` binds generated scalar steps
 to that memory, authenticates instruction fetches, stages restart state and
 commits prepared stores. `ir/X86/X86UndefinedOpcodeRules` owns the explicit
-processor choice for UD0 fetch priority. The paged code64 continuation admits
-original UD0 with up to thirteen qualified non-LOCK legacy/REX prefixes and
-the audited terminal intrinsic; an opcode beyond the fifteen-byte instruction
-limit remains an explicit native or invalid-decode boundary.
-`X64PagedExecution` requires the target CPU's choice before fetch, then
-authenticates the prefix and opcode bytes and, for the complete-fetch choice, reads
-the remaining ModR/M, SIB and displacement bytes from live executable RAM.
-It raises #GP before a fetch that would require the sixteenth instruction byte.
-No data operand is read, and the existing fault owner delivers #UD, #GP or a
-preceding instruction-fetch #PF. The legacy protected executor uses the
-same profile type for its segmented original-byte fetch.
+processor choice for UD0 fetch priority. In code64, the paged source reader
+records up to thirteen legacy or REX prefixes, including LOCK, followed by
+`0F FF`. With a complete-fetch CPU binding, the executor reads the live
+ModR/M, SIB and displacement from executable memory before reporting #UD. It
+reports #GP(0) if another byte would exceed the fifteen-byte limit. The
+opcode-only binding reports #UD after the two opcode bytes.
+
+Fifteen prefixes, or fourteen prefixes followed by `0F`, prove a length fault
+within the first fifteen bytes. The separate `PrefixLengthFaultAfter15Bytes`
+CPU binding checks an enabled instruction breakpoint before fetching that span
+in address order. A fetch fault within the span takes precedence over #GP(0).
+A changed byte requests a new lift. The CFG retains a terminal decode failure
+for paged entry selection only when its bytes belong to the selected function,
+have an executable owner and contain no unapplied relocation. Software SGX
+uses the same span and preserves the original PC across AEX and ERESUME.
+The legacy protected executor uses the same UD0 profile type for segmented fetch.
+
+The mixed-mode fetch for HLT, fast system transfers, bound MSRs, RSM and
+software enclave instructions shares the virtual-interrupt and execution
+breakpoint checks. A pending virtual-interrupt conflict at CPL3 raises #GP(0)
+before an instruction breakpoint or code-page access. Already accepted
+instruction work resumes at its saved stage.
+
+`X86SgxMemory` binds the enclave's platform key operations and freezes their
+identity during a suspended instruction. The mixed-mode executor validates
+TARGETINFO, KEYREQUEST and destination permissions in architectural order,
+assembles the public report body and commits the prepared store. The platform
+supplies the processor-specific key derivation and local report MAC. The same
+EPC bank owns the contents, permissions and tracking result of each SGX2 page.
+EACCEPTCOPY publishes a page and its access rights together after both operands
+have been checked. [Software SGX1](x86-sgx-transfer.md#software-sgx1-enclave-execution) · [SGX2 page operations](x86-sgx-transfer.md#sgx2-dynamic-enclave-pages)
 
 Faultable IRET and RETF reuse the same continuation
 return and descriptor templates through that concrete evaluator. Their bound
@@ -24364,9 +24384,11 @@ SIMD import in `X64ContinuationAvxImage.h`. The LLVM terminal context intrinsic
 owns the final control/MSR writes and inseparable XRSTOR/RSM sequence; neither
 source emitter models a vendor's private SMRAM layout.
 
-The native SGX continuation projection owns canonical ENCLU leaves 2/3/4 in
-`X64ContinuationSgx.h`, using that same XSAVE image authority. Its terminal
-LLVM/NeverC interface restores the explicit input bank and jumps to the
+The native SGX continuation projection owns ENCLU leaves 2/3/4 in
+`X64ContinuationSgx.h`, using that same XSAVE image authority. It shares
+prefix classification with the mixed-mode software SGX executor. Both accept
+a segment override, an address-size override and a final REX in code64.
+The terminal LLVM/NeverC interface restores the explicit input bank and jumps to the
 immutable original instruction site. The original ENCLU therefore owns its
 PC-dependent outputs and native enclave/AEP continuation. Neither C emitter
 relocates EENTER and substitutes a guessed RCX value or models EPC/SSA/AEX.

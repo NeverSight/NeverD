@@ -302,6 +302,17 @@ latched machine checks, SMI, INIT, SIPI, NMI and fixed local APIC vectors.
 `interrupt` accepts an already selected IRQ or NMI. The embedding supplies
 error records, controller arrivals and startup signals.
 
+### Local timer and halted execution
+
+A bound deadline timer receives the full EDX:EAX value on WRMSR and returns
+it on RDMSR. Pass an absolute guest TSC with the interrupt bank to sample
+expiry. A deadline can become pending while IF is clear, while HLT is waiting,
+or on the boundary that admits SMI. The regression programs the deadline in
+code64, executes HLT, runs RSM from private real-mode firmware and checks the
+fixed interrupt's saved return PC against the instruction following HLT.
+Eight original KVM comparisons check deadline-mode selection, expiry, masking,
+MSR readback and IRR. [Local APIC timer binding](x86-local-apic.md#local-tsc-deadline) · [Execution receipts](evidence/x86-code64-prefix-faults-2026-11-28.json)
+
 ### Conventional machine checks
 
 Bind `X86ModeState::MCA` to the virtual CPU's banks and optional global control

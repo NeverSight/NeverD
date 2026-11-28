@@ -1,0 +1,2899 @@
+{
+  "date": "2026-11-28",
+  "latest_qualified_neverd": "5646cd6173edaafd5ea204bbbe87d2f9d5180547",
+  "later_dev_integration": [
+    {
+      "neverd": "eb9ed901953df9a77742b1ee4714836cd840dea1",
+      "capstone": "8e33b3ed6ecc02557cb38af80c37945e7a519bb8",
+      "llvm_tag": "neverd-llvm-v23.0.0-r12",
+      "llvm_source": "6947b7db63e913244e0aa6de087d1ad2e791e86f",
+      "compiler_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+      "software_passed": 62,
+      "software_skipped": 0,
+      "software_report_sha256": "068bc0ee88bb1b4b676cd650138d46d075dbdd1f290dd72b30c359fbf6906f00",
+      "compiled_sgx2_page_accesses": 8,
+      "original_mode_comparisons": 5,
+      "original_deadline_comparisons": 8,
+      "cli_sha256": "c1a146dd32b31b07e28ee79f5f1eb43527f2a5868df89355142213a8ee5c5298",
+      "enclu_encodings": 26,
+      "compiled_provider_returns": 208,
+      "native_enclave_executions": 0,
+      "branch_oracle_and_vmrun_checks": [
+        {
+          "executable": "NeverDX64PagedExecutionTests",
+          "tests": [
+            "X64PagedBranchDebugTest.OriginalBranchSelectionThroughBothCRoutes"
+          ],
+          "xml_sha256": "952199e09bff07d6815b5a9e546b0418adb3f9b7d5ed1dd226decc1e96cb8a0b"
+        },
+        {
+          "executable": "NeverDX86PagingTests",
+          "tests": [
+            "X86LegacyBranchDebugTest.OriginalProtectedBranchSelection"
+          ],
+          "xml_sha256": "7a54d74c14fd7e30e34243b07cd3d8025aa4522802b836d4436910921180f59d"
+        },
+        {
+          "executable": "NeverDX86LegacySourceTests",
+          "tests": [
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/ClangO0",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/ClangO2",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/NeverCO0",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/NeverCO2"
+          ],
+          "xml_sha256": "794b8eaab30983a956eee51ea5c85d6089d49c54980c9e79bc43e09fdebbd5a6"
+        },
+        {
+          "executable": "NeverDX64ContinuationExportTests",
+          "tests": [
+            "X64ContinuationExportTest.VmrunTransportsOriginalStateAndStopsAtVmexit"
+          ],
+          "xml_sha256": "62bd57eff209dabdcd2631e7e3a53f22d8f2e7f1605fdd91186ebd6590988fdc"
+        }
+      ],
+      "unchanged_executed_vmrun_export_sha256": {
+        "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+        "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+      },
+      "compiler_source": "5a70f355ef14d30454128ff29b867044f7b9c583",
+      "compiler_receipt_sha256": "ff5d461ca9a8fa7c38136ab0d061bfd8779b4f27bfe57e47773c1dd7dd2026de",
+      "compiler_artifact_url": "https://github.com/gmh5225/test_mac_intel/actions/runs/46145102623/artifacts/15263139058",
+      "receipt_sha256": "008ced0bd70b5246584f03a0083dff430447735f14c7fcaf5f8b498774e269d0"
+    },
+    {
+      "neverd": "eb9ed901953df9a77742b1ee4714836cd840dea1",
+      "capstone": "8e33b3ed6ecc02557cb38af80c37945e7a519bb8",
+      "llvm_tag": "neverd-llvm-v23.0.0-r17",
+      "llvm_source": "93a7e578d2b105139e938d1da8b502d0689a25a0",
+      "production_llvm_gitlink": "6947b7db63e913244e0aa6de087d1ad2e791e86f",
+      "compiler_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+      "software_passed": 62,
+      "software_skipped": 0,
+      "software_report_sha256": "068bc0ee88bb1b4b676cd650138d46d075dbdd1f290dd72b30c359fbf6906f00",
+      "compiled_sgx2_page_accesses": 8,
+      "original_mode_comparisons": 5,
+      "original_deadline_comparisons": 8,
+      "cli_sha256": "c1a146dd32b31b07e28ee79f5f1eb43527f2a5868df89355142213a8ee5c5298",
+      "enclu_encodings": 26,
+      "compiled_provider_returns": 208,
+      "native_enclave_executions": 0,
+      "branch_oracle_and_vmrun_checks": [
+        {
+          "executable": "NeverDX64PagedExecutionTests",
+          "tests": [
+            "X64PagedBranchDebugTest.OriginalBranchSelectionThroughBothCRoutes"
+          ],
+          "xml_sha256": "7da2606b836ddab9f7373c93bfd848fb48e551dbb5119852876eea5d8c79738d"
+        },
+        {
+          "executable": "NeverDX86PagingTests",
+          "tests": [
+            "X86LegacyBranchDebugTest.OriginalProtectedBranchSelection"
+          ],
+          "xml_sha256": "1bc033d4a1db77c80477b82ffaa6dce23f631217e3b6ccca09c2f90ecbf4a07a"
+        },
+        {
+          "executable": "NeverDX86LegacySourceTests",
+          "tests": [
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/ClangO0",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/ClangO2",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/NeverCO0",
+            "Compilers/X86LegacySourceTest.BranchDebugMatchesOriginalProtectedInstructions/NeverCO2"
+          ],
+          "xml_sha256": "19fbaf8e3992f76a24f0190ba25071811b2c54b12a31e743edc1b0b2c34bb1fb"
+        },
+        {
+          "executable": "NeverDX64ContinuationExportTests",
+          "tests": [
+            "X64ContinuationExportTest.VmrunTransportsOriginalStateAndStopsAtVmexit"
+          ],
+          "xml_sha256": "747d8998f69c0727ec714f6f1d53e96f97190604aa05890d0338b1354ea835f7"
+        }
+      ],
+      "unchanged_executed_vmrun_export_sha256": {
+        "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+        "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+      },
+      "compiler_source": "5a70f355ef14d30454128ff29b867044f7b9c583",
+      "compiler_receipt_sha256": "ff5d461ca9a8fa7c38136ab0d061bfd8779b4f27bfe57e47773c1dd7dd2026de",
+      "compiler_artifact_url": "https://github.com/gmh5225/test_mac_intel/actions/runs/46145102623/artifacts/15263139058",
+      "receipt_sha256": "7861f106b6b0c8ac4f771cbc2c97947a5ac4c719d916efb0d3682836801ddd29"
+    }
+  ],
+  "release_gate": {
+    "satisfied": false,
+    "production_pin": "neverd-llvm-v23.0.0-r12",
+    "limits": [
+      "Native SGX unavailable on all three designated runners.",
+      "Software SGX uses initialized EPCM, explicit supervisor tracking for SGX2 page changes and a caller-supplied platform for SGX1 keys and report MACs. Hardware key derivation, supervisor enclave construction/paging, report-v2 and 256-bit key leaves, CET and XSTATE beyond AVX are outside the qualified profile.",
+      "The SMM comparisons bind the two KVM save maps. External device timing and multiprocessor interrupt routing require platform producers.",
+      "Length-fault and debug priority on other CPUs and other overlong opcode families require target-specific qualification.",
+      "Two lower-paging original KVM tests require LA57. The bound local CPU did not enumerate it."
+    ],
+    "production_llvm_commit": "6947b7db63e913244e0aa6de087d1ad2e791e86f"
+  },
+  "sgx2_dynamic_pages": {
+    "neverd": "5646cd6173edaafd5ea204bbbe87d2f9d5180547",
+    "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+    "decoder": "6102b82da67070c3de4802e521a50b85b1bfb086",
+    "mode": "x86-64, serialized logical CPU and an imported initialized EPCM",
+    "leaves": {
+      "5": "EACCEPT",
+      "6": "EMODPE",
+      "7": "EACCEPTCOPY"
+    },
+    "tests": [
+      "X86ModeSgxThreadTest.AcceptedPagesRetainTheirBytesAndExtendPermissions",
+      "X86ModeSgxThreadTest.AcceptDistinguishesPageAttributesFromTracking",
+      "X86ModeSgxThreadTest.DynamicPageFaultsKeepOperandOrderAndOriginalPC",
+      "X86ModeSgxThreadTest.TimestampAdmissionUsesEnclaveFeaturesAndTsd",
+      "X86ModeSgxThreadTest.CompiledBodiesUseTheAcceptedPrivatePage",
+      "X86ModeSgxThreadTest.AcceptRetainsSecinfoAcrossRepeatedPageTableRepair"
+    ],
+    "page_copy_bytes": 4096,
+    "attribute_mismatch_status": 19,
+    "tracking_incomplete_status": 11,
+    "tracking": "Fresh pending EAUG pages need no epoch. A permission restriction or type change requires a supplied tracking result before EACCEPT can retire.",
+    "fault_cases": 14,
+    "regression_scope": "Full register addresses, ordered SECINFO/source/destination checks, AEX original RIP in SSA, EXINFO address and error code, repeated page-table backing repair and transactional page updates.",
+    "timestamps": "RDTSC and RDTSCP produce #UD in SGX1 and #GP(0) at CPL3 in SGX2 when CR4.TSD is set. Otherwise code64 uses the body time source.",
+    "sdk_checks": {
+      "r12": {
+        "selected_software": {
+          "passed": 62,
+          "hardware_skipped": 0,
+          "compiled_private_page_executions": 8,
+          "sha256": "52fc1bc466ac27ee0e2164ad785e0c62858a2024393f68836e0e1ac054c46461"
+        },
+        "mode_and_paged_execution": {
+          "p": {
+            "passed": 274,
+            "skipped": [],
+            "xml_sha256": "e6ab80fcd756b629515a945d9130db03d81577298a9a2f0e45d83e80d5bb1460",
+            "core_type": "0x40",
+            "original_cpu_to_generated_c_comparisons": 768,
+            "execute_breakpoint_priority_comparisons": 384,
+            "virtual_interrupt_priority_comparisons": 129,
+            "shards": [
+              {
+                "cpu": 2,
+                "sha256": "23ee2b028d934091fdb63bd0107090fe62235bca48d99ac3ff8014c6cd0db00c",
+                "tests": 137
+              },
+              {
+                "cpu": 8,
+                "sha256": "1ad62572f3bd28ca3029b2bcf56d6a3fee0ce8eba581a0a31581904135c3a51d",
+                "tests": 137
+              }
+            ],
+            "deadline_cpu_comparisons": 8,
+            "compiled_private_page_executions": 8,
+            "original_mode_transition_comparisons": 5
+          },
+          "e": {
+            "passed": 274,
+            "skipped": [],
+            "xml_sha256": "30ee70964329399929ae3f0e1a9948a34b02116b10f0bf662092b254dfd8c24a",
+            "core_type": "0x20",
+            "original_cpu_to_generated_c_comparisons": 768,
+            "execute_breakpoint_priority_comparisons": 384,
+            "virtual_interrupt_priority_comparisons": 129,
+            "shards": [
+              {
+                "cpu": 15,
+                "sha256": "a90c70142a04012dc4ceb938374266c4c161485c5be3aecf0756d8f4555cb4ee",
+                "tests": 137
+              },
+              {
+                "cpu": 17,
+                "sha256": "85736cc40cd7d80500456f372f1ef768599b6cd790020a7976717744cca637d8",
+                "tests": 137
+              }
+            ],
+            "deadline_cpu_comparisons": 8,
+            "compiled_private_page_executions": 8,
+            "original_mode_transition_comparisons": 5
+          }
+        },
+        "lower_paging": {
+          "passed": 859,
+          "skipped": [
+            "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+            "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1"
+          ],
+          "xml_sha256": "e44020e74aede120e8381eaa82977ddd48fd167cf51dfa03747ce213a06c04e5",
+          "configured_cpu": 3
+        },
+        "generated_guest_source": {
+          "passed": 265,
+          "skipped": [],
+          "xml_sha256": "fe0c3ac97f0b30a55b08acf9130ea4a7530f3a602f6505ff64ff3ec8529a45a2"
+        },
+        "continuation_export": {
+          "passed": 133,
+          "skipped": [],
+          "xml_sha256": "c5ee119a9b7e918326fe3ad4ed910317e926cc31bf14c5debcb1c7f84b827f52"
+        },
+        "code64_enclu_export": {
+          "encodings": 26,
+          "checked_provider_returns": 208,
+          "native_context_objects": 4,
+          "native_enclave_executions": 0,
+          "receipt_sha256": "c1a146dd32b31b07e28ee79f5f1eb43527f2a5868df89355142213a8ee5c5298"
+        },
+        "vmrun_export_sha256": {
+          "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+        },
+        "build": {
+          "llvm_tag": "neverd-llvm-v23.0.0-r12",
+          "llvm_commit": "6947b7db63e913244e0aa6de087d1ad2e791e86f",
+          "buildinfo_sha256": "00ec65ddc98d5cb5c4c2f0765d66a9e4b0b4e430a001410c1cc16b1703e6ab4a",
+          "native_bins_sha256": {
+            "NeverDX64PagedExecutionTests": "6089e628f61fe69ca6dcb70b7d7315d2bdfbb63f1e8a7d28a0ce287452a541fa",
+            "NeverDX64ContinuationExportTests": "b0e3d8c62aae0cdb3e96f8d3a1e04b93e73b4f6917574d2d3aaf57da892b9a70",
+            "NeverDX86PagingTests": "9759d472143b9236b6ca11be830499f8ceaa21db77c5f3304b423a7d2834ebe2",
+            "NeverDX86LegacySourceTests": "427f6d78f7b28c6d94ac098b83c1f8b3cd7cb647727f2f1e224f8c531c15ba2d",
+            "neverd": "c68d6757cb7010dbc7120650da3649277320344615feb39955e2fd238d54817e"
+          }
+        }
+      },
+      "r17": {
+        "selected_software": {
+          "passed": 62,
+          "hardware_skipped": 0,
+          "compiled_private_page_executions": 8,
+          "sha256": "52fc1bc466ac27ee0e2164ad785e0c62858a2024393f68836e0e1ac054c46461"
+        },
+        "mode_and_paged_execution": {
+          "p": {
+            "passed": 274,
+            "skipped": [],
+            "xml_sha256": "c073f5d0bbe26ea5822a39c9ad41cade7ab0c45581403384df33eec147f98a22",
+            "core_type": "0x40",
+            "original_cpu_to_generated_c_comparisons": 768,
+            "execute_breakpoint_priority_comparisons": 384,
+            "virtual_interrupt_priority_comparisons": 129,
+            "shards": [
+              {
+                "cpu": 0,
+                "sha256": "858839300a078019b4b80b1fe01148ec119143a695066cad439501488c0b8ff8",
+                "tests": 137
+              },
+              {
+                "cpu": 10,
+                "sha256": "a0e98a48b1e43fb06c03ffe0c2d62ec12105d76e0008cacf88f6b8e184517f50",
+                "tests": 137
+              }
+            ],
+            "deadline_cpu_comparisons": 8,
+            "compiled_private_page_executions": 8,
+            "original_mode_transition_comparisons": 5
+          },
+          "e": {
+            "passed": 274,
+            "skipped": [],
+            "xml_sha256": "38112c84273772090f8b2e8a22d4de7a3fc711b7a7e17de7606c0667e72786c8",
+            "core_type": "0x20",
+            "original_cpu_to_generated_c_comparisons": 768,
+            "execute_breakpoint_priority_comparisons": 384,
+            "virtual_interrupt_priority_comparisons": 129,
+            "shards": [
+              {
+                "cpu": 14,
+                "sha256": "a30e3e51650d1ab10ee9a5eb01e2bd44b7494eb4b70c59520fcb90672752576c",
+                "tests": 137
+              },
+              {
+                "cpu": 18,
+                "sha256": "8fdf643cfa2f62d980f9f286397cafe6472b26a21e3181ab408d86fc41b5a79c",
+                "tests": 137
+              }
+            ],
+            "deadline_cpu_comparisons": 8,
+            "compiled_private_page_executions": 8,
+            "original_mode_transition_comparisons": 5
+          }
+        },
+        "lower_paging": {
+          "passed": 859,
+          "skipped": [
+            "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+            "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1"
+          ],
+          "xml_sha256": "f43bdf2bbc8eeea8317c982ce4cc375e9fbc59b81ebd2ebd212cd09c325f8248",
+          "configured_cpu": 4
+        },
+        "generated_guest_source": {
+          "passed": 265,
+          "skipped": [],
+          "xml_sha256": "e838bb6f4b9a467a4e110638d19e57ab4106481f4c73f5e6cf89351cf4601c78"
+        },
+        "continuation_export": {
+          "passed": 133,
+          "skipped": [],
+          "xml_sha256": "759c38143aa93553aa24391f99d40aeaa62e1d71438fef53a1e0ecdee03f4a5b"
+        },
+        "code64_enclu_export": {
+          "encodings": 26,
+          "checked_provider_returns": 208,
+          "native_context_objects": 4,
+          "native_enclave_executions": 0,
+          "receipt_sha256": "c1a146dd32b31b07e28ee79f5f1eb43527f2a5868df89355142213a8ee5c5298"
+        },
+        "vmrun_export_sha256": {
+          "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+        },
+        "build": {
+          "llvm_tag": "neverd-llvm-v23.0.0-r17",
+          "llvm_commit": "93a7e578d2b105139e938d1da8b502d0689a25a0",
+          "buildinfo_sha256": "a56e1b59a87acd8c5ffd8425649c885138b86ea612df2f08c9c574fd38875c02",
+          "native_bins_sha256": {
+            "NeverDX64PagedExecutionTests": "0cc2346904fdd87150511d291b4468f107b69d23214216265987f62fab4b7087",
+            "NeverDX64ContinuationExportTests": "c4b16f8237060b389a2593ef035cee5d79400b15a56cdf2bcac3e4fca14da564",
+            "NeverDX86PagingTests": "56963290fb60560de8e87dd657c8856a4f660600b37dd77b0aa3a96bbd3acf49",
+            "NeverDX86LegacySourceTests": "cf86773720d6865ff27a4d662ca74b919313ffdc36acbb9eb061c0ccc08b6e6a",
+            "neverd": "2ca51c3385079ebd872950ca3d527f7f5d4e3423e6dd1164458a775d24501d54"
+          }
+        }
+      }
+    },
+    "hosted": [
+      {
+        "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46143175318",
+        "workflow_commit": "2d57aa39f9e6cef3e8713791c28f9f479508e85c",
+        "neverd": "5646cd6173edaafd5ea204bbbe87d2f9d5180547",
+        "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+        "expected": 62,
+        "status": "completed",
+        "conclusion": "success",
+        "capabilities": [
+          {
+            "runner": "macos-15-intel",
+            "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+            "epc_sections": 0,
+            "native_enclave_instructions": 0,
+            "sha256": "a5732c139aa8cb0bd86b5d3e64d004021be4176f1003395502eed3a443feb42f",
+            "cpuid_la57": false
+          },
+          {
+            "runner": "macos-26-intel",
+            "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+            "epc_sections": 0,
+            "native_enclave_instructions": 0,
+            "sha256": "103572c4b87c56deb98667089728b401a274cf92db024c569e2a9936ebd5107d",
+            "cpuid_la57": false
+          },
+          {
+            "runner": "ubuntu-24.04",
+            "cpu": "AMD EPYC 9V74 80-Core Processor",
+            "epc_sections": 0,
+            "native_enclave_instructions": 0,
+            "sha256": "40f3c332fd88625ecfef435dc6c2b17f1cad961e65edd1dadb5f07ae92a881ab",
+            "cpuid_la57": false
+          }
+        ],
+        "passed": 60,
+        "skipped": [
+          {
+            "name": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+            "status": "skipped",
+            "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeExecutionTests.inc:779: 1\n"
+          },
+          {
+            "name": "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm",
+            "status": "skipped",
+            "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeDeadlineTests.inc:116: false masked=false expire=false\n"
+          }
+        ],
+        "neverc_binary_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+        "software_sha256": "6d7d9c9607cb036459f1d17cfc3bb2ae3d60f12a29757a19603f6a14629754bc",
+        "translation_matrix_sha256": "5202e3b4e8652ba194d3f366f8c0f6ee33c1195c19ea973c708fb386a5e43772",
+        "compiled_private_page_executions": 8
+      },
+      {
+        "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46144355081",
+        "workflow_commit": "7eb123cf8ca3310560e1ec898210b120606a8ae5",
+        "neverd": "5646cd6173edaafd5ea204bbbe87d2f9d5180547",
+        "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+        "expected": 62,
+        "status": "completed",
+        "conclusion": "success",
+        "capabilities": [
+          {
+            "runner": "macos-15-intel",
+            "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+            "epc_sections": 0,
+            "native_enclave_instructions": 0,
+            "sha256": "815d66ef5592d9417f5e1e2ab65902fd4dcc900e971747d97cbabe23c0d9877c",
+            "cpuid_la57": false
+          },
+          {
+            "runner": "macos-26-intel",
+            "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+            "epc_sections": 0,
+            "native_enclave_instructions": 0,
+            "sha256": "94eb335f727d8246eb3488c9c0c9ca3cf1856b19b4e2ce6dc1004f1f2853863c",
+            "cpuid_la57": false
+          },
+          {
+            "runner": "ubuntu-24.04",
+            "cpu": "Intel(R) Xeon(R) 6975P-C",
+            "epc_sections": 0,
+            "native_enclave_instructions": 0,
+            "sha256": "4c75c9e22a807f813a25b6f285b4e9a06c9798e452337989380cbe26e9450197",
+            "cpuid_la57": false
+          }
+        ],
+        "passed": 60,
+        "skipped": [
+          {
+            "name": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+            "status": "skipped",
+            "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeExecutionTests.inc:779: 1\n"
+          },
+          {
+            "name": "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm",
+            "status": "skipped",
+            "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeDeadlineTests.inc:116: false masked=false expire=false\n"
+          }
+        ],
+        "neverc_binary_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+        "software_sha256": "6d7d9c9607cb036459f1d17cfc3bb2ae3d60f12a29757a19603f6a14629754bc",
+        "translation_matrix_sha256": "5202e3b4e8652ba194d3f366f8c0f6ee33c1195c19ea973c708fb386a5e43772",
+        "compiled_private_page_executions": 8,
+        "kvm_descriptor": {
+          "api_version": 12,
+          "uid": 1001
+        }
+      },
+      {
+        "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46145102623",
+        "workflow_commit": "3a9fadef3ef880c0df5fb35e8b3a5032c6a3b8f1",
+        "neverd": "5646cd6173edaafd5ea204bbbe87d2f9d5180547",
+        "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+        "expected": 62,
+        "status": "completed",
+        "conclusion": "success",
+        "passed": 60,
+        "skipped": [
+          {
+            "name": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+            "status": "skipped",
+            "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeExecutionTests.inc:779: 1\n"
+          },
+          {
+            "name": "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm",
+            "status": "skipped",
+            "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeDeadlineTests.inc:116: false masked=false expire=false\n"
+          }
+        ],
+        "neverc_binary_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+        "software_sha256": "6d7d9c9607cb036459f1d17cfc3bb2ae3d60f12a29757a19603f6a14629754bc",
+        "translation_matrix_sha256": "5202e3b4e8652ba194d3f366f8c0f6ee33c1195c19ea973c708fb386a5e43772",
+        "compiled_private_page_executions": 8,
+        "standalone_native_comparisons": {
+          "source_commit": "5646cd6173edaafd5ea204bbbe87d2f9d5180547",
+          "kvm": {
+            "api_version": 12,
+            "uid": 1001
+          },
+          "comparisons": [
+            {
+              "name": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+              "result": "skipped",
+              "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeExecutionTests.inc:779: 0\n",
+              "trace_sha256": "3d4e46cb2d19625db6630162fa5d73e862609b675869d6a409c0bb0860ed55a7",
+              "kvm_open_observations": [
+                "\", O_RDWR|O_CLOEXEC) = -1 EACCES (Permission denied)"
+              ]
+            },
+            {
+              "name": "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm",
+              "result": "skipped",
+              "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeDeadlineTests.inc:116: false masked=false expire=false\n",
+              "trace_sha256": "6d21280e934e236125e879eefda8440fc150a66c715977672a6ad815e3130da0",
+              "kvm_open_observations": [
+                "\", O_RDWR|O_CLOEXEC) = -1 EACCES (Permission denied)"
+              ]
+            }
+          ]
+        },
+        "unique_passes_including_standalone": 60
+      }
+    ],
+    "architecture_reference": "https://cdrdv2-public.intel.com/868149/332831-089-sdm-vol-3d.pdf",
+    "linux_reference": "https://github.com/torvalds/linux/blob/v6.18/arch/x86/kernel/cpu/sgx/ioctl.c",
+    "sdk_simulator_dispatch": "https://github.com/intel/confidential-computing.sgx.sdk/blob/73ae8ba0140f9295ef62245897c578c76c289341/sdk/simulation/tinst/t_instructions.cpp",
+    "native_sgx2_enclave_instructions": 0,
+    "bounded_enclu_native_codegen": {
+      "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+      "compiler_sha256": "6a040cdffeedc497912f46b27f4f977d4734cd3e4829382bb5e5c9a18495ba5f",
+      "source_sha256": "27461fc0a04ddeb8e109d9d322608183fa8dfecda472799542ef673bde96c086",
+      "public_api": "_enclu_bounded_u32",
+      "llvm_intrinsic": "llvm.x86.enclu.bounded",
+      "inline_asm": false,
+      "hardware_executions": 0,
+      "rows": [
+        {
+          "backend": "NeverC",
+          "optimization": "O0",
+          "ir_sha256": "e565712fb8dd31f167ff1ed75935916879a817ddee143eddf4330743e3769b4e",
+          "object_sha256": "c89c8345c266ea070861075e9336f014a4e82d7271d0c95805fd4a3686b6599b",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x24",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0xa7",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x127",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0x1a7",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0x227",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x2a7",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x327",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x3a7",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x427",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        },
+        {
+          "backend": "r12",
+          "optimization": "O0",
+          "ir_sha256": "e565712fb8dd31f167ff1ed75935916879a817ddee143eddf4330743e3769b4e",
+          "object_sha256": "d9ae9f0edf37aedc3dee2583eba83583dad578296c22a558f0c80708dc77e828",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x2c",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0xbf",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x14f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0x1df",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0x26f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x2ff",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x38f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x41f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x4af",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        },
+        {
+          "backend": "r17",
+          "optimization": "O0",
+          "ir_sha256": "e565712fb8dd31f167ff1ed75935916879a817ddee143eddf4330743e3769b4e",
+          "object_sha256": "d9ae9f0edf37aedc3dee2583eba83583dad578296c22a558f0c80708dc77e828",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x2c",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0xbf",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x14f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0x1df",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0x26f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x2ff",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x38f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x41f",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x4af",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        },
+        {
+          "backend": "NeverC",
+          "optimization": "O2",
+          "ir_sha256": "2601bddcc7129a7a0ebf78120bf8729467ddd6940d74b1a87f5529d6bfedeb17",
+          "object_sha256": "a4d74b5f41ac21e2d351f3b54ca579347c6348589076e53ed6b2913f2972f788",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x10",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0x43",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x73",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0xa3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0xd3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x103",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x133",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x163",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x193",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        },
+        {
+          "backend": "r12",
+          "optimization": "O2",
+          "ir_sha256": "2601bddcc7129a7a0ebf78120bf8729467ddd6940d74b1a87f5529d6bfedeb17",
+          "object_sha256": "2480b20ddb16a171cd7571c6cab3dbc27d5d69168a2b37f72a2fca1ffd87ebf9",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x10",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0x43",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x73",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0xa3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0xd3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x103",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x133",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x163",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x193",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        },
+        {
+          "backend": "r17",
+          "optimization": "O2",
+          "ir_sha256": "2601bddcc7129a7a0ebf78120bf8729467ddd6940d74b1a87f5529d6bfedeb17",
+          "object_sha256": "2480b20ddb16a171cd7571c6cab3dbc27d5d69168a2b37f72a2fca1ffd87ebf9",
+          "sites": {
+            "ereport": {
+              "leaf": 0,
+              "object_offset": "0x10",
+              "instruction": "0f01d7",
+              "selector": "xor eax,eax"
+            },
+            "egetkey": {
+              "leaf": 1,
+              "object_offset": "0x43",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x1"
+            },
+            "eaccept": {
+              "leaf": 5,
+              "object_offset": "0x73",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x5"
+            },
+            "emodpe": {
+              "leaf": 6,
+              "object_offset": "0xa3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x6"
+            },
+            "eacceptcopy": {
+              "leaf": 7,
+              "object_offset": "0xd3",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x7"
+            },
+            "everifyreport2": {
+              "leaf": 8,
+              "object_offset": "0x103",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x8"
+            },
+            "edeccssa": {
+              "leaf": 9,
+              "object_offset": "0x133",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0x9"
+            },
+            "ereport2": {
+              "leaf": 10,
+              "object_offset": "0x163",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xa"
+            },
+            "egetkey256": {
+              "leaf": 11,
+              "object_offset": "0x193",
+              "instruction": "0f01d7",
+              "selector": "mov eax,0xb"
+            }
+          }
+        }
+      ]
+    },
+    "earlier_paging_profile_crosscheck": {
+      "initial_xml_sha256": "c939024f6a7c29cb00668e25ca80231b785691eaacbf5b25d24669a85c8affec",
+      "unbound_cases": 34,
+      "processor_profile_checks": {
+        "p": [
+          {
+            "cpu": 4,
+            "passed": 17,
+            "xml_sha256": "7f21c67ed0bbb20d06e03aa3d8bc8f3d4e0540563248e7e36d70712a4e8f1d12"
+          },
+          {
+            "cpu": 6,
+            "passed": 17,
+            "xml_sha256": "35575bc118edf14d1c9d34a889262573ec6e2b75c18aab0bdd4dc102a3e11db0"
+          }
+        ],
+        "e": [
+          {
+            "cpu": 12,
+            "passed": 17,
+            "xml_sha256": "bcc96293392e6c4b97b17290d15c332ac41e1e152e9d0dcc2943a0e4f7b768c1"
+          },
+          {
+            "cpu": 14,
+            "passed": 17,
+            "xml_sha256": "5433bd9b623491d01ae9899ce5a20c23e07eb0614d94b287f664d117e8d8559b"
+          }
+        ]
+      },
+      "unique_qualified_cases": 859,
+      "hardware_skips": [
+        "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1",
+        "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3"
+      ]
+    }
+  },
+  "candidate_llvm": {
+    "release": "neverd-llvm-v23.0.0-r17",
+    "source": "93a7e578d2b105139e938d1da8b502d0689a25a0",
+    "production": false,
+    "archive_sha256": "589d35764bb0ba41971d5785b7c2df19e94c9b1cb30fed1a20ac0ceca8d709f4",
+    "buildinfo_sha256": "a56e1b59a87acd8c5ffd8425649c885138b86ea612df2f08c9c574fd38875c02",
+    "release_url": "https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r17",
+    "neverc_native_intrinsics": {
+      "frontend_sha256": "6a040cdffeedc497912f46b27f4f977d4734cd3e4829382bb5e5c9a18495ba5f",
+      "sdk": "neverd-llvm-v23.0.0-r17",
+      "input_sha256": "0a966f17d1560e496eb36c203e59970e92571d9e327e9b116b20a820f16de52b",
+      "optimizations": [
+        {
+          "optimization": "O0",
+          "calls": [
+            "enclu.transfer.at.context",
+            "enclu.transfer.context",
+            "rsm.context",
+            "vmread",
+            "vmrun.context",
+            "vmwrite"
+          ],
+          "opcodes": [
+            "vmread",
+            "vmwrite",
+            "vmrun",
+            "enclu",
+            "xrstor64",
+            "rsm"
+          ],
+          "ir_sha256": "8302389cc38acadb48dc51a81cb354f40f42b64344bc7b56b7e81762e116c555",
+          "object_sha256": "8ac8d30a9ffee043823f7ce650fb9aee4526115f5fff12de4c16a7b364e75710"
+        },
+        {
+          "optimization": "O2",
+          "calls": [
+            "enclu.transfer.at.context",
+            "enclu.transfer.context",
+            "rsm.context",
+            "vmread",
+            "vmrun.context",
+            "vmwrite"
+          ],
+          "opcodes": [
+            "vmread",
+            "vmwrite",
+            "vmrun",
+            "enclu",
+            "xrstor64",
+            "rsm"
+          ],
+          "ir_sha256": "643cff8668122ab637738d05c58583ee28920b259311485fed77ab4e3783d070",
+          "object_sha256": "622238f3acb496fae498964214a11ba48bba1cd69c0526477cbd7a0599dd3d29"
+        }
+      ]
+    },
+    "vmrun_local_rebuild": {
+      "neverd": "e0584f30c4e03a52d8305390ffee22e9d4624ab1",
+      "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+      "compiler_sha256": "6a040cdffeedc497912f46b27f4f977d4734cd3e4829382bb5e5c9a18495ba5f",
+      "llvm": "93a7e578d2b105139e938d1da8b502d0689a25a0",
+      "sdk_buildinfo_sha256": "a56e1b59a87acd8c5ffd8425649c885138b86ea612df2f08c9c574fd38875c02",
+      "fixture_catalog_sha256": "9a283c9b49ac43bae44d8d1e7017deeb04f57b6274b86369c32d0d6314d8540e",
+      "guests": [
+        {
+          "route": "high",
+          "input": "mapped",
+          "optimization": "O0",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "2d963accec587119b6088c0d1b4ef0c4106240eab189401b3042b0eb3d0cdadd",
+          "object_sha256": "12f3efbe99a04404a2fcd5da6cf2e7c864f401b927c4cdd25610a4d6eeb75800",
+          "image_sha256": "4e13ec16635702c27f1656103ef16ade6d5a64915bb579e6db260ea038786553",
+          "elf_sha256": "a617393a38049e740f06fd7551ad95ea485cead092d7c297b66c9adeaaf70242"
+        },
+        {
+          "route": "high",
+          "input": "mapped",
+          "optimization": "O2",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "75328a9a029f975d3684e6dc1ca76471fe49f332958ac2328a50800692080574",
+          "object_sha256": "3300524c953cbbf069215f84ace0cd068eeb6f823211d070af7d862b6a1c8a81",
+          "image_sha256": "5751266fbd7d9d048a9148e1aada6699a68969d40251d0a2c99c1190962b5141",
+          "elf_sha256": "da8df8f97bb1a97629731b16f2787ee3319dfa978d4431d179de0d24c1d5ca5d"
+        },
+        {
+          "route": "high",
+          "input": "tagged",
+          "optimization": "O0",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "44aa20fa38dce2ded0b2c765f2cf237ef96dcc8b6963ba8cc50decb187ed9049",
+          "object_sha256": "2d8a57407173852b6f56e5dc59df5d09a222435c6b0d1ddf9eec20fb226d4c07",
+          "image_sha256": "80ef5d0ec5c2343878ea80dbf3b37fab562d2e84177f605cbb5edfb2c563ec81",
+          "elf_sha256": "754b830e4258fcc565f786c207d98c797b55f0b68c9f0fd97ea22b0b370daa12"
+        },
+        {
+          "route": "high",
+          "input": "tagged",
+          "optimization": "O2",
+          "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+          "ir_sha256": "a17fc04c47100c27fe732118ef41a17380873a771ee9fc30d89642daeb8c2111",
+          "object_sha256": "4ce060cf3dced71b8fe5c771f35bfb5310481b624df1e9f1dac328bc6d95059c",
+          "image_sha256": "ac43fe0ee87e2e9dca99655e0598fbdbcb16b170d0efb87a03287ed87158d10f",
+          "elf_sha256": "dd0386aebe8df78c1d484c36aec3149e82972b91a44a669bb6dcf586e4e471e9"
+        },
+        {
+          "route": "llvm",
+          "input": "mapped",
+          "optimization": "O0",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "35d2730ef165eb0af7c3f09f11f9d50cc1db46e2af89ef0cb255f539380db8ed",
+          "object_sha256": "985d74bf317205fadcb1c6db23b919aaf3a8b7af7d55b7937b17a51ddbf9c7ae",
+          "image_sha256": "96cf79cc90fbbc9f3e2934d8e42ca16813fafde5086e5ef80b15e9716ef7d0fa",
+          "elf_sha256": "11a9b8dd16c4df7c08dfecd1bcbffb4ad5d7fc9928868002e7d773899ccbead7"
+        },
+        {
+          "route": "llvm",
+          "input": "mapped",
+          "optimization": "O2",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "3ce14b6bc0e2f9a5dee6d2ce9a11a4cad0af9cdbe523c91163c04ac6527a8fdf",
+          "object_sha256": "e836a4d9093e830c609bef4da98beb7d1dffa61a3a7e2bfe4d50355b826a7587",
+          "image_sha256": "c718bc3ae671f080663b652527d7e23938b991153ae7554d4f34526652fe3ff0",
+          "elf_sha256": "3f1f6b45834d630986b743a0bcbf8901ad78faa1b9b061dfc92c1349f278c969"
+        },
+        {
+          "route": "llvm",
+          "input": "tagged",
+          "optimization": "O0",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "1f9dc61a85cf1745ca3b4d06fcf164c433d8ff675acdac0ddbd12140b20df991",
+          "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+          "image_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b",
+          "elf_sha256": "a63df62ba27af42652a355d3db6f98c8a8f5dfae950a73ef9e09bf0fc3e1fb0b"
+        },
+        {
+          "route": "llvm",
+          "input": "tagged",
+          "optimization": "O2",
+          "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+          "ir_sha256": "3f0243608b00c56cfdc2e500ccea7f27af106a1a1dc383be58f61e37cc7b8ba1",
+          "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+          "image_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e",
+          "elf_sha256": "90ee93cf18692f67bfd60891320e96ac7c51e1d423eb2f97c7a084c53f017c90"
+        }
+      ]
+    },
+    "vmrun_matching_hardware_fixture_objects": 8,
+    "vmrun_matching_guest_images": 8,
+    "vmrun_matching_fault_symbol_elfs": 4,
+    "hosted_vmrun_rebuild_and_execution": [
+      {
+        "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46144197510",
+        "workflow_commit": "d7b7beacfa6f78dcb51cd95bc2109fc03ee7d0cf",
+        "compiler_source_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46138460863",
+        "compiler_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+        "receipt_sha256": "93de86d194c47a429fa9bb1cb61abdd3b5679254737dd18eed4cda3335e34b53",
+        "rebuild": {
+          "neverd": "e0584f30c4e03a52d8305390ffee22e9d4624ab1",
+          "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+          "compiler_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+          "llvm": "93a7e578d2b105139e938d1da8b502d0689a25a0",
+          "sdk_buildinfo_sha256": "a56e1b59a87acd8c5ffd8425649c885138b86ea612df2f08c9c574fd38875c02",
+          "fixture_catalog_sha256": "9a283c9b49ac43bae44d8d1e7017deeb04f57b6274b86369c32d0d6314d8540e",
+          "guests": [
+            {
+              "route": "high",
+              "input": "mapped",
+              "optimization": "O0",
+              "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+              "ir_sha256": "f98f61899765c5149f8df199b581e589e1916133bf86e4d35fe7943e0e2de6fc",
+              "object_sha256": "12f3efbe99a04404a2fcd5da6cf2e7c864f401b927c4cdd25610a4d6eeb75800",
+              "image_sha256": "4e13ec16635702c27f1656103ef16ade6d5a64915bb579e6db260ea038786553",
+              "elf_sha256": "a617393a38049e740f06fd7551ad95ea485cead092d7c297b66c9adeaaf70242"
+            },
+            {
+              "route": "high",
+              "input": "mapped",
+              "optimization": "O2",
+              "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+              "ir_sha256": "83d10c98bb52d9358fb9b67aeb1eb8b815791f19357bf6b1363303f7950d1bd2",
+              "object_sha256": "3300524c953cbbf069215f84ace0cd068eeb6f823211d070af7d862b6a1c8a81",
+              "image_sha256": "5751266fbd7d9d048a9148e1aada6699a68969d40251d0a2c99c1190962b5141",
+              "elf_sha256": "da8df8f97bb1a97629731b16f2787ee3319dfa978d4431d179de0d24c1d5ca5d"
+            },
+            {
+              "route": "high",
+              "input": "tagged",
+              "optimization": "O0",
+              "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+              "ir_sha256": "626253cdb3c6755cca6caf80fd7b4a7b333511763f50cfe52064a6898712603a",
+              "object_sha256": "2d8a57407173852b6f56e5dc59df5d09a222435c6b0d1ddf9eec20fb226d4c07",
+              "image_sha256": "80ef5d0ec5c2343878ea80dbf3b37fab562d2e84177f605cbb5edfb2c563ec81",
+              "elf_sha256": "754b830e4258fcc565f786c207d98c797b55f0b68c9f0fd97ea22b0b370daa12"
+            },
+            {
+              "route": "high",
+              "input": "tagged",
+              "optimization": "O2",
+              "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+              "ir_sha256": "a182fd3ec190034b2f30659b95fa75562da04f9b5d142a8586211863a4f44950",
+              "object_sha256": "4ce060cf3dced71b8fe5c771f35bfb5310481b624df1e9f1dac328bc6d95059c",
+              "image_sha256": "ac43fe0ee87e2e9dca99655e0598fbdbcb16b170d0efb87a03287ed87158d10f",
+              "elf_sha256": "dd0386aebe8df78c1d484c36aec3149e82972b91a44a669bb6dcf586e4e471e9"
+            },
+            {
+              "route": "llvm",
+              "input": "mapped",
+              "optimization": "O0",
+              "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+              "ir_sha256": "fe156fe524b9e499dcb693b7e29cbcaf42e97a279edbfb4f90d29f32c3cb1892",
+              "object_sha256": "985d74bf317205fadcb1c6db23b919aaf3a8b7af7d55b7937b17a51ddbf9c7ae",
+              "image_sha256": "96cf79cc90fbbc9f3e2934d8e42ca16813fafde5086e5ef80b15e9716ef7d0fa",
+              "elf_sha256": "11a9b8dd16c4df7c08dfecd1bcbffb4ad5d7fc9928868002e7d773899ccbead7"
+            },
+            {
+              "route": "llvm",
+              "input": "mapped",
+              "optimization": "O2",
+              "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+              "ir_sha256": "1a3029fdb1a705711c799fd697f8a61c5f55788cbc353106595407722291465c",
+              "object_sha256": "e836a4d9093e830c609bef4da98beb7d1dffa61a3a7e2bfe4d50355b826a7587",
+              "image_sha256": "c718bc3ae671f080663b652527d7e23938b991153ae7554d4f34526652fe3ff0",
+              "elf_sha256": "3f1f6b45834d630986b743a0bcbf8901ad78faa1b9b061dfc92c1349f278c969"
+            },
+            {
+              "route": "llvm",
+              "input": "tagged",
+              "optimization": "O0",
+              "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+              "ir_sha256": "b3863f66dc10e311bfac672853cccae81afe4036e65b1c4840ab44e91bce9f88",
+              "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+              "image_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b",
+              "elf_sha256": "a63df62ba27af42652a355d3db6f98c8a8f5dfae950a73ef9e09bf0fc3e1fb0b"
+            },
+            {
+              "route": "llvm",
+              "input": "tagged",
+              "optimization": "O2",
+              "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+              "ir_sha256": "44ef98bf9ba14d840621f4fea219dfa61652e312738b50dae125c12945531465",
+              "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+              "image_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e",
+              "elf_sha256": "90ee93cf18692f67bfd60891320e96ac7c51e1d423eb2f97c7a084c53f017c90"
+            }
+          ]
+        },
+        "hosts": [
+          {
+            "run": "46144197510",
+            "runner": "ubuntu-22.04",
+            "cpu": "AMD EPYC 7763 64-Core Processor",
+            "svm_available": true,
+            "images_executed": 12,
+            "report_sha256": "6a0d2dbafdcef26014384d4269a2d9a68a38fd73c9bab8e9ee0aaf3dcbf4265a"
+          },
+          {
+            "run": "46144197510",
+            "runner": "ubuntu-24.04",
+            "cpu": "Intel(R) Xeon(R) 6975P-C",
+            "svm_available": false,
+            "images_executed": 0,
+            "report_sha256": "c6c176716ab6ac1028232f3e06b1de10be4af9764a443423c1fc962a34f37d3b"
+          }
+        ],
+        "images_executed": 12,
+        "matched_original_and_generated_cases": 12
+      },
+      {
+        "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46144437596",
+        "workflow_commit": "7eb123cf8ca3310560e1ec898210b120606a8ae5",
+        "compiler_source_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46138460863",
+        "compiler_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+        "receipt_sha256": "93de86d194c47a429fa9bb1cb61abdd3b5679254737dd18eed4cda3335e34b53",
+        "rebuild": {
+          "neverd": "e0584f30c4e03a52d8305390ffee22e9d4624ab1",
+          "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+          "compiler_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+          "llvm": "93a7e578d2b105139e938d1da8b502d0689a25a0",
+          "sdk_buildinfo_sha256": "a56e1b59a87acd8c5ffd8425649c885138b86ea612df2f08c9c574fd38875c02",
+          "fixture_catalog_sha256": "9a283c9b49ac43bae44d8d1e7017deeb04f57b6274b86369c32d0d6314d8540e",
+          "guests": [
+            {
+              "route": "high",
+              "input": "mapped",
+              "optimization": "O0",
+              "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+              "ir_sha256": "f98f61899765c5149f8df199b581e589e1916133bf86e4d35fe7943e0e2de6fc",
+              "object_sha256": "12f3efbe99a04404a2fcd5da6cf2e7c864f401b927c4cdd25610a4d6eeb75800",
+              "image_sha256": "4e13ec16635702c27f1656103ef16ade6d5a64915bb579e6db260ea038786553",
+              "elf_sha256": "a617393a38049e740f06fd7551ad95ea485cead092d7c297b66c9adeaaf70242"
+            },
+            {
+              "route": "high",
+              "input": "mapped",
+              "optimization": "O2",
+              "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+              "ir_sha256": "83d10c98bb52d9358fb9b67aeb1eb8b815791f19357bf6b1363303f7950d1bd2",
+              "object_sha256": "3300524c953cbbf069215f84ace0cd068eeb6f823211d070af7d862b6a1c8a81",
+              "image_sha256": "5751266fbd7d9d048a9148e1aada6699a68969d40251d0a2c99c1190962b5141",
+              "elf_sha256": "da8df8f97bb1a97629731b16f2787ee3319dfa978d4431d179de0d24c1d5ca5d"
+            },
+            {
+              "route": "high",
+              "input": "tagged",
+              "optimization": "O0",
+              "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+              "ir_sha256": "626253cdb3c6755cca6caf80fd7b4a7b333511763f50cfe52064a6898712603a",
+              "object_sha256": "2d8a57407173852b6f56e5dc59df5d09a222435c6b0d1ddf9eec20fb226d4c07",
+              "image_sha256": "80ef5d0ec5c2343878ea80dbf3b37fab562d2e84177f605cbb5edfb2c563ec81",
+              "elf_sha256": "754b830e4258fcc565f786c207d98c797b55f0b68c9f0fd97ea22b0b370daa12"
+            },
+            {
+              "route": "high",
+              "input": "tagged",
+              "optimization": "O2",
+              "source_sha256": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+              "ir_sha256": "a182fd3ec190034b2f30659b95fa75562da04f9b5d142a8586211863a4f44950",
+              "object_sha256": "4ce060cf3dced71b8fe5c771f35bfb5310481b624df1e9f1dac328bc6d95059c",
+              "image_sha256": "ac43fe0ee87e2e9dca99655e0598fbdbcb16b170d0efb87a03287ed87158d10f",
+              "elf_sha256": "dd0386aebe8df78c1d484c36aec3149e82972b91a44a669bb6dcf586e4e471e9"
+            },
+            {
+              "route": "llvm",
+              "input": "mapped",
+              "optimization": "O0",
+              "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+              "ir_sha256": "fe156fe524b9e499dcb693b7e29cbcaf42e97a279edbfb4f90d29f32c3cb1892",
+              "object_sha256": "985d74bf317205fadcb1c6db23b919aaf3a8b7af7d55b7937b17a51ddbf9c7ae",
+              "image_sha256": "96cf79cc90fbbc9f3e2934d8e42ca16813fafde5086e5ef80b15e9716ef7d0fa",
+              "elf_sha256": "11a9b8dd16c4df7c08dfecd1bcbffb4ad5d7fc9928868002e7d773899ccbead7"
+            },
+            {
+              "route": "llvm",
+              "input": "mapped",
+              "optimization": "O2",
+              "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+              "ir_sha256": "1a3029fdb1a705711c799fd697f8a61c5f55788cbc353106595407722291465c",
+              "object_sha256": "e836a4d9093e830c609bef4da98beb7d1dffa61a3a7e2bfe4d50355b826a7587",
+              "image_sha256": "c718bc3ae671f080663b652527d7e23938b991153ae7554d4f34526652fe3ff0",
+              "elf_sha256": "3f1f6b45834d630986b743a0bcbf8901ad78faa1b9b061dfc92c1349f278c969"
+            },
+            {
+              "route": "llvm",
+              "input": "tagged",
+              "optimization": "O0",
+              "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+              "ir_sha256": "b3863f66dc10e311bfac672853cccae81afe4036e65b1c4840ab44e91bce9f88",
+              "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+              "image_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b",
+              "elf_sha256": "a63df62ba27af42652a355d3db6f98c8a8f5dfae950a73ef9e09bf0fc3e1fb0b"
+            },
+            {
+              "route": "llvm",
+              "input": "tagged",
+              "optimization": "O2",
+              "source_sha256": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b",
+              "ir_sha256": "44ef98bf9ba14d840621f4fea219dfa61652e312738b50dae125c12945531465",
+              "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+              "image_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e",
+              "elf_sha256": "90ee93cf18692f67bfd60891320e96ac7c51e1d423eb2f97c7a084c53f017c90"
+            }
+          ]
+        },
+        "hosts": [
+          {
+            "run": "46144437596",
+            "runner": "ubuntu-22.04",
+            "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+            "svm_available": false,
+            "images_executed": 0,
+            "report_sha256": "655fcd55e901798d58453d29418c08c295599e8d735dd97d7df8c8903584dff2"
+          },
+          {
+            "run": "46144437596",
+            "runner": "ubuntu-24.04",
+            "cpu": "AMD EPYC 9V45 96-Core Processor",
+            "svm_available": true,
+            "images_executed": 12,
+            "report_sha256": "97b07b709cda59aaea522960d7499ebbb2a19bf95b997bfbb0c6f218c00e4ff4"
+          }
+        ],
+        "images_executed": 12,
+        "matched_original_and_generated_cases": 12
+      }
+    ],
+    "ida_comparison_on_executed_elf": {
+      "artifact": "high-r12-O2.elf",
+      "image_sha256": "dd0386aebe8df78c1d484c36aec3149e82972b91a44a669bb6dcf586e4e471e9",
+      "hosted_bundle": "https://github.com/gmh5225/test_mac_intel/actions/runs/46144197510",
+      "tool": "Local IDA Pro with the Hex-Rays x64 decompiler, fresh headless database",
+      "functions": [
+        {
+          "symbol": "ida_vmrun_rcx_result",
+          "address": "0x100233",
+          "bytes": "4889f8b9341200000f01d84889c8c3",
+          "instructions": [
+            {
+              "address": "0x100233",
+              "text": "mov rax, rdi"
+            },
+            {
+              "address": "0x100236",
+              "text": "mov ecx, 1234h"
+            },
+            {
+              "address": "0x10023b",
+              "text": "vmrun"
+            },
+            {
+              "address": "0x10023e",
+              "text": "mov rax, rcx"
+            },
+            {
+              "address": "0x100241",
+              "text": "retn"
+            }
+          ],
+          "pseudocode": "__int64 __fastcall ida_vmrun_rcx_result(unsigned int a1)\n{\n  __svm_vmrun(a1);\n  return 4660;\n}"
+        },
+        {
+          "symbol": "original_vmrun_addr32_rax",
+          "address": "0x100242",
+          "bytes": "4889f8670f01d8c3",
+          "instructions": [
+            {
+              "address": "0x100242",
+              "text": "mov rax, rdi"
+            },
+            {
+              "address": "0x100245",
+              "text": "vmrun"
+            },
+            {
+              "address": "0x100249",
+              "text": "retn"
+            }
+          ],
+          "pseudocode": "__int64 __fastcall original_vmrun_addr32_rax(__int64 a1)\n{\n  __svm_vmrun(a1);\n  return a1;\n}"
+        },
+        {
+          "symbol": "guest_rcx",
+          "address": "0x100229",
+          "bytes": "b9785600000f01d90f0b",
+          "instructions": [
+            {
+              "address": "0x100229",
+              "text": "mov ecx, 5678h"
+            },
+            {
+              "address": "0x10022e",
+              "text": "vmmcall"
+            },
+            {
+              "address": "0x100231",
+              "text": "ud2"
+            }
+          ]
+        }
+      ],
+      "scalar_inference": "0x1234",
+      "observed_after_vmexit": "0x5678"
+    },
+    "frontend_tcg_observation": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46143713941",
+      "output": "F:00000003:00000000ffffffff",
+      "returncode": 65,
+      "scope": "Ubuntu packaged QEMU TCG stopped in the earlier context VMCB-exit check. The hardware jobs compile the same fixture directly and execute the rebuilt images through KVM."
+    }
+  },
+  "vmrun_nested_amd_kvm": {
+    "runs": [
+      "https://github.com/gmh5225/test_mac_intel/actions/runs/46132714914",
+      "https://github.com/gmh5225/test_mac_intel/actions/runs/46132796766"
+    ],
+    "workflow_commit": "d2a98fa8b44029fe4cbca88de4f22b74a95281c3",
+    "prior_fixture_trace": "https://github.com/gmh5225/test_mac_intel/actions/runs/46131553129",
+    "hosts": [
+      {
+        "run": "46132714914",
+        "runner": "ubuntu-22.04",
+        "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+        "svm_available": false,
+        "images_executed": 0,
+        "report_sha256": "655fcd55e901798d58453d29418c08c295599e8d735dd97d7df8c8903584dff2"
+      },
+      {
+        "run": "46132714914",
+        "runner": "ubuntu-24.04",
+        "cpu": "AMD EPYC 7763 64-Core Processor",
+        "svm_available": true,
+        "images_executed": 12,
+        "report_sha256": "6a0d2dbafdcef26014384d4269a2d9a68a38fd73c9bab8e9ee0aaf3dcbf4265a"
+      },
+      {
+        "run": "46132796766",
+        "runner": "ubuntu-22.04",
+        "cpu": "AMD EPYC 9V74 80-Core Processor",
+        "svm_available": true,
+        "images_executed": 12,
+        "report_sha256": "21001964f9c1782711000619d4d06d23303853a13037f34ad78fee2c347bf255"
+      },
+      {
+        "run": "46132796766",
+        "runner": "ubuntu-24.04",
+        "cpu": "Intel(R) Xeon(R) 6973P-C",
+        "svm_available": false,
+        "images_executed": 0,
+        "report_sha256": "f039170f72238e46a753e04405c65133af116472716e22527a2890d68395b21f"
+      }
+    ],
+    "cases": [
+      {
+        "route": "original",
+        "optimization": "O0",
+        "rax_high32": "nonzero",
+        "image_sha256": "d7a49c3bb848463647781a61f8983d462f010189c642cae17d48e8ac02bf047e",
+        "object_sha256": "e9b2f78e6d10231e2b082a64526666ff92d68a392f7239ab7feb1e5355f23286",
+        "instruction_pc": "0x100245",
+        "instruction_bytes": "670f01d8",
+        "returned": false,
+        "rax": "0xfedcba9800106000",
+        "vector": 13,
+        "error_code": 0,
+        "fault_pc": "0x100245",
+        "fault_bytes": "670f01d8"
+      },
+      {
+        "route": "original",
+        "optimization": "O2",
+        "rax_high32": "nonzero",
+        "image_sha256": "a9fb8fc10553ac13a9a62d0afae84e0a13dd208f8fc63e66e03842a166a8fb5b",
+        "object_sha256": "43c4763bd53ff77df27e2570dcda0b4260f9abb7ba530bda19e1897b1fb6ca77",
+        "instruction_pc": "0x100245",
+        "instruction_bytes": "670f01d8",
+        "returned": false,
+        "rax": "0xfedcba9800106000",
+        "vector": 13,
+        "error_code": 0,
+        "fault_pc": "0x100245",
+        "fault_bytes": "670f01d8"
+      },
+      {
+        "route": "high",
+        "optimization": "O0",
+        "rax_high32": "nonzero",
+        "image_sha256": "80ef5d0ec5c2343878ea80dbf3b37fab562d2e84177f605cbb5edfb2c563ec81",
+        "object_sha256": "2d8a57407173852b6f56e5dc59df5d09a222435c6b0d1ddf9eec20fb226d4c07",
+        "instruction_pc": "0x10b045",
+        "instruction_bytes": "670f01d8",
+        "source_pc": "0x1010",
+        "intrinsic": "__llvm_x86_vmrun_context.1",
+        "step_call_pc": "0x104a4c",
+        "returned": false,
+        "rax": "0xfedcba9800111000",
+        "vector": 13,
+        "error_code": 0,
+        "fault_pc": "0x10b045",
+        "fault_bytes": "670f01d8",
+        "source_site": "0x1010",
+        "step": "neverd_step_v10_1010",
+        "elf_sha256": "754b830e4258fcc565f786c207d98c797b55f0b68c9f0fd97ea22b0b370daa12"
+      },
+      {
+        "route": "high",
+        "optimization": "O2",
+        "rax_high32": "nonzero",
+        "image_sha256": "ac43fe0ee87e2e9dca99655e0598fbdbcb16b170d0efb87a03287ed87158d10f",
+        "object_sha256": "4ce060cf3dced71b8fe5c771f35bfb5310481b624df1e9f1dac328bc6d95059c",
+        "instruction_pc": "0x105015",
+        "instruction_bytes": "670f01d8",
+        "source_pc": "0x1010",
+        "intrinsic": "__llvm_x86_vmrun_context.1",
+        "step_call_pc": "0x10150b",
+        "returned": false,
+        "rax": "0xfedcba980010b000",
+        "vector": 13,
+        "error_code": 0,
+        "fault_pc": "0x105015",
+        "fault_bytes": "670f01d8",
+        "source_site": "0x1010",
+        "step": "neverd_step_v10_1010",
+        "elf_sha256": "dd0386aebe8df78c1d484c36aec3149e82972b91a44a669bb6dcf586e4e471e9"
+      },
+      {
+        "route": "llvm",
+        "optimization": "O0",
+        "rax_high32": "nonzero",
+        "image_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b",
+        "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+        "instruction_pc": "0x10ab25",
+        "instruction_bytes": "670f01d8",
+        "source_pc": "0x1010",
+        "intrinsic": "__llvm_x86_vmrun_context.1",
+        "step_call_pc": "0x10472c",
+        "returned": false,
+        "rax": "0xfedcba9800110000",
+        "vector": 13,
+        "error_code": 0,
+        "fault_pc": "0x10ab25",
+        "fault_bytes": "670f01d8",
+        "source_site": "0x1010",
+        "step": "neverd_step_v10_1010",
+        "elf_sha256": "a63df62ba27af42652a355d3db6f98c8a8f5dfae950a73ef9e09bf0fc3e1fb0b"
+      },
+      {
+        "route": "llvm",
+        "optimization": "O2",
+        "rax_high32": "nonzero",
+        "image_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e",
+        "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+        "instruction_pc": "0x104fb5",
+        "instruction_bytes": "670f01d8",
+        "source_pc": "0x1010",
+        "intrinsic": "__llvm_x86_vmrun_context.1",
+        "step_call_pc": "0x1014e3",
+        "returned": false,
+        "rax": "0xfedcba980010b000",
+        "vector": 13,
+        "error_code": 0,
+        "fault_pc": "0x104fb5",
+        "fault_bytes": "670f01d8",
+        "source_site": "0x1010",
+        "step": "neverd_step_v10_1010",
+        "elf_sha256": "90ee93cf18692f67bfd60891320e96ac7c51e1d423eb2f97c7a084c53f017c90"
+      },
+      {
+        "route": "original",
+        "optimization": "O0",
+        "rax_high32": "zero",
+        "image_sha256": "99b8064bfcb4a1d63ef2c0ed027b832748f38b4c7a8b8e67f6e976124794c5bd",
+        "object_sha256": "e9ee1df4bdfc23985233bf3f81e15f2d95f2e9feb8eb9bd0b505adc5a94eecf9",
+        "instruction_pc": "0x100245",
+        "instruction_bytes": "670f01d8",
+        "returned": true,
+        "rax": "0x106000",
+        "return_pc": "0x100249",
+        "return_rax": "0x106000",
+        "return_rcx": "0x5678",
+        "vmcb_exit": "0x81",
+        "completed_contexts": 0
+      },
+      {
+        "route": "original",
+        "optimization": "O2",
+        "rax_high32": "zero",
+        "image_sha256": "9adff5fc5a5c145c3324cee11f4628f5bb125b37f1753a44ed48f589426b1c9a",
+        "object_sha256": "059361774e8590ab2f8874f2c4c10baf1ccb7c95d90a2635c1cfea9d20140a37",
+        "instruction_pc": "0x100245",
+        "instruction_bytes": "670f01d8",
+        "returned": true,
+        "rax": "0x106000",
+        "return_pc": "0x100249",
+        "return_rax": "0x106000",
+        "return_rcx": "0x5678",
+        "vmcb_exit": "0x81",
+        "completed_contexts": 0
+      },
+      {
+        "route": "high",
+        "optimization": "O0",
+        "rax_high32": "zero",
+        "image_sha256": "4e13ec16635702c27f1656103ef16ade6d5a64915bb579e6db260ea038786553",
+        "object_sha256": "12f3efbe99a04404a2fcd5da6cf2e7c864f401b927c4cdd25610a4d6eeb75800",
+        "instruction_pc": "0x10b035",
+        "instruction_bytes": "670f01d8",
+        "source_pc": "0x1010",
+        "intrinsic": "__llvm_x86_vmrun_context.1",
+        "step_call_pc": "0x104a4c",
+        "returned": true,
+        "rax": "0x111000",
+        "return_pc": "0x10b039",
+        "return_rax": "0x111000",
+        "return_rcx": "0x123456789abcd027",
+        "vmcb_exit": "0x81",
+        "completed_contexts": 50
+      },
+      {
+        "route": "high",
+        "optimization": "O2",
+        "rax_high32": "zero",
+        "image_sha256": "5751266fbd7d9d048a9148e1aada6699a68969d40251d0a2c99c1190962b5141",
+        "object_sha256": "3300524c953cbbf069215f84ace0cd068eeb6f823211d070af7d862b6a1c8a81",
+        "instruction_pc": "0x104fe5",
+        "instruction_bytes": "670f01d8",
+        "source_pc": "0x1010",
+        "intrinsic": "__llvm_x86_vmrun_context.1",
+        "step_call_pc": "0x10150b",
+        "returned": true,
+        "rax": "0x10b000",
+        "return_pc": "0x104fe9",
+        "return_rax": "0x10b000",
+        "return_rcx": "0x123456789abcd027",
+        "vmcb_exit": "0x81",
+        "completed_contexts": 50
+      },
+      {
+        "route": "llvm",
+        "optimization": "O0",
+        "rax_high32": "zero",
+        "image_sha256": "96cf79cc90fbbc9f3e2934d8e42ca16813fafde5086e5ef80b15e9716ef7d0fa",
+        "object_sha256": "985d74bf317205fadcb1c6db23b919aaf3a8b7af7d55b7937b17a51ddbf9c7ae",
+        "instruction_pc": "0x10ab15",
+        "instruction_bytes": "670f01d8",
+        "source_pc": "0x1010",
+        "intrinsic": "__llvm_x86_vmrun_context.1",
+        "step_call_pc": "0x10472c",
+        "returned": true,
+        "rax": "0x110000",
+        "return_pc": "0x10ab19",
+        "return_rax": "0x110000",
+        "return_rcx": "0x123456789abcd027",
+        "vmcb_exit": "0x81",
+        "completed_contexts": 50
+      },
+      {
+        "route": "llvm",
+        "optimization": "O2",
+        "rax_high32": "zero",
+        "image_sha256": "c718bc3ae671f080663b652527d7e23938b991153ae7554d4f34526652fe3ff0",
+        "object_sha256": "e836a4d9093e830c609bef4da98beb7d1dffa61a3a7e2bfe4d50355b826a7587",
+        "instruction_pc": "0x104f85",
+        "instruction_bytes": "670f01d8",
+        "source_pc": "0x1010",
+        "intrinsic": "__llvm_x86_vmrun_context.1",
+        "step_call_pc": "0x1014e3",
+        "returned": true,
+        "rax": "0x10b000",
+        "return_pc": "0x104f89",
+        "return_rax": "0x10b000",
+        "return_rcx": "0x123456789abcd027",
+        "vmcb_exit": "0x81",
+        "completed_contexts": 50
+      }
+    ],
+    "tcg_results": {
+      "images_returned": 12,
+      "cases_verified_by_guest": 400,
+      "returned_on_nonzero_rax_high32": true
+    },
+    "comparison_to_previous_fixtures": {
+      "original": true,
+      "high": false,
+      "llvm": true
+    },
+    "current_export_sha256": {
+      "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+      "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+    },
+    "exported_at": "47eeb7b4c88b68aad06765f90fd97d3c2c916e0b",
+    "identical_exports_at": "69b82f8a98cf730663748824343408e008739b56",
+    "identical_exports_at_current_dev": "7a0f218965a75d714b5196c06003affc5818ffc0"
+  },
+  "neverc": {
+    "revision": "5a70f355ef14d30454128ff29b867044f7b9c583",
+    "binary_sha256": "6a040cdffeedc497912f46b27f4f977d4734cd3e4829382bb5e5c9a18495ba5f",
+    "generated_host_pointer_bytes": 8,
+    "target_matrix": [
+      {
+        "target": "x86_64-unknown-linux-gnu",
+        "included": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2"
+        ]
+      },
+      {
+        "target": "aarch64-unknown-linux-gnu",
+        "included": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2"
+        ]
+      },
+      {
+        "target": "x86_64-apple-macosx15.0.0",
+        "included": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2"
+        ]
+      },
+      {
+        "target": "arm64-apple-macosx15.0.0",
+        "included": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2"
+        ]
+      },
+      {
+        "target": "x86_64-pc-windows-msvc",
+        "included": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2"
+        ]
+      },
+      {
+        "target": "aarch64-pc-windows-msvc",
+        "included": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2"
+        ]
+      },
+      {
+        "target": "i386-unknown-linux-gnu",
+        "rejected": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2",
+          "cpp-project-v1",
+          "cpp-math-v1",
+          "embedded-frontend"
+        ]
+      },
+      {
+        "target": "i686-unknown-linux-gnu",
+        "rejected": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2",
+          "cpp-project-v1",
+          "cpp-math-v1",
+          "embedded-frontend"
+        ]
+      },
+      {
+        "target": "i686-pc-windows-msvc",
+        "rejected": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2",
+          "cpp-project-v1",
+          "cpp-math-v1",
+          "embedded-frontend"
+        ]
+      },
+      {
+        "target": "i386-apple-darwin",
+        "rejected": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2",
+          "cpp-project-v1",
+          "cpp-math-v1",
+          "embedded-frontend"
+        ]
+      },
+      {
+        "target": "x86_64-unknown-linux-gnux32",
+        "rejected": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2",
+          "cpp-project-v1",
+          "cpp-math-v1",
+          "embedded-frontend"
+        ]
+      },
+      {
+        "target": "x86_64-unknown-linux-muslx32",
+        "rejected": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2",
+          "cpp-project-v1",
+          "cpp-math-v1",
+          "embedded-frontend"
+        ]
+      },
+      {
+        "target": "arm64_32-apple-watchos",
+        "rejected": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2",
+          "cpp-project-v1",
+          "cpp-math-v1",
+          "embedded-frontend"
+        ]
+      },
+      {
+        "target": "aarch64-unknown-linux-gnu_ilp32",
+        "rejected": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2",
+          "cpp-project-v1",
+          "cpp-math-v1",
+          "embedded-frontend"
+        ]
+      },
+      {
+        "target": "aarch64-unknown-linux-gnuilp32",
+        "rejected": [
+          "object",
+          "cpp-core-v1",
+          "cpp-core-v2",
+          "cpp-project-v1",
+          "cpp-math-v1",
+          "embedded-frontend"
+        ]
+      }
+    ],
+    "rejected_x86_64_abi_options": [
+      "ilp32",
+      "x32"
+    ],
+    "target_matrix_sha256": "3ee3a2fda91dc1d96c646742ca9735c6bf07a1738b0b34a3387c4d3218bd7a32",
+    "first_party_abi_sdk_ir": {
+      "passed": 142,
+      "skipped": [],
+      "xml_sha256": "fd67f983412993563d9237c0195772c9f98bb3f1c1d236e22c02e6cac24e2717"
+    },
+    "cpp_translation_protocol": {
+      "status": "passed",
+      "cases": 742,
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    "emitted_hash_and_crt_controls": {
+      "native_executions": 20,
+      "receipt_sha256": "4a2cb9c19bbbb73210589d1555d6eec7821810c79321c1ea0f4f122f5321853e"
+    },
+    "generated_vmrun_images_and_objects": 8,
+    "checked_against_hosted_vmrun": true,
+    "symbol_elf_matches": 4,
+    "vmrun_receipt_sha256": "c1904141acefb5d32e9cb7f065d1a2d23e81572b057f993a787a90b831b48134",
+    "native_intrinsics": {
+      "frontend_sha256": "6a040cdffeedc497912f46b27f4f977d4734cd3e4829382bb5e5c9a18495ba5f",
+      "sdk": "neverd-llvm-v23.0.0-r12",
+      "input_sha256": "0a966f17d1560e496eb36c203e59970e92571d9e327e9b116b20a820f16de52b",
+      "optimizations": [
+        {
+          "optimization": "O0",
+          "calls": [
+            "enclu.transfer.at.context",
+            "enclu.transfer.context",
+            "rsm.context",
+            "vmread",
+            "vmrun.context",
+            "vmwrite"
+          ],
+          "opcodes": [
+            "vmread",
+            "vmwrite",
+            "vmrun",
+            "enclu",
+            "xrstor64",
+            "rsm"
+          ],
+          "ir_sha256": "3db40071017a0d8c8b258ad42cb13941cce3d1986fbe253d016117fbae08d7f0",
+          "object_sha256": "8ac8d30a9ffee043823f7ce650fb9aee4526115f5fff12de4c16a7b364e75710"
+        },
+        {
+          "optimization": "O2",
+          "calls": [
+            "enclu.transfer.at.context",
+            "enclu.transfer.context",
+            "rsm.context",
+            "vmread",
+            "vmrun.context",
+            "vmwrite"
+          ],
+          "opcodes": [
+            "vmread",
+            "vmwrite",
+            "vmrun",
+            "enclu",
+            "xrstor64",
+            "rsm"
+          ],
+          "ir_sha256": "8d56b193f23f374e97852e7e7008a2e6b0ace27fe53414bcfa4fa5ee90ea06cb",
+          "object_sha256": "622238f3acb496fae498964214a11ba48bba1cd69c0526477cbd7a0599dd3d29"
+        }
+      ]
+    },
+    "removed_32_bit_source_support": [
+      {
+        "commit": "ac2335646fb80d749066029ba5ccfdfdc6bbec80",
+        "files_changed": 166,
+        "lines_removed": 14216
+      },
+      {
+        "commit": "5a70f355ef14d30454128ff29b867044f7b9c583",
+        "files_changed": 26,
+        "lines_removed": 745
+      }
+    ]
+  },
+  "neverd": "69b82f8a98cf730663748824343408e008739b56",
+  "dev_base": "f197a097d0d559679ca3d3bb5159175e012b2d19",
+  "integrated_dev": "25bbc15a6e196ebbb087c197002202ab5a0dd00e",
+  "capstone": "6ee08c9cfc7e104e240b50b97996c880e3bb5155",
+  "llvm": {
+    "release": "neverd-llvm-v23.0.0-r12",
+    "source": "6947b7db63e913244e0aa6de087d1ad2e791e86f",
+    "sdk_buildinfo_sha256": "00ec65ddc98d5cb5c4c2f0765d66a9e4b0b4e430a001410c1cc16b1703e6ab4a"
+  },
+  "original_code64_prefix_faults": {
+    "model": "Intel Core i9-13900H",
+    "source": "scripts/isa/x86/ud0_long_prefix_matrix.c",
+    "probe_source_sha256": "94c19a15ed9824cdab8229a22be7f31b7ed9a440874bfb24af9f61fd17e46edf",
+    "cores": [
+      {
+        "original_probe_cpu": 4,
+        "core": "p",
+        "original_instruction_probe": {
+          "profile": 14,
+          "total": 7175,
+          "overlong": 1295,
+          "mismatches": 0,
+          "pf": 4585,
+          "gp": 1435,
+          "ud": 1155
+        },
+        "probe_report_sha256": "2b9b03727e0b8327c7e6b27837127484216cd7d26343f8654711861e47864ba7",
+        "full_paged_execution": {
+          "passed": 255,
+          "skipped": [],
+          "xml_sha256": "ef593484e85e9c2389f1200d4d1e43339c2fb27de2f3593acdc284b257eca190",
+          "core_type": "0x40",
+          "original_cpu_to_generated_c_comparisons": 768,
+          "execute_breakpoint_priority_comparisons": 384,
+          "virtual_interrupt_priority_comparisons": 39,
+          "shards": [
+            {
+              "cpu": 2,
+              "sha256": "f980badef3085b7fe5f7f6ff53c2108e597e8ce8bb3d96cea470d49b62ebb1d0",
+              "tests": 128
+            },
+            {
+              "cpu": 8,
+              "sha256": "b2944f6d8b40892e821ea0d33c64aa59d86109a2c15cf8d00e5299b6fb1454cb",
+              "tests": 127
+            }
+          ]
+        }
+      },
+      {
+        "original_probe_cpu": 12,
+        "core": "e",
+        "original_instruction_probe": {
+          "profile": 6,
+          "total": 7175,
+          "overlong": 1295,
+          "mismatches": 0,
+          "pf": 1050,
+          "gp": 245,
+          "ud": 5880
+        },
+        "probe_report_sha256": "5559a3c00e1bea574b1be55ef76e19536a764104e6f0c610e9a36ea0131d614f",
+        "full_paged_execution": {
+          "passed": 255,
+          "skipped": [],
+          "xml_sha256": "6686e81ab18940866d300c0b280459e747b321ed45cbfa0b23548edbd34dd15a",
+          "core_type": "0x20",
+          "original_cpu_to_generated_c_comparisons": 768,
+          "execute_breakpoint_priority_comparisons": 384,
+          "virtual_interrupt_priority_comparisons": 39,
+          "shards": [
+            {
+              "cpu": 15,
+              "sha256": "2ef63278b17f0a2ef612f893f348f501118824956de4ad5aa9094ec2750e9733",
+              "tests": 128
+            },
+            {
+              "cpu": 17,
+              "sha256": "a7ee6b23cf1eb7b10d3e143f1614025331ca9226380135833ab0b73c77c5d608",
+              "tests": 127
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "linked_x64_elf_cli": {
+    "input_sha256": "c4773498d941225bc5995040ea161358c59d4a75d6f363c172c6479e5c269cfe",
+    "routes": {
+      "high": {
+        "pcs": [
+          "0x401000",
+          "0x401001",
+          "0x401010"
+        ],
+        "c_source_sha256": "9a1d7f164d1293d93abd62dbce8c2aff4037c8c19c74e241e29d1d7737e39dc7",
+        "native_requests": 0,
+        "generated_objects": 4
+      },
+      "llvm": {
+        "pcs": [
+          "0x401000",
+          "0x401001",
+          "0x401010"
+        ],
+        "c_source_sha256": "2900bcee0f0514f43f4f0a030efde3e88342b6e067dc3cf64f82e9adff04117b",
+        "native_requests": 0,
+        "generated_objects": 4
+      }
+    }
+  },
+  "continuation_exports": {
+    "passed": 132,
+    "skipped": [],
+    "xml_sha256": "aeb535e26172100e56165570c195bfee4d35ed5255dd89feb568516d42c8b1a6"
+  },
+  "pipeline_outcomes": {
+    "passed": 82,
+    "skipped": [],
+    "xml_sha256": "aab461b6569a8a1abfde585760f087e3d93cd57dc38cb94d21e99315ba1d369e"
+  },
+  "interpreter_specialization": {
+    "passed": 679,
+    "skipped": [],
+    "xml_sha256": "c826eeb3d588a613136de12a0e58f2a6413f3e611e26e7957f387c2286f9c2cd"
+  },
+  "lower_paging": {
+    "initial_pass": {
+      "passed": 825,
+      "skipped": [
+        "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3",
+        "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1",
+        "LegacyDivision/X86LegacyDivisionNativeTest.FullDividendsQuotientsAndPreservedFlagChoice/0",
+        "LegacyDivision/X86LegacyDivisionNativeTest.FullDividendsQuotientsAndPreservedFlagChoice/1",
+        "LegacyDivision/X86LegacyDivisionNativeTest.EveryRegisterAndImplicitDividendAlias/0",
+        "LegacyDivision/X86LegacyDivisionNativeTest.EveryRegisterAndImplicitDividendAlias/1",
+        "LegacyDivision/X86LegacyDivisionNativeTest.ReadonlySegmentsPagingAndAlignmentPrecedeDE/0",
+        "LegacyDivision/X86LegacyDivisionNativeTest.ReadonlySegmentsPagingAndAlignmentPrecedeDE/1",
+        "LegacyDivision/X86LegacyDivisionNativeTest.OriginalPageAndDivideHandlersReturnToRetry/0",
+        "LegacyDivision/X86LegacyDivisionNativeTest.OriginalPageAndDivideHandlersReturnToRetry/1",
+        "LegacyFastSystem/X86LegacyFastSystemNativeTest.PrivilegesSelectorsFlagsAndCachedState/0",
+        "LegacyFastSystem/X86LegacyFastSystemNativeTest.PrivilegesSelectorsFlagsAndCachedState/1",
+        "LegacyFastSystem/X86LegacyFastSystemNativeTest.TransfersDoNotReadTablesOrNewStack/0",
+        "LegacyFastSystem/X86LegacyFastSystemNativeTest.TransfersDoNotReadTablesOrNewStack/1",
+        "LegacyFastSystem/X86LegacyFastSystemNativeTest.PrefixesAndFetchFaultPrecedence/0",
+        "LegacyFastSystem/X86LegacyFastSystemNativeTest.PrefixesAndFetchFaultPrecedence/1",
+        "LegacyMultiply/X86LegacyMultiplyNativeTest.FullProductsAndSignedOverflow/0",
+        "LegacyMultiply/X86LegacyMultiplyNativeTest.FullProductsAndSignedOverflow/1",
+        "LegacyMultiply/X86LegacyMultiplyNativeTest.EveryRegisterAndImplicitResultAlias/0",
+        "LegacyMultiply/X86LegacyMultiplyNativeTest.EveryRegisterAndImplicitResultAlias/1",
+        "LegacyMultiply/X86LegacyMultiplyNativeTest.TruncatedProductsRegistersAndImmediates/0",
+        "LegacyMultiply/X86LegacyMultiplyNativeTest.TruncatedProductsRegistersAndImmediates/1",
+        "LegacyMultiply/X86LegacyMultiplyNativeTest.ReadonlyMemoryFaultsAndOriginalRepair/0",
+        "LegacyMultiply/X86LegacyMultiplyNativeTest.ReadonlyMemoryFaultsAndOriginalRepair/1",
+        "LegacyReturns/X86LegacyReturnNativeTest.AlignmentAndPageFaultPriority/0",
+        "LegacyReturns/X86LegacyReturnNativeTest.AlignmentAndPageFaultPriority/1",
+        "LegacyScalars/X86LegacyScalarNativeTest.AlignmentAndPagingPriority/0",
+        "LegacyScalars/X86LegacyScalarNativeTest.AlignmentAndPagingPriority/1",
+        "LegacyScalars/X86LegacyScalarNativeTest.NearBranchesCallsReturnsAndEveryCondition/0",
+        "LegacyScalars/X86LegacyScalarNativeTest.NearBranchesCallsReturnsAndEveryCondition/1",
+        "LegacyScalars/X86LegacyScalarNativeTest.BranchLimitsPrecedeOrFollowStackFaults/0",
+        "LegacyScalars/X86LegacyScalarNativeTest.BranchLimitsPrecedeOrFollowStackFaults/1",
+        "LegacySegmentLoads/X86LegacySegmentLoadNativeTest.OriginalAlignmentFaultPriorityUsesTheBoundCore/0",
+        "LegacySegmentLoads/X86LegacySegmentLoadNativeTest.OriginalAlignmentFaultPriorityUsesTheBoundCore/1",
+        "LegacyStrings/X86LegacyStringNativeTest.SegmentPermissionsAndCompetingFaults/0",
+        "LegacyStrings/X86LegacyStringNativeTest.SegmentPermissionsAndCompetingFaults/1"
+      ],
+      "xml_sha256": "e7117b6656e138ce566fc604299af59e58dc7b3abea6c5eefb3af10a9dee151c"
+    },
+    "passed": 859,
+    "skipped": [
+      "IA32e/X86CompatibilityPagingNativeTest.WrapPermissionsAndLimitsMatchCPU/1",
+      "PagingModes/X86PagingNativeTest.OriginalInstructionsMatchPagingFaultsAndCommit/3"
+    ],
+    "profile_reruns": {
+      "p": [
+        {
+          "cpu": 4,
+          "passed": 16,
+          "xml_sha256": "e876d8ee82dd62de4152174d79a059af03d7ce883cea88b8f895c0f83f0d9406"
+        },
+        {
+          "cpu": 6,
+          "passed": 16,
+          "xml_sha256": "2226b0da348e4d1402772f3ccda9786315ef5f801c022c7f2ca8e1aa3ede98be"
+        },
+        {
+          "cpu": 4,
+          "passed": 1,
+          "xml_sha256": "2fb2ff0de99dd9d854f13c3ff0e1b376c8dc171b6efd05954981a329a1aca85e"
+        },
+        {
+          "cpu": 6,
+          "passed": 1,
+          "xml_sha256": "8d7d336b47218922abda3f930024f4e3971e1876b6d5e6786a8f76d2a090e5fc"
+        }
+      ],
+      "e": [
+        {
+          "cpu": 12,
+          "passed": 16,
+          "xml_sha256": "07889692f889b3af612081012bf33301919a7261c8d05aa37883ba0cbda4ce8f"
+        },
+        {
+          "cpu": 14,
+          "passed": 16,
+          "xml_sha256": "d55d86843f94e3996ee952a22ef523352f390b318159b4fba9b9d327977adcc4"
+        },
+        {
+          "cpu": 12,
+          "passed": 1,
+          "xml_sha256": "2aad005505fc6783cca96542294e7e661406cdba2ed0dce8d16075f0ce0feb71"
+        },
+        {
+          "cpu": 14,
+          "passed": 1,
+          "xml_sha256": "80f9f8f30ba5ead0bf546bab4f513765c18484dfe29aca848c51bd4fe49f5524"
+        }
+      ]
+    }
+  },
+  "legacy_source": {
+    "passed": 265,
+    "skipped": [],
+    "xml_sha256": "72cd53dc55ef9e4dd2323d4ab1857d19ecc52542a50cf6f82b0aa8410f052602"
+  },
+  "software_enclave": {
+    "test": "X86ModeSgxTest.SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults",
+    "routes": [
+      "HighC",
+      "LLVM-to-C"
+    ],
+    "compilers": [
+      "x64 Clang",
+      "x64 NeverC"
+    ],
+    "optimization": "O2",
+    "cases": [
+      "LOCK UD0 #UD",
+      "live ModR/M fetch into the next non-executable EPC page: #PF(0x8005) without NXE and #PF(0x8015) with NXE",
+      "fifteen REX prefixes #GP(0)",
+      "SMI, real-mode INC AX, RSM and ERESUME at the original code64 fault RIP",
+      "INIT and machine check before the faulting instruction"
+    ]
+  },
+  "mixed_mode_virtual_interrupt": {
+    "cross_checked": [
+      "RSM",
+      "ENCLU",
+      "HLT"
+    ],
+    "enclave_aex_retry": "X86ModeSgxThreadTest.PendingVirtualInterruptRestartsEnclaveExit"
+  },
+  "sgx": {
+    "capabilities": "https://github.com/gmh5225/test_mac_intel/actions/runs/46130444355",
+    "native_hosts": [
+      {
+        "runner": "macos-15-intel",
+        "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+        "first_epc_section": 0,
+        "native_enclave_instructions": 0,
+        "report_sha256": "22af74b608b30f546b6bcc5dd0144869e5086701426fd2b06f76f4fa981e324e"
+      },
+      {
+        "runner": "macos-26-intel",
+        "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+        "first_epc_section": 0,
+        "native_enclave_instructions": 0,
+        "report_sha256": "aad281ed1be8dc713a2c6c2d9e4f2f9074a0122eed3a8e0a6a34fe37c66e2e2d"
+      },
+      {
+        "runner": "ubuntu-24.04",
+        "cpu": "Intel(R) Xeon(R) 6975P-C",
+        "first_epc_section": 0,
+        "native_enclave_instructions": 0,
+        "report_sha256": "c899e6a449f9615c4664320f0e88865765333117fd91747748f977921ce11a4a"
+      }
+    ],
+    "intel_sdk_simulation": "https://github.com/gmh5225/test_mac_intel/actions/runs/46130630793",
+    "linux_kselftest_status": "unavailable",
+    "simulated_calls": 3,
+    "simulated_divide_faults_repaired_at_original_pc": 2,
+    "simulation_receipt_sha256": "1e6b5e6ffa942de1a55685e58134ec49fa11620eef2b9b2779698935dc3a6627",
+    "hosted_software_execution": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46133756999",
+      "workflow_commit": "0b958ce2ced452d5d9d46ba077c6320aadfa9a92",
+      "neverd": "69b82f8a98cf730663748824343408e008739b56",
+      "neverc": "4f3e6b9ed8d3a2f1b4b6f680bbe9bf9b87cc78c0",
+      "expected": 42,
+      "status": "completed",
+      "conclusion": "success",
+      "capabilities": [
+        {
+          "runner": "macos-15-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "epc_sections": 0,
+          "native_enclave_instructions": 0,
+          "sha256": "52779a43606a1d92c578f1abc83f4c981fe34d07b5b41377f52252d0ab1de759",
+          "cpuid_la57": false
+        },
+        {
+          "runner": "macos-26-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "epc_sections": 0,
+          "native_enclave_instructions": 0,
+          "sha256": "ec6a76c8ab188e17aae2c239413f53f9b5e38bd156d488e3fdec50fc09288820",
+          "cpuid_la57": false
+        },
+        {
+          "runner": "ubuntu-24.04",
+          "cpu": "AMD EPYC 7763 64-Core Processor",
+          "epc_sections": 0,
+          "native_enclave_instructions": 0,
+          "sha256": "05821e5f01d894266e7b2519a626a0588733320e22fdfcd20686b8043a56054b",
+          "cpuid_la57": false
+        }
+      ],
+      "passed": 41,
+      "skipped": [
+        {
+          "name": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+          "status": "skipped",
+          "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeExecutionTests.inc:779: 2\n"
+        }
+      ],
+      "neverc_binary_sha256": "56da661b64322182b5b6bf76e49f1efce1831ba1028a03a83f860c94c2f6b779",
+      "software_sha256": "f8684e9a31200b3c78c590203325262143469d7d76fe14bbbf5501e5736cbec3"
+    },
+    "key_and_report_operands": {
+      "neverd": "af8723f12adc2ac3f907cfebadcd7759dd3d7dc5",
+      "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+      "software_scenarios": {
+        "ordered_faults": 13,
+        "retired_key_errors": 5,
+        "repeated_backing_repair_and_no_reexecution": true
+      },
+      "selected_local_cases": 50,
+      "selected_xml_and_cases_sha256": "ccf13a1f9cb5a372a750f8d577e66f4efcb3b1ff23e64dbabb91fff3cc536651",
+      "local_decoder_revision": "6ee08c9cfc7e104e240b50b97996c880e3bb5155",
+      "full_paged": {
+        "p": {
+          "passed": 262,
+          "skipped": [],
+          "xml_sha256": "125da30b10523fbb4d5abc7e67bfb141459f5e080c57a0417640e11d28a7e42f",
+          "core_type": "0x40",
+          "original_cpu_to_generated_c_comparisons": 768,
+          "execute_breakpoint_priority_comparisons": 384,
+          "virtual_interrupt_priority_comparisons": 129
+        },
+        "e": {
+          "passed": 262,
+          "skipped": [],
+          "xml_sha256": "d6ee18a6a1535258a82683e2b2955df6ca1a76426293403da46aef4369329b8c",
+          "core_type": "0x20",
+          "original_cpu_to_generated_c_comparisons": 768,
+          "execute_breakpoint_priority_comparisons": 384,
+          "virtual_interrupt_priority_comparisons": 129
+        }
+      },
+      "vmrun_export_sha256": {
+        "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+        "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+      },
+      "hosted": {
+        "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46138460863",
+        "workflow_commit": "f9cbbdd3abe78c4fb4c5f3b4931b12d4bef9a3af",
+        "neverd": "af8723f12adc2ac3f907cfebadcd7759dd3d7dc5",
+        "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+        "expected": 50,
+        "status": "completed",
+        "conclusion": "success",
+        "capabilities": [
+          {
+            "runner": "macos-15-intel",
+            "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+            "epc_sections": 0,
+            "native_enclave_instructions": 0,
+            "sha256": "7473229ac576b0d6978718d71285efbb87c1e5bc387b9357f7eb42ca64a9364f",
+            "cpuid_la57": false
+          },
+          {
+            "runner": "macos-26-intel",
+            "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+            "epc_sections": 0,
+            "native_enclave_instructions": 0,
+            "sha256": "26a7e2319df4af6466b5a09e42f947eaed602d19c4efdf0da0f0b24e797458a0",
+            "cpuid_la57": false
+          },
+          {
+            "runner": "ubuntu-24.04",
+            "cpu": "Intel(R) Xeon(R) 6975P-C",
+            "epc_sections": 0,
+            "native_enclave_instructions": 0,
+            "sha256": "5e6c180a71b49fcd794894ea4c64baebb75611d882ebc4922996bd2de2ad1223",
+            "cpuid_la57": false
+          }
+        ],
+        "passed": 49,
+        "skipped": [
+          {
+            "name": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+            "status": "skipped",
+            "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeExecutionTests.inc:779: 1\n"
+          }
+        ],
+        "neverc_binary_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+        "software_sha256": "56d76c798d77b0d09ec9e44773e1226d4eb0c0a045d3fefa6e75081fcefcfa2f",
+        "translation_matrix_sha256": "5202e3b4e8652ba194d3f366f8c0f6ee33c1195c19ea973c708fb386a5e43772"
+      }
+    },
+    "key_platform": {
+      "neverd": "50d78f42b06246927229f288a687654fa407a3db",
+      "capstone": "ea546fe8c9d7b05be844398dd5301dd4735d0eb2",
+      "native_sgx_instructions": 0,
+      "software_sgx1_leaves": [
+        "EGETKEY",
+        "EREPORT"
+      ],
+      "reference": "https://github.com/gmh5225/test_mac_intel/actions/runs/46139290670",
+      "reference_workflow": "96bad96db3a9f8e533585ca202a6e48c9d6c804a",
+      "reference_source": "Intel x64 SDK 2.30.101.1, signed simulation enclave",
+      "verified_public_report_bytes": 432,
+      "verified_targetinfo_bytes": 512,
+      "reference_report_sha256": "a85c104d9ae97a1f0d8c999cc8b8c6886984232ca233923832c0d6e2e1122572",
+      "targetinfo_sha256": "fc42ac59d753803a6916c8ddd949e0c7feba17f2e9b1a6df48efb06874008454",
+      "sdk_checks": [
+        "divisor=7 status=0 result=0 handler=0 vector=0 type=0 original_pc=0 rax=0 rdx=0 r9=0000000000000000 quotient=12",
+        "divisor=0 status=0 result=0 handler=1 vector=0 type=3 original_pc=1 rax=84 rdx=0 r9=1122334455667788 quotient=12",
+        "divisor=0 status=0 result=0 handler=1 vector=0 type=3 original_pc=1 rax=84 rdx=0 r9=1122334455667788 quotient=12",
+        "key_errors=2,2,2,256,256 intact_outputs=5 result=0 status=0",
+        "self_report_verified=1 reportdata_match=1 result=0 status=0"
+      ],
+      "core_tests": {
+        "passed": 8,
+        "skipped": [],
+        "xml_sha256": "917992e484ca49e4ab6ad97a1813b198b415fbe9b6eb14411364ee8f5f22dc2c"
+      },
+      "report_check": "NeverD assembled the 384-byte body from imported identity and caller data. The test platform returned the SDK reference MAC only for the matching target, key ID and body. All 432 result bytes matched. The caller supplies processor-specific key operations.",
+      "key_statuses": [
+        0,
+        2,
+        32,
+        64,
+        256
+      ],
+      "key_success": "An explicitly bound synthetic key service verified the 16-byte store. Platform root keys are not present in this qualification."
+    }
+  },
+  "prefixed_enclu_qualification": {
+    "neverd": "7a0f218965a75d714b5196c06003affc5818ffc0",
+    "base": "5bb6c910b9d362af84ea583b8e8ee138bdc1cd8f",
+    "neverc": "4f3e6b9ed8d3a2f1b4b6f680bbe9bf9b87cc78c0",
+    "neverc_binary_sha256": "8d8e574af94f5bf9e17ec1e4c96ac0c0927cd5409e37c8083bfce6d7e3783bc4",
+    "software_reference": "https://cdrdv2-public.intel.com/868149/332831-089-sdm-vol-3d.pdf",
+    "imported_epc_cases": [
+      "X86ModeSgxThreadTest.PrefixedTransfersPreserveNextPCAndFullOperands",
+      "X86ModeSgxThreadTest.EncluEncodingFaultsPrecedeLeafAndOperandAccess",
+      "X86ModeSgxThreadTest.EnclaveKeyAndReportFaultBeforePrivateOperands",
+      "X86ModeSgxThreadTest.PendingVirtualInterruptRestartsEnclaveExit"
+    ],
+    "software_transfer_prefix_encodings": 26,
+    "crypto_leaf_first_operand": {
+      "leaves": [
+        "EREPORT",
+        "EGETKEY"
+      ],
+      "outside_enclave": "GP(0)",
+      "misaligned_or_outside_elrange": "AEX on GP(0), resume at original RIP with full RAX/RBX",
+      "alignment_bytes": 512
+    },
+    "generated_original_site_transfer": {
+      "input_elf_sha256": "e1e9602f74e3ae78123cd5985b78d2aefeef37b82d857b0721c78b7456b52899",
+      "native_enclave_instructions": 0,
+      "source": "Code64 original-site transfer and software enclave; native context inspected up to ENCLU",
+      "cases": [
+        {
+          "pc": "0x401000",
+          "bytes": "0f01d7"
+        },
+        {
+          "pc": "0x401003",
+          "bytes": "260f01d7"
+        },
+        {
+          "pc": "0x401007",
+          "bytes": "2e0f01d7"
+        },
+        {
+          "pc": "0x40100b",
+          "bytes": "360f01d7"
+        },
+        {
+          "pc": "0x40100f",
+          "bytes": "3e0f01d7"
+        },
+        {
+          "pc": "0x401013",
+          "bytes": "640f01d7"
+        },
+        {
+          "pc": "0x401017",
+          "bytes": "650f01d7"
+        },
+        {
+          "pc": "0x40101b",
+          "bytes": "670f01d7"
+        },
+        {
+          "pc": "0x40101f",
+          "bytes": "67654f0f01d7"
+        },
+        {
+          "pc": "0x401025",
+          "bytes": "6467480f01d7"
+        },
+        {
+          "pc": "0x40102b",
+          "bytes": "400f01d7"
+        },
+        {
+          "pc": "0x40102f",
+          "bytes": "410f01d7"
+        },
+        {
+          "pc": "0x401033",
+          "bytes": "420f01d7"
+        },
+        {
+          "pc": "0x401037",
+          "bytes": "430f01d7"
+        },
+        {
+          "pc": "0x40103b",
+          "bytes": "440f01d7"
+        },
+        {
+          "pc": "0x40103f",
+          "bytes": "450f01d7"
+        },
+        {
+          "pc": "0x401043",
+          "bytes": "460f01d7"
+        },
+        {
+          "pc": "0x401047",
+          "bytes": "470f01d7"
+        },
+        {
+          "pc": "0x40104b",
+          "bytes": "480f01d7"
+        },
+        {
+          "pc": "0x40104f",
+          "bytes": "490f01d7"
+        },
+        {
+          "pc": "0x401053",
+          "bytes": "4a0f01d7"
+        },
+        {
+          "pc": "0x401057",
+          "bytes": "4b0f01d7"
+        },
+        {
+          "pc": "0x40105b",
+          "bytes": "4c0f01d7"
+        },
+        {
+          "pc": "0x40105f",
+          "bytes": "4d0f01d7"
+        },
+        {
+          "pc": "0x401063",
+          "bytes": "4e0f01d7"
+        },
+        {
+          "pc": "0x401067",
+          "bytes": "4f0f01d7"
+        }
+      ],
+      "routes": {
+        "high": {
+          "source_sha256": "ede94a9512d52eb6e7e9f346a75da9c4c02b80438807967f98694c662cc3948a",
+          "sites": 26,
+          "checks": [
+            {
+              "compiler": "clang",
+              "optimization": "O0",
+              "returned_to_provider": 26,
+              "executable_sha256": "13a804a1ae849f677c1406902ede347f977a2fdb6b8c1eedadeb7f490f1715a8"
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O0",
+              "returned_to_provider": 26,
+              "executable_sha256": "65619b36aa42dd6d1dee43402ac38f5738579f999145e34c7668b496d50ca77a"
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O0",
+              "native_context_object_sha256": "cdce25f37e7745013186dba9dae9722a3f60560592a22442ecd14bda7d252cc9"
+            },
+            {
+              "compiler": "clang",
+              "optimization": "O2",
+              "returned_to_provider": 26,
+              "executable_sha256": "b8486f1abae3ef7536b3383609eefd67c072f773927370990afb430c5e95a4b7"
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O2",
+              "returned_to_provider": 26,
+              "executable_sha256": "52f408b711995f2f8eed4ac4362bb7ca6bfbc59774b5112cb5b4e85e3fca4e25"
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O2",
+              "native_context_object_sha256": "dabc3eb016d2239ab2d8a5a45cd05fcd519c8d799bc49f0e5ddbe02450fc47f5"
+            }
+          ]
+        },
+        "llvm": {
+          "source_sha256": "918ef42d4e03e160380a1c050304525b34449e3428bd6b71b9500e726dbf8e38",
+          "sites": 26,
+          "checks": [
+            {
+              "compiler": "clang",
+              "optimization": "O0",
+              "returned_to_provider": 26,
+              "executable_sha256": "6959d89f885ebe4f3e88512d707595787a3c5eb7c1539dc9a987df6081209d50"
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O0",
+              "returned_to_provider": 26,
+              "executable_sha256": "bc4be4698bd24dc2516958362142c3f061d6c0df16f1e0556026c194d6d6e660"
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O0",
+              "native_context_object_sha256": "39a63650be836be839448d0268ddc4752dd626aba411ca852dbbd393f027d029"
+            },
+            {
+              "compiler": "clang",
+              "optimization": "O2",
+              "returned_to_provider": 26,
+              "executable_sha256": "3dc1fb2b5bbfc512ceb4d6db3ca62d953aa9fa661120b5f70d54666d38755061"
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O2",
+              "returned_to_provider": 26,
+              "executable_sha256": "3dfe9a912838002f127f0bcb4bc64814b46bc7e89dc5b72a0feb3d4f2cde37e2"
+            },
+            {
+              "compiler": "neverc",
+              "optimization": "O2",
+              "native_context_object_sha256": "0f9d2f106f4e025ea36d2130f51e5c9c4ca6e1bc323a220da3dddfb1e8bac98c"
+            }
+          ]
+        }
+      }
+    },
+    "full_paged": {
+      "p": {
+        "passed": 258,
+        "skipped": [],
+        "xml_sha256": "a8186f566f8af29e910d7ada04ea06252479e6ec78338b0b23f414828102f54e",
+        "core_type": "0x40",
+        "original_cpu_to_generated_c_comparisons": 768,
+        "execute_breakpoint_priority_comparisons": 384,
+        "virtual_interrupt_priority_comparisons": 129,
+        "shards": [
+          {
+            "cpu": 2,
+            "sha256": "a379b35547750b255a31cbff13626d3be9554c8cb3b8ed207e8a68de0f06a178",
+            "tests": 129
+          },
+          {
+            "cpu": 8,
+            "sha256": "7cb922c001ff0f28d97bfdefcad1ad08ac8b8edbd4236fa826619dea22dd176e",
+            "tests": 129
+          }
+        ]
+      },
+      "e": {
+        "passed": 258,
+        "skipped": [],
+        "xml_sha256": "b4ba80fceea8813727169e61f7180403a7c9055307088727aa9c26bc97bb2186",
+        "core_type": "0x20",
+        "original_cpu_to_generated_c_comparisons": 768,
+        "execute_breakpoint_priority_comparisons": 384,
+        "virtual_interrupt_priority_comparisons": 129,
+        "shards": [
+          {
+            "cpu": 15,
+            "sha256": "e7350718b5a0c4e806c65b087337edf56421385f24eb75329a9a57f08d9a1200",
+            "tests": 129
+          },
+          {
+            "cpu": 17,
+            "sha256": "1462ab53b15bed375ac1fa033c817f642945b0ed5b35dbecb61cb67279c1c09b",
+            "tests": 129
+          }
+        ]
+      }
+    },
+    "full_continuation_export": {
+      "passed": 133,
+      "skipped": [],
+      "xml_sha256": "6b29d2a712fe85e566f24246e58f2b189dc55b8de1d9efbc44d17bd0442c1a90"
+    },
+    "pipeline_outcomes": {
+      "passed": 82,
+      "skipped": [],
+      "xml_sha256": "938f2db2c4bb7284ee6a8be3f06fb035f9ff7a2e4bf8ddf0ae3e803284d24f7c"
+    },
+    "interpreter_specialization": {
+      "passed": 679,
+      "skipped": [],
+      "xml_sha256": "8f6a3098dcc055feec20f9b30aae30ce843c1ae9bb3ea315138493e1d58f0520"
+    },
+    "legacy_source": {
+      "passed": 265,
+      "skipped": [],
+      "xml_sha256": "3294926aac0d44743a9c3658e941c88bab4c83c3e373e390c4918e97dd61a93f"
+    },
+    "selected_software": {
+      "passed": 13,
+      "skipped": [],
+      "xml_sha256": "6cb8efac9b6a4f826bcd228d569ee794492a54ab83f99397b883296be2e7a1e1",
+      "execute_breakpoint_priority_comparisons": 384,
+      "virtual_interrupt_priority_comparisons": 129
+    },
+    "hosted": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46135492078",
+      "workflow_commit": "264feb171f8f0950f07c2b646c36f8b9fef9424a",
+      "neverd": "7a0f218965a75d714b5196c06003affc5818ffc0",
+      "neverc": "4f3e6b9ed8d3a2f1b4b6f680bbe9bf9b87cc78c0",
+      "expected": 46,
+      "status": "completed",
+      "conclusion": "success",
+      "capabilities": [
+        {
+          "runner": "macos-15-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "epc_sections": 0,
+          "native_enclave_instructions": 0,
+          "sha256": "c85e1bd53d9e1b6a874bd40c70810af794d0df7a5efa585916ca2392fcac4709",
+          "cpuid_la57": false
+        },
+        {
+          "runner": "macos-26-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "epc_sections": 0,
+          "native_enclave_instructions": 0,
+          "sha256": "15578999abd35c48b319651f70a2c92bb93988c6fc697c7a36db2604864fe741",
+          "cpuid_la57": false
+        },
+        {
+          "runner": "ubuntu-24.04",
+          "cpu": "AMD EPYC 9V74 80-Core Processor",
+          "epc_sections": 0,
+          "native_enclave_instructions": 0,
+          "sha256": "0697aef2105a46ce8649b0d69dd9b55fc5ff97c97dfe2b5d1540620372eb0a0e",
+          "cpuid_la57": false
+        }
+      ],
+      "passed": 45,
+      "skipped": [
+        {
+          "name": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+          "status": "skipped",
+          "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeExecutionTests.inc:779: 1\n"
+        }
+      ],
+      "neverc_binary_sha256": "56da661b64322182b5b6bf76e49f1efce1831ba1028a03a83f860c94c2f6b779",
+      "software_sha256": "5d871f5cdc0f109c959679c057cee348c5b585c6d8cffde3749a8c7707da9aa7"
+    }
+  },
+  "neverc_previous_checkpoint": {
+    "current_dev_revision": "4f3e6b9ed8d3a2f1b4b6f680bbe9bf9b87cc78c0",
+    "current_dev_binary_sha256": "8d8e574af94f5bf9e17ec1e4c96ac0c0927cd5409e37c8083bfce6d7e3783bc4",
+    "current_dev_reproduced_hosted_generated_images": 8,
+    "current_dev_object_report_sha256": "0681dd7f305bd8bd8cf2943a94673081b96b439213c2ca9cbe441ee02588622e",
+    "compiler_source": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+    "compiler_sha256": "4a6a10a89397faeaf64f1955210585a89fd1ae31e53fdc7e324969659e8d8702",
+    "dev_target_owner_checked": "4f3e6b9ed8d3a2f1b4b6f680bbe9bf9b87cc78c0",
+    "cleanup_commit": "ac2335646fb80d749066029ba5ccfdfdc6bbec80",
+    "generated_host_pointer_bytes": 8,
+    "rejected": [
+      "-m32",
+      "--target=i386-unknown-linux-gnu",
+      "--target=i686-pc-windows-msvc",
+      "--target=i386-apple-darwin",
+      "--target=x86_64-unknown-linux-gnux32"
+    ],
+    "current_dev_native_intrinsics": {
+      "frontend_sha256": "8d8e574af94f5bf9e17ec1e4c96ac0c0927cd5409e37c8083bfce6d7e3783bc4",
+      "sdk": "neverd-llvm-v23.0.0-r12",
+      "input_sha256": "0a966f17d1560e496eb36c203e59970e92571d9e327e9b116b20a820f16de52b",
+      "optimizations": [
+        {
+          "optimization": "O0",
+          "calls": [
+            "enclu.transfer.at.context",
+            "enclu.transfer.context",
+            "rsm.context",
+            "vmread",
+            "vmrun.context",
+            "vmwrite"
+          ],
+          "opcodes": [
+            "vmread",
+            "vmwrite",
+            "vmrun",
+            "enclu",
+            "xrstor64",
+            "rsm"
+          ],
+          "ir_sha256": "91606fe72af17aca90d503f48cd78fa85aa912c3b0857e965bdbbc483b5e6a23",
+          "object_sha256": "8ac8d30a9ffee043823f7ce650fb9aee4526115f5fff12de4c16a7b364e75710"
+        },
+        {
+          "optimization": "O2",
+          "calls": [
+            "enclu.transfer.at.context",
+            "enclu.transfer.context",
+            "rsm.context",
+            "vmread",
+            "vmrun.context",
+            "vmwrite"
+          ],
+          "opcodes": [
+            "vmread",
+            "vmwrite",
+            "vmrun",
+            "enclu",
+            "xrstor64",
+            "rsm"
+          ],
+          "ir_sha256": "4df4598b6606e88deaa0ec09fee203e66e9a2efe8260dcd31c183d1247d1023f",
+          "object_sha256": "622238f3acb496fae498964214a11ba48bba1cd69c0526477cbd7a0599dd3d29"
+        }
+      ]
+    }
+  },
+  "deadline_and_key_platform": {
+    "neverd": "e0584f30c4e03a52d8305390ffee22e9d4624ab1",
+    "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+    "decoder": "ea546fe8c9d7b05be844398dd5301dd4735d0eb2",
+    "full_paged": {
+      "p": {
+        "passed": 268,
+        "skipped": [],
+        "xml_sha256": "2a4fab36645f17153a0dce14cb64f506cd90605da8f407d766c6c22c14cf3b3d",
+        "core_type": "0x40",
+        "original_cpu_to_generated_c_comparisons": 768,
+        "execute_breakpoint_priority_comparisons": 384,
+        "virtual_interrupt_priority_comparisons": 129,
+        "shards": [
+          {
+            "cpu": 2,
+            "sha256": "c05d8350f63bcfa5f1f1d08706256ebf15da8d71ef6fd8689c2db6f061a5fabe",
+            "tests": 134
+          },
+          {
+            "cpu": 8,
+            "sha256": "753b287bf1119d5084b7436cd5802ac8232f381a42126e6f5afbb66d80c8bd71",
+            "tests": 134
+          }
+        ],
+        "deadline_cpu_comparisons": 8
+      },
+      "e": {
+        "passed": 268,
+        "skipped": [],
+        "xml_sha256": "c714eb58b97266fa66afa4b9b4a0bedb3d3469377bf9af19eabe16399bd0b794",
+        "core_type": "0x20",
+        "original_cpu_to_generated_c_comparisons": 768,
+        "execute_breakpoint_priority_comparisons": 384,
+        "virtual_interrupt_priority_comparisons": 129,
+        "shards": [
+          {
+            "cpu": 15,
+            "sha256": "6aaa669d9d30eca99ef48c0077df70a20bbb75c53d7027b9099b7a43dc203b24",
+            "tests": 134
+          },
+          {
+            "cpu": 17,
+            "sha256": "07692f9427b5270a69c20ed2a761990b482f92771e80444066ffae5e6dab67b7",
+            "tests": 134
+          }
+        ],
+        "deadline_cpu_comparisons": 8
+      }
+    },
+    "local_selected": {
+      "passed": 56,
+      "skipped": 0,
+      "report_sha256": "b775e21850525c556b42a216bd8954096d73eb649b15daae82becae344955a08"
+    },
+    "reference": "https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/lapic.c",
+    "clock": "Per-CPU guest TSC, IA32_TSC_DEADLINE, imported timer LVT, edge delivery across HLT, SMI and RSM",
+    "exported_vmrun_sha256": {
+      "high": "58c427f5125e570f2b5360b5c0b796985a30c454ff5094d0e439214b19ef01a4",
+      "llvm": "8994182bbf4e5a732e0369208a3ab4f6f03d4042d2d09d708b6356e2c806f11b"
+    },
+    "hosted": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/46140475515",
+      "workflow_commit": "9543b19c6f30c3616999f9cc128e60f445c21eea",
+      "neverd": "e0584f30c4e03a52d8305390ffee22e9d4624ab1",
+      "neverc": "5a70f355ef14d30454128ff29b867044f7b9c583",
+      "expected": 56,
+      "status": "completed",
+      "conclusion": "success",
+      "capabilities": [
+        {
+          "runner": "macos-15-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "epc_sections": 0,
+          "native_enclave_instructions": 0,
+          "sha256": "28ec024be9d23397f020754290c7665a01f453834272bff9f910d8f8ddcfb6f3",
+          "cpuid_la57": false
+        },
+        {
+          "runner": "macos-26-intel",
+          "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+          "epc_sections": 0,
+          "native_enclave_instructions": 0,
+          "sha256": "6f79dea8281fae2f70e3e0a2fad0ed6ca8ce8b9d18c5fb2b7f0a13ee4085904c",
+          "cpuid_la57": false
+        },
+        {
+          "runner": "ubuntu-24.04",
+          "cpu": "Intel(R) Xeon(R) 6975P-C",
+          "epc_sections": 0,
+          "native_enclave_instructions": 0,
+          "sha256": "3cd1fe2a010f1474dec98560b5ac538abb16f965493533fac0efb11d9e1d94f4",
+          "cpuid_la57": false
+        }
+      ],
+      "passed": 54,
+      "skipped": [
+        {
+          "name": "X86ModeExecutionTest.OriginalModeWritesChooseTheNativeEventFrame",
+          "status": "skipped",
+          "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeExecutionTests.inc:779: 1\n"
+        },
+        {
+          "name": "X86ModeInterruptTest.OriginalDeadlineMsrsAndPendingEdgesMatchKvm",
+          "status": "skipped",
+          "reason": "/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X64PagedNativeCPU.h:135\nKVM unavailable: 13\nGoogle Test trace:\n/home/runner/work/test_mac_intel/test_mac_intel/NeverD/unittests/translate/x86/X86ModeDeadlineTests.inc:116: false masked=false expire=false\n"
+        }
+      ],
+      "neverc_binary_sha256": "78bc8516fcbbc64f51bfe293509566c3c82a78f1fefb371cfa63058a06825687",
+      "software_sha256": "805b0e60a61ed5fd61fb6d4f5e711b24ea78eacfc944b54a74752c1d61f8cf4b",
+      "translation_matrix_sha256": "5202e3b4e8652ba194d3f366f8c0f6ee33c1195c19ea973c708fb386a5e43772"
+    }
+  }
+}

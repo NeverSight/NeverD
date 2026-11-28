@@ -1,11 +1,14 @@
 # Native SGX transfer state
 
-The `native-sgx-v13` source profile connects canonical `0f 01 d7` ENCLU to
+The `native-sgx-v13` source profile connects code64 `0f 01 d7` ENCLU to
 explicit GPR, flags and x87/SSE/AVX input state through HighC and LLVM-to-C.
 It admits low EAX 2 (EENTER), 3 (ERESUME) and 4 (EEXIT). The transfer restores
 the complete native input bank and jumps to the **original executable
-instruction address**. EENTER's RCX next-PC output therefore retains the
-original address plus three. A relocated ENCLU would change that output.
+instruction address**. EENTER's RCX contains the address after the complete
+instruction. A segment override, address-size override, or final REX contributes
+to its length. ENCLU uses the full implicit register operands in code64, including
+with `67`. The accepted grammar has at most one prefix per group.
+[Intel SDM, ENCLU](https://cdrdv2-public.intel.com/868149/332831-089-sdm-vol-3d.pdf)
 
 This is an explicit terminal native environment binding. The original
 enclave, native continuation and AEP/runtime own execution after transfer.
@@ -37,9 +40,8 @@ low 32-byte values and MXCSR override its SSE/AVX components; higher vector
 containers are not live when XCR0=7. `X64ContinuationAvxImage.h` shares image
 admission and SIMD import with SVM/SMM. The source validates the state PC,
 flags, leaf, MXCSR, image alignment/range/disjointness and XSAVE header before
-any state/image write. Invalid invocation returns status 5 unchanged. Other
-instructions or prefixed ENCLU require native execution at status 4; they
-are not silently replaced or advanced.
+any state/image write. Invalid invocation returns status 5 unchanged.
+Instructions outside the transfer profile require native execution at status 4.
 
 The invocation supplies:
 
@@ -80,8 +82,8 @@ The separate `llvm.x86.enclu.transfer.context(ptr)` interface emits ENCLU at
 the generated site and deliberately traps at its generated continuation. Its
 native-address protocol is useful independently, but NeverD's V13 original-PC
 projection always uses the original-site interface. Both are native compiler
-intrinsics, with no assembly fallback. The full fork also owns code32 and
-x32 transport; V13 source itself remains x64.
+intrinsics. The LLVM backend also implements code32 and x32 transport. NeverC
+and the V13 source export use x64 for this interface.
 
 The source's shared intrinsic contract validates its two operands, complete
 context pointer and constant u64 original PC. LLVM and C routes preserve
@@ -223,6 +225,74 @@ Two successive faults exercise slot reuse. Intel's signed x64 simulation
 enclave produces the same register, retry and quotient observations on the
 designated runner. [Independent Intel SDK simulation](https://github.com/gmh5225/test_mac_intel/actions/runs/44873573672)
 
-Enclave construction and cryptographic leaves require platform state beyond
-this imported-thread profile. CET, XSTATE components beyond AVX and physical
-SGX qualification remain open.
+The mixed-mode executor authenticates ENCLU before delivering encoding faults.
+LOCK, REP/REPNE and the operand-size prefix cause #UD before the task-switched
+check. Outside an enclave, EREPORT and EGETKEY cause #GP(0) at the original RIP,
+before any access to their operands. Inside the enclave, the 512-byte
+TARGETINFO or KEYREQUEST starts at an aligned address in ELRANGE. EREPORT
+checks reserved target fields, then the 128-byte-aligned REPORTDATA address
+and the 512-byte-aligned report destination. EGETKEY checks its 16-byte-aligned
+output before reporting reserved request fields. An EPCM read fault delivers
+#PF(0x8005), and a write fault delivers #PF(0x8007) in this user-mode profile.
+EXINFO retains the precise address across AEX and ERESUME, including its page
+offset. [Intel SDM, EGETKEY and EREPORT](https://cdrdv2-public.intel.com/874252/332831-090-sdm-vol-3d.pdf)
+
+Bind an `X86SgxKeyPlatform` to the EPC bank to execute successful cryptographic
+requests. The platform supplies the CPU version relation, key derivation,
+hidden initialized SECS fields, report key ID and local report MAC. The
+executor owns operand access, version and attribute errors, the 384-byte report
+body, and the prepared output store. EGETKEY writes 16 bytes on success. Its
+errors set ZF and return 2 (attributes), 32 (CPU SVN), 64 (ISV/config SVN) or
+256 (key name), preserving the destination. EREPORT commits 432 bytes and
+preserves the input RAX and arithmetic flags. A missing platform yields
+`ModeUnavailable` for an otherwise valid request.
+
+Intel's signed SDK simulation independently returned 2, 2, 2, 256 and 256 for
+five prohibited or unknown key names and preserved all five outputs. It also
+verified a self-addressed report. A NeverD regression supplies its recorded MAC
+only for the identical target, key ID and 384-byte body. It compares the full
+432-byte output, including when REPORTDATA aliases the destination. Separate
+tests cover a nonzero KSS identity, a refused MAC, and key version ordering.
+[SDK simulation and public report](https://github.com/gmh5225/test_mac_intel/actions/runs/46139290670)
+
+The paged enclave path authenticates the original prefix and opcode bytes
+before delivering UD0 or an instruction-length fault. A ModR/M fetch that
+crosses into a non-executable EPC page raises #PF. With SMEP clear, its
+user error code is `0x8005` with NXE clear and `0x8015` with NXE set.
+For a virtual-interrupt conflict at a private EEXIT, AEX saves the unexecuted
+EEXIT in the SSA. Resolving the conflict outside and executing ERESUME
+restores its PC and operands. The same EEXIT then reaches its original target.
+[Mixed-mode execution evidence](evidence/x86-code64-prefix-faults-2026-11-28.json)
+
+### SGX2 dynamic enclave pages
+
+An imported EPC bank with `X86SgxFeatures::SGX2` admits the x64 EACCEPT,
+EMODPE and EACCEPTCOPY user leaves. EACCEPT checks SECINFO before examining
+RCX, matches the request against the page, and clears its pending,
+modified and permission-restricted flags on success.
+A fresh EAUG page can be accepted immediately. Type changes and permission
+restrictions use the page's imported tracking result. An incomplete tracking
+cycle returns 11. The platform can publish a completed shootdown with
+`bindPageTracking` before the next EACCEPT. An attribute mismatch returns
+19. A missing tracking observation stops the executor at the original instruction.
+EMODPE retains existing access rights when it adds permissions. EACCEPTCOPY validates
+the source and pending destination before publishing the 4 KiB copy and its
+new access rights. The bank is serialized across these operations.
+[Intel SDM volume 3D, SGX page management and instruction references](https://cdrdv2-public.intel.com/868149/332831-089-sdm-vol-3d.pdf) · [Linux SGX enclave page management](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kernel/cpu/sgx/ioctl.c)
+
+The x64 NeverC header exposes `_enclu_bounded_u32` for constant leaves 0, 1
+and 5 through 11. At O0 and O2 each call produced `llvm.x86.enclu.bounded`
+in IR. The NeverC backend and LLVM r12 and r17 all emitted the requested leaf
+selector in EAX and `0F 01 D7` for ENCLU. The 54 disassembly checks cover
+code generation. The software execution cases above cover the SGX2 page leaves.
+[Per-function selectors and object hashes](evidence/x86-code64-prefix-faults-2026-11-28.json)
+
+The same instruction admission applies to ordinary generated enclave bodies
+and the mixed-mode executor. RDTSC and RDTSCP raise #UD on SGX1 and #GP(0)
+at CPL3 on SGX2 with CR4.TSD set. When admitted they use the existing
+code64 body and its time source. [Intel SDM, enclave instruction behavior](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
+
+The software profile starts with initialized EPC pages. Supervisor enclave
+construction and paging, the report-v2 and 256-bit key leaves, CET and XSTATE
+components beyond AVX remain open. All designated hosts reported zero usable
+EPC sections, so native SGX qualification is still outstanding.

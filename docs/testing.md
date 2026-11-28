@@ -10687,21 +10687,32 @@ ModR/M, SIB or first displacement byte on an absent page in code64. Both
 fetch profiles run with zero, eleven, twelve and thirteen `66` prefixes
 through HighC and LLVM-to-C, Clang and 64-bit NeverC at O0/O2.
 `UD0RefusesMissingOrInvalidFetchProfile` checks fail-loud admission
-for bare, `67`, `66`, `66 67` and thirteen-prefix UD0 before CPU or RAM effects.
+for bare, `67`, `66`, `66 67`, LOCK and thirteen-prefix UD0 before CPU or RAM effects.
 `X64PagedUD0PrefixTest.QualifiedPrefixesMatchTheDecoder` checks every one of
-the 703 decoded zero-to-two-prefix combinations and rejects LOCK.
+the 703 decoded zero-to-two-prefix combinations and the separate paged recognition of LOCK.
 `ExtendedPrefixesAndLengthBoundaryMatchTheDecoder` checks each of the 26
 qualified prefix bytes repeated at lengths 3–13, plus five mixed sequences
-at those lengths. LOCK and an opcode beyond the 15-byte instruction limit
-remain explicit boundaries.
+at those lengths. It also checks LOCK at three positions and distinguishes
+a valid fifteen-byte instruction from an incomplete opcode escape.
+`PagedEntriesEndAtPrefixFaults` exercises entry discovery at the fault and
+after a fallthrough. `PrefixLengthFaultAuthenticatesOnlyTheFirst15Bytes`
+changes bytes 15 and 16 independently and checks the unbound profile.
+`PrefixLengthFaultMatchesOriginalBreakpointAndFetchPriority` compares 384
+original KVM and generated executions per core across CPL0–3, RF, breakpoint
+matches and the accessible prefix span. `VirtualInterruptPrecedesRsmAndEncluBreakpointsAndFetch`
+compares the original RSM, ENCLU and HLT with the mixed-mode executor.
+Its 129 cases per core cover CR4.PVI, VIF/VIP, execution breakpoints, missing
+code pages and four ENCLU prefixes that raise #UD after successful fetch.
+`PendingVirtualInterruptRestartsEnclaveExit` follows the software #GP(0)
+through AEX, the outside frame, ERESUME and the original EEXIT.
 `UD0AddressExtentUsesLiveBytesAfterTheOpcode`
 exports an image ending at the two-byte opcode, then changes its live ModR/M
 and SIB to distinguish #UD from a displacement-fetch #PF without relifting;
 the same case uses a three-byte `67` prefix-plus-opcode image in code64.
 The register-indirect data address is noncanonical and is never read.
 Pin `UD0FetchPriorityMatchesOriginalHybridCPU` to the qualified P and E cores
-separately; compare 21 representative prefix sequences, three encoded address
-tails and eight generated compiler/route/optimization lanes (504 comparisons
+separately. Compare 32 representative prefix sequences, three page-boundary
+placements and eight generated compiler/route/optimization lanes (768 comparisons
 per core when x64 NeverC is configured) through the original KVM handler,
 fault stack RIP/error code, CR2, all GPRs, flags and RAM with each generated
 lane. The model's execution binding is intentionally independent of the host
@@ -10712,13 +10723,34 @@ Capstone rejects. It records the original signal, trap vector, fault RIP,
 page-fault error and fault address; these user-mode observations do not replace
 the KVM/generated-C comparisons. A separate repeated-`66` length sweep
 observes P-core #GP at 13 prefixes while the E core still raises #UD; both
-raise #GP at 14 prefixes. The extended probe checks 5,208 length, tail and
-page-boundary combinations on each core using every qualified byte repeated
-and five mixed sequences. On the P core, attempting the sixteenth encoded
-byte raises #GP before a missing-page #PF; the E core raises #UD after the
-opcode. The bound continuation follows this measured order through the
-fifteen-byte opcode limit. See the
-[prefix qualification](evidence/x86-code64-ud0-prefixes-2026-11-24.json).
+raise #GP at 14 prefixes. The extended probe checks 7,175 cases on each core,
+including 1,295 with an overlong prefix or escape. These cases place a protected page at every
+offset from the original RIP through the end of the supplied stream.
+The probe verifies the signal, vector, error code, original RIP and page-fault
+address. The generated enclave regression also follows an inaccessible live
+address tail into the EPC page and checks the external frame, SSA and resumed
+instruction. [Qualification record](evidence/x86-code64-prefix-faults-2026-11-28.json)
+
+For SGX1 key/report changes, run the `X86ModeSgxThreadTest` cases in
+`NeverDX64PagedExecutionTests`. They check fault priority, the SSA and resumed
+PC, unchanged failed destinations, successful 16-byte key stores, and every byte
+of a local report. The Intel SDK reference contains its own verified public
+report and target. The x64 NeverC qualification also rebuilds both generated
+VMRUN routes at O0/O2 and compares all eight object and guest-image digests to
+the executed AMD KVM guests.
+[Intel SDK reference](https://github.com/gmh5225/test_mac_intel/actions/runs/46139290670)
+
+For SGX2 dynamic memory changes, run the `X86ModeSgxThreadTest` acceptance,
+copy, permission, timestamp and paging-retry cases. Check that
+`CompiledBodiesUseTheAcceptedPrivatePage` reports eight executions with x64
+NeverC installed. HighC and LLVM-to-C each read and write the newly accepted
+page using Clang and NeverC at O0 and O2. The fault cases check the SSA's
+original instruction address, the page-fault address and the order of competing
+operand faults. The standalone signed Intel SDK simulation covers its
+implemented SGX1 leaves. For a hardware result, check the EPC discovery and
+the number of enclave instructions executed in the runner's native report.
+[SGX2 cases and hardware discovery](https://github.com/gmh5225/test_mac_intel/actions/runs/46143175318)
+
 On Linux x64, build the independent probes against the configured Capstone
 archive, then pin each run to an identified P or E core:
 
