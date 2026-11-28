@@ -1011,6 +1011,7 @@ private:
   resolvedName(const std::string &name);
   /// Run the session's restricted single-function pipeline for \p address
   /// unless whole-image analysis already covers it.
+  void primeSourcePage(std::uint64_t address);
   void prepareFunction(std::uint64_t address,
                        std::string_view representation = {});
   Listing &listing();

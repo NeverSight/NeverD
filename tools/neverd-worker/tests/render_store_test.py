@@ -85,7 +85,7 @@ def check_opening_preparation(clients, executable, root):
             # Reopening actually prepared a dependency after the restore
             # advanced the revision. This separate C view builds its own page.
             view = source(replica, A, representation="c")
-            assert view["fixture_prepares"] == 2 and view["fixture_pages"] == 1, view
+            assert view["fixture_prepares"] == 2 and view["fixture_pages"] == 2, view
         with Client(executable) as reader:
             opened = ok(reader, "open", {"path": str(binary), "read_only": True,
                                         "analysis": True, "initial_render_snapshot": True})

@@ -1693,6 +1693,16 @@ std::string Engine::engineViewPage(std::uint64_t address,
       true);
 }
 
+void Engine::primeSourcePage(std::uint64_t address) {
+  if (!irViewFunction())
+    return;
+  try {
+    (void)engineViewPage(address, "source", 0, true, Json::object(), "{}");
+  } catch (const Error &) {
+    // A function can have valid analysis even when its source cannot be emitted.
+  }
+}
+
 void Engine::syncNamedViews() {
   const auto generation = listing().viewGeneration();
   if (namedViewsRevision_ != revision_ ||
@@ -4779,7 +4789,10 @@ void Engine::afterReply(const std::function<bool()> &requestWaiting) {
     if (prepare) {
       preparedFunction_.reset();
       textKey_.clear();
-      (void)prepare(session_, *entry, "source");
+      if (prepare(session_, *entry, "source")) {
+        (void)listing().functionAliases();
+        primeSourcePage(*entry);
+      }
     }
   }
 }
@@ -8385,12 +8398,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
               ::neverd::limits::worker::
                   kEngineExecuteImplFunctionTypeOptionsDeclarationStringFieldMax));
     prepareFunction(entry, "source");
-    try {
-      (void)engineViewPage(entry, "source", 0, true, Json::object(),
-                           Json::object().dump());
-    } catch (const Error &) {
-      // An engine that emits no source for it has prepared what it can.
-    }
+    primeSourcePage(entry);
     return {{"address", hexAddress(entry)}, {"prepared", true}};
   }
   if (operation == "decompile") {
