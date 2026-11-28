@@ -319,6 +319,12 @@ void seed(SymContext &Ctx, SymState &State, SymRef Root,
     for (const auto &[Register, Pointer] : Values.AffineRegisters)
       State.write(SymSpace::Register, Register,
                   entryPointerValue(Ctx, Root, ObjectRoots, Pointer));
+    // Rebuild each finite word as an unconstrained carrier. Its incoming
+    // predicate restricts the current value to the proved domain; later
+    // writes still invalidate or change it through ordinary memory semantics.
+    for (const auto &Domain : Values.FrameValueDomains)
+      State.store(Ctx.mkAdd(Root, Ctx.mkConst(64, Domain.first)),
+                  Ctx.mkFreshVar(64, "frame_word"));
     // A complete affine value takes precedence over independently projected
     // byte marginals. They can agree only under the incoming frame predicate,
     // which has not been installed yet and is not a syntactic equality.
@@ -2414,38 +2420,40 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
     }
   }
   if (Root) {
+    std::set<uint64_t> Slots;
+    for (const auto &Domain : Incoming.FrameValueDomains)
+      Slots.insert(Domain.first);
     const auto Hints =
         Refinement.FrameWordHints.find({Successor.Address, Successor.Mode});
     if (Hints != Refinement.FrameWordHints.end())
-      for (uint64_t Slot : Hints->second) {
-        if (!State.hasMaterializedRegionRange(Root, Slot, 8))
-          continue;
-        if (Result.EvaluatedOperations >= Options.MaxOperations)
-          return fail(SpecializationStatus::BudgetExceeded,
-                      "frame word projection budget exhausted");
-        ++Result.EvaluatedOperations;
-        const auto Value =
-            State.load(Ctx.mkAdd(Root, Ctx.mkConst(64, Slot)), 8);
-        const auto Domain =
-            enumerate(Ctx, Predicate, {Value}, Options.MaxControlTuples);
-        if (Failed)
-          return false;
-        if (Domain.Status != FiniteValueStatus::Complete ||
-            Domain.Tuples.empty())
-          continue;
-        if (Domain.Tuples.size() >
-            Options.MaxOperations - Result.EvaluatedOperations)
-          return fail(SpecializationStatus::BudgetExceeded,
-                      "frame word projection budget exhausted");
-        Result.EvaluatedOperations += Domain.Tuples.size();
-        std::vector<uint64_t> Values;
-        Values.reserve(Domain.Tuples.size());
-        for (const auto &Tuple : Domain.Tuples)
-          Values.push_back(Tuple.front());
-        llvm::sort(Values);
-        Values.erase(std::unique(Values.begin(), Values.end()), Values.end());
-        Out.FrameValueDomains.emplace(Slot, std::move(Values));
-      }
+      Slots.insert(Hints->second.begin(), Hints->second.end());
+    for (uint64_t Slot : Slots) {
+      if (!State.hasMaterializedRegionRange(Root, Slot, 8))
+        continue;
+      if (Result.EvaluatedOperations >= Options.MaxOperations)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "frame word projection budget exhausted");
+      ++Result.EvaluatedOperations;
+      const auto Value = State.load(Ctx.mkAdd(Root, Ctx.mkConst(64, Slot)), 8);
+      const auto Domain =
+          enumerate(Ctx, Predicate, {Value}, Options.MaxControlTuples);
+      if (Failed)
+        return false;
+      if (Domain.Status != FiniteValueStatus::Complete || Domain.Tuples.empty())
+        continue;
+      if (Domain.Tuples.size() >
+          Options.MaxOperations - Result.EvaluatedOperations)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "frame word projection budget exhausted");
+      Result.EvaluatedOperations += Domain.Tuples.size();
+      std::vector<uint64_t> Values;
+      Values.reserve(Domain.Tuples.size());
+      for (const auto &Tuple : Domain.Tuples)
+        Values.push_back(Tuple.front());
+      llvm::sort(Values);
+      Values.erase(std::unique(Values.begin(), Values.end()), Values.end());
+      Out.FrameValueDomains.emplace(Slot, std::move(Values));
+    }
   }
   // An edge guard may establish an offset that was not unique in its source
   // block. Keep the fact in this projection only: mutating State would leak
@@ -3476,6 +3484,11 @@ bool Specializer::evaluate(int Id) {
   if (Draft.Incoming.Frame.EntryReturnSlotIntact &&
       !chargeCallWork(Options.EntryReturnSlot->Bytes))
     return false;
+  if (Draft.Incoming.FrameValueDomains.size() >
+      Options.MaxOperations - Result.EvaluatedOperations)
+    return fail(SpecializationStatus::BudgetExceeded,
+                "frame word carrier budget exhausted");
+  Result.EvaluatedOperations += Draft.Incoming.FrameValueDomains.size();
   seed(Ctx, State, FrameRoot, ObjectRoots, Draft.Incoming,
        Options.EntryReturnSlot);
   LiveNativeCallReturnCells.clear();
