@@ -295,6 +295,15 @@ helper. The callee checks both ends of that array along with the incoming
 stack arguments after the frame grows beyond one SAVE instruction. The n64
 programs run above 4 GiB.
 
+The `-O2 -fPIC -mabicalls` version uses a classic process entry that calls
+the C driver through `$t9`. It covers classic MIPS and microMIPS R2 and R6
+on all three ABIs in both byte orders, plus MIPS16 R2 on o32. Direct object
+output and saved assembly each go through both relink modes. The guest
+checks the aggregate result and the weighted sum. The ELF reader checks
+the call and data relocations in the caller and both callees, and the addresses
+of `calc`, `finish` and `weights` in the GOT of each linked executable,
+including the ISA bit on compressed function pointers.
+
 The cross-object arithmetic programs exercise their own stack, function pointer, ELF
 global pointer, 64-bit data and arguments beyond the register argument area.
 The replacement and its classic helper each read the initialized 64-bit

@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 
 from mips_relink_linkage import (FIXTURES, SET_THREAD_AREA, build_linkage_objects,
-                                 inspect_linkage, verify_linkage_objects)
+                                 inspect_linkage, linkage_startup, verify_linkage_objects)
 
 
 ABIS = {
@@ -23,7 +23,7 @@ ABIS = {
 }
 MODES = ("section", "inplace")
 SAVED_ASSEMBLY_FLAGS = ("-fintegrated-as", "-save-temps=obj")
-PRODUCT_VERSION = 16
+PRODUCT_VERSION = 17
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -114,6 +114,7 @@ class Profile:
     saved_assembly: bool = False
     large_frame: bool = False
     optimization: str = "O2"
+    c_pic: bool = False
 
     @property
     def high_address(self):
@@ -138,6 +139,8 @@ class Profile:
         suffix = f"{self.abi}-{'le' if self.little else 'be'}"
         if self.c_call:
             prefix = "c-call-large-frame" if self.large_frame else "c-call"
+            if self.c_pic:
+                prefix += f"-pic-r{self.release}"
             if self.optimization != "O2":
                 prefix += "-" + self.optimization.lower()
             if self.saved_assembly:
@@ -199,6 +202,11 @@ def profiles(version=PRODUCT_VERSION):
                             for level in ("O0", "Os", "O3"):
                                 for saved in (False, True):
                                     yield replace(c_profile, optimization=level, saved_assembly=saved)
+                        if version >= 17:
+                            for release in ((2,) if isa == "mips16" else (2, 6)):
+                                for saved in (False, True):
+                                    yield replace(c_profile, c_pic=True, release=release,
+                                                  compressed_entry=False, saved_assembly=saved)
             if version >= 11:
                 for dwarf_version in (4, 5):
                     yield Profile(abi, little, dwarf_version=dwarf_version)
@@ -254,9 +262,10 @@ def scalar_release_profiles(abi, little, version):
 
 def startup(profile):
     if profile.entry_alias or profile.c_call:
-        return ((FIXTURES / "entry_exit.s").read_text()
-                .replace("EXIT_ISA", ".set micromips" if profile.isa == "micromips" else "")
-                .replace("EXIT_NR", str(profile.exit_nr)))
+        finish = ((FIXTURES / "entry_exit.s").read_text()
+                  .replace("EXIT_ISA", ".set micromips" if profile.isa == "micromips" else "")
+                  .replace("EXIT_NR", str(profile.exit_nr)))
+        return linkage_startup(profile, "run_calls") + "\n" + finish if profile.c_pic else finish
     source = STARTUP
     callee = "invoke" if profile.isa == "mips16" else "calc"
     for value in (0, 1, 7):
@@ -358,15 +367,18 @@ def compile_arithmetic_object(args, build, profile, filename, ir, *, pic=False):
 
 def assemble_startup(args, build, profile):
     target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}"]
+    if not profile.c_pic:
+        target.append("-mattr=+noabicalls")
     run([args.mc, "-filetype=obj", f"-triple={profile.triple}", *target,
-         "-mattr=+noabicalls", "-o", build / "start.o", "-"], source=startup(profile))
+         "-o", build / "start.o", "-"], source=startup(profile))
 
 
 def build_c_call_objects(args, build, profile, replacement_clang=None, replacement_flags=(), *, size_loop=False):
     sources = FIXTURES / "c_abi"
     abi = {"o32": "32", "n32": "n32", "n64": "64"}[profile.abi]
+    addressing = ["-mabicalls", "-fPIC"] if profile.c_pic else ["-mno-abicalls", "-fno-pic"]
     flags = ["--target=" + profile.triple, "-march=" + profile.cpu, "-mabi=" + abi,
-             "-mno-abicalls", "-fno-pic", "-G0", "-" + profile.optimization, "-ffreestanding", "-fno-stack-protector",
+             *addressing, "-G0", "-" + profile.optimization, "-ffreestanding", "-fno-stack-protector",
              "-fno-ident", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables"]
     if profile.isa != "classic":
         flags.append("-mips16" if profile.isa == "mips16" else "-mmicromips")
@@ -377,7 +389,8 @@ def build_c_call_objects(args, build, profile, replacement_clang=None, replaceme
     if profile.saved_assembly:
         flags.extend(SAVED_ASSEMBLY_FLAGS)
     assemble_startup(args, build, profile)
-    run([args.clang, *flags, "-c", sources / "start.c", "-o", build / "caller.o"])
+    caller_flags = ["-D_start=run_calls"] if profile.c_pic else []
+    run([args.clang, *flags, *caller_flags, "-c", sources / "start.c", "-o", build / "caller.o"])
     run([args.clang, *flags, "-DREVISION=7", "-c", sources / "calc.c", "-o", build / "calc.o"])
     run([replacement_clang or args.clang, *flags, *replacement_flags, "-DREVISION=5", "-c", sources / "calc.c",
          "-o", build / "updated.o"])
@@ -730,13 +743,13 @@ def qualify(args):
                     if digest(reference) != digest(out / f"{mode}.elf"):
                         raise ValueError(f"{name}: {mode} output differs from the direct link")
             results[name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
-            if profile.c_call or profile.dwarf_version or profile.entry_alias:
-                continue
-            if profile.linkage:
+            if profile.linkage or profile.c_pic:
                 object_hashes[name] = {}
-                for obj in ("caller.o", "calc.o"):
+                for obj in (("caller.o", "calc.o", "updated.o") if profile.c_pic else ("caller.o", "calc.o")):
                     shutil.copyfile(build / obj, out / obj)
                     object_hashes[name][obj] = digest(out / obj)
+                continue
+            if profile.c_call or profile.dwarf_version or profile.entry_alias:
                 continue
             split = layout(profile, True, split_entry=True)
             write(build / "grown.ld", split)
@@ -867,7 +880,7 @@ def inspect_elf(image, profile, *, require_pic_marker=False):
             or not section["sh_addr"] <= va <= section["sh_addr"] + section["sh_size"] - size
             or (profile.high_address and va < 1 << 32)):
         raise ValueError(f"{profile.name}: invalid calc range {va:#x}+{size:#x} in {section.name}")
-    if profile.linkage:
+    if profile.linkage or profile.c_pic:
         inspect_linkage(image, profile, symbol, section)
     return dict(va=va, offset=section["sh_offset"] + va - section["sh_addr"], size=size, section=section.name)
 
@@ -1014,7 +1027,7 @@ def execute(args):
         encode(root / "partial-inputs.json", partial)
     if version >= 4:
         object_hashes = manifest["objects"]
-        if set(object_hashes) != {p.name for p in cases if p.linkage}:
+        if set(object_hashes) != {p.name for p in cases if p.linkage or p.c_pic}:
             raise ValueError("MIPS relink object receipts do not match the expected linkage profiles")
     results, placements = {}, {}
     for profile in cases:
@@ -1024,6 +1037,7 @@ def execute(args):
             original, updated = 43, 89
         elif profile.linkage:
             original, updated = 41, 73
+        if profile.linkage or profile.c_pic:
             verify_linkage_objects(root / profile.name, profile, object_hashes[profile.name], digest)
         expected_results = {"original": original, "section": updated, "inplace": updated}
         if version >= 3 and not (profile.c_call or profile.linkage or profile.dwarf_version or profile.entry_alias):

@@ -8,6 +8,14 @@ CALLBACK_COUNT = 4096
 SET_THREAD_AREA = {"o32": 4283, "n32": 6246, "n64": 5242}
 
 
+def linkage_startup(profile, entry, set_thread_pointer=""):
+    return ((FIXTURES / "start.s").read_text()
+            .replace("LOAD_ADDRESS", "dla" if profile.abi == "n64" else "la")
+            .replace("SET_THREAD_POINTER", set_thread_pointer).replace("ENTRY_FUNCTION", entry)
+            .replace("EXIT_NR", str(profile.exit_nr))
+            .replace("CALL_REGISTER", "jalrc $25" if profile.release == 6 else "jalr $25\n    nop"))
+
+
 def build_linkage_objects(args, build, profile, run):
     pic = profile.linkage != "small-data"
     soft = profile.soft_float
@@ -30,12 +38,9 @@ def build_linkage_objects(args, build, profile, run):
                   f"    addiu $2, $zero, {set_thread_area}\n    syscall\n"
                   "    beq $7, $zero, 1f\n    nop\n    addiu $4, $zero, 97\n"
                   f"    addiu $2, $zero, {profile.exit_nr}\n    syscall\n1:")
-    start = ((FIXTURES / "start.s").read_text().replace("LOAD_ADDRESS", load_address)
-             .replace("SET_THREAD_POINTER", set_tp).replace("EXIT_NR", str(profile.exit_nr))
-             .replace("CALL_REGISTER", "jalrc $25" if profile.release == 6 else "jalr $25\n    nop"))
     entry = {"large-segments": "check_large_segments", "callback-table": "check_callback_table"}.get(
         profile.linkage, "run_calls")
-    start = start.replace("ENTRY_FUNCTION", entry)
+    start = linkage_startup(profile, entry, set_tp)
     if profile.tls_blocks:
         start += ((FIXTURES / "tls_blocks.s").read_text()
                   .replace("ADD_POINTER", "daddiu" if n64 else "addiu")
@@ -139,6 +144,21 @@ def verify_large_segments(image, profile, symtab):
 def inspect_linkage(image, profile, function, text):
     """Verify the actual callable pointer and floating-point ABI in each ET_EXEC."""
     symtab = image.get_section_by_name(".symtab")
+    if profile.c_pic:
+        width = image.elfclass // 8
+        order = "little" if profile.little else "big"
+        got = image.get_section_by_name(".got")
+        if not image["e_flags"] & 4 or got is None or got["sh_size"] % width:  # EF_MIPS_CPIC
+            raise ValueError(f"{profile.name}: missing MIPS PIC calling convention or invalid GOT")
+        data = got.data()
+        entries = {int.from_bytes(data[i:i + width], order) for i in range(0, len(data), width)}
+        # The exit shim is classic for MIPS16 and matches the caller on microMIPS.
+        for name, compressed in (("calc", profile.isa != "classic"),
+                                 ("finish", profile.isa == "micromips"), ("weights", False)):
+            symbols = symtab.get_symbol_by_name(name) or []
+            if len(symbols) != 1 or (symbols[0]["st_value"] | compressed) not in entries:
+                raise ValueError(f"{profile.name}: missing linked GOT address for {name}")
+        return
     if profile.linkage == "init-arrays":
         width = image.elfclass // 8
         order = "little" if profile.little else "big"
@@ -262,6 +282,8 @@ def verify_linkage_objects(folder, profile, hashes, digest):
             raise ValueError(f"{path}: SHA-256 mismatch")
         with path.open("rb") as source:
             image = ELFFile(source)
+            if profile.c_pic and not image["e_flags"] & 2:  # EF_MIPS_PIC
+                raise ValueError(f"{path}: Clang did not produce a PIC object")
             if profile.linkage == "callback-table" and obj == "caller.o":
                 verify_callback_relocations(image, profile)
             refs = set()
@@ -278,6 +300,21 @@ def verify_linkage_objects(folder, profile, hashes, digest):
                                     rel["r_info_ssym"], rel.entry.get("r_addend")))
             return refs, packed
 
+    if profile.c_pic:
+        if set(hashes) != {"caller.o", "calc.o", "updated.o"}:
+            raise ValueError(f"{profile.name}: expected the PIC caller and both callees")
+        caller, _ = references("caller.o", (".text.start",))
+        # CALL16 and GOT16 (o32) or GOT_DISP (n32/n64) for each encoding.
+        call, got = {"classic": (11, 9 if profile.abi == "o32" else 19),
+                     "micromips": (142, 138 if profile.abi == "o32" else 145),
+                     "mips16": (103, 102)}[profile.isa]
+        if not {(call, "calc"), (call, "finish")} <= caller:
+            raise ValueError(f"{profile.name}: missing PIC C call relocations")
+        for obj in ("calc.o", "updated.o"):
+            callee, _ = references(obj, (".text.calc",))
+            if (got, "weights") not in callee:
+                raise ValueError(f"{profile.name}: {obj} is missing the weights GOT relocation")
+        return
     if set(hashes) != {"caller.o", "calc.o"}:
         raise ValueError(f"{profile.name}: expected both original object files")
     if profile.linkage == "init-arrays":
