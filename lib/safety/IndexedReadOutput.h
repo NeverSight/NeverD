@@ -197,6 +197,25 @@ struct IndexedReadBlock {
            !Ambiguous.count(keyOf(Left->Base));
   }
 
+  // The replacement store can rule out a data path through memory. Its
+  // returned address must also be independent of the read being classified.
+  std::optional<int> pointerBaseDefinition(const MedVar &V, int At) const {
+    const auto Ptr = address(V, At);
+    if (!Ptr || Ambiguous.count(keyOf(Ptr->Base)))
+      return std::nullopt;
+    const auto It = Definitions.find(keyOf(Ptr->Base));
+    if (It == Definitions.end()) {
+      if (Ptr->Base.Kind == MedVar::Reg || Ptr->Base.Kind == MedVar::Param)
+        return -1;
+      return std::nullopt;
+    }
+    const auto [Bi, Oi] = It->second;
+    const MedBlock &DefBlock = Func.Blocks[Bi];
+    if (!sameReadValue(DefBlock.Ops[Oi].Output, Ptr->Base))
+      return std::nullopt;
+    return &DefBlock == &Block ? Oi : -1;
+  }
+
   static bool lowBytes(const MedOp &D) {
     return D.Opcode == NdOp::SUBBYTES && D.NumInputs == 2 &&
            unsignedConstant(D.Inputs[1]) == 0 &&

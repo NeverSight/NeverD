@@ -31,7 +31,8 @@ Read `analyzers.audit.indexed_read_output`. On a single retained indexed load, t
 | --- | --- | --- |
 | Initialize a word, copy a byte from a bounded runtime distance to the returned cursor | YES | YES, returned storage |
 | Return the selected initialized byte in a scalar | YES | YES, returned value |
-| Fully replace the only copied byte at the returned address before exit | YES | NO |
+| Fully replace the only copied byte at an independent returned address before exit | YES | NO |
+| Use the selected byte to compute the returned address, then overwrite the copied byte | YES | UNKNOWN |
 | The allowed source range extends beyond the known write | UNKNOWN | UNKNOWN |
 | Apply arithmetic to an initialized byte before returning it | YES | UNKNOWN for whole-byte transport |
 | A recognized native indexed load vanished from machine MedIR | UNKNOWN | UNKNOWN, with `unmatched_native` |

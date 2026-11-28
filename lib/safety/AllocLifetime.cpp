@@ -969,6 +969,7 @@ struct ReturnContract {
   AuthenticatedReturnKind Kind = AuthenticatedReturnKind::Unknown;
   uint16_t Size = 0;
   bool HasValueWithoutCarrier = false;
+  bool Conflicting = false;
 
   bool isPointerKind() const {
     return Kind == AuthenticatedReturnKind::Pointer;
@@ -1282,13 +1283,13 @@ private:
     // result is more convenient for the analysis.  Preserve the uncertainty.
     if (Declared.Kind == AuthenticatedReturnKind::NoValue &&
         Explicit.HasValueWithoutCarrier)
-      return {};
+      return {.Conflicting = true};
     if (Declared.Kind != AuthenticatedReturnKind::Unknown &&
         Explicit.Kind != AuthenticatedReturnKind::Unknown &&
         (Declared.Kind != Explicit.Kind ||
          (Declared.Size != 0 && Explicit.Size != 0 &&
           Declared.Size != Explicit.Size)))
-      return {};
+      return {.Conflicting = true};
     if (Declared.Kind != AuthenticatedReturnKind::Unknown)
       return Declared;
     return Explicit;
@@ -2850,7 +2851,7 @@ private:
       return;
     }
     const ReturnContract Contract = returnContract(F);
-    if (Contract.hasNoValue() ||
+    if (Contract.Conflicting || Contract.hasNoValue() ||
         Contract.Kind == AuthenticatedReturnKind::FloatingPoint ||
         Contract.Kind == AuthenticatedReturnKind::Aggregate) {
       Result.OutputUnknown += Written.size();
@@ -2885,6 +2886,8 @@ private:
         }
       }
     }
+    const auto PointerBase =
+        Replaced ? Proof.pointerBaseDefinition(Value, ReturnIdx) : std::nullopt;
     for (int Index : Written) {
       if (Index <= Effects.Barrier)
         ++Result.OutputUnknown;
@@ -2893,7 +2896,8 @@ private:
       else if (&B.Ops[Index] == Stored)
         ++Result.ReturnedStorage;
       else if ((Value.isConst() && Index > Effects.Last) ||
-               (&B.Ops[Index] == Replaced && Index > Effects.BeforePrevious))
+               (&B.Ops[Index] == Replaced && Index > Effects.BeforePrevious &&
+                PointerBase && Index > *PointerBase))
         ++Result.NoOutput;
       else
         ++Result.OutputUnknown;

@@ -84,7 +84,7 @@ The counters describe lifted operations visited, including a partial inventory i
 | --- | --- |
 | `written_before_read.YES` | A completed constant store in the same block covers every possible byte of the load. Audit checks the entire access width. An exact shared address or a bounded runtime displacement can establish coverage. |
 | `reaches_output.YES` | All the loaded bytes survive in the explicit scalar machine result (`returned_value`) or in the final store at the address returned by that function (`returned_storage`). |
-| `reaches_output.NO` | A constant return has no later observable write from the read, or the function completely replaces its only such write at the returned address before returning. |
+| `reaches_output.NO` | A constant return has no later observable write from the read, or the function completely replaces its only such write at a returned address whose value is independent of the read. |
 | `UNKNOWN` | Evidence for the question is incomplete. An unresolved source leaves both questions open. A proved source can still have an unresolved output. |
 
 A bounded backwards lookup can use a variable distance into a previously written region. The proof follows same-width SSA address arithmetic, an AND bound or a signed OR bound, and byte-preserving register views. A call, atomic operation, unmodeled effect or control transfer can end the proof. `unmatched_native` counts recognized instruction-local indexed loads missing from machine MedIR. These contribute one `UNKNOWN` to each question.

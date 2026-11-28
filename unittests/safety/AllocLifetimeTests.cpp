@@ -2603,31 +2603,41 @@ TEST(AllocLifetime, IndexedOutputDistinguishesFinalValueAndUncertainty) {
     Stored,
     Replaced,
     Partial,
+    IndexedDestination,
+    Conflict,
     OtherPointer,
     Barrier,
     Constant
   };
   for (auto Case :
        {Result::Returned, Result::Stored, Result::Replaced, Result::Partial,
-        Result::OtherPointer, Result::Barrier, Result::Constant}) {
+        Result::OtherPointer, Result::IndexedDestination, Result::Conflict,
+        Result::Barrier, Result::Constant}) {
     SCOPED_TRACE(static_cast<int>(Case));
     FB B("select_word", 0x100);
     const int Block = B.block();
-    const auto Base = mkReg(0x38, 0), Output = mkReg(0x10, 0);
+    const auto Base = mkReg(0x38, 0);
+    auto Output = mkReg(0x10, 0);
     B.op(Block, NdOp::STORE, MedVar{}, {Base, MedVar::makeConst(7, 8)});
     B.op(Block, NdOp::INT_AND, temp(10),
          {mkReg(0x30, 0), MedVar::makeConst(3, 8)});
     B.op(Block, NdOp::INT_ADD, temp(11), {Base, temp(10)});
     B.op(Block, NdOp::LOAD, temp(12, 2), {temp(11)}, 0x108);
+    if (Case == Result::IndexedDestination) {
+      B.op(Block, NdOp::INT_ZEXT, temp(16), {temp(12, 2)});
+      B.op(Block, NdOp::INT_ADD, temp(17), {Output, temp(16)});
+      Output = temp(17);
+    }
     MedVar Ret = Output;
-    if (Case == Result::Returned) {
+    if (Case == Result::Returned || Case == Result::Conflict) {
       B.op(Block, NdOp::INT_ZEXT, temp(13), {temp(12, 2)});
       Ret = temp(13);
     } else if (Case == Result::Constant) {
       Ret = MedVar::makeConst(7, 4);
     } else {
       B.op(Block, NdOp::STORE, MedVar{}, {Output, temp(12, 2)});
-      if (Case == Result::Replaced || Case == Result::Partial)
+      if (Case == Result::Replaced || Case == Result::Partial ||
+          Case == Result::IndexedDestination)
         B.op(Block, NdOp::STORE, MedVar{},
              {Output, MedVar::makeConst(1, Case == Result::Partial ? 1 : 2)});
       if (Case == Result::OtherPointer)
@@ -2636,8 +2646,12 @@ TEST(AllocLifetime, IndexedOutputDistinguishesFinalValueAndUncertainty) {
         B.call(Block, "callback", temp(18), {});
     }
     B.ret(Block, {Ret});
+    TypedFunctionDebug Debug(B.F.Entry, B.F.Name, {}, NdType::makeVoid());
+    if (Case == Result::Conflict)
+      B.F.ReturnValueEvidence = MedReturnValueEvidence::ReturnsValue;
     DirectReadInitialization Reads;
-    audit({B.F}, &Img, true, true, nullptr, &Reads);
+    audit({B.F}, &Img, true, true, Case == Result::Conflict ? &Debug : nullptr,
+          &Reads);
     EXPECT_EQ(Reads.BoundedIndexStore, 1u);
     EXPECT_EQ(Reads.Indexed.ReturnedValue, unsigned(Case == Result::Returned));
     EXPECT_EQ(Reads.Indexed.ReturnedStorage, unsigned(Case == Result::Stored));
@@ -2646,7 +2660,8 @@ TEST(AllocLifetime, IndexedOutputDistinguishesFinalValueAndUncertainty) {
     EXPECT_EQ(Reads.Indexed.OutputUnknown,
               unsigned(Case == Result::Partial ||
                        Case == Result::OtherPointer ||
-                       Case == Result::Barrier));
+                       Case == Result::IndexedDestination ||
+                       Case == Result::Conflict || Case == Result::Barrier));
   }
 }
 
