@@ -61,17 +61,9 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
     llvm::Value *Base = nullptr;
     if (!Immediate && Instruction.isLoad() && OriginalImageStorageForSource &&
         Img)
-      if (const auto *Table = recoveredJumpTableForLoad(Op);
-          Table && Table->HasBaseAddr && Table->HasDispatchSlotMap &&
-          !Table->SlotIndices.empty()) {
-        const uint32_t Last = *std::max_element(Table->SlotIndices.begin(),
-                                                Table->SlotIndices.end());
-        const auto Span =
-            Instruction.controlIndependentSpan(Table->BaseAddr, Last);
-        const auto Storage =
-            Span ? aarch64OriginalMemoryStorage(*Img, Span->Begin)
-                 : std::nullopt;
-        if (Storage && Span->Bytes <= Storage->Bytes.size()) {
+      if (const auto *Table = recoveredJumpTableForLoad(Op))
+        if (const auto Storage =
+                aarch64OriginalJumpTableMemory(*Img, Instruction, *Table)) {
           // The result is consumed only by the authenticated switch. Keep
           // the actual read, using original bytes rather than inventing
           // callable identities for physical slots the switch cannot reach.
@@ -89,7 +81,6 @@ MedLLVMEmitter::emitAArch64IntrinsicValue(const MedOp &Op, Intrinsic IC,
               Builder.getInt8Ty(), Global,
               Builder.getInt64(Storage->Pad + Table->BaseAddr - Storage->Base));
         }
-      }
     if (!Instruction.stackBase() && !Immediate && !Base)
       Base = resolveAtomicMemoryPtr(
           Op.Inputs[kAddressMemoryBaseOperand + 1], Instruction.accessBytes(),
