@@ -269,6 +269,14 @@ public:
                  LowInstructionUndefinedEffects *UndefinedEffects = nullptr,
                  LowInstructionPreservedState *PreservedState = nullptr);
 
+  /// Return the undefined-bit transfer for immediate use with this lift.
+  /// Architectures without an audit produce an incomplete transfer.
+  void
+  liftWithUndefinedTransfer(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
+                            llvm::ArrayRef<RelocatedAddressOperand> Relocs,
+                            llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
+                            LowUndefinedTransfer &Transfer);
+
   /// Explicit target-value projection for ordinary unsegmented x64 r/m64
   /// near CALL. Unlike the import-slot representation, this retains the
   /// target LOAD even for a constant slot. Returns false without changing Ops

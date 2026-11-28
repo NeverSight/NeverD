@@ -255,7 +255,7 @@ const char *runDataPtrScan(Session &S, neverd_cancel_probe_fn Cancel,
               }))
             Matches[Index].Addresses.push_back(Address);
         },
-        &Coverage);
+        &Coverage, /*IncludeInstructionText=*/false);
     if (!Decoded) {
       S.setError("failed to initialize the native reference decoder");
       return nullptr;

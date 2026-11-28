@@ -72,6 +72,50 @@ void expectCleared(const LowInstructionUndefinedEffects &Effects) {
   EXPECT_NE(Effects.Diagnostic, "stale certificate");
 }
 
+TEST_F(X86UndefinedEffects, LocalTransfersMatchTheBoundAudit) {
+  const InstructionCase Cases[] = {
+      {"mov eax, ebx", {0x89, 0xd8}},
+      {"xor eax, eax", {0x31, 0xc0}},
+      {"shl eax, cl", {0xd3, 0xe0}},
+      {"div ecx", {0xf7, 0xf1}},
+  };
+  LowUndefinedTransfer Transfer;
+  for (bool Strict : {true, false}) {
+    Dec.setStrict(Strict);
+    for (const auto &Case : Cases) {
+      SCOPED_TRACE(Case.Name);
+      DecodedInsn Insn{};
+      ASSERT_TRUE(decode(Case.Bytes, Insn));
+      std::vector<LowOp> BoundOps, LocalOps;
+      LowInstructionUndefinedEffects Bound;
+      Dec.liftToLow(Insn, BoundOps, {}, {}, &Bound);
+      Dec.liftWithUndefinedTransfer(Insn, LocalOps, {}, {}, Transfer);
+      expectSameOps(BoundOps, LocalOps);
+      EXPECT_EQ(Bound.OperationDigest, lowUndefinedOperationDigest(BoundOps));
+      EXPECT_EQ(Transfer.Complete,
+                Bound.Coverage == LowUndefinedCoverage::Complete);
+      ASSERT_EQ(Transfer.Effects.size(), Bound.Effects.size());
+      for (size_t I = 0; I < Bound.Effects.size(); ++I) {
+        const auto &Actual = Transfer.Effects[I];
+        const auto &Expected = Bound.Effects[I];
+        EXPECT_EQ(Actual.AfterOp, Expected.AfterOp);
+        EXPECT_EQ(Actual.Output, Expected.Output);
+        EXPECT_EQ(Actual.BitOffset, Expected.BitOffset);
+        EXPECT_EQ(Actual.BitCount, Expected.BitCount);
+        EXPECT_EQ(Actual.When, Expected.When);
+      }
+    }
+  }
+  Transfer.Complete = true;
+  Transfer.Effects = staleEffects().Effects;
+  std::vector<LowOp> Ops;
+  EXPECT_THROW(Dec.liftWithUndefinedTransfer({}, Ops, {}, {}, Transfer),
+               UnliftedInstruction);
+  EXPECT_FALSE(Transfer.Complete);
+  EXPECT_TRUE(Transfer.Effects.empty());
+  EXPECT_TRUE(Ops.empty());
+}
+
 TEST_F(X86UndefinedEffects, LogicalInstructionsProduceOnlyAuxiliaryCarryBit) {
   const InstructionCase Cases[] = {
       {"and eax, ecx", {0x21, 0xc8}}, {"or eax, ecx", {0x09, 0xc8}},
