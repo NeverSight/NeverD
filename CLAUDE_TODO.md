@@ -1,7 +1,7 @@
 # CLAUDE_TODO
 
-Open work left by the jump-table and CI campaign, as of 2026-11-28 (dev at
-`1bad7c4d9e`). Items are ordered by what to do next.
+Open work left by the jump-table, DWARF and CI campaign, as of 2026-11-28
+(dev at `8f1bb016a4`). Items are ordered by what to do next.
 
 ## 1. Next action: CI on the current dev head
 
@@ -12,7 +12,7 @@ Open work left by the jump-table and CI campaign, as of 2026-11-28 (dev at
     into the three-field `NEVERD_ELF_SYMBOL_VALUE`; MSVC's traditional
     preprocessor passed it on as one argument (C4003 + C2059).
   - `f63f4f96f2` and `aa4e382e91`: dispatch by value through own-label relative
-    tables (section 4).
+    tables (section 5).
   - `b8180a4371`: Win64 keeps `%rsi` and `%rdi` across calls for own-label table
     reads and the kept-register filter.
   - `ccc4482612`: a table jump whose every label reads a kept register keeps its
@@ -31,8 +31,23 @@ Open work left by the jump-table and CI campaign, as of 2026-11-28 (dev at
   repository checks: #2734, #2737 and #2738 had not claimed the data-pointer
   scan surfaces in `docs/capabilities.json`, which #2740 then did, and every
   build and test job was skipped.
+- Its macOS job ran out of runner disk again (`ld: write() failed,
+  errno=28`).
 - When `46127034325` ends, dispatch once more on the dev head, which adds
-  `184d0b09d9` and `1bad7c4d9e`:
+  `184d0b09d9` and `1bad7c4d9e` (section 2) and two DWARF-path fixes:
+  - `a54c0b3c53`: a call argument typed by its callee's declaration prints
+    the frame address its variable names (`placeVarText`), as every other
+    use does.
+    It passed a local that nothing assigns: Go's
+    `internal_strconv_FormatInt` handed `formatBase10` an unassigned `t16_18`
+    for the buffer it had just zeroed.
+  - `8f1bb016a4`: a line-tables-only DWARF unit (Rust's `-Cdebuginfo=1`
+    standard library, `-gline-tables-only`, `-g1`) states no signature, so its
+    functions no longer read as `void f(void)`. The 16 Linux Rust probes fell
+    from 87972 to 30206 unknown markers, and every function the change
+    touches renders as it does without DWARF, apart from identifier
+    spellings.
+  Dispatch with:
   `git push -f origin <head>:refs/heads/ci/return-contracts`, then
   `gh workflow run ci.yml --repo NeverSight/NeverD --ref ci/return-contracts -f use_prebuilt_llvm=true`.
   Run one CI at a time and do not cancel a running one.
@@ -139,7 +154,72 @@ pcre2.
 - Known failures kept as decided earlier: `XCPT4` x3 (documented
   import-binding rule). The `a64cgo0` round trips pass since #2705.
 
-## 4. Reference: dispatch by value through own-label tables
+## 4. Wrong code found by the never-assigned-local scan, not fixed yet
+
+A scan of rendered C for locals that a function declares and reads but never
+assigns (not counting `eh_exception` and `eh_selector`, which the unwinder
+hands over, nor reads that a `v_known ?` flag guards) found these. The
+printer fix (`placeVarText`) cleared every temporary of that kind that a
+typed call argument printed.
+
+- AArch64 machine-outlined functions that read their caller's frame.
+  `OUTLINED_FUNCTION_52` in the aarch64 Rust probes is
+  `ldur w0, [x29, #-0xa8]; b close` and renders as
+  `int32_t var_mA8; return close(var_mA8);`: a slot of its own frame that
+  nothing assigns. An outlined function sets up no frame, so x29 is still
+  the caller's frame pointer. Cause, confirmed with a probe: the
+  frame-pointer rule in `HighCWriter::frameDisplacement` for functions with
+  exception metadata fires for it outside any EH clause body and takes the
+  incoming x29 as the function's own frame. Every Linux function with an FDE
+  has exception metadata; the rule should hold only where the frame pointer
+  is the parent's by contract (an EH clause body or funclet), and elsewhere
+  the read should fail closed. One function
+  in each of the eight aarch64 Linux Rust images, with and without DWARF.
+- MSVC C++ EH, analysis-only rendering: after `_CxxThrowException` the catch
+  continuation's return value prints as a temporary nothing assigns
+  (`uint32_t t39; ... return t39;` in `cxx_eh_probe` fh3/fh4 o2 at
+  `0x140001100`). The value comes from the catch funclet, which the
+  rendering does not model; it should fail closed.
+- Go: stack slots read before any write, `var_N` (the incoming stack
+  argument area) and `var_mN` (results a callee writes into the caller's
+  outgoing area), in about 40 functions of each Go image (41 in
+  `eh_probe-go1.26.5-linux-amd64-exe-cgo0-symtab-opt`). Go's stack results
+  are the open part of the Go call contract work.
+- The LLVM C whole-image route refuses the x86-64 Linux Rust probes
+  ("refusing stale-address fallback") and prints no function.
+- `InterpreterMachineRegionSourceTest.BoundedCopyDiscoversPointerAndCountContexts`
+  (`NeverDInterpreterMachineStateTests`) fails on dev since #2662
+  ("specialization context budget exhausted" at `0x140001031`; CI passed it
+  on `9132922fa5`). A relinked bisect over `InterpreterSpecialization.cpp`
+  puts it on #2662's four lines in `Specializer::projectEdge`, which prove
+  the live native return slot's domain on every edge. On most edges that
+  word is one constant, on a few it has seven candidates or no complete
+  domain, and the context key (`ReturnSlots`, read from the proved frame
+  bytes) then differs at the same address, so contexts split until the
+  per-address limit.
+- After the printer fix, 178 functions of the 608 corpus, census and
+  coverage images still read a temporary that nothing assigns (291 before):
+  Windows EH outputs (MSVC SEH and C++ EH probes, mingw, clang-cl, ARM
+  `xcpt4`), Go windows-amd64 (7 and 6 functions) and gawk (8). The gawk
+  case at `0x20FE6` is no wrong code: `writeStmts` drops the reload after a
+  call the whole image proves never returns (`sub_84D00`, gawk's fatal
+  error), and the `if` after it prints only because its body holds a label
+  other paths jump to, so its condition, which reads the reload, is never
+  evaluated. Printing such a condition-only path as dead would make it
+  read clean; the Windows EH ones still need a cause each.
+- Three `NeverDLiftTests` cases fail on dev since `2f84583e1b` ("Preserve
+  open Win64 integer call arguments in ordinary HighC", which declares such
+  callees through `__NEVERD_WIN64_OPEN`):
+  `CSymbolNames.MicrosoftImportsLinkByTheirDecoratedNames` and
+  `HighCPointerAddresses.ImageFunctionNamedLikeLibcIsNotLibc` still expect
+  the old `extern T name()` spelling, and
+  `HighCPointerAddresses.CorpusCalleeSavesAreNotStoresOfLaterArguments`
+  expects `sub_140002C00()` where the call now passes an `rcx` that nothing
+  set, as a trap. That reverses `936bbbb654` for Win64 (section 3,
+  "Undescribed callee arguments"), so it needs the maintainer's decision
+  before the tests or the rendering change.
+
+## 5. Reference: dispatch by value through own-label tables
 
 - `CFGBuilder::recoverOwnLabelTableBranches`
   (`lib/ir/low/jumptable/JumpTableResolverInterior.cpp`) runs once after the
