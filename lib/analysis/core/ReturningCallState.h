@@ -14,6 +14,8 @@
 
 #include "neverd/symbolic/SymState.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <cstdint>
 
 namespace neverd::analysis {
@@ -26,6 +28,11 @@ struct ReturningCallStateEffect {
   const char *Diagnostic = "returning-call state effect was not applied";
 };
 
+struct ReturningCallFrameOutput {
+  uint64_t Offset;
+  uint16_t Bytes;
+};
+
 /// Apply the already-admitted architecture policy to this evaluator's state.
 /// The caller has validated frame containment and staged provenance/sidecars.
 /// Work and node charging is shared with the actual specialization consumer.
@@ -33,13 +40,12 @@ struct ReturningCallStateEffect {
 /// effect requires discarding this evaluator, not reusing a partial state.
 /// Runtime-control/priority locals are outside this function; segment roots
 /// inside State remain untouched. This is not a separate relation admission.
-void applyReturningCallState(symbolic::SymState &State,
-                             symbolic::SymRef FrameRoot,
-                             symbolic::SymRef CallerStack,
-                             int64_t PreservedBegin, int64_t FrameEnd,
-                             va_t GuestContinuation,
-                             const RecoveryCallTransition &Policy,
-                             ReturningCallStateEffect &Effect);
+void applyReturningCallState(
+    symbolic::SymState &State, symbolic::SymRef FrameRoot,
+    symbolic::SymRef CallerStack, int64_t PreservedBegin, int64_t FrameEnd,
+    va_t GuestContinuation, const RecoveryCallTransition &Policy,
+    ReturningCallStateEffect &Effect,
+    llvm::ArrayRef<ReturningCallFrameOutput> Outputs = {});
 
 } // namespace neverd::analysis
 

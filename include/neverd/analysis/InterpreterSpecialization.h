@@ -125,6 +125,12 @@ enum class SpecializationX64CallProfile : uint8_t {
   /// object. This is an explicit callee-effect premise, not inferred from an
   /// allocator name, image layout, or observed address.
   ConditionalNormalReturnResultObjectExcludedV4,
+  /// V2 plus declared caller-frame output spans. The named argument registers
+  /// must hold exact pointers into the declared entry frame at each physical
+  /// call. Normal return replaces those bytes with fresh unknown values; old
+  /// materialized bytes and saved-pointer facts do not survive the write.
+  /// This is a caller-supplied call-effect contract, not an import summary.
+  ConditionalNormalReturnFrameOutputsV5,
 };
 
 struct SpecializationCallPreservedFrameRange {
@@ -139,6 +145,14 @@ struct SpecializationCallObjectExclusion {
   uint64_t Begin = 0;
   uint64_t End = 0;
   bool operator==(const SpecializationCallObjectExclusion &) const = default;
+};
+
+struct SpecializationCallFrameOutput {
+  /// Full-width x64 integer argument register containing the output pointer.
+  uint64_t PointerRegister = 0;
+  /// Positive number of bytes whose post-call values are unrestricted.
+  uint16_t Bytes = 0;
+  bool operator==(const SpecializationCallFrameOutput &) const = default;
 };
 
 /// Opt-in relation at an exact native CALL. Every dynamic invocation has fresh
@@ -158,6 +172,11 @@ struct SpecializationX64ReturningCall {
   /// nonnull result object at every dynamic invocation. No result address or
   /// memory contents are inferred. Empty for earlier versions.
   std::vector<SpecializationCallObjectExclusion> ResultObjectExclusions;
+  /// Version 5 only. Ordered unique pointer argument registers and bounded
+  /// output extents. Every byte has a fresh unconstrained value after normal
+  /// return, including its old value as a possible outcome, even if the
+  /// declared outputs overlap each other or a saved control word.
+  std::vector<SpecializationCallFrameOutput> FrameOutputs;
   bool operator==(const SpecializationX64ReturningCall &) const = default;
 };
 

@@ -160,6 +160,9 @@ public:
       if (At->ResultObjectExclusions.size() > Work)
         return false;
       Work -= At->ResultObjectExclusions.size();
+      if (At->FrameOutputs.size() > Work)
+        return false;
+      Work -= At->FrameOutputs.size();
       Call.emplace();
       Call->Declaration = *At;
     }
@@ -206,6 +209,11 @@ public:
             std::errc::value_too_large,
             "returning-call object-exclusion index budget exhausted");
       Work -= Call.ResultObjectExclusions.size();
+      if (Call.FrameOutputs.size() > Work)
+        return llvm::createStringError(
+            std::errc::value_too_large,
+            "returning-call frame-output index budget exhausted");
+      Work -= Call.FrameOutputs.size();
     }
     return std::make_unique<X64ReturningCallLookup>(Options.X64ReturningCalls);
   }
@@ -326,6 +334,9 @@ public:
         if (Declaration.ResultObjectExclusions.size() > Budget.Records - Ranges)
           return RecoveryValidationBudget::exhausted();
         Ranges += Declaration.ResultObjectExclusions.size();
+        if (Declaration.FrameOutputs.size() > Budget.Records - Ranges)
+          return RecoveryValidationBudget::exhausted();
+        Ranges += Declaration.FrameOutputs.size();
       }
       if (Calls && Ranges > Budget.Records / Calls)
         return RecoveryValidationBudget::exhausted();

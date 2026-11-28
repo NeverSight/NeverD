@@ -157,6 +157,11 @@ struct RecoveryCallTransition {
     std::vector<SpecializationCallObjectExclusion> Exclusions;
   };
   std::optional<ResultObject> ReturnedObject;
+  struct FrameOutput {
+    NdVar Pointer;
+    uint16_t Bytes;
+  };
+  std::vector<FrameOutput> FrameOutputs;
 };
 
 struct RecoveryResultObjectSite {

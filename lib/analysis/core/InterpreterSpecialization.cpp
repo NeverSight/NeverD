@@ -1220,6 +1220,7 @@ private:
                           int64_t PreservedBegin,
                           const SpecializationReturningCall &Call,
                           const RecoveryCallTransition &Policy,
+                          llvm::ArrayRef<ReturningCallFrameOutput> Outputs,
                           FrameOrigins &Origins, FrameFacts &Frame);
   bool applyReturningResultObject(SymExec &Exec, SymState &State,
                                   SymRef FrameRoot,
@@ -1327,11 +1328,12 @@ bool Specializer::chargeCallWork(uint64_t Count) {
   return true;
 }
 
-bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
-                                     SymRef CallerStack, int64_t PreservedBegin,
-                                     const SpecializationReturningCall &Call,
-                                     const RecoveryCallTransition &Policy,
-                                     FrameOrigins &Origins, FrameFacts &Frame) {
+bool Specializer::applyReturningCall(
+    SymState &State, SymRef FrameRoot, SymRef CallerStack,
+    int64_t PreservedBegin, const SpecializationReturningCall &Call,
+    const RecoveryCallTransition &Policy,
+    llvm::ArrayRef<ReturningCallFrameOutput> Outputs, FrameOrigins &Origins,
+    FrameFacts &Frame) {
   const uint64_t Begin = static_cast<uint64_t>(PreservedBegin);
   const uint64_t Size =
       static_cast<uint64_t>(Options.EntryFrameBounds->End) - Begin;
@@ -1420,11 +1422,31 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
   Effect.MaxNodes = Options.MaxSymbolicNodes;
   applyReturningCallState(State, FrameRoot, CallerStack, PreservedBegin,
                           Options.EntryFrameBounds->End,
-                          Call.Original.Fallthrough.Address, Policy, Effect);
+                          Call.Original.Fallthrough.Address, Policy, Effect,
+                          Outputs);
   Result.EvaluatedOperations += Effect.WorkUsed;
   if (Effect.Status != SpecializationStatus::Complete)
     // A failed composition belongs only to this evaluator and is discarded.
     return fail(Effect.Status, Effect.Diagnostic);
+  for (const auto &Output : Outputs) {
+    for (uint16_t I = 0; I < Output.Bytes; ++I) {
+      const uint64_t Offset = Output.Offset + I;
+      NextOrigins.ExternalFrameBytes.erase(Offset);
+      for (auto It = NextFrame.AffineValues.begin();
+           It != NextFrame.AffineValues.end();) {
+        if (!chargeCallWork(1))
+          return false;
+        if (Offset - It->first < Policy.Stack.Size)
+          It = NextFrame.AffineValues.erase(It);
+        else
+          ++It;
+      }
+      if (NextFrame.EntryReturnSlotIntact && Options.EntryReturnSlot &&
+          Offset - static_cast<uint64_t>(Options.EntryReturnSlot->Offset) <
+              Options.EntryReturnSlot->Bytes)
+        NextFrame.EntryReturnSlotIntact = false;
+    }
+  }
   for (uint64_t Flag : Policy.FreshFlags)
     NextOrigins.UndefinedFlags.erase(Flag);
   setUnsafeOrigin(Policy.Stack, true, NextOrigins);
@@ -4215,8 +4237,38 @@ bool Specializer::evaluate(int Id) {
                              Policy.ReturnedObject->Size.Offset,
                              Policy.ReturnedObject->Size.Size)
                 : SymRef();
+        std::vector<ReturningCallFrameOutput> Outputs;
+        Outputs.reserve(Policy.FrameOutputs.size());
+        for (const auto &Output : Policy.FrameOutputs) {
+          if (!Output.Pointer.isReg() || Output.Pointer.Size != 8 ||
+              !Output.Bytes)
+            return fail(SpecializationStatus::InvalidInput,
+                        "invalid returning-call frame output location");
+          const SymRef Pointer =
+              State.read(SymSpace::Register, Output.Pointer.Offset, 8);
+          const auto Offset =
+              frameOffset(Ctx, Exec.pathPredicate(), Pointer, FrameRoot,
+                          FrameOffsetProof::Required);
+          if (Failed)
+            return false;
+          if (!Offset) {
+            discover(State, Pointer, FrameRoot, ControlDemand::Memory);
+            Refinement.PrecisionFailure = true;
+            return fail(SpecializationStatus::Unsupported,
+                        "returning-call frame output requires an exact "
+                        "entry-relative pointer");
+          }
+          const int64_t Begin = static_cast<int64_t>(*Offset);
+          const auto &Bounds = *Options.EntryFrameBounds;
+          if (Begin < Bounds.Begin || Begin >= Bounds.End ||
+              Output.Bytes > static_cast<uint64_t>(Bounds.End) - *Offset)
+            return fail(SpecializationStatus::InvalidInput,
+                        "returning-call frame output exceeds entry bounds");
+          Outputs.push_back({*Offset, Output.Bytes});
+        }
         if (!applyReturningCall(State, FrameRoot, CallerStack, PreservedBegin,
-                                *ReturningCall, Policy, Origins, Frame))
+                                *ReturningCall, Policy, Outputs, Origins,
+                                Frame))
           return false;
         if (!applyReturningResultObject(Exec, State, FrameRoot, ObjectRoots,
                                         *ReturningCall, Policy, ResultSize,
