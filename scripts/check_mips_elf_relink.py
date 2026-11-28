@@ -22,7 +22,7 @@ ABIS = {
     "n64": ("mips64", "gnuabi64", 5058),
 }
 MODES = ("section", "inplace")
-PRODUCT_VERSION = 12
+PRODUCT_VERSION = 13
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -109,10 +109,12 @@ class Profile:
     gp64_o32: bool = False
     dwarf_version: int = 0
     entry_alias: bool = False
+    c_call: bool = False
 
     @property
     def high_address(self):
-        return self.abi == "n64" and bool(self.shrinking or self.linkage or self.dwarf_version or self.entry_alias)
+        return self.abi == "n64" and bool(self.shrinking or self.linkage or self.dwarf_version
+                                          or self.entry_alias or self.c_call)
 
     @property
     def tls_model(self):
@@ -130,6 +132,8 @@ class Profile:
     @property
     def name(self):
         suffix = f"{self.abi}-{'le' if self.little else 'be'}"
+        if self.c_call:
+            return f"c-call-{self.isa}-{suffix}"
         if self.entry_alias:
             return f"entry-alias-{self.isa}-{suffix}"
         if self.dwarf_version:
@@ -174,6 +178,8 @@ def profiles(version=PRODUCT_VERSION):
                 encodings = ("classic", "micromips", "mips16") if abi == "o32" else ("classic", "micromips")
                 for isa in encodings:
                     yield Profile(abi, little, isa, compressed_entry=isa != "classic", entry_alias=True)
+                    if version >= 13:
+                        yield Profile(abi, little, isa, compressed_entry=isa != "classic", c_call=True)
             if version >= 11:
                 for dwarf_version in (4, 5):
                     yield Profile(abi, little, dwarf_version=dwarf_version)
@@ -228,7 +234,7 @@ def scalar_release_profiles(abi, little, version):
 
 
 def startup(profile):
-    if profile.entry_alias:
+    if profile.entry_alias or profile.c_call:
         return ((FIXTURES / "entry_exit.s").read_text()
                 .replace("EXIT_ISA", ".set micromips" if profile.isa == "micromips" else "")
                 .replace("EXIT_NR", str(profile.exit_nr)))
@@ -335,6 +341,21 @@ def assemble_startup(args, build, profile):
     target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}"]
     run([args.mc, "-filetype=obj", f"-triple={profile.triple}", *target,
          "-mattr=+noabicalls", "-o", build / "start.o", "-"], source=startup(profile))
+
+
+def build_c_call_objects(args, build, profile):
+    sources = FIXTURES / "c_abi"
+    abi = {"o32": "32", "n32": "n32", "n64": "64"}[profile.abi]
+    flags = [args.clang, "--target=" + profile.triple, "-march=" + profile.cpu, "-mabi=" + abi,
+             "-mno-abicalls", "-fno-pic", "-G0", "-O2", "-ffreestanding", "-fno-stack-protector",
+             "-fno-ident", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables"]
+    if profile.isa != "classic":
+        flags.append("-mips16" if profile.isa == "mips16" else "-mmicromips")
+    assemble_startup(args, build, profile)
+    run([*flags, "-c", sources / "start.c", "-o", build / "caller.o"])
+    for output, revision in (("calc.o", 7), ("updated.o", 5)):
+        run([*flags, f"-DREVISION={revision}", "-c", sources / "calc.c", "-o", build / output])
+    return ["caller.o", "start.o", "calc.o"]
 
 
 def build_arithmetic_objects(args, build, profile):
@@ -598,15 +619,19 @@ def qualify_named_inputs(args, build, out, profile, expected):
 def qualify(args):
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
+    # Existing IR-only tool installations can still produce and replay v12 products.
+    version = PRODUCT_VERSION if args.clang else 12
     results, object_hashes = {}, {}
     with tempfile.TemporaryDirectory(prefix="mips relink ") as temp:
-        for profile in profiles():
+        for profile in profiles(version):
             name = profile.name
             out = root / name
             out.mkdir(exist_ok=True)
             build = Path(temp) / name
             build.mkdir()
-            if profile.linkage:
+            if profile.c_call:
+                objects = build_c_call_objects(args, build, profile)
+            elif profile.linkage:
                 objects = build_linkage_objects(args, build, profile, run)
             else:
                 objects = build_arithmetic_objects(args, build, profile)
@@ -630,7 +655,7 @@ def qualify(args):
 
             for mode in MODES:
                 patch(mode, out / f"{mode}.elf")
-                if (profile.entry_alias or profile.dwarf_version
+                if (profile.c_call or profile.entry_alias or profile.dwarf_version
                         or profile.linkage in ("init-arrays", "large-segments", "callback-table")):
                     reference = build / "reference.elf"
                     script = build / ("section.ld" if mode == "section" else "base.ld")
@@ -639,7 +664,7 @@ def qualify(args):
                     if digest(reference) != digest(out / f"{mode}.elf"):
                         raise ValueError(f"{name}: {mode} output differs from the direct link")
             results[name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
-            if profile.dwarf_version or profile.entry_alias:
+            if profile.c_call or profile.dwarf_version or profile.entry_alias:
                 continue
             if profile.linkage:
                 object_hashes[name] = {}
@@ -712,7 +737,7 @@ def qualify(args):
             run([args.neverd, "patch", original, *options, "--from-object=updated.o", "-o", sentinel],
                 error="cannot be combined")
         check_mixed_float_abis(args, Path(temp), root)
-    encode(root / "products.json", {"version": PRODUCT_VERSION, "profiles": results, "objects": object_hashes})
+    encode(root / "products.json", {"version": version, "profiles": results, "objects": object_hashes})
     print(f"Relinked {len(results)} profiles in both modes")
 
 
@@ -925,11 +950,13 @@ def execute(args):
     for profile in cases:
         row, ranges = {}, {}
         original, updated = (81, 29) if profile.shrinking else (25, 37)
-        if profile.linkage:
+        if profile.c_call:
+            original, updated = 43, 89
+        elif profile.linkage:
             original, updated = 41, 73
             verify_linkage_objects(root / profile.name, profile, object_hashes[profile.name], digest)
         expected_results = {"original": original, "section": updated, "inplace": updated}
-        if version >= 3 and not (profile.linkage or profile.dwarf_version or profile.entry_alias):
+        if version >= 3 and not (profile.c_call or profile.linkage or profile.dwarf_version or profile.entry_alias):
             # The larger body returns 61, 56 and 44 for the three startup calls.
             expected_results["section-grown"] = 161
         second_updates = version >= 10 and profile == Profile(profile.abi, profile.little)
@@ -985,6 +1012,7 @@ if __name__ == "__main__":
     patch.add_argument("--root", required=True, type=Path)
     for tool in ("neverd", "mc", "llc", "lld"):
         patch.add_argument("--" + tool, required=True)
+    patch.add_argument("--clang", help="also compile the C aggregate and variadic calls with this fork Clang")
     upgrade = commands.add_parser("upgrade")
     upgrade.add_argument("--root", required=True, type=Path)
     upgrade.add_argument("--neverd", required=True)

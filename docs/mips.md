@@ -260,6 +260,14 @@ reader checks every relocation's offset, width, symbol and addend. The guest
 compares every linked pointer with the current function address before running
 the calls. The runner also compares both outputs with independent LLD links.
 
+The fork Clang also compiles a C caller and callee in separate translation
+units. The caller passes a structure by value and receives a 24-byte result
+in caller-owned storage. Signed integers and 64-bit variadic arguments cross
+the register and stack boundary. The caller checks all three result fields
+and exits with 43 for the original or 89 for either replacement. This covers
+classic MIPS and microMIPS R2 for o32, n32 and n64 in both byte orders, plus
+MIPS16 o32 in both byte orders. The n64 programs run above 4 GiB.
+
 The cross-object arithmetic programs exercise their own stack, function pointer, ELF
 global pointer, 64-bit data and arguments beyond the register argument area.
 The replacement and its classic helper each read the initialized 64-bit
@@ -298,8 +306,8 @@ memory size and 256-byte alignment of `PT_TLS`.
 The MIPS16 branch programs take both arms of a conditional and swap the
 two destinations in the replacement. The targets are more than 2 KiB ahead
 in the original layout and behind the new `section` placement. Each native
-build produces 1,304 executable images across 380 configurations, including
-924 updated images. The upgrade check uses r13 and r14 to build one original
+build produces 1,346 executable images across 394 configurations, including
+952 updated images. The upgrade check uses r13, r14 and r15 to build one original
 per ABI and byte order. Twelve more r14 originals use `ld.lld -r` to combine
 the startup, the function and two helpers. Both helpers define the same
 COMDAT function and different weak implementations of `group_choice`.
@@ -311,9 +319,9 @@ and helpers. The runner checks the ABI, the surviving COMDAT group, both
 weak symbols and the three `R_MIPS_26` relocations on startup calls in both
 intermediate objects. Reversing the original helpers selects a different
 weak definition. Both modes reject that executable when given the original
-input order and preserve the previous output. Across the four input sets
-the runner compares all 48 replacements byte for byte with independent
-links, runs the 24 originals and all 48 replacements, and checks the
+input order and preserve the previous output. Across the five input sets
+the runner compares all 60 replacements byte for byte with independent
+links, runs the 30 originals and all 60 replacements, and checks the
 function placement in every ELF.
 
 When the original build uses a static library in a partial link, keep the
@@ -335,13 +343,14 @@ To build the tools from NeverD's pinned fork checkout, run
 ```sh
 git submodule update --init third_party/llvm-project
 cmake -S third_party/llvm-project/llvm -B build-mips-tools -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS=lld \
+  -DCMAKE_BUILD_TYPE=Release '-DLLVM_ENABLE_PROJECTS=clang;lld' \
   -DLLVM_TARGETS_TO_BUILD=Mips -DLLVM_ENABLE_RTTI=ON
-cmake --build build-mips-tools --target llc llvm-mc llvm-ar lld
+cmake --build build-mips-tools --target clang llc llvm-mc llvm-ar lld
 ```
 
-Use `build-mips-tools/bin/ld.lld` as the linker. Run
-`python3 scripts/check_mips_elf_relink.py qualify --help` for the tool
+Use `build-mips-tools/bin/ld.lld` as the linker and pass
+`--clang build-mips-tools/bin/clang` to include the C calling-convention cases.
+Run `python3 scripts/check_mips_elf_relink.py qualify --help` for all tool
 paths, then `python3 scripts/check_mips_elf_relink.py execute --root products`
 on Linux with QEMU user-mode and pyelftools. The n32 and n64 microMIPS
 cases and the pre-R6 o32 microMIPS cases using the FPU run on the pinned
