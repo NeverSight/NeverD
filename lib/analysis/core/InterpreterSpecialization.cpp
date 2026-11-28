@@ -1028,6 +1028,7 @@ struct ControlRefinement {
   std::map<std::pair<va_t, InstructionMode>, SymRegisterRange>
       RegisterPartitions;
   std::map<std::pair<va_t, InstructionMode>, int64_t> FramePartitions;
+  std::map<std::pair<va_t, InstructionMode>, std::vector<uint64_t>> TargetHints;
   bool BudgetExceeded = false;
   bool PrecisionFailure = false;
   // Finite dispatch is already a valid abstraction. Walk its optional guard
@@ -3489,22 +3490,64 @@ bool Specializer::emitTargets(
   const auto Structural = finiteTargets(Ctx, TargetValue, Targets, TargetLimit);
   if (Structural != TargetSetResult::Exact) {
     Targets.clear();
-    auto Domain = enumerate(Ctx, Path, {TargetValue}, TargetLimit);
-    if (Failed)
-      return false;
-    if (Domain.Status == FiniteValueStatus::Unknown)
-      return fail(SpecializationStatus::BudgetExceeded,
-                  "finite indirect-target proof exceeded its solver budget");
-    if (Domain.Status != FiniteValueStatus::Complete) {
-      discover(State, TargetValue, FrameRoot);
-      return fail(
-          Structural == TargetSetResult::BudgetExceeded
-              ? SpecializationStatus::BudgetExceeded
-              : SpecializationStatus::UnresolvedControl,
-          "indirect control target is not an exact finite constant set");
+    bool HintsComplete = false;
+    const auto Hints = Refinement.TargetHints.find(
+        {Instruction.Origin.Address, Instruction.Origin.Mode});
+    if (Hints != Refinement.TargetHints.end() &&
+        Hints->second.size() <= TargetLimit && Ctx.width(TargetValue) <= 64) {
+      llvm::SmallVector<SymRef, 16> Cases;
+      for (uint64_t Target : Hints->second) {
+        if (Ctx.width(TargetValue) < 64 && Target >> Ctx.width(TargetValue))
+          continue;
+        auto Canonical = canonicalizeLowControlTarget(
+            Target, Instruction.Origin.Mode, Instruction.Origin.TargetMode,
+            Original.Inputs[0].Size);
+        if (!Canonical) {
+          llvm::consumeError(Canonical.takeError());
+          Cases.clear();
+          break;
+        }
+        if (Result.EvaluatedOperations >= Options.MaxOperations)
+          return fail(SpecializationStatus::BudgetExceeded,
+                      "indirect target hint work budget exhausted");
+        ++Result.EvaluatedOperations;
+        Cases.push_back(
+            Ctx.mkEq(TargetValue, Ctx.mkConst(Ctx.width(TargetValue), Target)));
+      }
+      if (!Cases.empty()) {
+        const auto Outside = Ctx.mkAnd(Path, Ctx.mkNot(Ctx.mkOr(Cases)));
+        const auto Coverage = enumerate(Ctx, Outside, {}, 1);
+        if (Failed)
+          return false;
+        if (Coverage.Status == FiniteValueStatus::Complete &&
+            Coverage.Tuples.empty()) {
+          for (uint64_t Target : Hints->second)
+            if (Ctx.width(TargetValue) == 64 ||
+                !(Target >> Ctx.width(TargetValue)))
+              Targets.insert(Target);
+          HintsComplete = true;
+          ++Result.ProvenControlTargetHints;
+        }
+      }
     }
-    for (const auto &Tuple : Domain.Tuples)
-      Targets.insert(Tuple.front());
+    if (!HintsComplete) {
+      auto Domain = enumerate(Ctx, Path, {TargetValue}, TargetLimit);
+      if (Failed)
+        return false;
+      if (Domain.Status == FiniteValueStatus::Unknown)
+        return fail(SpecializationStatus::BudgetExceeded,
+                    "finite indirect-target proof exceeded its solver budget");
+      if (Domain.Status != FiniteValueStatus::Complete) {
+        discover(State, TargetValue, FrameRoot);
+        return fail(
+            Structural == TargetSetResult::BudgetExceeded
+                ? SpecializationStatus::BudgetExceeded
+                : SpecializationStatus::UnresolvedControl,
+            "indirect control target is not an exact finite constant set");
+      }
+      for (const auto &Tuple : Domain.Tuples)
+        Targets.insert(Tuple.front());
+    }
   }
   std::vector<std::pair<uint64_t, int>> Destinations;
   if (Targets.size() > 1)
@@ -6937,6 +6980,8 @@ specializeInterpreter(SpecializationProvider &Provider,
           limits::analysis::kMaxControlProducerHints ||
       Options.ControlPartitionHints.size() >
           limits::analysis::kMaxControlPartitionHints ||
+      Options.ControlTargetHints.size() >
+          limits::analysis::kMaxControlTargetHintSites ||
       Options.ControlFramePartitionHints.size() >
           limits::analysis::kMaxControlPartitionHints -
               Options.ControlPartitionHints.size() ||
@@ -6950,6 +6995,33 @@ specializeInterpreter(SpecializationProvider &Provider,
     Limited.Status = SpecializationStatus::BudgetExceeded;
     Limited.Diagnostic = "control precision hint budget exhausted";
     return Limited;
+  }
+  size_t TargetHintValues = 0;
+  for (const auto &Hint : Options.ControlTargetHints) {
+    if (Hint.Targets.size() >
+        limits::analysis::kMaxControlTargetHintValues - TargetHintValues) {
+      SpecializationResult Limited;
+      Limited.Status = SpecializationStatus::BudgetExceeded;
+      Limited.Diagnostic = "control target hint budget exhausted";
+      return Limited;
+    }
+    TargetHintValues += Hint.Targets.size();
+    if (Hint.Cursor.Address == InvalidVA ||
+        !isSingleInstructionMode(Hint.Cursor.Mode) || Hint.Targets.empty() ||
+        Hint.Targets.size() > std::max(Options.MaxIndirectTargets,
+                                       Options.nativeReturnTargetLimit()) ||
+        !std::is_sorted(Hint.Targets.begin(), Hint.Targets.end()) ||
+        std::adjacent_find(Hint.Targets.begin(), Hint.Targets.end()) !=
+            Hint.Targets.end() ||
+        !Refinement.TargetHints
+             .emplace(std::make_pair(Hint.Cursor.Address, Hint.Cursor.Mode),
+                      Hint.Targets)
+             .second) {
+      SpecializationResult Invalid;
+      Invalid.Status = SpecializationStatus::InvalidInput;
+      Invalid.Diagnostic = "invalid control target hint";
+      return Invalid;
+    }
   }
   for (const auto &Hint : Options.ControlProducerHints) {
     if (Hint.Cursor.Address == InvalidVA ||

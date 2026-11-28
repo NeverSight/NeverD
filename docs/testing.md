@@ -889,6 +889,15 @@ budgets use the specialization suite. The core retains only exhaustive pair
 projections and widens missing predecessor facts; these checks do not certify
 ordinary source ABIs or native fault behavior.
 
+`InterpreterSpecialization.IndirectTargetCandidatesRequireFreshCompleteCoverageProof`
+checks a proved indirect target set, unreachable and noncanonical extra
+candidates, a missing candidate that must fall back to full enumeration, an
+over-limit domain and an unbounded target that must refuse. The native-return
+finite-word regression also replays candidates at a physical return and checks
+both return targets.
+Run `NeverDInterpreterSpecializationTests` for this precision API; observed
+candidates alone grant no control edge or source ABI.
+
 `InterpreterSpecialization.UnsignedRanges*` checks bounded subtraction across
 recovery cuts, register/frame carriers and masked values with unrelated high
 payload bits. Unsigned bounds require exhaustive Boolean proofs; joins widen

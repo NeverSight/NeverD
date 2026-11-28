@@ -57,6 +57,17 @@ struct SpecializationControlPartitionHint {
   }
 };
 
+/// Candidate values for one physical indirect transfer. The solver must
+/// prove that every reachable target is in this set before it can replace
+/// finite-value enumeration. An incomplete proposal uses the ordinary proof
+/// path; no observed value becomes an execution premise.
+struct SpecializationControlTargetHint {
+  SpecializationCursor Cursor;
+  std::vector<uint64_t> Targets;
+
+  bool operator==(const SpecializationControlTargetHint &) const = default;
+};
+
 /// Provider certificate for the omitted physical effects of a native near
 /// CALL/RETURN. The instruction uses the configured eight-byte frame register
 /// as its stack pointer. CALL pushes its exact fallthrough address. Internal
@@ -657,6 +668,10 @@ struct SpecializationOptions {
   /// word projection and joins. This does not enlarge ordinary indirect
   /// dispatch or admit an unproved return address.
   std::optional<uint32_t> MaxNativeReturnTargets;
+  /// Optional candidate target sets at physical indirect transfers. A fresh
+  /// solver proof checks coverage under each current path; candidate values
+  /// do not authorize edges on their own.
+  std::vector<SpecializationControlTargetHint> ControlTargetHints;
 
   uint32_t nativeReturnTargetLimit() const {
     return MaxNativeReturnTargets.value_or(MaxIndirectTargets);
@@ -785,6 +800,9 @@ struct SpecializationResult {
   uint32_t NodeEvaluations = 0;
   uint32_t Contexts = 0;
   uint64_t SolverQueries = 0;
+  /// Successful per-path coverage proofs for candidate indirect target sets.
+  /// Counts proofs, not unique sites; it grants no source ABI certificate.
+  uint64_t ProvenControlTargetHints = 0;
   uint32_t RelationalWidenings = 0;
   uint32_t DiscoveredControlFields = 0;
   uint32_t DiscoveredContextFields = 0;
