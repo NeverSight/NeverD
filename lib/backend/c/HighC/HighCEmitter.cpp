@@ -4786,7 +4786,7 @@ void HighCWriter::noteFunctionAddress(va_t Addr,
     Name = Found->second->Name;
   if (ProvenCodeAddress && Dbg &&
       !Opts.Image->LoadOnlyFunctionEntries.empty() &&
-      (Name.empty() || isSynthesizedFuncName(Name)))
+      isSynthesizedFuncName(Name))
     if (const auto Public = Dbg->functionName(Addr))
       Name = *Public;
   if (!Name.empty()) {

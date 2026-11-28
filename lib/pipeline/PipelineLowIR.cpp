@@ -5244,32 +5244,31 @@ bool computeCallRegisterEffects(
       FixedEntryStackArgs[Entry] =
           Proto->ArgCount > std::size(Win64Args) ? Proto->ArgCount : 0;
     };
-    std::set<va_t> Callees;
-    for (const auto &[Entry, Effect] : Effects)
-      Callees.insert(Entry);
-    // Restricted PE loads keep only root publics in the image inventory.
-    // A reached native service still has its header contract. Consult its
-    // exact public only after the complete dispatch instructions match.
+    // A focused PE load keeps only requested publics in the image. A
+    // reached native service still has its header contract. Read its exact
+    // public only when its complete dispatch instructions match.
+    const bool SparsePublics = Dbg && !Img.LoadOnlyFunctionEntries.empty();
     const auto ClassifyCallee = [&](va_t Entry, llvm::StringRef Name) {
-      if (Dbg && !Img.LoadOnlyFunctionEntries.empty() &&
-          (Name.empty() || isSynthesizedFuncName(Name)) &&
-          decodeX64DispatchFrame(Img, Entry))
-        if (const auto Public = Dbg->functionName(Entry)) {
+      if (!isSynthesizedFuncName(Name)) {
+        Classify(Entry, Name);
+        return;
+      }
+      if (SparsePublics && decodeX64DispatchFrame(Img, Entry))
+        if (const auto Public = Dbg->functionName(Entry))
           Classify(Entry, *Public);
-          return;
-        }
-      Classify(Entry, Name);
     };
     if (FunctionNames) {
-      // What functionNamesAt gives these: the analysis cache read every
-      // named address of the image once.
-      for (const va_t Entry : Callees)
-        if (const auto Named = FunctionNames->find(Entry);
-            Named != FunctionNames->end())
-          ClassifyCallee(Entry, Named->second);
-        else
-          ClassifyCallee(Entry, {});
+      // Effects already contains one entry per reached callee.
+      for (const auto &[Entry, Effect] : Effects) {
+        const auto Named = FunctionNames->find(Entry);
+        ClassifyCallee(Entry, Named != FunctionNames->end()
+                                  ? llvm::StringRef(Named->second)
+                                  : llvm::StringRef());
+      }
     } else {
+      std::set<va_t> Callees;
+      for (const auto &[Entry, Effect] : Effects)
+        Callees.insert(Entry);
       for (const auto &[Entry, Name] : functionNamesAt(Img, Callees))
         ClassifyCallee(Entry, Name);
     }
