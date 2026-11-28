@@ -302,6 +302,21 @@ constexpr uint32_t kMaxJumpTableReloadSearchBlocks = 4;
 /// `L: ...; ja default`, reusing the compare's flags in the next block.
 constexpr uint32_t kMaxJumpTableGuardFlagSearchBlocks = 4;
 
+/// Blocks a jump left without a proved target looks straight back through,
+/// each its successor's only predecessor, for the read of a table of its
+/// function's own code it jumps through (`lea table(%rip), %rcx` hoisted into
+/// an earlier block).
+constexpr uint32_t kMaxOwnLabelTableReadBlocks = 4;
+
+/// Rounds of dispatching such jumps by value in one function, each decoding
+/// the code their labels reach, which can hold another one: a Rust `match`
+/// after a `match`, or a loop unrolled around one.
+constexpr uint32_t kMaxOwnLabelTableRounds = 256;
+
+/// Instructions one linear decode of a function may take to tell whether
+/// the labels a table of its own code names start instructions.
+constexpr uint32_t kMaxOwnLabelTableSweepInstructions = 1u << 16;
+
 /// CFG value reconstruction for target/address roles, masks and exact guard
 /// occurrences can cross many predecessors in an expanded dispatch graph.
 /// A 3-machine x64 selector reaches 65 distinct exact states before closing its

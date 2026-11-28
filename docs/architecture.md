@@ -3063,6 +3063,41 @@ block addresses, and an optimizer may give two labels one. The proof-based
 recoveries run first and are unchanged; a dispatch by value claims no table
 storage, no index and no relocation suppression.
 
+A linked image holds no relocation for a relative table, so that list is empty
+for a jump through one, and nothing may bound the jump's index: Rust compiles a
+`match` on an enum's discriminant read from memory to `lea table(%rip), %rcx;
+movslq (%rcx,%rax,4), %rdx; add %rcx, %rdx; jmp *%rdx` with no compare, since
+the type allows no other value. After the scalar recoveries,
+`CFGBuilder::recoverOwnLabelTableBranches` reads such a jump's target back
+through the blocks that are each the only way into the next: the table's
+address plus its 32-bit slot, read from a read-only, non-executable section.
+The labels are the table's leading slots, up to the first slot that names
+anything but code of the function, an instruction start of one linear decode
+of it, and no address inside an instruction recursive descent already decoded.
+The linear decode is kept only when every instruction recursive descent decoded
+in the function is one of its starts. Nothing proves how many slots the table
+has, so no index domain is claimed; a slot read past the table's end names
+code the machine would run for that index too, and only adds an edge. A jump
+whose index domain ran out of evidence still dispatches, since the dispatch
+claims no domain; one whose table evidence, or its function's marker evidence,
+ran out is left opaque. The labels are published as the jump's targets so that
+the code they reach is decoded, and a jump there through another such table (a
+`match` after a `match`, or a loop unrolled around one) dispatches the same
+way, round by round up to `kMaxOwnLabelTableRounds`; the linear decode is made
+once and checked again each round. The resolver's fixed point is not run
+again: that would retry proofs whose evidence ran out and drop the
+incompleteness they recorded. `dispatchUnprovedBranchesByValue` then keeps an
+edge only where the
+same callee-saved-register test admits it, and withdraws all of them if it
+cannot decide. The table's address is no address of the lifted program,
+so neither is the jump's value, but the slot is the same number in both: the
+dispatch's selector occurrence is the LOAD of the slot and its case keys are
+the labels' offsets from the table (`CFGBuilder::OwnLabelTableReads`). HighC
+and the LLVM emitter bind that occurrence through the switch selector plan,
+and the default arm still traps. No resolver stage sees such a dispatch, so it
+never counts as a published table, and losing its labels loses no validated
+one.
+
 A direct branch, or the end of a block, can reach an address where the image
 maps no code: data, bytes the file does not hold, the end of a section.
 `CFGBuilder` records the address in `LowFunc::TruncatedPathAddresses` and

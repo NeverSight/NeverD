@@ -5291,6 +5291,87 @@ TEST_F(JTE_X86_64, LaneCompareBoundWinsOverAWideTest) {
     EXPECT_TRUE(Table.AnalysisOnly || Table.BaseAddr != TableBase(3));
 }
 
+static fs::path ownLabelDispatchX64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_own_label_dispatch.o";
+}
+
+// A jump through a relative table of its function's own code that nothing
+// bounds, as Rust compiles a `match` on a discriminant read from memory,
+// dispatches by value on the labels the table's leading slots name: no table
+// is published, and the jump traps on every other value.  The dispatch
+// compares the slot, which holds each label as its offset from the table and
+// is the same number in the lifted program.  A label whose code reads a
+// register the caller keeps that no path to the jump has written is left out,
+// an address inside an instruction ends what the table is taken to hold, and
+// a table in writable memory gives no labels.
+TEST_F(JTE_X86_64, AnUnboundedOwnLabelTableDispatchesByValue) {
+  auto ImageOrErr = neverd::loadBinary(ownLabelDispatchX64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Section *Rodata = nullptr;
+  for (const neverd::Section &Section : Image.Sections)
+    if (Section.Name == ".rodata")
+      Rodata = &Section;
+  ASSERT_NE(Rodata, nullptr);
+  const auto Label = [&](neverd::va_t Table, size_t Slot) {
+    const uint8_t *Bytes = Image.readVA(Table + Slot * 4, 4);
+    int32_t Entry = 0;
+    if (Bytes)
+      std::memcpy(&Entry, Bytes, sizeof(Entry));
+    return Table + static_cast<int64_t>(Entry);
+  };
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  const auto Build = [&](const char *Name) {
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    if (!Function)
+      return neverd::LowFunc{};
+    neverd::CFGBuilder Builder;
+    return Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  };
+
+  // jt_own_enum's table holds six slots and a zero word.
+  const neverd::va_t Enum = Rodata->VA;
+  const neverd::LowFunc Func = Build("jt_own_enum");
+  EXPECT_TRUE(Func.JumpTables.empty());
+  ASSERT_EQ(Func.ValueDispatches.size(), 1u);
+  const neverd::JumpTable &Dispatch = Func.ValueDispatches.front();
+  EXPECT_TRUE(Dispatch.ValueDispatch);
+  EXPECT_TRUE(Dispatch.MutatedUnsafe);
+  EXPECT_FALSE(Dispatch.HasBaseAddr);
+  const std::vector<neverd::va_t> Labels{Label(Enum, 0), Label(Enum, 1),
+                                         Label(Enum, 3)};
+  EXPECT_EQ(Dispatch.Targets, Labels);
+  ASSERT_EQ(Dispatch.CaseLabels.size(), Labels.size());
+  for (size_t Case = 0; Case < Labels.size(); ++Case)
+    EXPECT_EQ(Dispatch.CaseLabels[Case],
+              static_cast<int32_t>(static_cast<uint32_t>(Labels[Case] - Enum)));
+  ASSERT_EQ(Dispatch.SelectorUseRefs.size(), 1u);
+  EXPECT_EQ(Dispatch.SelectorUseRefs.front().ExpectedOpcode,
+            neverd::NdOp::LOAD);
+  EXPECT_EQ(Dispatch.SelectorUseRefs.front().ExpectedSize, 4u);
+  EXPECT_EQ(Func.UnsafeIndirectBranchAddresses.count(Dispatch.InsnAddr), 1u);
+
+  // jt_own_kept's table holds three slots and a zero word after the first.
+  const neverd::va_t Kept = Enum + 7 * 4;
+  const neverd::LowFunc KeptFunc = Build("jt_own_kept");
+  ASSERT_EQ(KeptFunc.ValueDispatches.size(), 1u);
+  EXPECT_EQ(KeptFunc.ValueDispatches.front().Targets,
+            std::vector<neverd::va_t>{Label(Kept, 0)});
+
+  const neverd::va_t Inside = Kept + 4 * 4;
+  const neverd::LowFunc InsideFunc = Build("jt_own_inside");
+  ASSERT_EQ(InsideFunc.ValueDispatches.size(), 1u);
+  EXPECT_EQ(InsideFunc.ValueDispatches.front().Targets,
+            std::vector<neverd::va_t>{Label(Inside, 0)});
+
+  const neverd::LowFunc Writable = Build("jt_own_writable");
+  ASSERT_FALSE(Writable.Blocks.empty());
+  EXPECT_TRUE(Writable.ValueDispatches.empty());
+  EXPECT_TRUE(Writable.JumpTables.empty());
+}
+
 static fs::path scalarRetractedX64So() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_scalar_retracted.so";
 }
@@ -6997,6 +7078,14 @@ expectIndirectDispatchHasNoStaticSuccessors(const std::string &Body) {
   EXPECT_NE(Body.find(ByValue), std::string::npos) << Header << '\n' << Body;
 }
 
+/// Whether the LowIR text \p Body dispatches by value: a jump no table was
+/// proved for, through a table of its own code, goes to the labels the
+/// table's slots name and traps on every other value.  A proved table
+/// leaves no such dispatch for its jump.
+static void expectDispatchByValue(const std::string &Body) {
+  EXPECT_NE(Body.find("dispatch-by-value: "), std::string::npos) << Body;
+}
+
 #define JUMP_TABLE_ENTRY_OBSERVATION_TEXT(Name, Text)                          \
   static constexpr char Name[] = Text;
 #define JUMP_TABLE_ENTRY_OBSERVATION_VALUE(Type, Name, Value)                  \
@@ -7132,18 +7221,17 @@ TEST_F(JTE_X86_64, GuardOnAFieldBoundsTheReloadedIndex) {
 }
 
 // A store between the two loads may write the field, and a load through
-// another pointer reads another value: the guard bounds neither, and slot 3
-// is never a case.
+// another pointer reads another value: the guard bounds neither, so no table
+// is proved.  The index may then be 3, and the jump dispatches by value on
+// the labels the slots name, slot 3's among them.
 TEST_F(JTE_X86_64, GuardOnAFieldBoundsNoOtherLoad) {
   auto R = liftToLowIR(fieldReloadObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
-  for (const auto &[Name, Poison] :
-       {std::pair{"jt_field_reload_store", "cst:0x26B:4"},
-        std::pair{"jt_field_reload_other", "cst:0x275:4"}}) {
+  for (const char *Name : {"jt_field_reload_store", "jt_field_reload_other"}) {
     SCOPED_TRACE(Name);
     const std::string Body = lowFunctionBody(R.out, Name);
     ASSERT_FALSE(Body.empty()) << R.out;
-    EXPECT_EQ(Body.find(Poison), std::string::npos) << Body;
+    expectDispatchByValue(Body);
   }
 }
 
@@ -9834,27 +9922,29 @@ TEST_F(JTE_X86_64,
   ASSERT_FALSE(LowBody.empty()) << Low.out;
   expectIndirectDispatchHasNoStaticSuccessors(LowBody);
 
+  // No table is proved: a dispatch by value on the labels the slots name,
+  // whose default traps, is the only switch either route may print.
   auto High = liftToHighIR(rawRelativeDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_raw_relative_capacity");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 
   // The LLVM backend may conservatively reject the unresolved relocatable
   // target instead of materializing an opaque indirect tail call.  Either
-  // outcome is fail-closed, but neither may synthesize a static switch.
+  // outcome is fail-closed, but neither may synthesize a table's switch.
   auto LLVM = liftToLLVMIRUnopt(rawRelativeDomainObj());
   if (LLVM.exitCode == 0) {
     const std::string LLVMBody =
         llvmFunctionBody(LLVM.out, "jt_raw_relative_capacity");
     ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-    EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+    EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
   } else {
     EXPECT_NE(LLVM.err.find("refusing stale-address fallback"),
               std::string::npos)
         << LLVM.err;
-    EXPECT_EQ(LLVM.out.find("switch i"), std::string::npos) << LLVM.out;
+    EXPECT_EQ(recoveredSwitchCount(LLVM.out), 0u) << LLVM.out;
   }
 }
 
@@ -9987,6 +10077,9 @@ TEST_F(JTE_X86_64, MaskBoundAuthenticatesOffsetTransform) {
   EXPECT_EQ(Body.find("cst:0x9C3:4"), std::string::npos) << Body;
 }
 
+// The mask-bound rejections below prove no table: each jump stays a branch
+// and dispatches by value on the labels its table's slots name, since its
+// index may reach any of them.
 TEST_F(JTE_X86_64, MaskBoundRejectsUnprovedNegativeOffsetDomain) {
   auto R = liftToLowIR(identityCfgLaneObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
@@ -9994,8 +10087,7 @@ TEST_F(JTE_X86_64, MaskBoundRejectsUnprovedNegativeOffsetDomain) {
   ASSERT_FALSE(Body.empty()) << R.out;
   EXPECT_NE(Body.find("INDIR_BR"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("INDIR_CALL"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("cst:0x9C4:4"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("cst:0xA27:4"), std::string::npos) << Body;
+  expectDispatchByValue(Body);
 }
 
 TEST_F(JTE_X86_64, MaskBoundClosesMultipleCheckedOffsets) {
@@ -10019,8 +10111,7 @@ TEST_F(JTE_X86_64, MaskBoundRejectsUnknownOffsetDependency) {
   ASSERT_FALSE(Body.empty()) << R.out;
   EXPECT_NE(Body.find("INDIR_BR"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("INDIR_CALL"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("cst:0xA8C:4"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("cst:0xAEF:4"), std::string::npos) << Body;
+  expectDispatchByValue(Body);
 }
 
 TEST_F(JTE_X86_64, MaskBoundRejectsRuntimeMaskDependency) {
@@ -10030,8 +10121,7 @@ TEST_F(JTE_X86_64, MaskBoundRejectsRuntimeMaskDependency) {
   ASSERT_FALSE(Body.empty()) << R.out;
   EXPECT_NE(Body.find("INDIR_BR"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("INDIR_CALL"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("cst:0xAF0:4"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("cst:0xB53:4"), std::string::npos) << Body;
+  expectDispatchByValue(Body);
 }
 
 TEST_F(JTE_X86_64, MaskBoundRejectsNarrowArithmeticWrap) {
@@ -10041,8 +10131,7 @@ TEST_F(JTE_X86_64, MaskBoundRejectsNarrowArithmeticWrap) {
   ASSERT_FALSE(Body.empty()) << R.out;
   EXPECT_NE(Body.find("INDIR_BR"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("INDIR_CALL"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("cst:0xB54:4"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("cst:0xBB7:4"), std::string::npos) << Body;
+  expectDispatchByValue(Body);
 }
 
 TEST_F(JTE_X86_64, MaskBoundPreservesPartialRegisterDependencies) {
@@ -10052,9 +10141,7 @@ TEST_F(JTE_X86_64, MaskBoundPreservesPartialRegisterDependencies) {
   ASSERT_FALSE(Body.empty()) << R.out;
   EXPECT_NE(Body.find("INDIR_BR"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("INDIR_CALL"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("cst:0xBB8:4"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("cst:0xBB9:4"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("cst:0xC1B:4"), std::string::npos) << Body;
+  expectDispatchByValue(Body);
 }
 
 TEST_F(JTE_X86_64, MaskBoundIntersectsNestedMaskDomains) {
