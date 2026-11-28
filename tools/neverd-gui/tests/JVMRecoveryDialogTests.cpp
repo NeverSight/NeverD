@@ -125,6 +125,9 @@ private slots:
     QCOMPARE(F["status"].toString(), "reconstructed_source");
     QCOMPARE(Tabs->currentWidget(), Source);
     QCOMPARE(Source->toPlainText(), F["source"].toString());
+    QVERIFY(Source->document()->defaultFont().styleStrategy() &
+            QFont::PreferNoShaping);
+    QVERIFY(Mappings->font().styleStrategy() & QFont::PreferNoShaping);
     QCOMPARE(BytecodeChanges.count(), 0);
     bool VisibleDuringLoad = true;
     const auto Loaded =
@@ -154,25 +157,38 @@ private slots:
     QVERIFY(Evidence->document()->defaultFont().styleStrategy() &
             QFont::PreferNoShaping);
     Tabs->setCurrentWidget(Source);
+    const auto Instructions = F["instructions"].toArray();
+    QCOMPARE(Mappings->count(), Instructions.size());
     bool Found = false;
     for (int I = 0; I < Mappings->count(); ++I) {
-      auto Lines = Mappings->item(I)->data(Qt::UserRole).toList();
-      if (Lines.empty())
+      const auto Instruction = Instructions.at(I).toObject();
+      QCOMPARE(Mappings->item(I)->text(),
+               QStringLiteral("%1   0x%2   %3")
+                   .arg(Instruction["pc"].toInt())
+                   .arg(Instruction["offset"].toInteger(), 0, 16)
+                   .arg(Instruction["opcode"].toString()));
+      const auto Spans = Instruction["source_spans"].toArray();
+      if (Spans.isEmpty())
         continue;
       Mappings->setCurrentRow(I);
-      QCOMPARE(Source->textCursor().blockNumber() + 1, Lines.front().toInt());
+      QCOMPARE(Source->textCursor().blockNumber() + 1,
+               Spans.first().toObject()["line"].toInt());
       Found = true;
-      break;
     }
     QVERIFY(Found);
     Source->setFocus();
     QTRY_VERIFY(Source->hasFocus());
-    auto Map = F["source_map"].toArray().first().toObject();
-    int Line = Map["line"].toInt();
     Source->moveCursor(QTextCursor::Start);
-    Source->setTextCursor(
-        QTextCursor(Source->document()->findBlockByNumber(Line - 1)));
-    QCOMPARE(Mappings->selectedItems().size(), Map["pcs"].toArray().size());
+    for (auto V : F["source_map"].toArray()) {
+      const auto Map = V.toObject();
+      const int Line = Map["line"].toInt();
+      Source->setTextCursor(
+          QTextCursor(Source->document()->findBlockByNumber(Line - 1)));
+      const auto PCs = Map["pcs"].toArray();
+      for (int I = 0; I < Mappings->count(); ++I)
+        QCOMPARE(Mappings->item(I)->isSelected(),
+                 PCs.contains(Instructions.at(I).toObject()["pc"]));
+    }
     Methods->setCurrentIndex(0);
     Run->click();
     QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
@@ -212,6 +228,40 @@ private slots:
              Evidence->font().styleStrategy());
     Copy->click();
     QVERIFY(QApplication::clipboard()->text().contains(JarName));
+  }
+  void sourceShapingFollowsSelectedText() {
+    QTemporaryDir Temp;
+    QVERIFY(Temp.isValid());
+    neverd::gui::JVMRecoveryDialog Dialog(TEST_JVM_WORKER);
+    Dialog.show();
+    auto *Input = Dialog.findChild<QLineEdit *>("jvmPath");
+    auto *Run = Dialog.findChild<QPushButton *>("jvmAnalyze");
+    auto *Source = Dialog.findChild<QPlainTextEdit *>("jvmSource");
+    auto *Copy = Dialog.findChild<QPushButton *>("jvmCopy");
+    QVERIFY(Input && Run && Source && Copy);
+    const auto ASCII = QStringLiteral("class Sample { int count; }\n");
+    const auto Unicode =
+        QStringLiteral("class Sample { String اسم = \"漢字\"; }\n");
+    QFile File(Temp.filePath("Sample.java"));
+    Input->setText(File.fileName());
+    for (const auto &Text : {ASCII, Unicode, ASCII}) {
+      QVERIFY(File.open(QIODevice::WriteOnly | QIODevice::Truncate));
+      const auto Bytes = Text.toUtf8();
+      QCOMPARE(File.write(Bytes), Bytes.size());
+      File.close();
+      QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
+      Run->click();
+      QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 15000);
+      QCOMPARE(Source->toPlainText(), Text);
+      if (Text == Unicode)
+        QCOMPARE(Source->document()->defaultFont().styleStrategy(),
+                 Source->font().styleStrategy());
+      else
+        QVERIFY(Source->document()->defaultFont().styleStrategy() &
+                QFont::PreferNoShaping);
+      Copy->click();
+      QCOMPARE(QApplication::clipboard()->text(), Text);
+    }
   }
   void incompleteMethodShowsMappedBytecodeAndDiagnostics() {
     QTemporaryDir Temp;
