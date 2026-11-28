@@ -64,13 +64,21 @@ def observation():
         "nonempty": "poi(@$t1) != poi(@$t1+4)",
         "room": "poi(@$t1+4) != poi(@$t1+8)",
     }
+    def stop_at(address):
+        # CDB also stops on first-chance exceptions. A sample at that stop
+        # carries no evidence about the requested instruction.
+        return ["bc *", "ba e 1 " + address, "bl", "g", ".lastevent",
+                '.if (@eip != (' + address + ')) { .echo XCPT4_UNEXPECTED_STOP; qd }']
+
     steps = [
-        ".expr /s masm", "ba e 1 @$exentry-0x272", "g", ".lastevent",
+        ".expr /s masm", *stop_at("@$exentry"), ".echo XCPT4_PROCESS_ENTRY",
+        *stop_at("@$exentry-0x272"),
         "r $t0 = poi(@$exentry+0x127a)-0x61640", marker("ENTRY", entry),
-        "bc *", "ba e 1 @$t0+0x616e0", "g", ".lastevent",
-        "r $t1 = poi(@esp+4)", marker("TABLE", table),
-        "bc *", "ba e 1 @$t0+0x617d2", "g", marker("COMPARE", comparison),
-        "bc *", "ba e 1 @$exentry-0x26d", "g", marker("RETURN", returned),
+        *stop_at("@$t0+0x616e0"), "r $t1 = poi(@esp+4)",
+        '.if ((@$t1 != (@$t0+0x10475c)) and (@$t1 != (@$exentry+0x43ca))) { .echo XCPT4_UNKNOWN_TABLE; qd }',
+        marker("TABLE", table),
+        *stop_at("@$t0+0x617d2"), marker("COMPARE", comparison),
+        *stop_at("@$exentry-0x26d"), marker("RETURN", returned),
         "bc *", "qd",
     ]
     return steps, {"ENTRY": entry, "TABLE": table, "COMPARE": comparison, "RETURN": returned}
@@ -107,6 +115,10 @@ def main():
         completed = subprocess.run(command, stdin=subprocess.DEVNULL, text=True,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    errors="replace", timeout=120, check=True)
+    if re.search(r"(?:^|> )XCPT4_(?:UNEXPECTED_STOP|UNKNOWN_TABLE)[ \t]*$", completed.stdout, re.MULTILINE):
+        events = [line for line in completed.stdout.splitlines()
+                  if re.search(r"last event:|xcpt4.*\+0x[0-9a-f]+:$|\be\s+[0-9a-f]{8}\b|XCPT4_PROCESS_ENTRY$|XCPT4_UNEXPECTED_STOP$", line, re.I)]
+        raise ValueError(f"CDB stopped outside the fixed startup observations: {events[-20:]}")
     results = parse_markers(completed.stdout, groups)
     before, table, branch, after = (results[n] for n in ("ENTRY", "TABLE", "COMPARE", "RETURN"))
     if not (all(before[key] for key in ("pc", "app_type_export", "commode_export", "callback"))
