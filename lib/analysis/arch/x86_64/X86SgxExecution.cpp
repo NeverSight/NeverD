@@ -13,6 +13,7 @@
 #include "X86ModeState.h"
 
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Errc.h"
@@ -153,6 +154,11 @@ X86SgxExecution::instructionException(llvm::ArrayRef<uint8_t> Bytes,
                                       uint64_t PC, const X86SgxMemory &Memory) {
   if (!Memory.Running)
     return invalid("enclave instruction admission requires a running thread");
+  // These spans fault during ordinary code64 execution. The paged owner
+  // authenticates the bytes and resolves fetch faults before enclave exit.
+  const auto Fault = x86PagedCode64FaultEncoding(Bytes.data(), Bytes.size());
+  if (Fault && Fault->Size == Bytes.size())
+    return std::optional<uint8_t>{};
   const uint64_t XFRM = Memory.Running->XFRM;
   Decoder D;
   if (!D.init(Arch::X64))

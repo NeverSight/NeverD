@@ -16,7 +16,8 @@ protected:
   }
 
   void checkPlatformEvent(std::vector<X86SgxPage> Pages,
-                          const std::array<uint8_t, 160> &X87, bool INIT) {
+                          const std::array<uint8_t, 160> &X87,
+                          uint64_t InterruptedPC, bool INIT) {
     auto Bank = llvm::cantFail(X86SgxMemory::create(std::move(Pages)));
     llvm::cantFail(Bank->bindX87(X87, 7));
     auto C = Controls;
@@ -35,6 +36,7 @@ protected:
     ASSERT_EQ(llvm::cantFail(Execution.run(S, Program, Budget)).Completions,
               1u);
     ASSERT_TRUE(M->sgxMemory()->active());
+    ASSERT_EQ(R.PC, InterruptedPC);
     X86ModeInterrupts Inputs{*X86LocalApicFixed::fromState({}, 0)};
     if (INIT) {
       S.Startup = X86StartupState{0x906a0, false};
@@ -61,7 +63,7 @@ protected:
       auto Resumed = llvm::cantFail(Execution.run(S, Program, Budget));
       ASSERT_EQ(Resumed.Completions, 1u) << Resumed.OwnerError;
       EXPECT_TRUE(M->sgxMemory()->active());
-      EXPECT_EQ(R.PC, 0x41000u);
+      EXPECT_EQ(R.PC, InterruptedPC);
       EXPECT_EQ(R.GPR[9], 0x1122334455667788ULL);
       return;
     }
@@ -133,25 +135,43 @@ TEST_F(X86ModeSgxTest,
     Compilers.emplace_back(NeverC);
   for (const auto &Compiler : Compilers)
     for (bool LLVM : {false, true})
-      for (const std::vector<uint8_t> FaultBytes : {std::vector<uint8_t>{},
-                                                    {0x8e, 0xe0},
-                                                    {0xcc},
-                                                    {0xf1},
-                                                    {0xf4},
-                                                    {0xc5, 0xf8, 0x77},
-                                                    {0x89, 0x06}}) {
+      for (const std::vector<uint8_t> &FaultBytes :
+           std::vector<std::vector<uint8_t>>{
+               {},
+               {0x8e, 0xe0},
+               {0xcc},
+               {0xf1},
+               {0xf4},
+               {0xc5, 0xf8, 0x77},
+               {0x89, 0x06},
+               {0xf0, 0x0f, 0xff, 0xc0},
+               {0x67, 0xf0, 0x0f, 0xff},
+               std::vector<uint8_t>(x86::kMaxInstructionLen, 0x40)}) {
         SCOPED_TRACE(testing::Message()
                      << Compiler << " llvm=" << LLVM
-                     << ", instruction length=" << FaultBytes.size());
+                     << ", bytes=" << testing::PrintToString(FaultBytes));
+        const bool LockedUD0 =
+            !FaultBytes.empty() && FaultBytes.front() == 0xf0;
+        // Only the address tail is on the next, non-executable EPC page.
+        const bool TailPF = !FaultBytes.empty() && FaultBytes.front() == 0x67;
         const bool PageFault =
-            !FaultBytes.empty() && FaultBytes.front() == 0x89;
-        const bool GPFault = !FaultBytes.empty() && FaultBytes.front() == 0xf4;
+            TailPF || (!FaultBytes.empty() && FaultBytes.front() == 0x89);
+        const bool Overlong = FaultBytes.size() == x86::kMaxInstructionLen;
+        const bool GPFault =
+            Overlong || (!FaultBytes.empty() && FaultBytes.front() == 0xf4);
+        const uint64_t FaultAddress = TailPF ? Base + 0x2000 : Base + 0x1027;
+        const uint32_t PageError = TailPF ? 0x8015 : 0x8007;
         const bool ErrorCode = PageFault || GPFault;
         const bool AVX =
             LLVM && (FaultBytes.empty() || FaultBytes.front() != 0xc5);
         const uint64_t XFRM = AVX ? 7 : 3;
         const uint64_t EnclaveXCR0 = LLVM ? XFRM : 7;
         start(Mode::Long64);
+        if (LockedUD0 || TailPF)
+          Options.Long.UD0Fetch = (TailPF || LLVM)
+                                      ? X86UD0FetchProfile::CompleteModRM
+                                      : X86UD0FetchProfile::OpcodeOnly;
+        Options.Long.PrefixLengthFaultAfter15Bytes = Overlong;
         Machine.SMM.emplace();
         Machine.Debug.emplace();
         Options.Legacy.Debug = Options.Long.DebugProfile =
@@ -222,7 +242,9 @@ TEST_F(X86ModeSgxTest,
         field(Secs, 56, XFRM, 8);
         field(Tcs, 16, 0x2000, 8);
         field(Tcs, 28, 1, 4);
-        const auto EntryOffset = FaultBytes.empty() ? 0x1000u : 0x100du;
+        const auto EntryOffset = TailPF ? 0x2000u - FaultBytes.size()
+                                 : FaultBytes.empty() ? 0x1000u
+                                                      : 0x100du;
         field(Tcs, 32, EntryOffset, 8);
         field(Tcs, 48, 0x3000, 8);
         field(Tcs, 64, UINT32_MAX, 4);
@@ -236,10 +258,10 @@ TEST_F(X86ModeSgxTest,
         Program.push_back({Base + 0x100a, Mode::Long64, Enclu});
         if (!FaultBytes.empty()) {
           std::copy(FaultBytes.begin(), FaultBytes.end(),
-                    Code.Bytes.begin() + 13);
+                    Code.Bytes.begin() + (EntryOffset - 0x1000));
           X86ModeInstruction Fault{Base + EntryOffset, Mode::Long64,
                                    FaultBytes};
-          if (PageFault) {
+          if (PageFault || LockedUD0 || Overlong) {
             auto Other = std::move(Program);
             Program = {Fault};
             ASSERT_NO_FATAL_FAILURE(
@@ -261,10 +283,11 @@ TEST_F(X86ModeSgxTest,
         X87[0] = 0x7f;
         X87[1] = 3;
         X87[32] = 0x13;
-        if (FaultBytes.empty())
+        if (FaultBytes.empty() || Overlong || TailPF)
           for (bool INIT : {false, true})
             ASSERT_NO_FATAL_FAILURE(
-                checkPlatformEvent({Secs, Tcs, Code, SSA, LastSSA}, X87, INIT));
+                checkPlatformEvent({Secs, Tcs, Code, SSA, LastSSA}, X87,
+                                   Base + EntryOffset, INIT));
         if (FaultBytes.empty())
           ASSERT_NO_FATAL_FAILURE(checkInitialResume(Secs, Tcs, Code, SSA,
                                                      LastSSA, X87, LLVM, AVX));
@@ -272,12 +295,18 @@ TEST_F(X86ModeSgxTest,
         Memory = llvm::cantFail(X86PagedMemory::createWithSgx(
             RAM, Features, Controls, std::move(Enclaves)));
         auto SMRAM = RAM;
-        SMRAM.Memory.front().Bytes[0x38000] = 0x0f;
-        SMRAM.Memory.front().Bytes[0x38001] = 0xaa;
+        const uint64_t RsmPC = 0x38000u + unsigned(Overlong);
+        if (Overlong) {
+          // The same 0x40 byte is INC AX in the firmware's real mode.
+          SMRAM.Memory.front().Bytes[0x38000] = 0x40;
+          Program.push_back({0x38000, Mode::Real16, {0x40}});
+        }
+        SMRAM.Memory.front().Bytes[RsmPC] = 0x0f;
+        SMRAM.Memory.front().Bytes[RsmPC + 1] = 0xaa;
         auto System =
             llvm::cantFail(X86PagedMemory::create(SMRAM, Features, Controls));
         X86ModeExecution Execution(*Memory, Options, *System);
-        Program.push_back({0x38000, Mode::Real16, {0x0f, 0xaa}});
+        Program.push_back({RsmPC, Mode::Real16, {0x0f, 0xaa}});
         uint64_t Budget = 1;
         auto Enter = llvm::cantFail(Execution.run(Machine, Program, Budget));
         ASSERT_TRUE(Enter.OwnerError.empty()) << Enter.OwnerError;
@@ -317,8 +346,10 @@ TEST_F(X86ModeSgxTest,
                        0x100),
                   OutsideTF);
         if (PageFault) {
-          EXPECT_EQ(word(OutsideFrame, R.GPR[4], 8), 0x8007u);
-          EXPECT_EQ(V.Core.Core.CR2, Base + 0x1000);
+          EXPECT_EQ(word(OutsideFrame, R.GPR[4], 8), PageError);
+          EXPECT_EQ(V.Core.Core.CR2, FaultAddress & ~uint64_t{0xfff});
+        } else if (GPFault) {
+          EXPECT_EQ(word(OutsideFrame, R.GPR[4], 8), 0u);
         }
         EXPECT_EQ(R.GPR[0], 3u);
         EXPECT_EQ(R.GPR[1], 0x1800u);
@@ -345,7 +376,13 @@ TEST_F(X86ModeSgxTest,
         EXPECT_EQ(Memory->sgxMemory()->xcr0(), EnclaveXCR0);
         EXPECT_EQ((*Memory->sgxMemory()->x87())[32], 0x13u);
         const uint64_t GprArea = Base + (LLVM ? 0x4000 : 0x3000) - 184;
-        std::vector<uint8_t> SavedMisc(16), ExitInfo(4);
+        std::vector<uint8_t> SavedMisc(16), ExitInfo(4), SavedIP(8);
+        ASSERT_EQ(llvm::cantFail(
+                      Memory->load({GprArea + 136, MemoryAccessKind::Read, 3},
+                                   SavedIP))
+                      .Status,
+                  X86PageWalkStatus::Completed);
+        EXPECT_EQ(word(SavedIP, 0, 8), Base + EntryOffset);
         ASSERT_EQ(llvm::cantFail(
                       Memory->load({GprArea - 16, MemoryAccessKind::Read, 3},
                                    SavedMisc))
@@ -359,8 +396,8 @@ TEST_F(X86ModeSgxTest,
         if (LLVM && ErrorCode) {
           EXPECT_EQ(word(ExitInfo, 0, 4),
                     PageFault ? 0x8000030eu : 0x8000030du);
-          EXPECT_EQ(word(SavedMisc, 0, 8), PageFault ? Base + 0x1027 : 0u);
-          EXPECT_EQ(word(SavedMisc, 8, 4), PageFault ? 0x8007u : 0u);
+          EXPECT_EQ(word(SavedMisc, 0, 8), PageFault ? FaultAddress : 0u);
+          EXPECT_EQ(word(SavedMisc, 8, 4), PageFault ? PageError : 0u);
           EXPECT_EQ(word(SavedMisc, 12, 4), 0u);
         } else {
           EXPECT_EQ(word(ExitInfo, 0, 4),
@@ -368,7 +405,7 @@ TEST_F(X86ModeSgxTest,
           EXPECT_EQ(SavedMisc, std::vector<uint8_t>(
                                    16, LLVM && FaultBytes.empty() ? 0 : 0xae));
         }
-        if (!FaultBytes.empty())
+        if (!FaultBytes.empty() && !Overlong)
           continue;
         X86ModeInterrupts Inputs{*X86LocalApicFixed::fromState({}, 0)};
         Inputs.SMIPending = true;
@@ -393,6 +430,16 @@ TEST_F(X86ModeSgxTest,
         ASSERT_TRUE(Machine.SMM->Active);
         EXPECT_EQ(word(bytes(*System), 0x3ff78, 8), 0x1800u);
         EXPECT_EQ(word(bytes(*System), 0x3fff8, 8), 3u);
+        if (Overlong) {
+          ASSERT_EQ(llvm::cantFail(Execution.mode(Machine)), Mode::Real16);
+          const auto BeforeAX = R.GPR[0];
+          Budget = 1;
+          const auto Firmware =
+              llvm::cantFail(Execution.run(Machine, Program, Budget, Inputs));
+          ASSERT_EQ(Firmware.Completions, 1u) << Firmware.OwnerError;
+          EXPECT_EQ(uint16_t(R.GPR[0]), uint16_t(BeforeAX + 1));
+          EXPECT_TRUE(Machine.SMM->Active);
+        }
         Budget = 2;
         auto Returned =
             llvm::cantFail(Execution.run(Machine, Program, Budget, Inputs));
@@ -401,6 +448,20 @@ TEST_F(X86ModeSgxTest,
         ASSERT_TRUE(Memory->sgxMemory()->active());
         EXPECT_EQ(R.PC, Base + EntryOffset);
         EXPECT_EQ(R.GPR[9], 0x1122334455667788ULL);
+        ASSERT_EQ(llvm::cantFail(Execution.mode(Machine)), Mode::Long64);
+        if (Overlong) {
+          // SMI intervened at the restored fault RIP. RSM and ERESUME must
+          // restore that same instruction before the next attempt raises #GP.
+          Budget = 1;
+          const auto Retried =
+              llvm::cantFail(Execution.run(Machine, Program, Budget));
+          ASSERT_TRUE(Retried.OwnerError.empty()) << Retried.OwnerError;
+          EXPECT_EQ(Retried.DeliveredVector, 13u);
+          EXPECT_EQ(Retried.Completions, 0u);
+          EXPECT_EQ(word(bytes(*Memory), R.GPR[4], 8), 0u);
+          EXPECT_FALSE(Memory->sgxMemory()->active());
+          continue;
+        }
         Budget = 3;
         auto Exit = llvm::cantFail(Execution.run(Machine, Program, Budget));
         ASSERT_TRUE(Exit.OwnerError.empty()) << Exit.OwnerError;

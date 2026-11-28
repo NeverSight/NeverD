@@ -85,6 +85,40 @@ TEST_F(X64PagedExecutionBreakpointTest, BoundControlsAndBridgePrecedeEffects) {
 }
 
 TEST_F(X64PagedExecutionBreakpointTest,
+       PrefixLengthFaultWithCompetingBreakpoint) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "No test Clang";
+  const std::vector<uint8_t> Code(x86::kMaxInstructionLen, 0x66);
+  for (bool LLVM : {false, true}) {
+    Run Driver = nullptr;
+    Schedule Scheduled = nullptr;
+    ASSERT_NO_FATAL_FAILURE(compileDebug(Code, LLVM, Driver, Scheduled));
+    resetDebug(Code);
+    X64PagedDebugState Debug;
+    Debug.DR[0] = 0x1000;
+    Debug.DR7 = 0x401;
+    auto O = breakpointOptions(Debug);
+    O.PrefixLengthFaultAfter15Bytes = true;
+    const auto Before = State;
+    const auto BeforeDebug = Debug;
+    Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+    X64PagedExecution Context(*Memory, O);
+    uint64_t Budget = 1;
+    EXPECT_EQ(Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget),
+              5u);
+    EXPECT_NE(Context.lastError().find("competing execution breakpoint"),
+              std::string::npos);
+    EXPECT_EQ(Budget, 1u);
+    EXPECT_EQ(Memory->controls().RFlags, Controls.RFlags);
+    EXPECT_FALSE(Context.lastResult().InstructionAttempted);
+    EXPECT_EQ(std::memcmp(&Before, &State, sizeof(State)), 0);
+    EXPECT_EQ(std::memcmp(&BeforeDebug, &Debug, sizeof(Debug)), 0);
+    EXPECT_EQ(Memory->physicalMemory().snapshotMemoryRegions().front().Bytes,
+              RAM.Memory.front().Bytes);
+  }
+}
+
+TEST_F(X64PagedExecutionBreakpointTest,
        BreakpointPrecedesFetchAndResumesAcceptedEntry) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";

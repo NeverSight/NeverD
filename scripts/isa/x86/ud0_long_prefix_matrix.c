@@ -33,6 +33,17 @@ static void on_fault(int number, siginfo_t *information, void *opaque) {
   siglongjmp(resume, 1);
 }
 
+static int observe(uint8_t *start, uint8_t *guard, unsigned expected_trap) {
+  signal_number = 0;
+  trap = error = 0;
+  if (!sigsetjmp(resume, 1))
+    ((void (*)(void))start)();
+  return trap == expected_trap && error == (expected_trap == 14 ? 0x14u : 0u) &&
+         signal_number == (expected_trap == 6 ? SIGILL : SIGSEGV) &&
+         rip == (uintptr_t)start &&
+         (expected_trap != 14 || fault_address == (uintptr_t)guard);
+}
+
 int main(int argc, char **argv) {
   if (argc != 2)
     return 2;
@@ -56,9 +67,9 @@ int main(int argc, char **argv) {
       {0x00}, {0x04, 0x20}, {0x84, 0x20, 0x00, 0x50, 0x34, 0x12}};
   const unsigned tail_lengths[] = {1, 2, 6};
   const uint8_t repeated_prefixes[] = {0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65, 0x66,
-                                       0x67, 0xf2, 0xf3, 0x40, 0x41, 0x42, 0x43,
-                                       0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a,
-                                       0x4b, 0x4c, 0x4d, 0x4e, 0x4f};
+                                       0x67, 0xf0, 0xf2, 0xf3, 0x40, 0x41, 0x42,
+                                       0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49,
+                                       0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f};
   const uint8_t mixed_patterns[][13] = {
       {0x66, 0x67, 0x66, 0x67, 0x66, 0x67, 0x66, 0x67, 0x66, 0x67, 0x66, 0x67,
        0x66},
@@ -70,50 +81,52 @@ int main(int argc, char **argv) {
        0xf2},
       {0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65, 0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65,
        0x26},
+      {0xf0, 0x67, 0xf3, 0x64, 0x4f, 0x2e, 0x66, 0x40, 0x65, 0x3e, 0x48, 0x36,
+       0x26},
+      {0x66, 0x67, 0xf3, 0x64, 0x4f, 0x2e, 0xf0, 0x40, 0x65, 0x3e, 0x48, 0x36,
+       0x26},
+      {0x66, 0x67, 0xf3, 0x64, 0x4f, 0x2e, 0x26, 0x40, 0x65, 0x3e, 0x48, 0x36,
+       0xf0},
   };
   const unsigned repeated_count = sizeof(repeated_prefixes);
   const unsigned mixed_count =
       sizeof(mixed_patterns) / sizeof(mixed_patterns[0]);
-  unsigned total = 0, mismatch = 0, pf = 0, gp = 0, ud = 0;
-  for (unsigned kind = 0; kind < repeated_count + mixed_count; ++kind)
-    for (unsigned prefix_count = 0; prefix_count <= 13; ++prefix_count)
-      for (unsigned form = 0; form < 3; ++form)
-        for (unsigned available = 0; available <= tail_lengths[form];
-             ++available) {
-          const unsigned front_length = prefix_count + 2;
-          uint8_t *start = memory + page_size - front_length - available;
-          if (kind < repeated_count)
-            memset(start, repeated_prefixes[kind], prefix_count);
-          else
-            memcpy(start, mixed_patterns[kind - repeated_count], prefix_count);
-          start[prefix_count] = 0x0f;
-          start[prefix_count + 1] = 0xff;
-          memcpy(start + front_length, tails[form], available);
-          __builtin___clear_cache((char *)start,
-                                  (char *)(start + front_length + available));
-          signal_number = 0;
-          trap = error = 0;
-          if (!sigsetjmp(resume, 1))
-            ((void (*)(void))start)();
-          const unsigned next_byte = front_length + available;
-          const unsigned expected_trap =
-              expected_profile == 6 ? 6
-              : available == tail_lengths[form] &&
-                      front_length + tail_lengths[form] <= 15
-                  ? 6
-              : next_byte >= 15 ? 13
-                                : 14;
-          const unsigned long expected_error = expected_trap == 14 ? 0x14 : 0;
-          const int expected_signal = expected_trap == 6 ? SIGILL : SIGSEGV;
-          const int good = trap == expected_trap && error == expected_error &&
-                           signal_number == expected_signal &&
-                           rip == (uintptr_t)start &&
-                           (expected_trap != 14 ||
-                            fault_address == (uintptr_t)(memory + page_size));
+  unsigned total = 0, overlong = 0, mismatch = 0, pf = 0, gp = 0, ud = 0;
+  uint8_t *guard = memory + page_size;
+  for (unsigned kind = 0; kind < repeated_count + mixed_count; ++kind) {
+    for (unsigned prefix_count = 0; prefix_count <= 15; ++prefix_count) {
+      const unsigned front = prefix_count + 2;
+      const int prefix_overflow = front > 15;
+      uint8_t code[15 + 2 + sizeof(tails[0])];
+      for (unsigned i = 0; i < prefix_count; ++i)
+        code[i] = kind < repeated_count
+                      ? repeated_prefixes[kind]
+                      : mixed_patterns[kind - repeated_count]
+                                      [i % sizeof(mixed_patterns[0])];
+      code[prefix_count] = 0x0f;
+      code[prefix_count + 1] = 0xff;
+      for (unsigned form = 0; form < (prefix_overflow ? 1u : 3u); ++form) {
+        const unsigned length = front + tail_lengths[form];
+        memcpy(code + front, tails[form], tail_lengths[form]);
+        // For an overlong front, put the guard at every offset, including RIP.
+        for (unsigned available = prefix_overflow ? 0 : front;
+             available <= length; ++available) {
+          uint8_t *start = guard - available;
+          if (available)
+            memcpy(start, code, available);
+          __builtin___clear_cache((char *)start, (char *)guard);
+          unsigned expected = 14;
+          if (!prefix_overflow &&
+              (expected_profile == 6 || (available == length && length <= 15)))
+            expected = 6;
+          else if (available >= 15)
+            expected = 13;
+          const int good = observe(start, guard, expected);
           ++total;
-          pf += expected_trap == 14;
-          gp += expected_trap == 13;
-          ud += expected_trap == 6;
+          overlong += prefix_overflow;
+          pf += trap == 14;
+          gp += trap == 13;
+          ud += trap == 6;
           if (!good) {
             ++mismatch;
             printf("mismatch kind=%u prefixes=%u form=%u available=%u "
@@ -121,12 +134,16 @@ int main(int argc, char **argv) {
                    "fault_delta=%ld expected_trap=%u\n",
                    kind, prefix_count, form, available, (int)signal_number,
                    trap, error, (long)(rip - (uintptr_t)start),
-                   (long)(fault_address - (uintptr_t)(memory + page_size)),
-                   expected_trap);
+                   (long)(fault_address - (uintptr_t)guard), expected);
           }
         }
-  printf("profile=%u total=%u mismatches=%u pf=%u gp=%u ud=%u\n",
-         expected_profile, total, mismatch, pf, gp, ud);
+      }
+    }
+  }
+  printf("profile=%u total=%u overlong=%u mismatches=%u pf=%u gp=%u ud=%u\n",
+         expected_profile, total, overlong, mismatch, pf, gp, ud);
   munmap(memory, (size_t)page_size * 2);
-  return mismatch || total != (repeated_count + mixed_count) * 14 * 12;
+  const unsigned patterns = repeated_count + mixed_count;
+  return mismatch || total - overlong != patterns * 14 * 12 ||
+         overlong != patterns * (18 + 19);
 }

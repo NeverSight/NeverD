@@ -95,6 +95,9 @@ struct X64PagedExecutionOptions {
   /// Retained across instruction/event stops and their secondary faults.
   X86DescriptorCanonicalityProfile EventDescriptorCanonicality =
       kX64PagedEventDescriptorCanonicality;
+  /// Target delivers #GP(0) after 15 authenticated prefix/escape bytes.
+  /// Independent of how the CPU fetches a UD0 whose opcode fits.
+  bool PrefixLengthFaultAfter15Bytes = false;
 };
 
 /// A committed near CALL/RET, captured before its post-instruction event.

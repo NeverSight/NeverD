@@ -39,7 +39,6 @@
 #include "neverd/decode/X86/X86TransactionEncoding.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
-#include "neverd/ir/X86/X86UndefinedOpcodeRules.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/X86/X86SystemState.h"
 #include "neverd/ir/low/LowScalarConstant.h"
@@ -1386,12 +1385,14 @@ buildInstruction(SpecializationInstruction Instruction,
                    Instruction.Ops.size() == 1 &&
                    eventIntrinsic(Instruction.Ops.front(), Intrinsic::Ud2, 1);
   const bool Ud0 =
+      Options.PagedMemory && Instruction.ProfileProjection ==
+                                 InterpreterProfileProjection::X64PagedUD0;
+  const bool PrefixLengthFault =
       Options.PagedMemory &&
-      x86PagedCode64UD0OpcodeOffset(Instruction.NativeBytes.data(),
-                                    Instruction.NativeBytes.size()) &&
-      Instruction.Ops.size() == 1 &&
-      eventIntrinsic(Instruction.Ops.front(), Intrinsic::Ud0, 1);
-  const bool UndefinedInstruction = Ud0 || Ud2 || ObservedXbegin;
+      Instruction.ProfileProjection ==
+          InterpreterProfileProjection::X64PagedPrefixLengthFault;
+  const bool FaultingInstruction =
+      Ud0 || PrefixLengthFault || Ud2 || ObservedXbegin;
   // These unprefixed encodings have the same meaning in compatibility mode.
   // REX-prefixed forms cannot share that entry domain: there REX is an opcode.
   const bool CompatibilityFastEntry =
@@ -1495,7 +1496,7 @@ buildInstruction(SpecializationInstruction Instruction,
       Instruction.UndefinedEffects.Effects.empty();
   if ((!FarPointer && !SegmentMove && !Repeated && !PortIO && !UserInterrupt &&
        !FredReturn && !Vmrun && !Mpx && !Hypercall && !Snp && !Hle &&
-       !SmmReturn && !SgxTransfer && !UndefinedInstruction && !DebugTrap &&
+       !SmmReturn && !SgxTransfer && !FaultingInstruction && !DebugTrap &&
        !DebugRegister &&
        (Instruction.ProfileProjection != InterpreterProfileProjection::None ||
         (!OwnedFrameReturn && Instruction.UndefinedEffects.Coverage !=
@@ -1503,7 +1504,7 @@ buildInstruction(SpecializationInstruction Instruction,
       (Instruction.Origin.Control == LowInstructionControl::Terminator &&
        !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn && !Interrupt &&
        !UserInterrupt && !FredReturn && !Vmrun && !Hypercall && !Snp && !Hle &&
-       !SmmReturn && !SgxTransfer && !UndefinedInstruction && !DebugTrap &&
+       !SmmReturn && !SgxTransfer && !FaultingInstruction && !DebugTrap &&
        !DebugRegister))
     RequireNative("instruction requires an explicit native environment");
   if (Instruction.UndefinedEffects.Effects.size() >
@@ -1567,7 +1568,7 @@ buildInstruction(SpecializationInstruction Instruction,
                      (Op.Opcode == NdOp::INTRINSIC && !Alignment) ||
                      Op.MemoryOrdering != NdMemoryOrdering::None;
     if (!Timestamp && !Sysret && !Sysenter && !Sysexit && !Iret && !FarReturn &&
-        !Interrupt && !SmmReturn && !SgxTransfer && !UndefinedInstruction &&
+        !Interrupt && !SmmReturn && !SgxTransfer && !FaultingInstruction &&
         !PortIO && !DebugTrap && !DebugRegister &&
         !supportedOperation(Op, Options, Division)) {
       std::string Detail = "unsupported continuation operation: ";
@@ -1596,7 +1597,8 @@ buildInstruction(SpecializationInstruction Instruction,
   if (Options.PagedMemory) {
     // Audited MOV CR8 has one register operand and no data memory. Its
     // undefined-effects certificate already checked the original encoding.
-    PagedRoles = (Repeated || PortIO || DebugRegister || PagedTaskPriority || Ud0)
+    PagedRoles = (Repeated || PortIO || DebugRegister || PagedTaskPriority ||
+                  Ud0 || PrefixLengthFault)
                      ? detail::X64PagedMemoryRoles{.Supported = true}
                      : detail::x64PagedMemoryRoles(Instruction);
     if ((!PagedRoles.Supported && !Iret && !FarReturn && !FarPointer &&
@@ -1606,7 +1608,7 @@ buildInstruction(SpecializationInstruction Instruction,
           "paged execution requires a scalar instruction commit model");
     for (const auto &Op : Instruction.Ops) {
       if (Op.Opcode == NdOp::INTRINSIC && !divisionPreconditionIntrinsic(Op) &&
-          !alignmentIntrinsic(Op) && !UndefinedInstruction && !Interrupt &&
+          !alignmentIntrinsic(Op) && !FaultingInstruction && !Interrupt &&
           !Iret && !FarReturn && !FarPointer && !SegmentMove && !PortIO &&
           !DebugTrap && !PagedTaskPriority &&
           !(Options.PagedDebug &&
@@ -1642,7 +1644,7 @@ buildInstruction(SpecializationInstruction Instruction,
   // virtualizing their writes must not turn a native abort into a commit.
   Result.SupportsRtmBody =
       !Options.PagedMemory && !Result.RequiresNativeExecution &&
-      !UndefinedInstruction &&
+      !FaultingInstruction &&
       Instruction.ProfileProjection == InterpreterProfileProjection::None &&
       Kind <= Exit::Return &&
       std::all_of(Instruction.Ops.begin(), Instruction.Ops.end(),
@@ -1888,8 +1890,8 @@ buildInstruction(SpecializationInstruction Instruction,
     detail::X64ContinuationMpx<Writer>(W).validate();
   if (Result.RequiresNativeExecution) {
     W.leave(Exit::NativeInstruction);
-  } else if (UndefinedInstruction) {
-    W.fault(6);
+  } else if (FaultingInstruction) {
+    W.fault(PrefixLengthFault ? 13 : 6);
   } else if (Hle) {
     detail::emitX64HleStep(W, *Hle, Instruction.Fallthrough.Address);
   } else if (Snp) {
@@ -2174,8 +2176,8 @@ buildX64ContinuationSource(const BinaryImage &Image,
        !Unique.contains(Options.ObservedXbeginFault->Address)))
     return invalid(
         "observed XBEGIN requires its selected successful-RAM V6 site");
-  auto Instructions = readBinaryX64ContinuationInstructions(Image, Addresses,
-                                                            Options.PagedDebug);
+  auto Instructions =
+      readBinaryX64ContinuationInstructions(Image, Addresses, Options);
   if (!Instructions)
     return Instructions.takeError();
   uint64_t Work = Addresses.size();
