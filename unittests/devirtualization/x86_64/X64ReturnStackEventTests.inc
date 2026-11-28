@@ -153,11 +153,11 @@ STOP(native,4,0)
     const auto File = tmpFile("return-stack.c");
     const auto IR = tmpFile("return-stack.ll");
     std::ofstream(File) << Source << Probes;
-    const auto Built =
-        exec(NEVERD_TEST_CLANG,
-             {"-std=c11", "-O2", "-mllvm", "-inline-threshold=10000", "-mllvm",
-              "-inline-cold-callsite-threshold=10000", "-S", "-emit-llvm",
-              File.string(), "-o", IR.string()});
+    const auto Built = exec(NEVERD_TEST_CLANG,
+                            {"-std=c11", "-Werror=unused-value", "-O2",
+                             "-mllvm", "-inline-threshold=10000", "-mllvm",
+                             "-inline-cold-callsite-threshold=10000", "-S",
+                             "-emit-llvm", File.string(), "-o", IR.string()});
     ASSERT_TRUE(Built.ok()) << Built.err;
     llvm::LLVMContext Context;
     llvm::SMDiagnostic Diagnostic;
@@ -242,10 +242,10 @@ int proof_register_transfer(uint64_t rsp, uint64_t gs, uint64_t kernel) {
         s.GSBase!=kernel || s.KernelGSBase!=gs;
 }
 )C";
-      const auto Built =
-          exec(NEVERD_TEST_CLANG,
-               {"-std=c11", "-O2", "-mllvm", "-inline-threshold=10000", "-S",
-                "-emit-llvm", File.string(), "-o", IR.string()});
+      const auto Built = exec(NEVERD_TEST_CLANG,
+                              {"-std=c11", "-Werror=unused-value", "-O2",
+                               "-mllvm", "-inline-threshold=10000", "-S",
+                               "-emit-llvm", File.string(), "-o", IR.string()});
       ASSERT_TRUE(Built.ok()) << Built.err;
       llvm::LLVMContext Context;
       llvm::SMDiagnostic Diagnostic;
