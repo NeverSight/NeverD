@@ -58,3 +58,24 @@ TEST(ModelArtifact, RejectsInvalidOptionsBeforeOpeningInput) {
   EXPECT_EQ(R->getInteger("exit_code"), 1);
   EXPECT_EQ(R->getString("error"), "expected an unsigned integer");
 }
+
+TEST(ModelArtifact, ChecksCancellationAtEachJSONEvent) {
+  // Object start, key, array start, number, object start, key, boolean,
+  // object end, array end and object end.
+  const char *Settings = R"({"unknown":[1,{"nested":true}]})";
+  for (unsigned StopAt = 1; StopAt <= 11; ++StopAt) {
+    unsigned Calls = 0;
+    auto Result = llvm::json::parse(neverd::model::scanJSON(
+        "unopened", Settings, [&] { return ++Calls == StopAt; }));
+    ASSERT_TRUE(bool(Result));
+    auto *Report = Result->getAsObject();
+    ASSERT_NE(Report, nullptr);
+    if (StopAt <= 10) {
+      EXPECT_EQ(Calls, StopAt);
+      EXPECT_EQ(Report->getString("error"), "cancelled");
+    } else {
+      EXPECT_EQ(Calls, 10u);
+      EXPECT_EQ(Report->getString("error"), "unknown model scan option");
+    }
+  }
+}
