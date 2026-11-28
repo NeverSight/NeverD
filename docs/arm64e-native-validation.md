@@ -2896,6 +2896,19 @@ and EL1 under all four EnPACM settings (1,344 calls per export).
 [Arm FVP, M4 export](https://github.com/gmh5225/test_mac_intel/actions/runs/46110737909) ·
 [Arm FVP, hosted export](https://github.com/gmh5225/test_mac_intel/actions/runs/46113033008)
 
+The M4 replay recovered all 32 valid publications previously refused in the
+original 64 attempts. It rejected all four cases with an overwritten slot. Across IA and IB, the expanded regression published
+92 images at O0 and O2, checked 410 unwind rows and rejected
+34 contradictory inputs. It resolved 8 stack-only signing PCs and checked
+24 authentication exits in source and published images.
+The hosted macOS Release run passed 367 tests with zero skips. For each
+Release export the Arm model executed 138 bodies in 2,400 calls. A separate output
+slot verified which authentication exit ran for each signing path.
+[Qualification record](evidence/arm64e-shared-signing-carriers-2026-11-28.json) ·
+[macOS Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46130085765) ·
+[Arm model, M4 export](https://github.com/gmh5225/test_mac_intel/actions/runs/46133896744) ·
+[Arm model, hosted export](https://github.com/gmh5225/test_mac_intel/actions/runs/46133780808)
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,
