@@ -28,6 +28,8 @@ TEST_F(X86LegacyBranchDebugTest, OriginalProtectedBranchSelection) {
     using Mode = neverd::test::X86BranchDebugOracle::Mode;
     ASSERT_NO_FATAL_FAILURE(
         CPU.initialize(Code16 ? Mode::Code16 : Mode::Code32));
+    if (!CPU.tracePermitted())
+      GTEST_SKIP() << CPU.TracePermissionDeniedReason;
     BlockSteps = CPU.stepsByBlocks();
     ASSERT_FALSE(HasFatalFailure());
     for (const auto &Case : neverd::test::x86BranchDebugCases(Code16))
