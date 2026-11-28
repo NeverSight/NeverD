@@ -468,6 +468,7 @@ extern llvm::cl::opt<bool> SymbolicExpressions;
 extern llvm::cl::opt<std::string> SafetySinks;
 extern llvm::cl::opt<std::string> SafetySources;
 extern llvm::cl::opt<neverd_scan_analyzers> ScanAnalyzers;
+extern llvm::cl::opt<bool> ScanDataPtr;
 extern llvm::cl::opt<unsigned> SafetyMaxPaths;
 extern llvm::cl::opt<unsigned> SafetyMaxSteps;
 extern llvm::cl::opt<unsigned> SafetyMaxLoop;

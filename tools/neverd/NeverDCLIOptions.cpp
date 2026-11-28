@@ -264,7 +264,7 @@ cl::SubCommand DashboardCmd("dashboard", "Show binary overview dashboard");
 cl::SubCommand SigsCmd("sigs", "Apply FLIRT signatures to binary");
 cl::SubCommand SymbolicCmd("sym-explore",
                            "Explore bounded symbolic paths through a function");
-cl::SubCommand ScanCmd("scan", "Run the native memory-safety scan");
+cl::SubCommand ScanCmd("scan", "Scan native memory safety or data references");
 cl::SubCommand
     ConcolicCmd("concolic",
                 "Generate replay-verified LowIR conditional-branch seeds");
@@ -1403,6 +1403,12 @@ cl::opt<bool> SymbolicExpressions(
 //===----------------------------------------------------------------------===//
 // Memory-safety scan options
 //===----------------------------------------------------------------------===//
+
+cl::opt<bool>
+    ScanDataPtr("data-ptr",
+                cl::desc("Count code references to the data section and "
+                         "its relocated pointers to non-executable data"),
+                cl::sub(ScanCmd));
 
 cl::opt<neverd_scan_analyzers>
     ScanAnalyzers("analyzer", cl::desc("Memory-safety analyses to run"),

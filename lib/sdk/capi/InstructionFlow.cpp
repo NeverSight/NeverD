@@ -931,7 +931,8 @@ bool decodeFunctionReferences(
     const ReferenceImageIndex &ImageIndex,
     llvm::function_ref<void(size_t, va_t, llvm::StringRef,
                             const InstructionFlow &, unsigned, InstructionMode)>
-        Visit) {
+        Visit,
+    std::vector<FunctionDecodeStatus> *Coverage = nullptr) {
   struct Instruction {
     va_t Address, Next, CodeReference;
     InstructionMode Mode;
@@ -1011,7 +1012,7 @@ bool decodeFunctionReferences(
              !X86 || Undefined.Coverage == LowUndefinedCoverage::Complete});
         S.Ops.insert(S.Ops.end(), Ops.begin(), Ops.end());
       },
-      {}, nullptr, &NoReturnTargets,
+      {}, Coverage, &NoReturnTargets,
       [&](size_t Index, const FunctionDecodeStatus &Status) {
         auto &S = Sweeps[Index];
         if (S.DirectOnly || S.Instructions.empty())
@@ -1201,8 +1202,10 @@ bool decodeFunctionReferences(
     const Session &S, const FunctionPage &Page,
     llvm::function_ref<void(size_t, va_t, llvm::StringRef,
                             const InstructionFlow &, unsigned, InstructionMode)>
-        Visit) {
-  return decodeFunctionReferences(S.Img, Page, S.referenceImageIndex(), Visit);
+        Visit,
+    std::vector<FunctionDecodeStatus> *Status) {
+  return decodeFunctionReferences(S.Img, Page, S.referenceImageIndex(), Visit,
+                                  Status);
 }
 
 std::optional<DataAccessWidths>

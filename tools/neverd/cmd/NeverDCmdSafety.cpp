@@ -46,14 +46,8 @@ neverd_safety_options makeOptions() {
   return Options;
 }
 
-// Print the report to -o or stdout, and derive the exit code from its verdict
-// field.  A malformed report is treated as a failure.
-int emit(const char *Report) {
-  if (!Report) {
-    WithColor::error() << "safety analysis produced no report\n";
-    return 1;
-  }
-
+// A malformed safety verdict is a failure.
+int safetyExitCode(StringRef Report) {
   int Code = 1;
   if (Expected<json::Value> Parsed = json::parse(Report)) {
     if (const json::Object *Root = Parsed->getAsObject()) {
@@ -71,35 +65,50 @@ int emit(const char *Report) {
   } else {
     consumeError(Parsed.takeError());
   }
+  return Code;
+}
 
+int emit(const char *Report, int Code) {
+  scope_exit FreeReport([&] { neverd_free_string(Report); });
   if (!OutputFile.empty()) {
     std::error_code EC;
     raw_fd_ostream OS(OutputFile.getValue(), EC);
     if (EC) {
-      WithColor::error() << "cannot open safety output file: "
+      WithColor::error() << "cannot open scan output file: "
                          << OutputFile.getValue() << ": " << EC.message()
                          << "\n";
-      neverd_free_string(Report);
       return 1;
     }
     OS << Report << "\n";
     OS.flush();
     if (OS.has_error()) {
-      WithColor::error() << "cannot write safety output file: "
+      WithColor::error() << "cannot write scan output file: "
                          << OutputFile.getValue() << "\n";
-      neverd_free_string(Report);
+      OS.clear_error();
       return 1;
     }
   } else {
     outs() << Report << "\n";
   }
-  neverd_free_string(Report);
   return Code;
 }
 
 } // namespace
 
 int runScan(neverd_session_t Sess) {
+  if (ScanDataPtr &&
+      (ScanAnalyzers.getNumOccurrences() || SafetySinks.getNumOccurrences() ||
+       SafetySources.getNumOccurrences() ||
+       SafetyMaxPaths.getNumOccurrences() ||
+       SafetyMaxSteps.getNumOccurrences() ||
+       SafetyMaxLoop.getNumOccurrences() ||
+       SafetyMaxCallDepth.getNumOccurrences() ||
+       SafetyMaxSummaryIterations.getNumOccurrences() ||
+       SafetySolverConflicts.getNumOccurrences())) {
+    WithColor::error()
+        << "--data-ptr cannot be combined with memory-safety options\n";
+    return 1;
+  }
   static std::atomic_flag Interrupted;
   Interrupted.clear(std::memory_order_relaxed);
   sys::SetInterruptFunction(
@@ -113,7 +122,16 @@ int runScan(neverd_session_t Sess) {
   Options.cancel = [](void *) -> int {
     return Interrupted.test(std::memory_order_relaxed);
   };
-  return emit(neverd_session_scan_json(Sess, &Options));
+  const char *Report = ScanDataPtr ? neverd_session_data_ptr_scan_json(
+                                         Sess, Options.cancel, Options.context)
+                                   : neverd_session_scan_json(Sess, &Options);
+  if (!Report) {
+    const std::string Error = takeLastError(Sess);
+    WithColor::error() << (Error.empty() ? "scan produced no report" : Error)
+                       << "\n";
+    return 1;
+  }
+  return emit(Report, ScanDataPtr ? 0 : safetyExitCode(Report));
 }
 
 } // namespace neverd::cli
