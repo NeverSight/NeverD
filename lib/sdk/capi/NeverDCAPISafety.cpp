@@ -115,20 +115,24 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
   PO.LiftMode = true;
   PO.EmitLiftedLLVM = false;
   if (Request.Selection != safety::ScanSelection::Hunt &&
-      isMIPSN32(S->Img.Arch) && S->Img.MIPS) {
-    for (const auto &[Slot, Required] : S->Img.MIPS->RequiredImportVersions) {
-      const auto *Import = S->Img.findImportAt(Slot);
-      if (!Import || Import->IATAddr != Slot ||
-          Required.Library != "libc.so.6" || Required.Version != "GLIBC_2.0" ||
-          !llvm::is_contained(S->Img.DynInfo.NeededLibs, Required.Library))
+      isMIPSN32(S->Img.Arch) && S->Img.MIPS &&
+      !S->Img.MIPS->RequiredImportVersions.empty() &&
+      llvm::is_contained(S->Img.DynInfo.NeededLibs, "libc.so.6")) {
+    const auto &Versions = S->Img.MIPS->RequiredImportVersions;
+    for (const auto &Import : S->Img.Imports) {
+      if (Import.Name != "malloc" && Import.Name != "free")
         continue;
-      const auto *Sink = Cat.matchSink(Import->Name);
+      const auto V = Versions.find(Import.IATAddr);
+      if (V == Versions.end() || V->second.Library != "libc.so.6" ||
+          V->second.Version != "GLIBC_2.0")
+        continue;
+      const auto *Sink = Cat.matchSink(Import.Name);
       if (!Sink)
         continue;
-      if (Import->Name == "malloc" && Sink->Kind == safety::SinkKind::Alloc)
-        PO.StaticAllocatorSlots.insert(Slot);
-      if (Import->Name == "free" && Sink->Kind == safety::SinkKind::Free)
-        PO.StaticReleaseSlots.insert(Slot);
+      if (Import.Name == "malloc" && Sink->Kind == safety::SinkKind::Alloc)
+        PO.StaticAllocatorSlots.insert(Import.IATAddr);
+      else if (Import.Name == "free" && Sink->Kind == safety::SinkKind::Free)
+        PO.StaticReleaseSlots.insert(Import.IATAddr);
     }
   }
   S->applyAnalysisOptions(PO);
