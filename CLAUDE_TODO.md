@@ -1,26 +1,28 @@
 # CLAUDE_TODO
 
 Open work left by the jump-table and CI campaign, as of 2026-11-28 (dev at
-`e71c00e20e`). Items are ordered by what to do next.
+`94fbde2240`). Items are ordered by what to do next.
 
 ## 1. Next action: CI on the current dev head
 
-- CI run `46089267845` was dispatched on `e0f1a7d18a`, before the last three
-  fixes landed. When it ends, dispatch once more on the dev head:
+- CI run `46089267845` (on `e0f1a7d18a`) was still running its Linux job when
+  this was written. Its Windows job failed only in `ELFDynamicRelocations.def`
+  (C2059, fixed by `4f54948cab`); its macOS job ran out of runner disk
+  (section 3).
+- When it ends, dispatch once more on the dev head:
   `git push -f origin <head>:refs/heads/ci/return-contracts`, then
   `gh workflow run ci.yml --repo NeverSight/NeverD --ref ci/return-contracts -f use_prebuilt_llvm=true`.
   Run one CI at a time and do not cancel a running one.
 - That run is the first to cover on CI:
-  - `e0f1a7d18a`: the x86-64 tail-frame guard checks stack offsets with
-    `llvm::AddOverflow`/`llvm::SubOverflow` (MSVC has no
-    `__builtin_*_overflow`). Run `46089267845` already confirmed that this file
-    now builds on Windows.
   - `4f54948cab`: `ELFDynamicRelocations.def` no longer forwards `__VA_ARGS__`
     into the three-field `NEVERD_ELF_SYMBOL_VALUE`; MSVC's traditional
-    preprocessor passed it on as one argument (C4003 + C2059). This was the
-    Windows build error in run `46089267845`.
+    preprocessor passed it on as one argument (C4003 + C2059).
   - `f63f4f96f2` and `aa4e382e91`: dispatch by value through own-label relative
-    tables (section 2).
+    tables (section 4).
+  - `d732960877`: Win64 keeps `%rsi` and `%rdi` across calls for own-label table
+    reads and the kept-register filter.
+  - `94fbde2240`: a table jump whose every label reads a kept register keeps its
+    whole table (gimli `FileEntry::clone`).
 - Find a Windows build error with
   `gh api repos/NeverSight/NeverD/actions/jobs/<job>/logs | grep -E 'FAILED:|error C[0-9]+'`.
   The build runs with `-k 20`, so the step fails only at its end, about 2 h 40 min
@@ -30,10 +32,10 @@ Open work left by the jump-table and CI campaign, as of 2026-11-28 (dev at
 
 ## 2. Jump tables: unresolved dispatches left
 
-After `aa4e382e91` the coverage set (545 items) still has 286 unresolved
-indirect jumps (`indirect targets not proved` outside a dispatch's default
-arm): 260 AArch64, 24 x86-64 Linux Rust, 2 Go amd64. The census (9 binaries)
-has 3, all in pcre2.
+After `94fbde2240` the coverage set (545 items) has 278 unresolved indirect jumps
+(`indirect targets not proved` outside a dispatch's default arm): 260
+AArch64, 16 x86-64 Linux Rust, 2 Go amd64. The census (9 binaries) has 3, all
+in pcre2.
 
 ### 2.1 AArch64 compact tables (260 jumps)
 
@@ -53,11 +55,13 @@ has 3, all in pcre2.
   unguarded ones. A dispatch would compare the zero-extended slot with
   `(label - anchor) >> 2`.
 
-### 2.2 Lost-validated tables (pcre2 0x61BDF, 0x61C0C, 0x61D07; Rust 0x16A27, 0x16BA4)
+### 2.2 Lost-validated tables (pcre2 0x61BDF, 0x61C0C, 0x61D07; Rust x2 per image)
 
 - These jumps published a validated table and lost it in final revalidation,
   so `recoverOwnLabelTableBranches` skips them
-  (`LostValidatedJumpTableBranches`).
+  (`LostValidatedJumpTableBranches`). They are all 16 x86-64 Rust jumps left
+  (0x16A27 and 0x16BA4 in `rust_eh_probe-x86_64-unknown-linux-gnu-abort-o2`,
+  the same pair at other addresses in the other seven images).
 - Letting them dispatch by value resolves all of pcre2 (16 dispatches, 0
   unresolved) but breaks
   `JTE_X86_64.SecondMachineBehindAnOpenEntryDispatchStaysUnreachable`, the
@@ -66,15 +70,7 @@ has 3, all in pcre2.
   table). It was reverted; this needs a decision, or a resolver fix for why
   the validation is lost.
 
-### 2.3 Kept-register filter drops a real dispatch (x86-64 Rust 0x3E8E4)
-
-- gimli `FileEntry::clone` dispatches on two nested enums. One path copies the
-  caller's `%r15` into an unused field, a real read of a callee-saved register
-  before any write, so `dispatchUnprovedBranchesByValue` drops every edge of
-  the first dispatch. Zero idioms are not the cause: `xor r, r` and `sub r, r`
-  already lift to `COPY 0`.
-
-### 2.4 Absolute 8-byte tables (Go 1.20/1.21 linux-amd64, 2 jumps)
+### 2.3 Absolute 8-byte tables (Go 1.20/1.21 linux-amd64, 2 jumps)
 
 - Non-PIE Go uses absolute slots (`jmp *table(,%rax,8)`). Support existed in a
   draft of `f63f4f96f2` and resolved both, but it was removed for lack of a
@@ -82,13 +78,20 @@ has 3, all in pcre2.
   fixture, before it comes back. Selector: the jump value itself, with the
   labels' addresses as case keys; the existing value-dispatch slot mirror
   keeps relocated slots numeric.
+- When it lands, the kept-register filter and `TableReadState` must follow
+  Go's ABIInternal instead of System V: Go passes integer arguments in RAX,
+  RBX, RCX, RDI, RSI and R8-R11 and keeps `g` in R14, so the System V list
+  would drop real Go labels that read `%rbx` or `%r14`.
 
-### 2.5 Windows x64 callee-saved registers
+### 2.4 Observation: a case that saves a kept register itself
 
-- `getTargetRegInfo(Arch::X64).CalleeSaveRegs` is the System V list (no
-  `%rsi`/`%rdi`). On PE x64 the kept-register filter therefore does not filter
-  reads of `%rsi`/`%rdi`, and the hoisted-base propagation forgets them across
-  calls (conservative). A per-ABI list would fix both.
+- A shrink-wrapped prologue inside one case (`push %rbx` after the dispatch)
+  reads a kept register before writing it, so unless every label does the
+  same, that case loses its edge and traps. A probe that reported every
+  dropped edge (an env-gated `fprintf` in a `tools/shadow.py` copy, linked
+  with `tools/qlib.py`) found none in the corpus, census or coverage set: the
+  only register drops were gimli's, now kept. LLVM does not shrink-wrap for
+  Windows CFI, and on System V it rarely moves a save below a table dispatch.
 
 ## 3. Decisions waiting on the maintainer
 
@@ -100,7 +103,8 @@ has 3, all in pcre2.
   `ext_real(p, q)` in `krpass.c` renders as `ext_real()`. In newly decoded
   code, registers set on only some paths still become guarded arguments
   (`v_known ? v : trap`); sqlite `parse.o` gained 371 such markers when its
-  parser was decoded.
+  parser was decoded. gimli `FileEntry::clone` now shows the same guard where
+  it stores an unused payload from `%r15` and `%r11`.
 - CI infrastructure: Linux and Windows jobs hit GitHub's 6 h job cap before
   the main test profile finishes, and the macOS runner runs out of disk
   (`ld: write() failed, errno=28`) while linking the test binaries.
@@ -117,19 +121,29 @@ has 3, all in pcre2.
   retry proofs whose evidence ran out and drop their incompleteness markers.
 - `TableReadState` evaluates a jump's single-predecessor chain
   (`kMaxOwnLabelTableReadBlocks`), seeded by `blockEntryConstants` (forward
-  constant propagation of whole registers; a call keeps only callee-saved
-  registers). It finds `target = base + sext(load32(base + 4 * i))` in a
-  read-only, non-executable section.
+  constant propagation of whole registers; a call keeps only what
+  `TargetRegInfo::isCallPreserved` keeps under the image's `abiFormat()`, so
+  Win64 also keeps `%rsi` and `%rdi`). It finds
+  `target = base + sext(load32(base + 4 * i))` in a read-only, non-executable
+  section.
 - Labels are the leading slots that are linear-sweep instruction starts and
   `isOwnedInteriorTarget`. Rounds continue up to `kMaxOwnLabelTableRounds`;
   after each round every dispatch is re-read on the grown graph and withdrawn
   for good if its table read changed.
+- `dispatchUnprovedBranchesByValue` keeps an edge only where every kept
+  register the label's code reads before writing was written on every path
+  to the jump. A table jump whose every label fails that test keeps its whole
+  table, and the registers it read stop counting for the function's table
+  jumps (`Own`).
 - The selector is the slot's `LOAD` (`OwnLabelTableReads`); case keys are
   `(int32)(label - base)`. That keeps the comparison correct in the recompiled
   program, where the table's address differs. The LLVM `emitValueDispatch`
   takes the selector from the switch selector plan when it is not the jump's
   own value; HighC already did.
 - Tests: `JTE_X86_64.AnUnboundedOwnLabelTableDispatchesByValue`
-  (`unittests/lift/x86_64/test_jumptable_own_label_dispatch.s`) and the round
+  (`unittests/lift/x86_64/test_jumptable_own_label_dispatch.s`, including
+  `jt_own_join`), `JTE_X86_64.AWin64OwnLabelDispatchKeepsRsiAndRdi`
+  (`test_jumptable_own_label_win64.s`, a COFF object, so the test hands the
+  builder the function entries the way the lift pipeline does), and the round
   trips `x64swx_enumbyte{0,3,5}` and `x64swx_enumload` in
   `NeverDSwitchXformTests`.
