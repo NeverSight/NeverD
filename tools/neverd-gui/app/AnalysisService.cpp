@@ -751,8 +751,15 @@ void AnalysisPool::prefetchSource(quint64 address, bool listedOnly) {
        listedOnly ? SourceDefaults::options(representation) : QJsonObject{}},
       {"offset", 0},
       {"limit", 1}};
-  if (listedOnly)
+  if (listedOnly) {
     payload.insert(QStringLiteral("listed_entry_only"), true);
+    // Prepare the page the source view opens when navigation establishes an
+    // entry.
+    payload["limit"] = ::neverd::limits::gui::kCodeViewPageLines;
+    if (CodeView::isSource(representation))
+      payload["whole_document_limit"] =
+          ::neverd::limits::gui::kCodeViewWholeSourceLines;
+  }
   lane.service->queries().subscribe({QStringLiteral("decompile"), payload},
                                     &preparationOwner_,
                                     [this, serial](const QJsonObject &) {
