@@ -1035,6 +1035,13 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
         }
         if (EndsInNoReturnTail(Op))
           break;
+        // A jump retained by the tail-frame guard has no synthetic RETURN.
+        // Without a local successor, this path cannot account for the PC
+        // pushed by the interior call or for the parent's return slot.
+        if (Op.Opcode == NdOp::INDIR_BR && Func.Blocks[B].Succs.empty()) {
+          Unproven = Op.Addr;
+          break;
+        }
         const bool Replayed = Op.Seq == 0 && ReplayedReturns.count(Op.Addr);
         if (Op.Opcode == NdOp::RETURN || Replayed) {
           auto SP = S.find(StackPointerKey);
