@@ -2954,6 +2954,30 @@ the disabled-feature control for every inventory.
 [M4 export on Arm FVP](https://github.com/gmh5225/test_mac_intel/actions/runs/46143293586) ·
 [Hosted export on Arm FVP](https://github.com/gmh5225/test_mac_intel/actions/runs/46147038399)
 
+#### Cross-block copies, stack reuse and three authentication exits
+
+Two signing entries feed a diamond of full-width register copies, followed by
+three independently selectable authentication exits. The fixtures cover a loop
+backedge, selects with separately produced operands, and a backup modifier
+that survives the release of only part of a frame. After a full frame release,
+a later allocation requires a fresh store from a proven source. At the third
+exit an interrupted-stack check puts the other entry's valid signing PC into
+stale cells. The recovered row must select a cell that still belongs to the
+interrupted path.
+
+The unwinder intersects the facts of both possible CSEL operands. The
+publisher follows each operand back to its signing instruction on the same
+incoming path. A flag-setting arithmetic or logical copy preserves the source
+address for ordinary uses and computes NZCV. When multiple exits share a
+scratch register, the last preparation reaching each exit must match its LR.
+A physical clobber makes that scratch unavailable on the affected path.
+
+For multi-exit publication the forward analysis also checks the live LR before
+each contributing signer, after the frame dataflow has converged. A CFI rule
+may describe a separately saved return address. The input is refused when the
+live register at a signer has lost the caller's return or already holds a
+signature. Each other exit retains its own independently proved unwind row.
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,

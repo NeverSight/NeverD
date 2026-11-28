@@ -668,12 +668,16 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
     if (const auto R = reg(Ops[0].reg); R && *R < kSP)
       S.Registers[*R].Constant =
           wide(Ops[0].reg) ? uint64_t(Ops[1].imm) : uint32_t(Ops[1].imm);
-  if (const auto Copy = neverd::aarch64::fullWidthRegisterCopy(I)) {
-    const auto Dest = *reg(Copy->first), Src = *reg(Copy->second);
-    S.Registers[Dest] = Before.Registers[Src];
-    if (Dest == kLR && Src == kLR)
+  if (const auto Copy = neverd::aarch64::fullWidthRegisterTransfer(I)) {
+    const auto Dest = *reg(Copy->Destination), First = *reg(Copy->First),
+               Second = *reg(Copy->Second);
+    S.Registers[Dest] = Before.Registers[First];
+    if (First != Second)
+      intersect(S.Registers[Dest], Before.Registers[Second]);
+    if (Dest == kLR && First == kLR && Second == kLR)
       S.Modifiers = Before.Modifiers;
-    if (Dest < kLR && (Before.Modifiers.Registers & (uint32_t(1) << Src)))
+    const auto Sources = (uint32_t(1) << First) | (uint32_t(1) << Second);
+    if (Dest < kLR && (Before.Modifiers.Registers & Sources) == Sources)
       S.Modifiers.Registers |= uint32_t(1) << Dest;
   }
   if ((I.Id == AARCH64_INS_ADD || I.Id == AARCH64_INS_SUB) && Ops.size() == 3 &&
@@ -992,7 +996,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
     const BinaryImage &Image, const ExceptionFunction &Function,
     llvm::ArrayRef<va_t> Roots, const AArch64UnwindRecoveryLimits &Limits,
     const AArch64ClassicReturnCFI *Source = nullptr,
-    AArch64FrameAccesses *Accesses = nullptr) {
+    AArch64FrameAccesses *Accesses = nullptr,
+    llvm::SmallVectorImpl<va_t> *UnsignedLRSites = nullptr) {
   const auto Start = Function.CodeRange.Begin;
   const uint64_t Size = Function.Dwarf ? Function.Dwarf->AddressRange
                                        : Function.Compact->CodeRange.size();
@@ -1272,6 +1277,18 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       Queue(Index + 1, After);
     }
   }
+  if (UnsignedLRSites) {
+    llvm::erase_if(*UnsignedLRSites, [&](va_t PC) {
+      const auto Offset = PC - Start;
+      if (Offset >= Size || Offset % neverd::aarch64::kInsnSize)
+        return true;
+      const State *At = StateAt(Offset / neverd::aarch64::kInsnSize);
+      if (!At)
+        return true;
+      const auto &LR = At->Registers[kLR].Return;
+      return !LR || LR->Kind != AArch64RASigningKind::Unsigned;
+    });
+  }
   // At an unreachable word only a declared CFI transition can change the
   // row. End every reached run explicitly so a gap never inherits its LR.
   llvm::SmallVector<size_t> Boundaries;
@@ -1448,6 +1465,15 @@ recoverDarwinAArch64Unwind(const BinaryImage &Image,
                            const ExceptionFunction &Function,
                            const AArch64UnwindRecoveryLimits &Limits,
                            AArch64FrameAccesses *Accesses) {
+  return recoverDarwinAArch64Unwind(Image, Function, Limits, Accesses, nullptr);
+}
+
+llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
+recoverDarwinAArch64Unwind(const BinaryImage &Image,
+                           const ExceptionFunction &Function,
+                           const AArch64UnwindRecoveryLimits &Limits,
+                           AArch64FrameAccesses *Accesses,
+                           llvm::SmallVectorImpl<va_t> *UnsignedLRSites) {
   const auto Range = Function.CodeRange;
   if (!Image.isArm64e() || Range.End <= Range.Begin)
     return fail(kProfile);
@@ -1463,15 +1489,19 @@ recoverDarwinAArch64Unwind(const BinaryImage &Image,
     const auto Query = queryAArch64UnwindSigning(Image, Function, Range.Begin);
     if (implicitProfile(Image, Function, Query)) {
       auto Rows = recoverImplicitFrame(Image, Function, Roots, Limits, nullptr,
-                                       Accesses);
+                                       Accesses, UnsignedLRSites);
       if (!Rows || Forwarders.empty())
         return Rows;
       Base = std::move(*Rows);
     } else if (Forwarders.empty()) {
       return fail(kProfile);
     } else {
+      if (UnsignedLRSites)
+        UnsignedLRSites->clear();
       Base.emplace_back(); // Other entries have no instruction-derived row.
     }
+  } else if (UnsignedLRSites) {
+    UnsignedLRSites->clear();
   }
   std::vector<AArch64RecoveredUnwindRow> Rows;
   for (size_t I = 0; I < Roots.size(); ++I) {

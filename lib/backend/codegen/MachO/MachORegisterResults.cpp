@@ -140,7 +140,7 @@ bool independent(const DecodedInsn &I) {
     return D.op_count == unsigned(PCSigning->Authenticate) &&
            (!D.op_count || D.operands[0].type == AARCH64_OP_IMM ||
             D.operands[0].type == AARCH64_OP_REG);
-  if (aarch64::fullWidthRegisterCopy(I))
+  if (aarch64::fullWidthRegisterTransfer(I))
     return true;
   switch (I.Id) {
 #define MACHO_REGISTER_ALU(Name) case AARCH64_INS_##Name:
@@ -914,7 +914,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
                                (Op.shift.type != AARCH64_SFT_INVALID ||
                                 Op.ext != AARCH64_EXT_INVALID);
                       })) &&
-        aarch64::fullWidthRegisterCopy(I);
+        aarch64::fullWidthRegisterTransfer(I);
     const bool KeepEncoding =
         EncodedCopy || (OutsideCFG && !PCSigning && !PACM && independent(I));
     const bool RecoveredCode = OutsideCFG && !Body.RecoveredData.empty();
@@ -1139,9 +1139,13 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
         Sign = Joined->second;
       const va_t Use = NumericPage ? NextPC + Word : NextPC;
       if (Sign.Use == MachOSigningAddress::None && !OutsideCFG &&
-          Joins.SigningPCs.contains(Target) &&
-          machOObservesSigningAddress(Decode, *Source, Start, Use, Reg))
-        Sign.Use = MachOSigningAddress::Observable;
+          Joins.SigningPCs.contains(Target)) {
+        // A previous publication can prepare the same scratch more than
+        // once. An overwritten ADR still refers to the current local signer.
+        Sign.Use = machOSigningRegisterUse(Decode, *Source, Start, Use, Reg);
+        if (Sign.Use == MachOSigningAddress::Local && (NumericPage || Rebased))
+          Sign.Use = MachOSigningAddress::Observable;
+      }
       if (Sign.Use == MachOSigningAddress::None)
         for (auto SigningWord : Joins.RetainedSigningWords)
           if (retainedSigningWord(Image, Functions, Start, Target,

@@ -32,19 +32,16 @@
 
 namespace neverd {
 namespace {
-enum class SigningAddressUse { Local, Observable, Unknown };
-
 constexpr aarch64_reg SigningScratchRegisters[] = {
 #define MACHO_SIGNING_SCRATCH(Reg) AARCH64_REG_##Reg,
 #include "MachORegisterResults.def"
 };
 
-std::optional<aarch64_reg> copiedAddress(const DecodedInsn &I,
-                                         aarch64_reg From) {
-  if (const auto Copy = aarch64::fullWidthRegisterCopy(I);
-      Copy && Copy->second == From && Copy->first >= AARCH64_REG_X0 &&
-      Copy->first <= AARCH64_REG_X28)
-    return Copy->first;
+std::optional<aarch64::RegisterTransfer> addressTransfer(const DecodedInsn &I) {
+  if (const auto Copy = aarch64::fullWidthRegisterTransfer(I);
+      Copy && Copy->Destination >= AARCH64_REG_X0 &&
+      Copy->Destination <= AARCH64_REG_X28)
+    return Copy;
   return std::nullopt;
 }
 
@@ -70,18 +67,17 @@ bool storesAddress(const DecodedInsn &I, aarch64_reg Reg) {
 
 // A copied address can have several live aliases. Follow each until its W/X
 // register is overwritten, checking both successors of a conditional branch.
-SigningAddressUse signingAddressUse(Decoder &Decode,
-                                    const MachOLiftedSource &Source, va_t Start,
-                                    va_t After,
-                                    llvm::ArrayRef<aarch64_reg> Registers,
-                                    bool Returns, bool Observed = false) {
+MachOSigningAddress::Usage
+signingAddressUse(Decoder &Decode, const MachOLiftedSource &Source, va_t Start,
+                  va_t After, llvm::ArrayRef<aarch64_reg> Registers,
+                  bool Returns, bool Observed = false) {
   const auto Scratch = [](aarch64_reg R) {
     return llvm::is_contained(SigningScratchRegisters, R);
   };
   if (Returns)
     return !Observed && llvm::all_of(Registers, Scratch)
-               ? SigningAddressUse::Local
-               : SigningAddressUse::Observable;
+               ? MachOSigningAddress::Local
+               : MachOSigningAddress::Observable;
   constexpr auto Word = aarch64::kInsnSize;
   using Use = std::pair<va_t, unsigned>;
   llvm::SmallVector<Use> Work;
@@ -95,17 +91,17 @@ SigningAddressUse signingAddressUse(Decoder &Decode,
     const auto Reg = static_cast<aarch64_reg>(Number);
     if (PC < Start || !rangeInBounds(PC - Start, Word, Source.Bytes.size()) ||
         !machODataInCodeRanges(Source.Embedded, PC, Word).empty())
-      return SigningAddressUse::Unknown;
+      return MachOSigningAddress::None;
     DecodedInsn I{};
     if (Decode.decodeOne(Source.Bytes.data() + (PC - Start), Word, PC, I) !=
             int(Word) ||
         !I.Raw || !I.Raw->detail)
-      return SigningAddressUse::Unknown;
+      return MachOSigningAddress::None;
     cs_regs Reads, Writes;
     uint8_t NR = 0, NW = 0;
     const auto Handle = Decode.getHandle();
     if (cs_regs_access(Handle, I.Raw, Reads, &NR, Writes, &NW) != CS_ERR_OK)
-      return SigningAddressUse::Unknown;
+      return MachOSigningAddress::None;
     const auto Offset = mapCapstoneReg(Reg).Offset;
     const auto Matches = [&](uint16_t Other) {
       const auto R = mapCapstoneReg(static_cast<aarch64_reg>(Other));
@@ -113,12 +109,14 @@ SigningAddressUse signingAddressUse(Decoder &Decode,
     };
     const auto &D = I.Raw->detail->aarch64;
     if (llvm::any_of(llvm::ArrayRef(Reads, NR), Matches)) {
-      if (auto Copy = copiedAddress(I, Reg)) {
-        Work.emplace_back(PC + Word, *Copy);
+      if (const auto Copy = addressTransfer(I);
+          Copy && (Copy->First == Reg || Copy->Second == Reg)) {
+        Observed |= D.update_flags;
+        Work.emplace_back(PC + Word, Copy->Destination);
       } else if (storesAddress(I, Reg)) {
         Observed = true;
       } else {
-        return SigningAddressUse::Unknown;
+        return MachOSigningAddress::None;
       }
     }
     if (llvm::any_of(llvm::ArrayRef(Writes, NW), Matches) ||
@@ -131,22 +129,23 @@ SigningAddressUse signingAddressUse(Decoder &Decode,
     }
     if (cs_insn_group(Handle, I.Raw, CS_GRP_CALL)) {
       if (!Scratch(Reg))
-        return SigningAddressUse::Unknown;
+        return MachOSigningAddress::None;
     } else if (cs_insn_group(Handle, I.Raw, CS_GRP_JUMP)) {
       if (!D.op_count || D.operands[D.op_count - 1].type != AARCH64_OP_IMM)
-        return SigningAddressUse::Unknown;
+        return MachOSigningAddress::None;
       const va_t Target = D.operands[D.op_count - 1].imm;
       if (Target >= Start && Target - Start < Source.Bytes.size())
         Work.emplace_back(Target, Reg);
       else if (!Scratch(Reg))
-        return SigningAddressUse::Unknown;
+        return MachOSigningAddress::None;
       if (I.Id == AARCH64_INS_B &&
           (D.cc == AArch64CC_Invalid || D.cc == AArch64CC_AL))
         continue;
     }
     Work.emplace_back(PC + Word, Reg);
   }
-  return Observed ? SigningAddressUse::Observable : SigningAddressUse::Local;
+  return Observed ? MachOSigningAddress::Observable
+                  : MachOSigningAddress::Local;
 }
 
 } // namespace
@@ -155,17 +154,10 @@ llvm::ArrayRef<aarch64_reg> machOSigningScratchRegisters() {
   return SigningScratchRegisters;
 }
 
-bool machODeadSigningScratch(Decoder &Decode, const MachOLiftedSource &Source,
-                             va_t Start, va_t At, aarch64_reg Reg) {
-  return signingAddressUse(Decode, Source, Start, At, Reg, false) ==
-         SigningAddressUse::Local;
-}
-
-bool machOObservesSigningAddress(Decoder &Decode,
-                                 const MachOLiftedSource &Source, va_t Start,
-                                 va_t After, aarch64_reg Reg) {
-  return signingAddressUse(Decode, Source, Start, After, Reg, false) ==
-         SigningAddressUse::Observable;
+MachOSigningAddress::Usage
+machOSigningRegisterUse(Decoder &Decode, const MachOLiftedSource &Source,
+                        va_t Start, va_t After, aarch64_reg Reg) {
+  return signingAddressUse(Decode, Source, Start, After, Reg, false);
 }
 
 // Use the ISA's PC-relative encoding of the same operation. It uses the same
@@ -215,7 +207,7 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
       machODataInCodeRanges(Source.Embedded, Target, Word).empty();
   if (At(PC + Word) != kAArch64PACMEncoding) {
     llvm::SmallVector<aarch64_reg, 2> Aliases{Reg};
-    bool Stored = false;
+    bool Observed = false;
     DecodedInsn I{};
     va_t AuthPC = PC + Word;
     std::optional<std::pair<aarch64_reg, va_t>> SeparateModifier;
@@ -238,16 +230,16 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
             std::pair(D.operands[0].reg, va_t(D.operands[1].imm));
         continue;
       }
-      if (D.operands[1].type == AARCH64_OP_REG &&
-          llvm::is_contained(Aliases, D.operands[1].reg)) {
-        if (const auto Copy = copiedAddress(I, D.operands[1].reg)) {
-          if (!llvm::is_contained(Aliases, *Copy))
-            Aliases.push_back(*Copy);
-          continue;
-        }
+      if (const auto Copy = addressTransfer(I);
+          Copy && llvm::is_contained(Aliases, Copy->First) &&
+          llvm::is_contained(Aliases, Copy->Second)) {
+        Observed |= D.update_flags;
+        if (!llvm::is_contained(Aliases, Copy->Destination))
+          Aliases.push_back(Copy->Destination);
+        continue;
       }
       if (llvm::any_of(Aliases, [&](auto R) { return storesAddress(I, R); })) {
-        Stored = true;
+        Observed = true;
         continue;
       }
       break;
@@ -309,10 +301,10 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
       llvm::erase(Aliases, AuthRegister);
     }
     const auto Use = signingAddressUse(Decode, Source, Start, AuthPC + Word,
-                                       Aliases, Auth->Return, Stored);
-    if (Use == SigningAddressUse::Local && !Independent)
+                                       Aliases, Auth->Return, Observed);
+    if (Use == MachOSigningAddress::Local && !Independent)
       return {.Use = MachOSigningAddress::Local};
-    if (Use == SigningAddressUse::Observable) {
+    if (Use == MachOSigningAddress::Observable) {
       if (Independent)
         return {.Use = MachOSigningAddress::Observable,
                 .InstalledSigner = At(SignedAt)};
@@ -329,7 +321,7 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
         if (!aarch64::encodePCRelativeAddress(aarch64::AddressInstruction::ADR,
                                               Number, AuthPC, Target) ||
             signingAddressUse(Decode, Source, Start, AuthPC + Word, Scratch,
-                              Auth->Return) != SigningAddressUse::Local)
+                              Auth->Return) != MachOSigningAddress::Local)
           continue;
         const unsigned Shift = Auth->Return ? 0 : kAArch64PAuthLRImmShift;
         const uint32_t Encoding =
@@ -376,7 +368,7 @@ MachOSigningAddress machOSigningAddress(Decoder &Decode,
   const auto Auth = Operation(At(PC + 2 * Word), Modifier::X16);
   if (Sign && Auth && Sign->Key == Auth->Key &&
       signingAddressUse(Decode, Source, Start, PC + 3 * Word, Reg,
-                        Auth->Return) == SigningAddressUse::Local)
+                        Auth->Return) == MachOSigningAddress::Local)
     return {.Use = MachOSigningAddress::Local};
   return {};
 }

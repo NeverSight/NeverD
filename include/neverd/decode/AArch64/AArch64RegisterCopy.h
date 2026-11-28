@@ -19,9 +19,14 @@
 
 namespace neverd::aarch64 {
 
-/// The decoded destination and source preserve every bit, including LR.
-inline std::optional<std::pair<aarch64_reg, aarch64_reg>>
-fullWidthRegisterCopy(const DecodedInsn &I) {
+/// The destination receives every bit of one source. Equal sources describe
+/// an unconditional copy. A conditional select requires proof for both.
+struct RegisterTransfer {
+  aarch64_reg Destination, First, Second;
+};
+
+inline std::optional<RegisterTransfer>
+fullWidthRegisterTransfer(const DecodedInsn &I) {
   const auto &D = I.Raw->detail->aarch64;
   if (D.op_count < 2 || D.operands[0].type != AARCH64_OP_REG ||
       D.operands[1].type != AARCH64_OP_REG)
@@ -36,9 +41,10 @@ fullWidthRegisterCopy(const DecodedInsn &I) {
   const auto Dest = D.operands[0].reg;
   if (!Wide(Dest))
     return std::nullopt;
-  using Copy = std::optional<std::pair<aarch64_reg, aarch64_reg>>;
-  const auto From = [&](aarch64_reg Src) -> Copy {
-    return Wide(Src) ? Copy(std::pair(Dest, Src)) : std::nullopt;
+  const auto From = [&](aarch64_reg Src) -> std::optional<RegisterTransfer> {
+    if (Wide(Src))
+      return RegisterTransfer{Dest, Src, Src};
+    return std::nullopt;
   };
   const auto &Left = D.operands[1];
   if (D.op_count == 2) {
@@ -73,24 +79,42 @@ fullWidthRegisterCopy(const DecodedInsn &I) {
     return From(Right.reg);
   if (D.op_count != 3)
     return std::nullopt;
-  const bool AddSub = I.Id == AARCH64_INS_ADD || I.Id == AARCH64_INS_SUB;
+  const bool Add = I.Id == AARCH64_INS_ADD || I.Id == AARCH64_INS_ADDS;
+  const bool AddSub =
+      Add || I.Id == AARCH64_INS_SUB || I.Id == AARCH64_INS_SUBS;
   const bool OrXor = I.Id == AARCH64_INS_ORR || I.Id == AARCH64_INS_EOR;
   if (Right.type == AARCH64_OP_IMM && AddSub && Right.imm == 0)
     return From(Left.reg);
   if (Right.type != AARCH64_OP_REG)
     return std::nullopt;
+  if (I.Id == AARCH64_INS_CSEL) {
+    if (D.cc == AArch64CC_AL || D.cc == AArch64CC_NV)
+      return From(Left.reg);
+    if (Wide(Left.reg) && Wide(Right.reg))
+      return RegisterTransfer{Dest, Left.reg, Right.reg};
+    return std::nullopt;
+  }
   // Shifting or extending the zero operand leaves it zero.
   if ((Right.reg == AARCH64_REG_XZR || Right.reg == AARCH64_REG_WZR) &&
       (AddSub || OrXor))
     return From(Left.reg);
   if (!Plain(Right))
     return std::nullopt;
-  if (Left.reg == AARCH64_REG_XZR && (I.Id == AARCH64_INS_ADD || OrXor))
+  if (Left.reg == AARCH64_REG_XZR && (Add || OrXor))
     return From(Right.reg);
   if (Left.reg == Right.reg &&
-      (I.Id == AARCH64_INS_AND || I.Id == AARCH64_INS_ORR ||
-       I.Id == AARCH64_INS_CSEL))
+      (I.Id == AARCH64_INS_AND || I.Id == AARCH64_INS_ANDS ||
+       I.Id == AARCH64_INS_ORR))
     return From(Left.reg);
+  return std::nullopt;
+}
+
+/// Return the unique source for callers that cannot prove a two-input select.
+inline std::optional<std::pair<aarch64_reg, aarch64_reg>>
+fullWidthRegisterCopy(const DecodedInsn &I) {
+  if (const auto Copy = fullWidthRegisterTransfer(I);
+      Copy && Copy->First == Copy->Second)
+    return std::pair(Copy->Destination, Copy->First);
   return std::nullopt;
 }
 

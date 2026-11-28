@@ -181,13 +181,14 @@
       "test": "AArch64LiftedImage.JoinedSigningModifiersFollowEachIncomingPath",
       "environment": "NEVERD_ARM64E_JOINED_SIGNING_FIXTURES",
       "define": "-DRETURN_MODEL_JOINED",
-      "inventory": "combined-signing-carriers",
-      "bodies": 324,
+      "inventory": "cross-block-signing-carriers",
+      "bodies": 460,
       "archived_inventories": {
         "path-proven-modifiers": 36,
         "scratch-free-signing-edges": 54,
         "distant-joined-signers": 84,
-        "shared-signing-carriers": 138
+        "shared-signing-carriers": 138,
+        "combined-signing-carriers": 324
       }
     }
   },

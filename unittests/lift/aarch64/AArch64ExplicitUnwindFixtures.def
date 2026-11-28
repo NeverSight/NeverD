@@ -259,6 +259,18 @@ _main:
   .endif
  .endif
  bl Lbody$0
+ .ifnb $7
+  .if $7 >= 0
+   b.mi Lfailed
+   b.eq Lfailed
+   b.vs Lfailed
+  .endif
+  .if $7 == 0
+   b.cs Lfailed
+  .elseif $7 == 1
+   b.cc Lfailed
+  .endif
+ .endif
  .ifnb $5
   .if $5
    b.ne Lfailed
@@ -334,6 +346,27 @@ _main:
   .endif
  .endif
 .endm
+.macro run_cross
+ mov x3, #$3
+ stp xzr, xzr, [x20, #8]
+ ldr x19, =Lbody$0
+ ldr x9, =$2
+ add x19, x19, x9
+ run_body $0, $1, 1, 1, 0, 0, 0, $4
+ ldp x9, x10, [x20, #8]
+ .if $3 == 1
+  cmp x9, x19
+  b.ne Lfailed
+ .else
+  cbnz x9, Lfailed
+ .endif
+ .if $3 == 2
+  cmp x10, x19
+  b.ne Lfailed
+ .else
+  cbnz x10, Lfailed
+ .endif
+.endm
 .macro check_body
  adr x19, Lbody$0
  ldr x9, =$1
@@ -373,6 +406,7 @@ ASYNC_FRAME_TEXT(kJoinHalfCopy, "-DNEVERD_JOIN_HALF_COPY")
 ASYNC_FRAME_TEXT(kJoinAdjustedCopy, "-DNEVERD_JOIN_ADJUSTED_COPY")
 ASYNC_FRAME_TEXT(kJoinTwoWrong, "-DNEVERD_JOIN_TWO_WRONG")
 #include "AArch64CombinedSigningFixtures.def"
+#include "AArch64CrossBlockSigningFixtures.def"
 ASYNC_FRAME_VALUE(unsigned, kJoinStackBytes, 32)
 ASYNC_FRAME_TEXT(kJoinedStackCases, "resolved_stack_signing_pcs")
 ASYNC_FRAME_TEXT(kJoinedDualExits, "verified_shared_authentication_exits")
