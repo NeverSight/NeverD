@@ -60,6 +60,14 @@ llvm::Error X86SgxMemory::bindX87(std::array<uint8_t, 160> Image,
   return llvm::Error::success();
 }
 
+void X86SgxMemory::bindKeyPlatform(
+    std::shared_ptr<const X86SgxKeyPlatform> Platform) {
+  if (Keys != Platform) {
+    Keys = std::move(Platform);
+    ++Generation;
+  }
+}
+
 void X86SgxMemory::disableAfterMachineCheck() {
   if (Enabled) {
     Enabled = false;

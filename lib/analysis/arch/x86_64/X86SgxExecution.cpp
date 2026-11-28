@@ -402,10 +402,8 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
       (XFRM != 3 && !(C.CR4 & (1u << 18))))
     return Fault(13);
   const auto MiscSelect = le::read32le(SECS + 20);
-  constexpr uint64_t AEXNotifyAttribute = uint64_t{1} << 10;
   if (!FramePages || (MiscSelect & ~1u) ||
-      (Attributes &
-       ~(uint64_t(7) | (EPC.Features.AEXNotify ? AEXNotifyAttribute : 0))))
+      (Attributes & ~EPC.Features.allowedAttributes()))
     return invalid("unsupported initialized SECS attributes or SSA geometry");
   if (!std::has_single_bit(Enclave.Size) || Enclave.Size < 2 * PageSize ||
       (Enclave.Base & (Enclave.Size - 1)) || !Enclave.contains(TCSLinear))
@@ -419,7 +417,7 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
     return invalid("a debug opt-in TCS requires an imported debug enclave");
   const bool NotifyThread = TcsFlags & 2;
   if ((NotifyThread && !EPC.Features.AEXNotify) ||
-      (!DebugOptIn && NotifyThread != bool(Attributes & AEXNotifyAttribute)))
+      (!DebugOptIn && NotifyThread != bool(Attributes & X86SgxFeatures::Notify)))
     return Fault(13);
   const bool Resume = Leaf == 3;
   const auto CSSA = le::read32le(Thread + 24), NSSA = le::read32le(Thread + 28);

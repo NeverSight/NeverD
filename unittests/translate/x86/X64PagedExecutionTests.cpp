@@ -22,6 +22,7 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/X64ContinuationExport.h"
+#include "neverd/translate/X86/X86SgxKeyPlatform.h"
 #include "neverd/translate/X86/X86WatchpointObservation.h"
 
 #include "llvm/Support/DynamicLibrary.h"
@@ -1043,6 +1044,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X86ModeSegmentTests.inc"
 #include "X86ModeSgxNotificationTests.inc"
 #include "X86ModeSgxOperandTests.inc"
+#include "X86ModeSgxKeyPlatformTests.inc"
 #include "X86ModeSgxTests.inc"
 #include "X86ModeSmmTests.inc"
 #include "X86ModeStartupTests.inc"

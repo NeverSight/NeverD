@@ -10,6 +10,8 @@
 #include "X86ModeState.h"
 #include "X86SgxExecution.h"
 
+#include "neverd/translate/X86/X86SgxKeyPlatform.h"
+
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
@@ -20,8 +22,15 @@ namespace {
 constexpr unsigned RequestSize = 512, ReportDataSize = 64, ReportSize = 432;
 constexpr unsigned ReportDataAlignment = 128, ReportAlignment = 512;
 constexpr unsigned KeySize = 16;
-constexpr uint64_t InitTokenAttribute = 1u << 5, ProvisionAttribute = 1u << 4;
-constexpr uint64_t InvalidAttribute = 2, InvalidKeyName = 256;
+enum KeyName : uint16_t {
+  InitToken = 0,
+  Provision = 1,
+  ProvisionSeal = 2,
+  Report = 3,
+  Seal = 4,
+};
+constexpr uint64_t InvalidAttribute = 2, InvalidCPUSVN = 32, InvalidISVSVN = 64,
+                   InvalidKeyName = 256;
 
 bool hasReservedBytes(llvm::ArrayRef<uint8_t> Bytes) {
   return std::any_of(Bytes.begin(), Bytes.end(),
@@ -41,10 +50,63 @@ bool reservedKeyRequest(llvm::ArrayRef<uint8_t> Request, uint64_t Attributes) {
   if ((Policy & ~0x3fu) || hasReservedBytes(Request.slice(6, 2)) ||
       hasReservedBytes(Request.drop_front(78)))
     return true;
-  constexpr uint64_t KSS = 1u << 7;
-  return !(Attributes & KSS) &&
+  return !(Attributes & X86SgxFeatures::KSS) &&
          ((Policy & 0x3c) ||
           llvm::support::endian::read16le(Request.data() + 76));
+}
+// CPUSVN is a processor-defined relation. Do not compare its bytes as an
+// integer. The report key selects current platform identity regardless of
+// the requested versions.
+uint64_t keyError(std::span<const uint8_t, 512> Request, const X86SgxPage &SECS,
+                  const X86SgxKeyPlatform *Platform) {
+  namespace le = llvm::support::endian;
+  const uint16_t Name = le::read16le(Request.data());
+  const uint64_t Attributes = le::read64le(SECS.Bytes.data() + 48);
+  if (Name > Seal)
+    return InvalidKeyName;
+  if ((Name == InitToken && !(Attributes & X86SgxFeatures::InitToken)) ||
+      ((Name == Provision || Name == ProvisionSeal) &&
+       !(Attributes & X86SgxFeatures::Provision)))
+    return InvalidAttribute;
+  if (!Platform || Name == Report)
+    return 0;
+  if (!Platform->acceptsCPUSVN(Request.subspan<8, 16>()))
+    return InvalidCPUSVN;
+  if (le::read16le(Request.data() + 4) >
+          le::read16le(SECS.Bytes.data() + 258) ||
+      (Name == Seal && le::read16le(Request.data() + 76) >
+                           le::read16le(SECS.Bytes.data() + 260)))
+    return InvalidISVSVN;
+  return 0;
+}
+
+llvm::Expected<std::array<uint8_t, ReportSize>>
+localReport(const X86SgxKeyPlatform &Platform, const X86SgxPage &SECS,
+            std::span<const uint8_t, 512> Target,
+            const std::array<uint8_t, ReportDataSize> &Data) {
+  auto Identity = Platform.reportIdentity(SECS);
+  if (!Identity)
+    return Identity.takeError();
+  // SDM, Layout of Report. The reserved fields are zero, including
+  // CET_ATTRIBUTES in this non-CET profile.
+  std::array<uint8_t, ReportSize> Result{};
+  auto *Body = Result.data();
+  std::copy_n(Identity->CPUSVN.begin(), 16, Body);
+  std::copy_n(SECS.Bytes.data() + 20, 4, Body + 16); // MISCSELECT.
+  std::copy_n(Identity->ISVExtProdID.begin(), 16, Body + 32);
+  std::copy_n(SECS.Bytes.data() + 48, 48, Body + 48); // ATTRIBUTES, MRENCLAVE.
+  std::copy_n(SECS.Bytes.data() + 128, 32, Body + 128); // MRSIGNER.
+  // CONFIGID, ISVPRODID, ISVSVN and CONFIGSVN have the same offsets.
+  std::copy_n(SECS.Bytes.data() + 192, 70, Body + 192);
+  std::copy_n(Identity->ISVFamilyID.begin(), 16, Body + 304);
+  std::copy(Data.begin(), Data.end(), Body + 320);
+  std::copy_n(Identity->ReportKeyID.begin(), 32, Body + 384);
+  auto MAC = Platform.reportMAC(SECS, Target, Identity->ReportKeyID,
+                                std::span(Result).first<384>());
+  if (!MAC)
+    return MAC.takeError();
+  std::copy(MAC->begin(), MAC->end(), Body + 416);
+  return Result;
 }
 } // namespace
 
@@ -62,83 +124,99 @@ llvm::Expected<X86ModeExecutionResult> X86SgxExecution::keyOrReport(
     GP();
     return false;
   };
-  const auto Accessed = [&](llvm::Expected<X86MemoryAccessResult> Access)
-      -> llvm::Expected<bool> {
-    if (!Access)
-      return Access.takeError();
+  const auto Accessed = [&](const X86MemoryAccessResult &Access) {
     Out.SelfModifications.insert(Out.SelfModifications.end(),
-                                 Access->SelfModifications.begin(),
-                                 Access->SelfModifications.end());
-    Out.Exception = Access->Exception;
-    Out.BackingFault = Access->BackingFault;
+                                 Access.SelfModifications.begin(),
+                                 Access.SelfModifications.end());
+    Out.Exception = Access.Exception;
+    Out.BackingFault = Access.BackingFault;
     if (Out.BackingFault)
       Out.Status = X86LegacyExecutionStatus::BackingFault;
-    return Access->Status == X86PageWalkStatus::Completed;
+    return Access.Status == X86PageWalkStatus::Completed;
   };
   if (Progress.Request.empty()) {
     if (!Admits(R.GPR[3], RequestSize))
       return Out;
     std::vector<uint8_t> Request(RequestSize);
-    auto Read =
-        Accessed(M.load({R.GPR[3], MemoryAccessKind::Read, 3}, Request));
+    auto Read = M.load({R.GPR[3], MemoryAccessKind::Read, 3}, Request);
     if (!Read)
       return Read.takeError();
-    if (!*Read)
+    if (!Accessed(*Read))
       return Out;
     Progress.Request = std::move(Request);
   }
-  if (!Key && !Progress.ReportDataChecked) {
+  const std::span<const uint8_t, RequestSize> Request(Progress.Request.data(),
+                                                      RequestSize);
+  if (!Key && !Progress.ReportData) {
     if (reservedTargetInfo(Progress.Request)) {
       GP();
       return Out;
     }
     if (!Admits(R.GPR[1], ReportDataAlignment))
       return Out;
-    auto Read = Accessed(
-        M.probe({R.GPR[1], MemoryAccessKind::Read, 3}, ReportDataSize));
+    std::array<uint8_t, ReportDataSize> Data;
+    auto Read = M.load({R.GPR[1], MemoryAccessKind::Read, 3}, Data);
     if (!Read)
       return Read.takeError();
-    if (!*Read)
+    if (!Accessed(*Read))
       return Out;
-    Progress.ReportDataChecked = true;
+    Progress.ReportData = Data;
   }
   const auto Output = Key ? R.GPR[1] : R.GPR[2];
   if (!Admits(Output, Key ? KeySize : ReportAlignment))
     return Out;
-  auto Write = Accessed(M.probe({Output, MemoryAccessKind::Write, 3},
-                                Key ? KeySize : ReportSize));
+  auto Write = M.prepareStore({Output, MemoryAccessKind::Write, 3},
+                              Key ? KeySize : ReportSize);
   if (!Write)
     return Write.takeError();
-  if (!*Write)
+  if (!Accessed(*Write))
     return Out;
 
+  const auto &SECS = EPC.EPC.at(EPC.Active->SECS);
+  uint64_t ErrorCode = 0;
   if (Key) {
-    const auto Attributes = llvm::support::endian::read64le(
-        EPC.EPC.at(EPC.Active->SECS).Bytes.data() + 48);
-    if (reservedKeyRequest(Progress.Request, Attributes)) {
+    if (reservedKeyRequest(Progress.Request, llvm::support::endian::read64le(
+                                                 SECS.Bytes.data() + 48))) {
       GP();
       return Out;
     }
-    const uint16_t Name =
-        llvm::support::endian::read16le(Progress.Request.data());
-    if (Name > 4 || (Name == 0 && !(Attributes & InitTokenAttribute)) ||
-        ((Name == 1 || Name == 2) && !(Attributes & ProvisionAttribute))) {
-      R.GPR[0] = Name > 4 ? InvalidKeyName : InvalidAttribute;
-      // These outcomes retire, set ZF, clear the other arithmetic flags and
-      // leave the output bytes intact. RF clears on retirement.
-      R.RFlags = (R.RFlags & ~uint64_t{0x108d5}) | 0x40;
-      R.PC += InstructionSize;
-      Out.InstructionCompleted = true;
-      if (x86InstructionDebugStep(R.RFlags & 0x100,
-                                  S.Debug ? S.Debug->DebugCTL : 0, false)) {
-        x86PublishInstructionDebug(*S.Debug, true);
-        Out.Exception = X86MemoryException{1, 0, {}};
-      }
+    ErrorCode = keyError(Request, SECS, EPC.Keys.get());
+  }
+  if (!ErrorCode) {
+    Out.Status = X86LegacyExecutionStatus::ModeUnavailable;
+    if (!EPC.Keys) {
+      Out.OwnerError = "enclave EREPORT and EGETKEY require platform key state";
       return Out;
     }
+    if (Key) {
+      auto Bytes = EPC.Keys->deriveKey(SECS, Request);
+      if (!Bytes) {
+        Out.OwnerError = llvm::toString(Bytes.takeError());
+        return Out;
+      }
+      M.commitStore(*Write, *Bytes);
+    } else {
+      auto Bytes = localReport(*EPC.Keys, SECS, Request, *Progress.ReportData);
+      if (!Bytes) {
+        Out.OwnerError = llvm::toString(Bytes.takeError());
+        return Out;
+      }
+      M.commitStore(*Write, *Bytes);
+    }
+    Out.Status = X86LegacyExecutionStatus::Completed;
   }
-  Out.Status = X86LegacyExecutionStatus::ModeUnavailable;
-  Out.OwnerError = "enclave EREPORT and EGETKEY require platform key state";
+  if (Key) {
+    R.GPR[0] = ErrorCode;
+    R.RFlags = (R.RFlags & ~uint64_t{0x8d5}) | (ErrorCode ? 0x40 : 0);
+  }
+  R.PC += InstructionSize;
+  R.RFlags &= ~uint64_t{0x10000};
+  Out.InstructionCompleted = true;
+  if (x86InstructionDebugStep(R.RFlags & 0x100, S.Debug ? S.Debug->DebugCTL : 0,
+                              false)) {
+    x86PublishInstructionDebug(*S.Debug, true);
+    Out.Exception = X86MemoryException{1, 0, {}};
+  }
   return Out;
 }
 } // namespace neverd::analysis::detail

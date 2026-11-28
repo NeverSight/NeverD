@@ -24,7 +24,7 @@ struct X86SgxInstructionProgress {
   X86SgxFrameProgress Frame, NotificationFrame;
   // Retain a completed KEYREQUEST/TARGETINFO read across a later backing stop.
   std::vector<uint8_t> Request;
-  bool ReportDataChecked = false;
+  std::optional<std::array<uint8_t, 64>> ReportData;
 };
 
 class X86SgxExecution {
