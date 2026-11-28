@@ -68,6 +68,21 @@ public:
   report2MAC(const X86SgxPage &, std::span<const uint8_t, 192>) const {
     return llvm::createStringError("EREPORT2 requires a platform report MAC");
   }
+  /// Use the report MAC key with the full prefix consumed by EVERIFYREPORT2.
+  virtual llvm::Expected<std::array<uint8_t, 32>>
+  report2MAC224(std::span<const uint8_t, 224>) const {
+    return llvm::createStringError(
+        "EREPORT2 requires a full-prefix report MAC");
+  }
+  /// Authenticate all 224 bytes with the current processor's report MAC key
+  /// using HMAC-SHA256. A provider error stops the instruction before
+  /// retirement.
+  virtual llvm::Expected<bool>
+  verifyReport2MAC(std::span<const uint8_t, 224> Body,
+                   std::span<const uint8_t, 32> MAC) const {
+    return llvm::createStringError(
+        "EVERIFYREPORT2 requires a platform report authenticator");
+  }
 };
 
 } // namespace neverd::translate

@@ -35,6 +35,10 @@ TEST_F(X86ModeSgxThreadTest, KeyAndReportCheckOperandsInArchitecturalOrder) {
                         Case{1, Input, Output, 0, 78, 13, 0, 0},
                         Case{1, Input, Output, 0, 76, 13, 0, 0},
                         Case{1, Input, Output, 0, 3, 13, 0, 0},
+                        Case{8, Input, 0, 0, 0, 13, 0, 0},
+                        Case{8, Base - 4096, 0, 0, 0, 13, 0, 0},
+                        Case{8, Missing, 0, 0, 0, 14, 0x8005, Missing},
+                        Case{8, Missing, 0, 0, 0, 13, 0, 0, false},
                         Case{11, Missing, 1, 0, 0, 14, 0x8005, Missing},
                         Case{11, Input, Output + 16, 0, 0, 13, 0, 0},
                         Case{11, Input, Missing, 0, 78, 14, 0x8007, Missing},
@@ -55,7 +59,10 @@ TEST_F(X86ModeSgxThreadTest, KeyAndReportCheckOperandsInArchitecturalOrder) {
     if (C.InvalidByte)
       Code.Bytes[0x400 + C.InvalidByte] = 1;
     const auto Outside = Machine;
-    bindThread({.SGX256 = C.FeatureAvailable && C.Leaf >= 10});
+    X86SgxFeatures Features{.SGX256 = C.FeatureAvailable && C.Leaf >= 10};
+    if (C.FeatureAvailable && C.Leaf == 8)
+      Features.VerifyReport2 = X86SgxVerifyReport2Profile::SDM093;
+    bindThread(Features);
     X86ModeExecution Execution(*Memory, Options);
     uint64_t Budget = 1;
     ASSERT_EQ(

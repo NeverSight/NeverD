@@ -52,10 +52,12 @@ private:
   static llvm::Expected<std::array<uint8_t, Report2Size>>
   buildReport2(const translate::X86SgxKeyPlatform &Platform,
                const translate::X86SgxPage &SECS,
-               std::span<const uint8_t, 64> Data);
+               std::span<const uint8_t, 64> Data,
+               translate::X86SgxReport2MACCoverage Coverage);
   enum class KeyReportLeaf : uint32_t {
     Report = 0,
     Key = 1,
+    VerifyReport2 = 8,
     Report2 = 10,
     Key256 = 11
   };

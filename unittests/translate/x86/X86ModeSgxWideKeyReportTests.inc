@@ -245,10 +245,12 @@ TEST_F(X86ModeSgxThreadTest, Report2AuthenticatesAllFieldsBeforePublishing) {
         }
         if (AlterData)
           Next.Bytes[191] ^= 1;
-        bindThread({.KeySeparationAndSharing = true,
-                    .SGX256 = true,
-                    .SHA384Measurements = SHA384,
-                    .Report2Write = Footprint});
+        bindThread(
+            {.KeySeparationAndSharing = true,
+             .SGX256 = true,
+             .SHA384Measurements = SHA384,
+             .Report2Write = Footprint,
+             .Report2MACCoverage = X86SgxReport2MACCoverage::Operation192});
         auto Platform = std::make_shared<SgxReport2Platform>();
         Memory->sgxMemory()->bindKeyPlatform(Platform);
         X86ModeExecution Execution(*Memory, Options);

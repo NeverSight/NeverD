@@ -23,7 +23,8 @@ using namespace translate;
 llvm::Expected<std::array<uint8_t, X86SgxExecution::Report2Size>>
 X86SgxExecution::buildReport2(const X86SgxKeyPlatform &Platform,
                               const X86SgxPage &SECS,
-                              std::span<const uint8_t, 64> Data) {
+                              std::span<const uint8_t, 64> Data,
+                              X86SgxReport2MACCoverage Coverage) {
   auto Identity = Platform.reportIdentity(SECS);
   if (!Identity)
     return Identity.takeError();
@@ -52,7 +53,9 @@ X86SgxExecution::buildReport2(const X86SgxKeyPlatform &Platform,
   std::copy(Digest.begin(), Digest.end(), Result.begin() + 80);
   std::copy_n(Identity->CPUSVN.begin(), 16, Result.begin() + 16);
   std::copy(Data.begin(), Data.end(), Result.begin() + 128);
-  auto MAC = Platform.report2MAC(SECS, std::span(Result).first<192>());
+  auto MAC = Coverage == X86SgxReport2MACCoverage::Operation192
+                 ? Platform.report2MAC(SECS, std::span(Result).first<192>())
+                 : Platform.report2MAC224(std::span(Result).first<224>());
   if (!MAC)
     return MAC.takeError();
   std::copy(MAC->begin(), MAC->end(), Result.begin() + 224);

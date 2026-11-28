@@ -37,6 +37,21 @@ X86SgxMemory::create(std::vector<X86SgxPage> Pages,
         *Features.Report2Write != X86SgxReport2Write::ZeroReservedTail)))
     return invalid(
         "REPORT2 write footprint requires a supported 256BITSGX profile");
+  const auto Coverage = Features.Report2MACCoverage;
+  if (Coverage && (!Features.SGX256 ||
+                   (Coverage != X86SgxReport2MACCoverage::Operation192 &&
+                    Coverage != X86SgxReport2MACCoverage::Verifiable224)))
+    return invalid("invalid EREPORT2 MAC coverage for this processor");
+  const auto Verification = Features.VerifyReport2;
+  if (Verification && Verification != X86SgxVerifyReport2Profile::Unbound &&
+      Verification != X86SgxVerifyReport2Profile::SDM093 &&
+      Verification != X86SgxVerifyReport2Profile::TDX002)
+    return invalid("invalid EVERIFYREPORT2 processor profile");
+  const auto Flags = Features.VerifyReport2Flags;
+  if (Flags &&
+      (!Verification || (Flags != X86SgxVerifyReport2Flags::SetStatus &&
+                         Flags != X86SgxVerifyReport2Flags::Preserve)))
+    return invalid("invalid EVERIFYREPORT2 status-flag binding");
   auto Memory = std::make_unique<X86SgxMemory>();
   Memory->Features = Features;
   for (auto &Page : Pages) {

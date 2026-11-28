@@ -25,7 +25,7 @@ namespace neverd::analysis::detail {
 using namespace translate;
 namespace {
 namespace le = llvm::support::endian;
-constexpr unsigned PageSize = 4096, GprOffset = PageSize - 184;
+constexpr unsigned PageSize = X86SgxPage::Size, GprOffset = PageSize - 184;
 constexpr unsigned FlagsOffset = 128, IpOffset = 136, UserSPOffset = 144,
                    UserBPOffset = 152;
 constexpr unsigned ExitInfoOffset = 160, FSOffset = 168, GSOffset = 176;
@@ -364,6 +364,7 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
     return dynamicMemory(S, M, Progress, ExpectedBytes.size(), std::move(Out));
   const auto Op = static_cast<KeyReportLeaf>(Leaf);
   if (Op == KeyReportLeaf::Report || Op == KeyReportLeaf::Key ||
+      (Op == KeyReportLeaf::VerifyReport2 && EPC.Features.VerifyReport2) ||
       (EPC.Features.SGX256 &&
        (Op == KeyReportLeaf::Report2 || Op == KeyReportLeaf::Key256)))
     return keyOrReport(Op, S, M, Progress, ExpectedBytes.size(),
