@@ -264,6 +264,27 @@ TEST_F(PEFixedImageTest, ReturningCallFrameOutputReplacesPreservedBytes) {
   auto Valid = validateSpecializationRawEnvironment(R, O);
   EXPECT_FALSE(bool(Valid)) << llvm::toString(std::move(Valid));
 
+  auto WithoutEarlierSpan = O;
+  WithoutEarlierSpan.X64ReturningCalls.front().PreservedFrameRanges.clear();
+  const auto WithoutEarlier =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, WithoutEarlierSpan);
+  ASSERT_TRUE(WithoutEarlier.complete()) << WithoutEarlier.Diagnostic;
+  EXPECT_EQ(WithoutEarlier.ReturningCalls.size(), 1U);
+  EXPECT_EQ(WithoutEarlier.ExternalExits.size(), 2U);
+  auto WithoutEarlierValid =
+      validateSpecializationRawEnvironment(WithoutEarlier, WithoutEarlierSpan);
+  EXPECT_FALSE(bool(WithoutEarlierValid))
+      << llvm::toString(std::move(WithoutEarlierValid));
+
+  auto OverlappingSpan = O;
+  OverlappingSpan.X64ReturningCalls.front().PreservedFrameRanges = {{-80, -71}};
+  const auto Overlapping =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, OverlappingSpan);
+  EXPECT_FALSE(Overlapping.complete());
+  EXPECT_TRUE(Overlapping.Residual.Blocks.empty());
+  EXPECT_NE(Overlapping.Diagnostic.find("overlaps the physical call push"),
+            std::string::npos);
+
   auto WithoutOutput = O;
   auto &Earlier = WithoutOutput.X64ReturningCalls.front();
   Earlier.Version = 2;
