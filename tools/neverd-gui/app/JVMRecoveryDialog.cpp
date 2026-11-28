@@ -193,7 +193,16 @@ JVMRecoveryDialog::JVMRecoveryDialog(const QString &Worker, QWidget *Parent)
   // Each row contains a decimal PC, a hex offset and an ASCII JVM mnemonic.
   Mappings->setFont(literalFont(Mappings->font()));
   Mappings->setAccessibleName(tr("Bytecode mappings"));
-  Split->addWidget(Tabs);
+  // The splitter asks for its children's minimum sizes on each page switch.
+  // Let a layout cache the tab widget's size hints between geometry changes.
+  auto *TabPane = new QWidget;
+  TabPane->setSizePolicy(Tabs->sizePolicy());
+  // The inherited window background lets Qt clip ancestor paints at the pane.
+  TabPane->setAutoFillBackground(true);
+  auto *TabLayout = new QVBoxLayout(TabPane);
+  TabLayout->setContentsMargins(0, 0, 0, 0);
+  TabLayout->addWidget(Tabs);
+  Split->addWidget(TabPane);
   Split->addWidget(Mappings);
   Split->setStretchFactor(0, 3);
   Split->setStretchFactor(1, 1);
