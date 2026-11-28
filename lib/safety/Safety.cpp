@@ -386,7 +386,8 @@ void analyzeTrack(AnalyzerResult &Result, const AnalysisInput &In,
     for (const SinkSite &Site : Sites)
       if (Site.Kind == SinkKind::Alloc || Site.Kind == SinkKind::Realloc)
         ++R.Scanned;
-    R.Findings = auditMemory(In, Cat, Budgets, stopped);
+    R.Findings =
+        auditMemory(In, Cat, Budgets, stopped, Result.DirectReads.emplace());
     for (Finding &F : R.Findings) {
       Interproc.annotate(F);
       R.BudgetHit |= F.BudgetHit;

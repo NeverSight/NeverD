@@ -245,7 +245,8 @@ std::vector<Finding> audit(std::vector<MedFunc> Funcs,
                            const BinaryImage *Image = nullptr,
                            bool StackRegs = false,
                            bool IncludeStackReads = false,
-                           const DebugContext *Debug = nullptr) {
+                           const DebugContext *Debug = nullptr,
+                           DirectReadInitialization *DirectReads = nullptr) {
   static BinaryImage Img;
   AnalysisInput In;
   In.Img = Image ? Image : &Img;
@@ -254,6 +255,9 @@ std::vector<Finding> audit(std::vector<MedFunc> Funcs,
   In.DebugKind = Debug ? DebugInfoKind::DWARF : DebugInfoKind::None;
   In.StackRegsKnown = StackRegs;
   In.StackPointerReg = kSP;
+  if (DirectReads)
+    return auditMemory(In, SinkCatalog::defaults(), SafetyBudgets{}, nullptr,
+                       *DirectReads);
   return IncludeStackReads
              ? auditMemory(In, SinkCatalog::defaults(), SafetyBudgets{})
              : auditHeap(In, SinkCatalog::defaults(), SafetyBudgets{});
@@ -2427,6 +2431,95 @@ TEST(AllocLifetime, UninitializedLocalStackLoadIsReported) {
   ASSERT_NE(Read, nullptr);
   EXPECT_EQ(Read->FuncEntry, 0x100u);
   EXPECT_EQ(Read->CallVA, 0x408u);
+}
+
+TEST(AllocLifetime, DirectReadProofRequiresSameAddressAndFullConstantStore) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  const MedVar Address = mkReg(0x38, 0);
+  auto check = [&](const char *Case, MedVar Dest, MedVar Value,
+                   NdMemoryAddressSpace Space, NdMemoryOrdering Order,
+                   bool Expected) {
+    SCOPED_TRACE(Case);
+    FB B("read_field", 0x100);
+    const int Block = B.block();
+    B.op(Block, NdOp::STORE, MedVar{}, {Dest, Value});
+    B.F.Blocks[Block].Ops.back().MemoryAddressSpace = Space;
+    B.F.Blocks[Block].Ops.back().MemoryOrdering = Order;
+    B.op(Block, NdOp::LOAD, temp(10, 4), {Address}, 0x104);
+    B.ret(Block, {temp(10, 4)});
+    DirectReadInitialization Reads;
+    const auto Fs = audit({B.F}, &Img, true, true, nullptr, &Reads);
+    EXPECT_FALSE(has(Fs, VulnClass::UninitializedRead));
+    EXPECT_EQ(Reads.PrecedingConstantStore, Expected ? 1u : 0u);
+    EXPECT_EQ(Reads.OutsideOrUnresolved, Expected ? 0u : 1u);
+    EXPECT_EQ(Reads.LocalStack, 0u);
+  };
+  const auto Space = NdMemoryAddressSpace::Default;
+  const auto Order = NdMemoryOrdering::None;
+  const MedVar Word = MedVar::makeConst(7, 4);
+  check("exact", Address, Word, Space, Order, true);
+  check("wider", Address, MedVar::makeConst(7, 8), Space, Order, true);
+  check("partial", Address, MedVar::makeConst(7, 1), Space, Order, false);
+  check("unspecified", Address, MedVar::makeUnspecified(4, Img.Arch), Space,
+        Order, false);
+  check("different SSA version", mkReg(Address.RegOff, 1), Word, Space, Order,
+        false);
+  MedVar OtherView = Address;
+  OtherView.RegOff += 8;
+  check("different register occurrence", OtherView, Word, Space, Order, false);
+  check("different address space", Address, Word, NdMemoryAddressSpace::X86GS,
+        Order, false);
+  check("ordered access", Address, Word, Space, NdMemoryOrdering::Release,
+        false);
+}
+
+TEST(AllocLifetime, DirectReadStoreMustPrecedeLoadInSameBlock) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  FB B("read_field", 0x100);
+  const int Entry = B.block();
+  const int Next = B.block();
+  B.succ(Entry, Next);
+  const MedVar Address = mkReg(0x38, 0);
+  B.op(Entry, NdOp::LOAD, temp(10, 4), {Address});
+  B.op(Entry, NdOp::STORE, MedVar{}, {Address, MedVar::makeConst(7, 4)});
+  B.op(Next, NdOp::LOAD, temp(11, 4), {Address});
+  B.ret(Next, {temp(11, 4)});
+  DirectReadInitialization Reads;
+  audit({B.F}, &Img, true, true, nullptr, &Reads);
+  EXPECT_EQ(Reads.PrecedingConstantStore, 0u);
+  EXPECT_EQ(Reads.OutsideOrUnresolved, 2u);
+}
+
+TEST(AllocLifetime, DirectReadUsesEntireLocalByteRange) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  FB B("read_field", 0x100);
+  const int Block = B.block();
+  B.op(Block, NdOp::INT_SUB, temp(10),
+       {mkReg(kSP, 0), MedVar::makeConst(8, 8)});
+  B.op(Block, NdOp::INT_ADD, temp(11), {temp(10), MedVar::makeConst(3, 8)});
+  B.op(Block, NdOp::INT_ADD, temp(12), {temp(10), MedVar::makeConst(7, 8)});
+  B.op(Block, NdOp::STORE, MedVar{}, {temp(10), MedVar::makeConst(7, 8)});
+  B.op(Block, NdOp::LOAD, temp(13, 4), {temp(11)}, 0x108);
+  B.op(Block, NdOp::LOAD, temp(14, 4), {temp(12)}, 0x10c);
+  B.call(Block, "memcpy", temp(15),
+         {temp(16), temp(12), MedVar::makeConst(4, 8)}, 0x9000, 0x110);
+  B.ret(Block, {temp(14, 4)});
+  DirectReadInitialization Reads;
+  const auto Fs = audit({B.F}, &Img, true, true, nullptr, &Reads);
+  EXPECT_EQ(Reads.PrecedingConstantStore, 1u);
+  EXPECT_EQ(Reads.LocalStack, 0u);
+  EXPECT_EQ(Reads.OutsideOrUnresolved, 1u);
+  EXPECT_EQ(count(Fs, VulnClass::UninitializedRead), 2u);
+  for (const auto &F : Fs) {
+    if (F.Class != VulnClass::UninitializedRead)
+      continue;
+    EXPECT_TRUE(F.CallVA == 0x10c || F.CallVA == 0x110);
+    EXPECT_EQ(F.TheVerdict, Verdict::Unknown) << F.Detail;
+    EXPECT_NE(F.Detail.find("caller-owned"), std::string::npos);
+  }
 }
 
 TEST(AllocLifetime, NarrowStackLoadAddressFailsClosed) {

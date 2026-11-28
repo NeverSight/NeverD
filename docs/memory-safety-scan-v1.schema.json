@@ -15,7 +15,20 @@
       "type": "object",
       "required": ["audit", "hunt"],
       "properties": {
-        "audit": {"$ref": "#/$defs/analyzer"},
+        "audit": {
+          "$ref": "#/$defs/analyzer",
+          "properties": {
+            "direct_read_initialization": {
+              "type": "object",
+              "required": ["preceding_constant_store", "local_stack", "outside_or_unresolved"],
+              "properties": {
+                "preceding_constant_store": {"$ref": "#/$defs/count"},
+                "local_stack": {"$ref": "#/$defs/count"},
+                "outside_or_unresolved": {"$ref": "#/$defs/count"}
+              }
+            }
+          }
+        },
         "hunt": {"$ref": "#/$defs/analyzer"}
       }
     },

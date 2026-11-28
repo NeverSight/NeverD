@@ -65,6 +65,16 @@ Audit counts matched allocation sites, while Hunt counts sites it examined and t
 
 `coverage_complete` means all **selected** analyzers finished their inventories within budget. `ok` means at least one analyzer finished its pass (possibly with a budget limit) or produced observations before stopping. Consult the individual states for partial work. Any established `UNSAFE` finding yields exit code **2**, including when another analyzer stopped. With no such finding, an inconclusive observation or incomplete selected analyzer yields `UNKNOWN` and exit code **1**. Otherwise the verdict is `SAFE` within the selected static checks and the exit code is **0**. Argument, file loading and output errors also return **1**.
 
+When Audit reaches the memory pass, `analyzers.audit.direct_read_initialization` counts the direct MedIR loads and read-modify-write operations it visited. Each operation contributes to one row.
+
+| Counter | Evidence for the read |
+| --- | --- |
+| `preceding_constant_store` | The immediately preceding ordinary store in the same block wrote constant bytes covering the entire ordinary load. The two operations use the same recovered address or a provably contained stack range. |
+| `local_stack` | The entire read lies below the function-entry stack pointer. The local stack analysis checks reaching writes. Consult `uninitialized_read` findings for failures or uncertainty. |
+| `outside_or_unresolved` | The audit has no whole-read proof from the preceding store and cannot assess the entire read as a local stack slot. This includes caller storage, unresolved addresses and unsupported address widths or spaces. |
+
+The counters describe lifted operations visited, including a partial inventory if a scan stops after starting Audit. A missing object means the pass did not run. Reads performed by callees, including cataloged copy functions, have separate checks. A nonzero `outside_or_unresolved` can accompany `SAFE` and `coverage_complete: true`. In a routine that fills a caller-provided buffer, such a result leaves initialization of those bytes open. Proving that a source is within the buffer also leaves its write history open.
+
 ## MIPS, PowerPC and RISC-V ELF
 
 The same `neverd scan` command reads the architecture, byte order and ABI from the ELF. The CLI, desktop worker and SDK share this selection.
