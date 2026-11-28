@@ -28,7 +28,7 @@ inline constexpr char kX64ReturnStackResume[] =
 
 inline llvm::json::Object
 emitX64ReturnStackEntries(llvm::raw_ostream &OS, llvm::ArrayRef<va_t> Roots,
-                          const std::set<va_t> &JumpStops) {
+                          const std::set<va_t> &JumpStops, bool PagedDebug) {
   llvm::json::Array Entries;
   for (va_t Root : Roots) {
     const std::string Address = llvm::utohexstr(Root);
@@ -50,6 +50,12 @@ emitX64ReturnStackEntries(llvm::raw_ostream &OS, llvm::ArrayRef<va_t> Roots,
       {"resume", kX64ReturnStackResume},
       {"jump_stops", std::move(Jumps)},
       {"stack", "instruction-time guest registers and paged RAM"},
+      {"register_epilogue",
+       PagedDebug
+           ? "SWAPGS and SYSRETQ retain their debug-profile boundary"
+           : "original CPL and EFER.SCE qualify SWAPGS and SYSRETQ; "
+             "canonical SYSRETQ uses RCX/R11/STAR and preserves RSP; "
+             "unbound noncanonical fault context returns a native request"},
       {"completion", "stop after physical CALL, RET, or a listed jump; "
                      "return the instruction exit and updated guest state"},
       {"context", "retain the same offline X64PagedExecution across stops"}};

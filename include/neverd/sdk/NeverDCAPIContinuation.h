@@ -113,7 +113,8 @@ NEVERD_API const char *neverd_x64_continuation_source_with_observation_v1(
 
 /// Select a named C entry using the V6 paged return_stack_events contract.
 /// RequestJSON declares the CPU profile, MXCSR mask and paging width. An
-/// optional entries list must include Entry. Each generated entry accepts the
+/// optional entries list must include Entry. PE recovery uses full image
+/// metadata. Each generated entry accepts the
 /// guest state, the embedding caller's X64PagedExecution and a step budget.
 /// The manifest names the entry and resume functions. Retain the same working
 /// RAM and execution context across stops. CALL, RET and audited tail jumps

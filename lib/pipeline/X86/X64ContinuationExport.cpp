@@ -1034,8 +1034,8 @@ typedef struct neverd_x64_event_v1 {
         Request->FunctionContext, CallSitePauses,
         Request->Options.PagedReturnStackEvents ? &TransferJumps : nullptr);
     if (Request->Options.PagedReturnStackEvents)
-      ReturnStackContract =
-          emitX64ReturnStackEntries(OS, Request->Addresses, TransferJumps);
+      ReturnStackContract = emitX64ReturnStackEntries(
+          OS, Request->Addresses, TransferJumps, Request->Options.PagedDebug);
   } else {
     if (Request->FunctionContext)
       emitX64FunctionContext(OS, Version, Request->Addresses);

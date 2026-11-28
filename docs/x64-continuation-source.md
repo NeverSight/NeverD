@@ -451,7 +451,9 @@ at selected targets. The manifest lists the exact jump stops. Other branches
 retain bounded dispatch. Exceptions, missing backing, changed bytes and native
 requests retain their paged status and budget rules. To continue at the
 current PC, call `neverd_x64_resume_paged_transfers_v6(state, context, &budget)`
-with the same working context. An instruction or event with a separate pending
+with the same working context. Link the matching paged execution bridge from
+the NeverD analysis component into the embedding program. An instruction or
+event with a separate pending
 delivery uses its existing paged resumption contract.
 
 For the non-debug SWAPGS/SYSRETQ epilogue the executor authenticates the
