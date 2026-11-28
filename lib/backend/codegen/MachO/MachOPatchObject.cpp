@@ -3054,9 +3054,9 @@ llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
   for (const auto &Site : Addresses) {
     if (Site.Form == MachOAddressForm::Expanded)
       Growth.emplace_back(Site.Instruction, kInsnSize);
-    if (Site.expandsAuthentication())
-      Growth.emplace_back(Site.signingExpansionSite(),
-                          Site.Authentication->insertedWords() * kInsnSize);
+    Site.forEachSigningExpansion([&](va_t At, unsigned Words) {
+      Growth.emplace_back(At, uint64_t(Words) * kInsnSize);
+    });
   }
   llvm::sort(Growth);
   uint64_t Size = 0;

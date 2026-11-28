@@ -2781,6 +2781,24 @@ language scope agree with the authenticator. The final image check resolves
 each direct target, decodes each authentication against the installed signer
 and compares the duplicated prefix with the source instructions.
 
+For a direct edge whose signer lies ahead of the authenticator or beyond its
+backwards immediate, the publisher places the original IA/IB authentication
+near the installed signing instruction. Ordinary execution branches over this
+copy after signing. The incoming edge selects it at the join. An AUT branches
+back to its continuation with an unsigned LR. An authenticated return remains
+a single instruction. Neither path consumes a GPR or a stack slot. The source
+address returned or stored by the program still denotes the original signing
+word. Placement requires matching frame rules and language exception scope.
+An ambiguous incoming edge or an incompatible scope blocks publication.
+
+Instruction-based unwind recovery budgets the reachable words of a large
+sparse frame. A gap after an unconditional branch has unknown signing state
+until a proven incoming edge establishes it again. A Darwin frame may span a
+declared data-in-code range when every reached instruction stays in code owned
+by the frame. An edge into a literal pool, including a partially overlapping
+instruction, fails the proof. The compact-unwind reader uses the same storage
+proof when the lookup sentinel extends one byte past the instruction section.
+
 A compact saved-register frame can use a PC-relative authenticated return
 without materializing the signing address as data. The publisher keeps its
 compact unwind recipe. When the function does reference a signing address in
@@ -2851,6 +2869,20 @@ archived guest inventories also passed.
 [Validation record](evidence/arm64e-scratch-free-signing-2026-11-28.json) ·
 [Hosted Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46046283283) ·
 [Arm FVP execution](https://github.com/gmh5225/test_mac_intel/actions/runs/46051104410)
+
+Fourteen multi-entry fixtures cover IA and IB with forward signers and signers
+at or beyond the backward immediate limit. Across O0 publication and O2
+republication, the tests checked 56 images, 242 unwind rows, 92 interrupted
+signing PCs and 28 relocated authenticators. Twenty contradictory cases
+were rejected. Four generations of a mixed code and data image preserved the
+unwind state across embedded data. The free macOS Release run passed
+366 cases with zero skips. For each of the M4 and hosted Release exports,
+the Arm model ran 84 original and published bodies with two inputs at EL0
+and EL1 under all four EnPACM settings (1,344 calls per export).
+[Qualification record](evidence/arm64e-distant-joined-signers-2026-11-28.json) ·
+[macOS Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46109512420) ·
+[Arm FVP, M4 export](https://github.com/gmh5225/test_mac_intel/actions/runs/46110737909) ·
+[Arm FVP, hosted export](https://github.com/gmh5225/test_mac_intel/actions/runs/46113033008)
 
 ### Native x1 runner qualification
 
