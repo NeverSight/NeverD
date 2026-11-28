@@ -47,6 +47,12 @@ llvm::Expected<std::string> readContinuationInput(llvm::StringRef Path,
 } // namespace
 
 int runContinuation(neverd_session_t Sess) {
+  if (DecompileCheckAll) {
+    llvm::WithColor::error()
+        << "--check-all requires the default C route for every loaded "
+           "function and cannot be combined with explicit source export\n";
+    return 1;
+  }
   const bool Legacy = X86LegacySource.getNumOccurrences();
   const auto &Request = Legacy ? X86LegacySource : X64Continuation;
   const bool HasObservation = X64XbeginObservation.getNumOccurrences();

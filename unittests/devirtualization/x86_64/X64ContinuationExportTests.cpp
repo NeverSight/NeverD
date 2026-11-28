@@ -1438,10 +1438,13 @@ TEST_F(X64ContinuationExportTest,
     auto [Source, Manifest] = source(Request, LLVM);
     EXPECT_EQ(readOutput(Output), Source);
     EXPECT_EQ(readOutput(Report), Manifest);
-    auto Invalid = Args;
-    Invalid.push_back("--func=0x1000");
-    EXPECT_FALSE(exec(ndBin(), Invalid).ok());
-    EXPECT_EQ(readOutput(Output), Source);
+    for (const char *Conflict : {"--func=0x1000", "--check-all"}) {
+      auto Invalid = Args;
+      Invalid.push_back(Conflict);
+      EXPECT_FALSE(exec(ndBin(), Invalid).ok()) << Conflict;
+      EXPECT_EQ(readOutput(Output), Source);
+      EXPECT_EQ(readOutput(Report), Manifest);
+    }
     auto Aliased = Common;
     Aliased.push_back("--continuation-report=" + Output.string());
     EXPECT_FALSE(exec(ndBin(), Aliased).ok());
