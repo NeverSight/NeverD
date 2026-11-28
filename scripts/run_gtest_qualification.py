@@ -17,11 +17,11 @@ import xml.etree.ElementTree as ET
 
 if __package__:
     from .run_lift_qualification import (
-        RESULT_CHECKS, QualificationError, QualificationReport, sha256,
+        RESULT_CHECKS, QualificationReport, sha256,
     )
 else:
     from run_lift_qualification import (
-        RESULT_CHECKS, QualificationError, QualificationReport, sha256,
+        RESULT_CHECKS, QualificationReport, sha256,
     )
 
 
@@ -65,7 +65,6 @@ def run(binary: Path, output: Path, test_filter: str, minimum: int,
         "input": "a readable test binary",
         "discovery": "the complete filtered test inventory",
         **RESULT_CHECKS,
-        "binary identity": "matching binary hashes before and after execution",
     })
     try:
         with progress.check("input"):
@@ -76,11 +75,7 @@ def run(binary: Path, output: Path, test_filter: str, minimum: int,
                                        stderr=subprocess.STDOUT, timeout=timeout)
             listing_path.write_text(discovery.stdout, encoding="utf-8")
             names = identities(discovery.stdout, minimum)
-        outcome = progress.run_tests(args, output, names, timeout=timeout)
-        with progress.check("binary identity"):
-            if sha256(binary) != digest:
-                progress.observations = {}
-                raise QualificationError("qualification binary changed during execution")
+        outcome = progress.run_tests(args, output, names, binary_digest=digest, timeout=timeout)
     finally:
         progress.write(verification)
     report = {"binary_sha256": digest, "filter": test_filter,

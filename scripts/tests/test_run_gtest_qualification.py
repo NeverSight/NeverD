@@ -52,7 +52,8 @@ Targets/Matrix.
         with self.assertRaises(ValueError):
             qualification.identities(LISTING, 0)
 
-    def invoke(self, xml=XML, exit_code=0, discovery=LISTING, error=None):
+    def invoke(self, xml=XML, exit_code=0, discovery=LISTING, error=None,
+               replace_binary=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             binary, output = root / "tests.exe", root / "result.xml"
@@ -73,6 +74,8 @@ Targets/Matrix.
                         raise error
                     return subprocess.CompletedProcess(args, 0, stdout=discovery)
                 self.assertEqual(args[1], "--gtest_filter=Example.*")
+                if replace_binary:
+                    binary.write_bytes(b"a different test binary")
                 if xml is not None:
                     output.write_text(xml)
                 return subprocess.CompletedProcess(args, exit_code)
@@ -112,7 +115,40 @@ Targets/Matrix.
                                    "missing_evidence": "reference output for this input"})
         for key, value in observations.items():
             self.assertEqual(self.verification[key], value)
-        self.assertEqual(self.verification["stages"][-1]["state"], "not_run")
+        stages = {row["path"][0]: row["state"] for row in self.verification["stages"]}
+        self.assertEqual(stages["case inventory"], "passed")
+        self.assertEqual(stages["binary identity"], "passed")
+
+    def test_inventory_mismatch_leaves_run_observations_unattributed(self):
+        for replacement in ("Different", "First", None):
+            with self.subTest(replacement=replacement):
+                doc = ET.fromstring(XML)
+                suite = doc.find("testsuite")
+                second = suite.findall("testcase")[1]
+                if replacement is None:
+                    suite.remove(second)
+                else:
+                    second.set("name", replacement)
+                ET.SubElement(ET.SubElement(doc, "properties"), "property",
+                              name="neverd_execution_evidence",
+                              value='{"record_comparison":{"compared":3,"matches":1},'
+                                    '"caller_loop":"completed"}')
+                with self.assertRaisesRegex(ValueError, "test identities differ"):
+                    self.invoke(xml=ET.tostring(doc, encoding="unicode"))
+                self.assertIsNone(self.verification["record_comparison"])
+                self.assertEqual(self.verification["caller_loop"], "unknown")
+                self.assertEqual(self.verification["first_blocker"]["path"], ["case inventory"])
+
+    def test_replaced_binary_cannot_supply_observations_on_a_skipped_case(self):
+        doc = ET.fromstring(XML)
+        ET.SubElement(ET.SubElement(doc, "properties"), "property",
+                      name="neverd_execution_evidence", value='{"caller_loop":"completed"}')
+        ET.SubElement(doc.find(".//testcase"), "skipped", message="no reference")
+        with self.assertRaisesRegex(ValueError, "binary changed"):
+            self.invoke(xml=ET.tostring(doc, encoding="unicode"), replace_binary=True)
+        self.assertEqual(self.verification["first_blocker"]["path"], ["binary identity"])
+        self.assertIsNone(self.verification["record_comparison"])
+        self.assertEqual(self.verification["caller_loop"], "unknown")
 
     def test_child_observations_cannot_claim_the_caller_of_the_entire_run(self):
         doc = ET.fromstring(XML)
