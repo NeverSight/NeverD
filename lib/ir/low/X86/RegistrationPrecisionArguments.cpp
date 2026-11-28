@@ -72,6 +72,19 @@ bool PrecisionArguments::observe(
   return true;
 }
 
+std::optional<uint32_t> PrecisionArguments::firstPrivateWord(
+    const registration_state::FrameTransfer &Transfer, size_t &Work) const {
+  if (!Active || !chargeCalleeWork(Work, Words.size() + 1))
+    return std::nullopt;
+  const auto SP = Transfer.read(NdVar::reg(x86reg::RSP, 4));
+  if (!SP.Offset || *SP.Offset > -4 || SP != FrameValue::frame(*SP.Offset))
+    return std::nullopt;
+  for (const auto &Word : Words)
+    if (Word && Word->Offset == *SP.Offset)
+      return Word->Value;
+  return std::nullopt;
+}
+
 bool PrecisionArguments::provesSuccessfulCall(
     const BinaryImage &Image, const LowOp &Op,
     const registration_state::FrameState &State, size_t &Work) const {

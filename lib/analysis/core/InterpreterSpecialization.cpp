@@ -6559,11 +6559,23 @@ void Specializer::refineFailureGuards() {
       RefinableGuards.emplace(std::get<0>(Demand), std::get<1>(Demand));
   }
   std::vector<std::vector<int>> Predecessors(Nodes.size());
+  const bool FailedAtEntryAfterStore =
+      SawUnprovedNativeReturnStore &&
+      Result.Status == SpecializationStatus::Unsupported &&
+      FailureCursor == Nodes[FailureNode].Key.Cursor.Address;
   for (size_t I = 0; I < Nodes.size(); ++I)
     for (int Next : Nodes[I].Block.Succs) {
       if (!ChargeVisit())
         return;
       Predecessors[Next].push_back(static_cast<int>(I));
+      // A conditional store can leave a finite return word with an
+      // unsupported target. Recover the preceding loop guards in the same
+      // attempt as the store address. Every target is still re-proved.
+      if (Next == FailureNode && FailedAtEntryAfterStore &&
+          Nodes[I].Block.Succs.size() > 1 && !Nodes[I].Slices.empty() &&
+          Nodes[I].Slices.back().Origin.Control ==
+              LowInstructionControl::Return)
+        NativeReturnStoreFailure = true;
     }
   std::set<std::pair<va_t, InstructionMode>> Guards;
   bool SawReachableGuard = false;

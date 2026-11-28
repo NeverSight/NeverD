@@ -5,10 +5,15 @@ import argparse
 from dataclasses import dataclass, replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
+
+from mips_relink_linkage import (FIXTURES, SET_THREAD_AREA, build_linkage_objects,
+                                 inspect_linkage, linkage_startup, verify_linkage_objects)
 
 
 ABIS = {
@@ -17,6 +22,10 @@ ABIS = {
     "n64": ("mips64", "gnuabi64", 5058),
 }
 MODES = ("section", "inplace")
+SAVED_ASSEMBLY_FLAGS = ("-fintegrated-as", "-save-temps=obj")
+C_CALL_UPGRADES = {"direct": "c-call-upgrade", "saved-replacement": "c-call-upgrade-saved",
+                   "pic-saved-replacement": "c-call-upgrade-pic"}
+PRODUCT_VERSION = 20
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -98,10 +107,57 @@ class Profile:
     release: int = 2
     shrinking: bool = False
     compressed_entry: bool = False
+    historical_isa: int = 0
+    linkage: str = ""
+    gp64_o32: bool = False
+    dwarf_version: int = 0
+    entry_alias: bool = False
+    c_call: bool = False
+    saved_assembly: bool = False
+    large_frame: bool = False
+    optimization: str = "O2"
+    c_pic: bool = False
+
+    @property
+    def high_address(self):
+        return self.abi == "n64" and bool(self.shrinking or self.linkage or self.dwarf_version
+                                          or self.entry_alias or self.c_call)
+
+    @property
+    def tls_model(self):
+        return {"tls": "localexec", "tls-ie": "initialexec",
+                "tls-bss": "localexec", "tls-bss-ie": "initialexec"}.get(self.linkage)
+
+    @property
+    def tls_blocks(self):
+        return self.linkage in ("tls-bss", "tls-bss-ie")
+
+    @property
+    def soft_float(self):
+        return self.linkage in ("pic-soft", "far-branches", "relocation-bounds", "branch-slots") or self.tls_blocks
 
     @property
     def name(self):
         suffix = f"{self.abi}-{'le' if self.little else 'be'}"
+        if self.c_call:
+            prefix = "c-call-large-frame" if self.large_frame else "c-call"
+            if self.c_pic:
+                prefix += f"-pic-r{self.release}"
+            if self.optimization != "O2":
+                prefix += "-" + self.optimization.lower()
+            if self.saved_assembly:
+                prefix += "-asm"
+            return f"{prefix}-{self.isa}-{suffix}"
+        if self.entry_alias:
+            return f"entry-alias-{self.isa}-{suffix}"
+        if self.dwarf_version:
+            return f"dwarf{self.dwarf_version}-{suffix}"
+        if self.gp64_o32:
+            suffix = "gp64-" + suffix
+        if self.linkage:
+            return f"{self.linkage}-{self.isa}-r{self.release}-{suffix}"
+        if self.historical_isa:
+            return f"mips{self.historical_isa}-{suffix}"
         name = f"{self.isa}-r{self.release}-{suffix}" if self.shrinking else suffix
         return name + "-compressed-entry" if self.compressed_entry else name
 
@@ -115,27 +171,109 @@ class Profile:
         return ABIS[self.abi][2]
 
     @property
+    def release_isa_bits(self):
+        return 64 if self.gp64_o32 or self.abi != "o32" else 32
+
+    @property
     def cpu(self):
-        return f"mips{32 if self.abi == 'o32' else 64}r{self.release}"
+        if self.historical_isa:
+            return f"mips{self.historical_isa}"
+        base = f"mips{self.release_isa_bits}"
+        return base if self.release == 1 else f"{base}r{self.release}"
 
 
-def profiles():
+def profiles(version=PRODUCT_VERSION):
     for abi in ABIS:
         for little in (False, True):
             yield Profile(abi, little)
-            for isa in ("classic", "micromips"):
-                for release in (2, 6):
-                    profile = Profile(abi, little, isa, release, shrinking=True)
-                    yield profile
-                    if isa == "micromips":
-                        yield replace(profile, compressed_entry=True)
-            if abi == "o32":
-                profile = Profile(abi, little, "mips16", shrinking=True)
+            if version >= 20:
+                yield Profile(abi, little, linkage="entry-stack")
+            if version == 1:
+                continue
+            if version >= 12:
+                encodings = ("classic", "micromips", "mips16") if abi == "o32" else ("classic", "micromips")
+                for isa in encodings:
+                    yield Profile(abi, little, isa, compressed_entry=isa != "classic", entry_alias=True)
+                    if version >= 13:
+                        c_profile = Profile(abi, little, isa, compressed_entry=isa != "classic", c_call=True)
+                        yield c_profile
+                        if version >= 14:
+                            yield replace(c_profile, saved_assembly=True)
+                            if isa == "mips16":
+                                yield replace(c_profile, large_frame=True)
+                                yield replace(c_profile, large_frame=True, saved_assembly=True)
+                        if version >= 15:
+                            for level in ("O0", "Os", "O3"):
+                                for saved in (False, True):
+                                    yield replace(c_profile, optimization=level, saved_assembly=saved)
+                        if version >= 17:
+                            for release in ((2,) if isa == "mips16" else (2, 6)):
+                                for saved in (False, True):
+                                    yield replace(c_profile, c_pic=True, release=release,
+                                                  compressed_entry=False, saved_assembly=saved)
+            if version >= 11:
+                for dwarf_version in (4, 5):
+                    yield Profile(abi, little, dwarf_version=dwarf_version)
+            if version >= 9:
+                yield Profile(abi, little, linkage="callback-table")
+            if version >= 8:
+                yield Profile(abi, little, linkage="large-segments")
+            if version >= 7:
+                yield Profile(abi, little, linkage="init-arrays")
+            if version >= 4:
+                first_level = 1 if abi == "o32" else 3
+                last_level = 3 if version == 4 and abi == "o32" else 5
+                for level in range(first_level, last_level + 1):
+                    yield Profile(abi, little, shrinking=True, historical_isa=level)
+            for profile in scalar_release_profiles(abi, little, version):
                 yield profile
+                if version >= 5 and abi == "o32":
+                    yield replace(profile, gp64_o32=True)
+
+            if version >= 4:
+                workloads = ("pic-hard", "pic-soft", "small-data", "tls", "tls-ie")
+                if version >= 6:
+                    workloads += ("tls-bss", "tls-bss-ie")
+                if version >= 18:
+                    workloads += ("relocation-bounds",)
+                for release in (2, 6):
+                    for isa in ("classic", "micromips"):
+                        for linkage in workloads:
+                            yield Profile(abi, little, isa, release, linkage=linkage)
+                        if version >= 19:
+                            yield Profile(abi, little, isa, release, linkage="branch-slots")
+                if abi == "o32":
+                    for linkage in workloads:
+                        yield Profile(abi, little, "mips16", linkage=linkage)
+                    if version >= 6:
+                        yield Profile(abi, little, "mips16", linkage="far-branches")
+                yield Profile(abi, little, linkage="dsp")
+                yield Profile(abi, little, release=5, linkage="msa")
+
+
+def scalar_release_profiles(abi, little, version):
+    for isa in ("classic", "micromips"):
+        releases = (2, 6)
+        if version >= 4:
+            releases = (1, 2, 3, 5, 6) if isa == "classic" else (2, 3, 5, 6)
+        for release in releases:
+            profile = Profile(abi, little, isa, release, shrinking=True)
+            yield profile
+            if isa == "micromips" and version >= 3:
                 yield replace(profile, compressed_entry=True)
+    if abi == "o32":
+        profile = Profile(abi, little, "mips16", shrinking=True)
+        yield profile
+        if version >= 3:
+            yield replace(profile, compressed_entry=True)
 
 
 def startup(profile):
+    if profile.entry_alias or profile.c_call:
+        finish = ((FIXTURES / "entry_exit.s").read_text()
+                  .replace("EXIT_ISA", ".set micromips" if profile.isa == "micromips" else "")
+                  .replace("EXIT_NR", str(profile.exit_nr)))
+        return linkage_startup(profile, "run_calls") + "\n" + finish if profile.c_pic else finish
     source = STARTUP
     callee = "invoke" if profile.isa == "mips16" else "calc"
     for value in (0, 1, 7):
@@ -158,6 +296,13 @@ def startup(profile):
 
 
 def calculator(profile, updated):
+    if profile.entry_alias:
+        return (FIXTURES / "entry_alias.ll").read_text().replace("STATUS", "37" if updated else "25")
+    if profile.dwarf_version:
+        return ((FIXTURES / "debug_calc.ll").read_text()
+                .replace("DWARF_VERSION", str(profile.dwarf_version))
+                .replace("SOURCE_LINE", "29" if updated else "14")
+                .replace("ADJUST", "7" if updated else "3"))
     if not profile.shrinking:
         return CALC.replace("ADJUST", "7" if updated else "3")
     # A changing FDE size would legitimately change loaded bytes outside calc.
@@ -168,14 +313,41 @@ def calculator(profile, updated):
 
 
 def layout(profile, section, *, split_entry=False):
-    base = 0x120000000 if profile.shrinking and profile.abi == "n64" else 0x400000
-    headers = "PHDRS { startup PT_LOAD FLAGS(5); code PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6); }"
+    base = 0x120000000 if profile.high_address else 0x400000
+    entry_stack = profile.linkage == "entry-stack"
+    headers = ""
+    if split_entry or entry_stack:
+        file_headers = " FILEHDR PHDRS" if entry_stack else ""
+        separate_code = " code PT_LOAD FLAGS(5);" if split_entry else ""
+        headers = f"PHDRS {{ startup PT_LOAD{file_headers} FLAGS(5);{separate_code} data PT_LOAD FLAGS(6); }}"
     calc = (".calc.update ALIGN(0x10000) : { *(.text.calc) } :code" if split_entry else
             ".calc.update ALIGN(0x1000) : { *(.text.calc) }")
-    return (LAYOUT.replace("BASE_ADDRESS", hex(base + (0x100000 if section else 0)))
-            .replace("PROGRAM_HEADERS", headers if split_entry else "")
-            .replace("ENTRY_SEGMENT", ":startup" if split_entry else "")
-            .replace("DATA_SEGMENT", ":data" if split_entry else "")
+    script = LAYOUT
+    if entry_stack:
+        script = script.replace("BASE_ADDRESS;", "BASE_ADDRESS + SIZEOF_HEADERS;")
+    elif profile.linkage == "relocation-bounds":
+        anchor = "0x12347fff7fff8000" if profile.abi == "n64" else "0x12348000"
+        script = script.replace("  .data :", f"""  .gp_edges : {{ *(.gp.first) . += 65534; *(.gp.last) }}
+  _gp = ADDR(.gp_edges) + 0x8000;
+  carry_anchor = {anchor};
+  .data :""")
+    elif profile.linkage == "init-arrays":
+        arrays = []
+        for name in ("preinit_array", "init_array", "fini_array"):
+            arrays.append(f"  .{name} : {{ __{name}_start = .; KEEP(*(SORT_BY_INIT_PRIORITY(.{name}.*))) "
+                          f"KEEP(*(.{name})) __{name}_end = .; }}")
+        script = script.replace("  .data :", "\n".join(arrays) + "\n  .data :")
+    elif profile.tls_blocks:
+        script = script.replace("  .data :", """  .tdata ALIGN(256) : { *(.tdata*) }
+  __tls_image = ADDR(.tdata);
+  .tbss ALIGN(256) (NOLOAD) : { *(.tbss*) }
+  .data :""")
+    elif profile.tls_model:
+        script = script.replace("  .data :", "  .tdata : { *(.tdata*) }\n  __tls_image = ADDR(.tdata);\n  .data :")
+    return (script.replace("BASE_ADDRESS", hex(base + (0x100000 if section else 0)))
+            .replace("PROGRAM_HEADERS", headers)
+            .replace("ENTRY_SEGMENT", ":startup" if headers else "")
+            .replace("DATA_SEGMENT", ":data" if headers else "")
             .replace("RESERVE", ". = ADDR(.text) + 0x100;" if profile.shrinking else "")
             .replace("FILL", "=0" if profile.shrinking else "")
             .replace("OLD_CALC", "" if section else "*(.text.calc)")
@@ -194,8 +366,8 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run(args, *, error=None, expected=0, source=None):
-    result = subprocess.run(args, input=source, text=True, capture_output=True, timeout=60)
+def run(args, *, error=None, expected=0, source=None, cwd=None, env=None):
+    result = subprocess.run(args, input=source, text=True, capture_output=True, timeout=60, cwd=cwd, env=env)
     if error is None:
         passed = result.returncode == expected
     else:
@@ -205,41 +377,415 @@ def run(args, *, error=None, expected=0, source=None):
                            f"{error or expected}\n{result.stdout}\n{result.stderr}")
 
 
+def compile_arithmetic_object(args, build, profile, filename, ir, *, pic=False):
+    target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}"]
+    features = [] if pic else ["+noabicalls"]
+    if profile.isa != "classic":
+        features.append("+" + profile.isa)
+    run([args.llc, "-filetype=obj", f"-mtriple={profile.triple}", *target, "-mattr=" + ",".join(features),
+         "-relocation-model=pic" if pic else "-relocation-model=static", "-o", build / filename, "-"], source=ir)
+
+
+def assemble_startup(args, build, profile):
+    target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}"]
+    if not profile.c_pic:
+        target.append("-mattr=+noabicalls")
+    run([args.mc, "-filetype=obj", f"-triple={profile.triple}", *target,
+         "-o", build / "start.o", "-"], source=startup(profile))
+
+
+def c_target_flags(profile):
+    abi = {"o32": "32", "n32": "n32", "n64": "64"}[profile.abi]
+    addressing = ["-mabicalls", "-fPIC"] if profile.c_pic else ["-mno-abicalls", "-fno-pic"]
+    flags = ["--target=" + profile.triple, "-march=" + profile.cpu, "-mabi=" + abi,
+             *addressing, "-G0", "-" + profile.optimization, "-ffreestanding", "-fno-stack-protector",
+             "-fno-ident", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables"]
+    if profile.isa != "classic":
+        flags.append("-mips16" if profile.isa == "mips16" else "-mmicromips")
+    return flags
+
+
+def build_entry_stack_objects(args, build, profile):
+    sources = FIXTURES / "entry_stack"
+    flags = c_target_flags(profile)
+    for name, source, extra in (("start.o", "start.S", [f"-DEXIT_NR={profile.exit_nr}"]),
+                                ("caller.o", "check.c", []),
+                                ("calc.o", "calc.c", ["-DBIAS=41"]),
+                                ("updated.o", "calc.c", ["-DBIAS=73"])):
+        run([args.clang, *flags, *extra, "-c", sources / source, "-o", build / name])
+    return ["start.o", "caller.o", "calc.o"]
+
+
+def build_c_call_objects(args, build, profile, replacement_clang=None, replacement_flags=(), *, size_loop=False):
+    sources = FIXTURES / "c_abi"
+    flags = c_target_flags(profile)
+    if profile.large_frame:
+        flags.append("-DCHECK_LARGE_FRAME")
+    if size_loop:
+        flags.append("-DCHECK_SIZE_LOOP")
+    if profile.saved_assembly:
+        flags.extend(SAVED_ASSEMBLY_FLAGS)
+    assemble_startup(args, build, profile)
+    caller_flags = ["-D_start=run_calls"] if profile.c_pic else []
+    run([args.clang, *flags, *caller_flags, "-c", sources / "start.c", "-o", build / "caller.o"])
+    run([args.clang, *flags, "-DREVISION=7", "-c", sources / "calc.c", "-o", build / "calc.o"])
+    run([replacement_clang or args.clang, *flags, *replacement_flags, "-DREVISION=5", "-c", sources / "calc.c",
+         "-o", build / "updated.o"])
+    return ["caller.o", "start.o", "calc.o"]
+
+
+def build_arithmetic_objects(args, build, profile):
+    assemble_startup(args, build, profile)
+    compile_arithmetic_object(args, build, profile, "calc.o", calculator(profile, False))
+    compile_arithmetic_object(args, build, profile, "updated.o", calculator(profile, True))
+    if profile.entry_alias:
+        return ["start.o", "calc.o"]
+    if not profile.dwarf_version:
+        compile_arithmetic_object(args, build, profile, "grown.o", GROWING_CALC)
+    objects = ["start.o"]
+    if profile.isa == "mips16":
+        compile_arithmetic_object(args, build, profile, "invoke.o", MIPS16_CALLER)
+        objects.append("invoke.o")
+        if profile.compressed_entry:
+            compile_arithmetic_object(args, build, profile, "entry.o", MIPS16_ENTRY)
+            objects.append("entry.o")
+    objects.append("calc.o")
+    return objects
+
+
+def check_mixed_float_abis(args, builds, products):
+    for abi in ABIS:
+        for little in (False, True):
+            hard = Profile(abi, little, linkage="pic-hard").name
+            soft = Profile(abi, little, linkage="pic-soft").name
+            build = builds / hard
+            manifest = json.loads((build / "manifest.json").read_text())
+            shutil.copyfile(builds / soft / "updated.o", build / "soft.o")
+            path = build / "mixed.json"
+            encode(path, {**manifest, "replacement": "soft.o"})
+            previous = build / "prior-output.elf"
+            previous.write_bytes(b"existing product\n")
+            for mode in MODES:
+                run([args.neverd, "patch", products / hard / "original.elf", f"--relink={path}",
+                     f"--linker-path={args.lld}", f"--mode={mode}", "-o", previous],
+                    error="incompatible with target floating point ABI")
+                if previous.read_bytes() != b"existing product\n":
+                    raise ValueError(f"{hard}: incompatible {mode} replacement changed the prior output")
+
+
+def build_upgrade_objects(old, new, build, out, profile, partial, archive_tool=None):
+    inputs = build / "inputs" if partial else build
+    inputs.mkdir(exist_ok=True)
+    assemble_startup(old, inputs, profile)
+    if not partial:
+        compile_arithmetic_object(old, inputs, profile, "calc.o", calculator(profile, False))
+        compile_arithmetic_object(new, inputs, profile, "updated.o", calculator(profile, True))
+        return ["start.o", "calc.o"]
+
+    callers = [inputs / "start.o"]
+    helper = (FIXTURES / "group_helper.ll").read_text()
+    for role, choice in (("left", "0"), ("right", "3")):
+        filename = role + ".o"
+        ir = helper.replace("SIDE", role).replace("CHOICE", choice)
+        compile_arithmetic_object(old, inputs, profile, filename, ir)
+        callers.append(inputs / filename)
+    calc = (FIXTURES / "group_calc.ll").read_text()
+    versions = ((old, "calc.o", "updated.o", "1"), (new, "updated.o", "calc.o", "5"))
+    for tools, name, _, adjust in versions:
+        compile_arithmetic_object(tools, inputs, profile, name, calc.replace("ADJUST", adjust), pic=partial == "pic")
+    if archive_tool:
+        unused = (FIXTURES / "archive_unused.ll").read_text()
+        compile_arithmetic_object(old, inputs, profile, "unused.o", unused)
+    for tools, name, alternate, _ in versions:
+        selected = inputs / name
+        if archive_tool:
+            # Both versions define calc. LLD should pull the first definition
+            # and leave the unreferenced member with its unresolved call behind.
+            explicit = inputs / (name + ".explicit")
+            run([tools.lld, "-r", "-o", explicit, *callers, selected])
+            archive = inputs / (name + ".a")
+            run([archive_tool, "--format=gnu", "rcsD", archive, selected, inputs / alternate, inputs / "unused.o"])
+            selected = archive
+        run([tools.lld, "-r", "-o", build / name, *callers, selected])
+        if archive_tool and digest(build / name) != digest(explicit):
+            raise ValueError(f"{profile.name}: archive member selection changed {name}")
+        shutil.copyfile(build / name, out / name)
+    return ["calc.o"]
+
+
+def check_partial_link_order(neverd, old_lld, new_lld, manifest, out):
+    build = manifest.parent
+    inputs = build / "inputs"
+    other = build / "other-order"
+    other.mkdir()
+    # Use the same original objects and LLD, but select the other weak definition.
+    run([old_lld, "-r", "-o", other / "calc.o", inputs / "start.o", inputs / "right.o",
+         inputs / "left.o", inputs / "calc.o"])
+    original = other / "original.elf"
+    run([old_lld, "-static", "-T", build / "base.ld", "-o", original, other / "calc.o"])
+    for mode in MODES:
+        target = out / f"{mode}.elf"
+        previous = digest(target)
+        run([neverd, "patch", original, f"--relink={manifest}", f"--mode={mode}",
+             f"--original-linker-path={old_lld}", f"--linker-path={new_lld}", "-o", target],
+            error="do not reproduce")
+        if digest(target) != previous:
+            raise ValueError(f"{build.name}: mismatched input order changed the {mode} output")
+
+
+def c_call_upgrade_profiles(suite):
+    if suite == "c-call-upgrade-pic":
+        return [p for p in profiles(17) if p.c_pic and not p.saved_assembly]
+    # r16 also supports direct MIPS16 objects for this cross-unit C caller.
+    return [p for p in profiles(13) if p.c_call and (suite == "c-call-upgrade-saved" or p.isa != "mips16")]
+
+
+def reserve_callee_slot(tools, build, profile):
+    # The original callee is the last code input. Shortening its input
+    # section also shortens PT_LOAD and changes the linker's trailing fill.
+    sections = subprocess.check_output([tools.readobj, "--elf-output-style=JSON", "--sections", build / "calc.o"],
+                                       text=True, timeout=60)
+    size, = (item["Section"]["Size"] for item in json.loads(sections)[0]["Sections"]
+             if item["Section"]["Name"]["Name"] == ".text.calc")
+    replacement = build / "updated-slot.o"
+    if profile.c_pic:
+        # The saved assembly has already ended calc and recorded its symbol size.
+        # Reserving its input section here preserves the original PIC symbol flags.
+        source = (build / "calc.s").read_text()
+        source += f'\n.pushsection .text.calc,"ax",@progbits\n.org {size}, 0\n.popsection\n'
+        run([tools.mc, "-filetype=obj", "-triple=" + profile.triple, "-mcpu=" + profile.cpu,
+             "-target-abi=" + profile.abi, "-mattr=+" + profile.isa, "--position-independent",
+             "-o", replacement, "-"], source=source)
+        return replacement
+    nop = "0x00650065" if profile.little else "0x65006500"
+    layout = build / "callee-slot.ld"
+    write(layout, f"SECTIONS {{ .text.calc : {{ *(.text.calc) . = MAX(., {size}); }} ={nop} }}\n")
+    run([tools.lld, "-r", "-T", layout, "-o", replacement, build / "updated.o"])
+    return replacement
+
+
+def qualify_upgrade(args):
+    """Reproduce a prior fork release's ELF and link the replacement with the current one."""
+    def tools_in(directory):
+        suffix = ".exe" if (directory / "ld.lld.exe").is_file() else ""
+        return argparse.Namespace(clang=directory / ("clang" + suffix), mc=directory / ("llvm-mc" + suffix),
+                                  llc=directory / ("llc" + suffix), lld=directory / ("ld.lld" + suffix),
+                                  readobj=directory / ("llvm-readobj" + suffix))
+
+    old, new = tools_in(args.original_tools.resolve()), tools_in(args.tools.resolve())
+    root = args.root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    results, object_hashes = {}, {}
+    suite = C_CALL_UPGRADES.get(args.c_calls)
+    saved_replacement = args.c_calls in ("saved-replacement", "pic-saved-replacement")
+    cases = c_call_upgrade_profiles(suite) if suite else profiles(1)
+    with tempfile.TemporaryDirectory(prefix="mips upgrade ") as temp:
+        for profile in cases:
+            build = Path(temp) / profile.name
+            out = root / profile.name
+            build.mkdir()
+            out.mkdir(exist_ok=True)
+            if args.c_calls:
+                objects = build_c_call_objects(old, build, profile, replacement_clang=new.clang,
+                                               replacement_flags=SAVED_ASSEMBLY_FLAGS if saved_replacement else (),
+                                               size_loop=profile.c_pic)
+            else:
+                objects = build_upgrade_objects(old, new, build, out, profile, args.partial_link, args.archive_tool)
+            for separate, name in ((False, "base.ld"), (True, "section.ld")):
+                write(build / name, layout(profile, separate))
+            original = out / "original.elf"
+            run([old.lld, "-static", "-T", build / "base.ld", "-o", original, *(build / p for p in objects)])
+            manifest = build / "manifest.json"
+            inputs = dict(objects=objects, original="calc.o", replacement="updated.o",
+                          function="calc", layout="base.ld", section=".calc.update", sectionLayout="section.ld")
+            staged = build / "updated" / "calc.o"
+            staged.parent.mkdir()
+            for mode in MODES:
+                encode(manifest, inputs)
+                replacement = build / "updated.o"
+                target = out / f"{mode}.elf"
+                target.write_bytes(b"prior product\n")
+                command = [args.neverd, "patch", original, f"--relink={manifest}", f"--mode={mode}",
+                           f"--linker-path={new.lld}", "-o", target]
+                # The original linker version is part of the complete file.
+                run(command, error="do not reproduce")
+                if target.read_bytes() != b"prior product\n":
+                    raise ValueError(f"{profile.name}: failed upgrade changed {mode} output")
+                command.append(f"--original-linker-path={old.lld}")
+                reserve = profile.isa != "classic" if profile.c_pic else profile.isa == "mips16"
+                if saved_replacement and reserve and mode == "inplace":
+                    if not profile.c_pic:
+                        run(command, error="inplace relink changed the entry or load layout")
+                        if target.read_bytes() != b"prior product\n":
+                            raise ValueError(f"{profile.name}: rejected load layout changed the output")
+                    replacement = reserve_callee_slot(new, build, profile)
+                    encode(manifest, {**inputs, "replacement": replacement.name})
+                run(command)
+                shutil.copyfile(replacement, staged)
+                script = build / ("section.ld" if mode == "section" else "base.ld")
+                reference = build / "reference.elf"
+                run([new.lld, "-static", "-T", script, "-o", reference,
+                     *(staged if p == "calc.o" else build / p for p in objects)])
+                if reference.read_bytes() != target.read_bytes():
+                    raise ValueError(f"{profile.name}: {mode} differs from the new linker's output")
+            if args.partial_link:
+                check_partial_link_order(args.neverd, old.lld, new.lld, manifest, out)
+            if not results:
+                target = out / "inplace.elf"
+                previous = digest(target)
+                base = [args.neverd, "patch", original, "-o", target]
+                relink = [f"--relink={manifest}", f"--linker-path={new.lld}", "--mode=inplace"]
+                missing = "neverd-test-missing-original-linker"
+                for flags, error in (
+                    ([f"--original-linker-path={old.lld}"], "--original-linker-path requires --relink"),
+                    ([*relink, "--original-linker-path="], "--original-linker-path requires an ELF linker"),
+                    ([*relink, f"--original-linker-path={missing}"], missing),
+                ):
+                    run([*base, *flags], error=error)
+                    if digest(target) != previous:
+                        raise ValueError(f"{profile.name}: rejected linker option changed the prior output")
+            results[profile.name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
+            if profile.c_pic:
+                object_hashes[profile.name] = save_linkage_objects(build, out, profile)
+    # Existing upgrade archives use the original six-profile format.
+    products = ({"version": PRODUCT_VERSION, "suite": suite, "profiles": results, "objects": object_hashes}
+                if suite else results)
+    encode(root / "products.json", products)
+    print(f"Relinked {len(results)} original-release programs with the new linker in both modes")
+
+
+def qualify_second_updates(args, build, out, profile, manifest, patch):
+    # The first update replaced calc.o under its original basename. Reproduce
+    # that entire executable before changing the function a second time.
+    current = build / "first" / "calc.o"
+    current.parent.mkdir()
+    shutil.copyfile(build / "updated.o", current)
+    third = "third.o"
+    compile_arithmetic_object(args, build, profile, third, CALC.replace("ADJUST", "11"))
+    objects = [current.relative_to(build).as_posix() if name == manifest["original"] else name
+               for name in manifest["objects"]]
+    newest = [build / (third if name == manifest["original"] else name) for name in manifest["objects"]]
+    layouts = {"inplace": ("base.ld", ".text"), "section": ("section.ld", ".calc.update")}
+    references = {}
+    for script, _ in layouts.values():
+        reference = build / "reference.elf"
+        run([args.lld, "-static", "-T", build / script, "-o", reference, *newest])
+        references[script] = digest(reference)
+    results = {}
+    for first in MODES:
+        previous = out / f"{first}.elf"
+        old_script = layouts[first][0]
+        moved_script, moved_section = layouts["inplace" if first == "section" else "section"]
+        second_manifest = {**manifest, "objects": objects, "original": current.relative_to(build).as_posix(),
+                           "replacement": third, "layout": old_script,
+                           "sectionLayout": moved_script, "section": moved_section}
+        for mode in MODES:
+            key = f"after-{first}-{mode}"
+            output = out / f"{key}.elf"
+            encode(build / "manifest.json", second_manifest)
+            patch(mode, output, input_elf=previous)
+            expected = references[old_script if mode == "inplace" else moved_script]
+            if digest(output) != expected:
+                raise ValueError(f"{profile.name}: {key} differs from the independent second link")
+            encode(build / "manifest.json", {**second_manifest, "objects": manifest["objects"],
+                                             "original": manifest["original"]})
+            patch(mode, output, input_elf=previous, error="do not reproduce the input ELF")
+            if digest(output) != expected:
+                raise ValueError(f"{profile.name}: stale link inputs replaced the {key} output")
+            results[key] = expected
+    return results
+
+
+def qualify_named_inputs(args, build, out, profile, expected):
+    start, selected, replacement = "startup/unit.o", "../objects/unit.o", "rebuilt/unit.o"
+    lld = Path(shutil.which(str(args.lld)) or args.lld).absolute()
+    neverd = Path(shutil.which(str(args.neverd)) or args.neverd).absolute()
+    with tempfile.TemporaryDirectory(dir=out) as replay:
+        directory = Path(replay) / "project"
+        directory.mkdir()
+        for name, source in ((start, "start.o"), (selected, "calc.o"), (replacement, "updated.o")):
+            (directory / name).parent.mkdir()
+            shutil.copyfile(build / source, directory / name)
+        for mode, script in (("inplace", "base.ld"), ("section", "section.ld")):
+            body = layout(profile, mode == "section")
+            write(directory / script, body.replace("*(.text.start)", f'"{start}"(.text.start)')
+                  .replace("*(.text.calc)", f'"{selected}"(.text.calc)'))
+        manifest = directory / "manifest.json"
+        encode(manifest, dict(objects=[start, selected], original=selected, replacement=replacement,
+                              function="calc", layout="base.ld", sectionLayout="section.ld", section=".calc.update"))
+        # Link from the recorded directory with the actual object arguments.
+        # The updated object occupies the original argument in each direct link.
+        reference = directory / "reference.elf"
+        for case, source in (("original", "calc.o"), ("inplace", "updated.o"), ("section", "updated.o")):
+            shutil.copyfile(build / source, directory / selected)
+            script = "section.ld" if case == "section" else "base.ld"
+            run([lld, "-static", "-T", script, "-o", reference, start, selected], cwd=directory)
+            if digest(reference) != expected[case]:
+                raise ValueError(f"{profile.name}: {case} direct link with named inputs differs")
+        shutil.copyfile(build / "calc.o", directory / selected)
+        inputs = [directory / name for name in (start, selected, replacement, "base.ld", "section.ld", "manifest.json")]
+        for path in inputs:
+            path.chmod(0o444)
+        def input_state():
+            return [(digest(path), stat.S_IMODE(path.stat().st_mode)) for path in inputs]
+
+        before = input_state()
+        (directory / "temporary").mkdir()
+        env = dict(os.environ, TMPDIR="temporary", TMP="temporary", TEMP="temporary")
+        same = directory / "更新 app.elf"
+        for mode in MODES:
+            shutil.copyfile(out / "original.elf", same)
+            same.chmod(0o751)
+            permissions = stat.S_IMODE(same.stat().st_mode)
+            for error in (None, "do not reproduce"):
+                run([neverd, "patch", same.name, "--relink=manifest.json", f"--linker-path={lld}",
+                     f"--mode={mode}", "-o", same.name], error=error, cwd=directory, env=env)
+                if digest(same) != expected[mode] or stat.S_IMODE(same.stat().st_mode) != permissions:
+                    raise ValueError(f"{profile.name}: {mode} same-path bytes or permissions changed")
+            same.replace(out / f"{mode}.elf")
+        if input_state() != before:
+            raise ValueError(f"{profile.name}: relink changed a read-only build input")
+
+
+def save_linkage_objects(build, out, profile):
+    names = ["caller.o", "calc.o"]
+    if profile.linkage == "entry-stack":
+        names.append("start.o")
+    if profile.c_pic or profile.linkage in ("relocation-bounds", "branch-slots", "entry-stack"):
+        names.append("updated.o")
+    hashes = {}
+    for name in names:
+        shutil.copyfile(build / name, out / name)
+        hashes[name] = digest(out / name)
+    return hashes
+
+
 def qualify(args):
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    results = {}
+    # Existing IR-only tool installations can still produce and replay v12 products.
+    version = PRODUCT_VERSION if args.clang else 12
+    results, object_hashes = {}, {}
     with tempfile.TemporaryDirectory(prefix="mips relink ") as temp:
-        for profile in profiles():
+        for profile in profiles(version):
             name = profile.name
             out = root / name
             out.mkdir(exist_ok=True)
             build = Path(temp) / name
             build.mkdir()
-            target = [f"-mcpu={profile.cpu}", f"-target-abi={profile.abi}"]
-            features = "+noabicalls" + (f",+{profile.isa}" if profile.isa != "classic" else "")
-            run([args.mc, "-filetype=obj", f"-triple={profile.triple}", *target,
-                 "-mattr=+noabicalls", "-o", build / "start.o", "-"], source=startup(profile))
-
-            def compile_object(filename, ir, triple=profile.triple):
-                run([args.llc, "-filetype=obj", f"-mtriple={triple}", *target, f"-mattr={features}",
-                     "-relocation-model=static", "-o", build / filename, "-"], source=ir)
-
-            compile_object("calc.o", calculator(profile, False))
-            compile_object("updated.o", calculator(profile, True))
-            compile_object("grown.o", GROWING_CALC)
+            if profile.c_call:
+                size_loop = not profile.large_frame and profile.optimization in ("O2", "Os")
+                objects = build_c_call_objects(args, build, profile, size_loop=size_loop)
+            elif profile.linkage == "entry-stack":
+                objects = build_entry_stack_objects(args, build, profile)
+            elif profile.linkage:
+                objects = build_linkage_objects(args, build, profile, run)
+            else:
+                objects = build_arithmetic_objects(args, build, profile)
             write(build / "base.ld", layout(profile, False))
             section_layout = layout(profile, True)
             write(build / "section.ld", section_layout)
             write(build / "wrong-entry.ld", section_layout.replace("ENTRY(_start)", "ENTRY(calc)"))
-            objects = ["start.o"]
-            if profile.isa == "mips16":
-                compile_object("invoke.o", MIPS16_CALLER)
-                objects.append("invoke.o")
-                if profile.compressed_entry:
-                    compile_object("entry.o", MIPS16_ENTRY)
-                    objects.append("entry.o")
-            objects.append("calc.o")
             original = out / "original.elf"
             run([args.lld, "-static", "-T", build / "base.ld", "-o", original,
                  *(build / obj for obj in objects)])
@@ -256,12 +802,36 @@ def qualify(args):
 
             for mode in MODES:
                 patch(mode, out / f"{mode}.elf")
+                if (profile.c_call or profile.entry_alias or profile.dwarf_version
+                        or profile.linkage in ("init-arrays", "large-segments", "callback-table",
+                                               "relocation-bounds", "branch-slots", "entry-stack")):
+                    reference = build / "reference.elf"
+                    script = build / ("section.ld" if mode == "section" else "base.ld")
+                    run([args.lld, "-static", "-T", script, "-o", reference,
+                         *(build / ("updated.o" if obj == manifest["original"] else obj) for obj in objects)])
+                    if digest(reference) != digest(out / f"{mode}.elf"):
+                        raise ValueError(f"{name}: {mode} output differs from the direct link")
+            results[name] = {case: digest(out / f"{case}.elf") for case in ("original", *MODES)}
+            if profile.linkage == "relocation-bounds":
+                for obj, offset in (("below.o", -32769), ("above.o", 32768)):
+                    encode(manifest_path, {**manifest, "replacement": obj})
+                    for mode in MODES:
+                        target = out / f"{mode}.elf"
+                        patch(mode, target, error=f"out of range: {offset} is not in [-32768, 32767]")
+                        if digest(target) != results[name][mode]:
+                            raise ValueError(f"{name}: GP offset {offset} changed the {mode} output")
+            if profile.linkage or profile.c_pic:
+                object_hashes[name] = save_linkage_objects(build, out, profile)
+                continue
+            if profile.c_call or profile.dwarf_version or profile.entry_alias:
+                continue
             split = layout(profile, True, split_entry=True)
             write(build / "grown.ld", split)
             encode(manifest_path, {**manifest, "replacement": "grown.o", "sectionLayout": "grown.ld"})
             patch("section", out / "section-grown.elf")
-            results[name] = {case: digest(out / f"{case}.elf")
-                             for case in ("original", *MODES, "section-grown")}
+            results[name]["section-grown"] = digest(out / "section-grown.elf")
+            if profile == Profile(profile.abi, profile.little):
+                results[name].update(qualify_second_updates(args, build, out, profile, manifest, patch))
 
             sentinel = build / "prior output"
             sentinel.write_bytes(b"existing product\n")
@@ -282,6 +852,17 @@ def qualify(args):
             if profile.shrinking:
                 continue
 
+            # The manifest path must still apply the ELF loader's ISA admission.
+            invalid_isa = bytearray(original.read_bytes())
+            offset = 48 if profile.abi == "n64" else 36
+            order = "little" if profile.little else "big"
+            flags = int.from_bytes(invalid_isa[offset:offset + 4], order)
+            invalid_isa[offset:offset + 4] = (flags | 0x00010000).to_bytes(4, order)  # EF_MIPS_MACH
+            invalid_input = build / "vendor-isa.elf"
+            invalid_input.write_bytes(invalid_isa)
+            for mode in MODES:
+                reject(mode, "vendor/ASE profile is not supported", input_elf=invalid_input)
+
             # Check an unusable input as well as the candidate section layout.
             bad_input = build / "readonly-entry.elf"
             run([args.lld, "-static", "-T", build / "readonly-entry.ld", "-o", bad_input,
@@ -289,13 +870,8 @@ def qualify(args):
             for mode in MODES:
                 reject(mode, entry_error, input_elf=bad_input, layout="readonly-entry.ld")
 
-            # Exercise atomic replacement of the input pathname as well.
-            encode(manifest_path, manifest)
-            same = build / "same.elf"
-            shutil.copyfile(original, same)
-            patch("inplace", same, input_elf=same)
-            if digest(same) != digest(out / "inplace.elf"):
-                raise RuntimeError(f"{name}: inconsistent same-path result")
+            # Deliver the named-input, same-path results to the guest runner.
+            qualify_named_inputs(args, build, out, profile, results[name])
 
             reject("section", "do not reproduce", objects=["start.o", "updated.o"],
                    original="updated.o")
@@ -306,63 +882,194 @@ def qualify(args):
             reject("inplace", "missing defined global function", replacement="start.o")
             reject("inplace", "exactly one entry", original="absent.o")
             opposite = replace(profile, little=not profile.little)
-            compile_object("wrong-endian.o", calculator(profile, True), opposite.triple)
+            compile_arithmetic_object(args, build, opposite, "wrong-endian.o", calculator(profile, True))
             reject("section", "ELF linker exited", replacement="wrong-endian.o")
-            compile_object("adjacent.o", CALC.replace("ADJUST", "7").replace("12345", "9"))
+            compile_arithmetic_object(args, build, profile, "adjacent.o", CALC.replace("ADJUST", "7").replace("12345", "9"))
             reject("inplace", "other loaded bytes", replacement="adjacent.o")
             encode(manifest_path, manifest)
             run([args.neverd, "patch", original, *options, "--from-object=updated.o", "-o", sentinel],
                 error="cannot be combined")
-    encode(root / "products.json", {"version": 3, "profiles": results})
+        check_mixed_float_abis(args, Path(temp), root)
+    encode(root / "products.json", {"version": version, "profiles": results, "objects": object_hashes})
     print(f"Relinked {len(results)} profiles in both modes")
 
 
-def inspect_elf(image, profile):
+def verify_elf_profile(image, profile, file_type):
     # This runs on the execution host. Native producers only need Python's stdlib.
     abi = profile.abi
     flags = image["e_flags"]
-    arch = (7 if profile.release == 2 else 9) + (abi != "o32")
+    if profile.historical_isa:
+        arch = profile.historical_isa - 1
+        level, revision = profile.historical_isa, 0
+    else:
+        arch = {1: 5, 2: 7, 3: 7, 5: 7, 6: 9}[profile.release] + (profile.release_isa_bits == 64)
+        level, revision = profile.release_isa_bits, profile.release
     extension = {"classic": 0, "micromips": 0x02000000, "mips16": 0x04000000}[profile.isa]
-    if (image["e_type"] != "ET_EXEC" or image["e_machine"] != "EM_MIPS"
+    if (image["e_type"] != file_type or image["e_machine"] != "EM_MIPS"
             or image.little_endian != profile.little or image.elfclass != (64 if abi == "n64" else 32)
             or flags >> 28 != arch or flags & 0x06000000 != extension
             or bool(flags & 0x20) != (abi == "n32")
             or flags & 0xf000 != (0x1000 if abi == "o32" else 0)):
         raise ValueError(f"{profile.name}: unexpected ELF header or ABI flags {flags:#x}")
+    abi_record = image.get_section_by_name(".MIPS.abiflags")
+    if abi_record is None or abi_record.data()[2:4] != bytes((level, revision)):
+        raise ValueError(f"{profile.name}: expected ISA level {level}, revision {revision} in .MIPS.abiflags")
+    if abi == "o32" and (profile.historical_isa >= 3 or profile.gp64_o32):
+        if not flags & 0x100 or abi_record.data()[4] != 2:
+            raise ValueError(f"{profile.name}: expected the fork's wide-GPR o32 ELF flags")
+
+
+def inspect_elf(image, profile, *, require_pic_marker=False):
+    verify_elf_profile(image, profile, "ET_EXEC")
     if bool(image["e_entry"] & 1) != profile.compressed_entry:
         raise ValueError(f"{profile.name}: incorrect program entry ISA at {image['e_entry']:#x}")
 
     symtab = image.get_section_by_name(".symtab")
     (index, symbol), = ((i, s) for i, s in enumerate(symtab.iter_symbols()) if s.name == "calc")
-    # pyelftools exposes the generic ELF visibility fields. MIPS uses the full high nibble.
-    other = symtab.data()[index * symtab["sh_entsize"] + (5 if image.elfclass == 64 else 13)]
-    if other & 0xf0 != {"classic": 0, "micromips": 0x80, "mips16": 0xf0}[profile.isa]:
+    # MIPS16 uses the whole high nibble. Other functions can carry STO_MIPS_PIC
+    # alongside their encoding, for example after a relocatable link.
+    other_offset = 5 if image.elfclass == 64 else 13
+    table = symtab.data()
+    other = table[index * symtab["sh_entsize"] + other_offset]
+    if other & 0xf0 == 0xf0:
+        isa = "mips16"
+    elif other & 0x80:
+        isa = "micromips"
+    else:
+        isa = "classic"
+    if isa != profile.isa:
         raise ValueError(f"{profile.name}: incorrect calc ISA marker {other:#x}")
+    if require_pic_marker and not other & 0x20:
+        raise ValueError(f"{profile.name}: missing STO_MIPS_PIC on the partially linked calc")
     section = image.get_section(symbol["st_shndx"])
     va, size = symbol["st_value"], symbol["st_size"]
+    if profile.entry_alias:
+        (index, alias), = ((i, s) for i, s in enumerate(symtab.iter_symbols()) if s.name == "_start")
+        if (alias["st_info"]["bind"] != "STB_GLOBAL" or alias["st_info"]["type"] != "STT_FUNC"
+                or any(alias[key] != symbol[key] for key in ("st_value", "st_size", "st_shndx"))
+                or table[index * symtab["sh_entsize"] + other_offset] != other
+                or image["e_entry"] & ~1 != va):
+            raise ValueError(f"{profile.name}: ELF entry and _start must both designate calc")
     if (symbol["st_info"]["type"] != "STT_FUNC" or not section["sh_flags"] & 4 or size <= 0
             or not section["sh_addr"] <= va <= section["sh_addr"] + section["sh_size"] - size
-            or (profile.shrinking and abi == "n64" and va < 1 << 32)):
+            or (profile.high_address and va < 1 << 32)):
         raise ValueError(f"{profile.name}: invalid calc range {va:#x}+{size:#x} in {section.name}")
+    if profile.linkage or profile.c_pic:
+        inspect_linkage(image, profile, symbol, section)
     return dict(va=va, offset=section["sh_offset"] + va - section["sh_addr"], size=size, section=section.name)
 
 
+def verify_dwarf(image, version, placement, line):
+    from elftools.dwarf.descriptions import describe_form_class
+
+    dwarf = image.get_dwarf_info()
+    unit, = dwarf.iter_CUs()
+    if unit["version"] != version or unit["address_size"] != image.elfclass // 8:
+        raise ValueError("Unexpected MIPS DWARF version or address size")
+    subprogram, = (die for die in unit.iter_DIEs() if die.tag == "DW_TAG_subprogram")
+    attrs = subprogram.attributes
+    start = attrs["DW_AT_low_pc"].value
+    high = attrs["DW_AT_high_pc"]
+    end = high.value + (start if describe_form_class(high.form) == "constant" else 0)
+    if (attrs["DW_AT_name"].value != b"calc" or attrs["DW_AT_decl_line"].value != line
+            or (start, end) != (placement["va"], placement["va"] + placement["size"])):
+        raise ValueError(f"DWARF subprogram does not match calc at {placement['va']:#x}")
+    program = dwarf.line_program_for_CU(unit)
+    states = [e.state for e in program.get_entries() if e.state is not None]
+    if (len(states) < 2 or states[0].address != start or not states[-1].end_sequence
+            or states[-1].address != end):
+        raise ValueError("DWARF line table does not span calc")
+    for state in states[:-1]:
+        # DWARF 5 numbers files from zero. Earlier line tables start at one.
+        index = state.file if version == 5 else state.file - 1
+        if (state.end_sequence or state.line != line or not start <= state.address < end
+                or not 0 <= index < len(program.header.file_entry)
+                or program.header.file_entry[index].name != b"calc.c"):
+            raise ValueError(f"DWARF line table does not identify calc.c line {line}")
+
+
 def execute_image(path, image, profile, expected):
-    if profile.isa == "micromips" and profile.abi != "o32":
+    needs_fpu = profile.release < 6 and profile.linkage and not profile.soft_float
+    if profile.isa == "micromips" and (profile.abi != "o32" or profile.gp64_o32 or needs_fpu):
         from mips_elf_runtime import run_micromips64
-        run_micromips64(image, profile.release, profile.exit_nr, expected)
+        pointers = None
+        if profile.tls_blocks:
+            blocks, = image.get_section_by_name(".symtab").get_symbol_by_name("tls_blocks")
+            first = blocks["st_value"] + 0x7000
+            pointers = (first, first + 768) * 2
+        run_micromips64(image, profile.release, profile.exit_nr, expected,
+                        instruction_limit=2048 if profile.linkage else 256,
+                        set_thread_area=SET_THREAD_AREA[profile.abi] if profile.tls_model else None,
+                        thread_pointers=pointers)
         return
     arch = {"o32": "mips", "n32": "mipsn32", "n64": "mips64"}[profile.abi]
     qemu = f"qemu-{arch}{'el' if profile.little else ''}"
     cpu = None
-    if profile.release == 6:
+    if profile.linkage == "dsp":
+        cpu = "74Kf" if profile.abi == "o32" else "mips64dspr2"
+    elif profile.linkage == "msa":
+        cpu = "P5600" if profile.abi == "o32" else "Loongson-3A4000"
+    elif profile.release == 6:
         cpu = "mips32r6-generic" if profile.abi == "o32" else "I6400"
     elif profile.isa == "micromips":
         cpu = "M14Kc"
     elif profile.isa == "mips16":
         cpu = "74Kf"
     path.chmod(0o755)
+    if profile.linkage == "entry-stack":
+        from mips_elf_runtime import run_entry_stack
+        return run_entry_stack(qemu, path, expected, run)
     run([qemu, *(["-cpu", cpu] if cpu else []), path], expected=expected)
+
+
+def verify_partial_object(path, profile):
+    from elftools.elf.elffile import ELFFile
+
+    with path.open("rb") as stream:
+        image = ELFFile(stream)
+        verify_elf_profile(image, profile, "ET_REL")
+        symbols = image.get_section_by_name(".symtab")
+        if symbols is None:
+            raise ValueError(f"{path}: missing combined object symbol table")
+        for name, section in (("_start", ".text.start"), ("calc", ".text.calc")):
+            found = symbols.get_symbol_by_name(name) or []
+            if (len(found) != 1 or found[0]["st_info"]["type"] != "STT_FUNC"
+                    or found[0]["st_info"]["bind"] != "STB_GLOBAL" or found[0]["st_size"] == 0
+                    or found[0]["st_shndx"] != image.get_section_index(section)):
+                raise ValueError(f"{path}: expected a definition of {name} in {section}")
+        relocs = image.get_section_by_name(".rel.text.start" if profile.abi == "o32" else ".rela.text.start")
+        if relocs is None or relocs["sh_info"] != image.get_section_index(".text.start"):
+            raise ValueError(f"{path}: missing startup relocations")
+        targets = image.get_section(relocs["sh_link"])
+        startup = image.get_section(relocs["sh_info"]).data()
+        order = "little" if image.little_endian else "big"
+        calls = {}
+        for reloc in relocs.iter_relocations():
+            offset = reloc["r_offset"]
+            instruction = int.from_bytes(startup[offset:offset + 4], order)
+            operations = (reloc["r_info_type"], reloc.entry.get("r_info_type2", 0),
+                          reloc.entry.get("r_info_type3", 0))
+            calls[offset] = (operations, targets.get_symbol(reloc["r_info_sym"]).name,
+                             reloc.entry.get("r_addend", 0), instruction)
+        # Each startup call is a JAL to calc with R_MIPS_26 and a zero addend.
+        if (relocs.num_relocations() != 3 or len(calls) != 3
+                or set(calls.values()) != {((4, 0, 0), "calc", 0, 0x0c000000)}):
+            raise ValueError(f"{path}: unexpected startup relocations {calls}")
+        for name in ("group_choice", "group_increment"):
+            found = symbols.get_symbol_by_name(name) or []
+            if (len(found) != 1 or found[0]["st_info"]["bind"] != "STB_WEAK"
+                    or not isinstance(found[0]["st_shndx"], int)):
+                raise ValueError(f"{path}: expected one defined weak {name}")
+        groups = [section for section in image.iter_sections() if section["sh_type"] == "SHT_GROUP"]
+        if len(groups) != 1:
+            raise ValueError(f"{path}: expected one group for group_increment")
+        group = groups[0]
+        signature = image.get_section(group["sh_link"]).get_symbol(group["sh_info"])
+        data = group.data()
+        words = [int.from_bytes(data[i:i + 4], order) for i in range(0, len(data), 4)]
+        if signature.name != "group_increment" or words[:1] != [1] or signature["st_shndx"] not in words[1:]:
+            raise ValueError(f"{path}: incomplete group_increment COMDAT group")
+    return digest(path)
 
 
 def execute(args):
@@ -370,30 +1077,53 @@ def execute(args):
 
     root = args.root.resolve()
     manifest = json.loads((root / "products.json").read_text())
-    cases = list(profiles())
     if "version" in manifest:
         version = manifest["version"]
-        if version not in (2, 3):
+        if version not in range(2, PRODUCT_VERSION + 1):
             raise ValueError("Unknown MIPS relink products version")
-        if version == 2:
-            cases = [p for p in cases if not p.compressed_entry]
         hashes = manifest["profiles"]
     else:
         # Archived original-format manifests contain the six classic R2 cases.
         version = 1
-        cases = [p for p in cases if not p.shrinking]
         hashes = manifest
+    suite = manifest.get("suite")
+    if suite in C_CALL_UPGRADES.values():
+        cases = c_call_upgrade_profiles(suite)
+    else:
+        cases = list(profiles(version))
     if set(hashes) != {p.name for p in cases}:
         raise ValueError("MIPS relink products do not match the expected profile set")
-    section_cases = ("section", "section-grown") if version == 3 else ("section",)
-    results, placements = {}, {}
+    if args.partial_link:
+        partial = {}
+        for profile in cases:
+            folder = root / profile.name
+            objects = {name: verify_partial_object(folder / name, profile) for name in ("calc.o", "updated.o")}
+            if objects["calc.o"] == objects["updated.o"]:
+                raise ValueError(f"{profile.name}: expected distinct original and updated objects")
+            partial[profile.name] = objects
+        encode(root / "partial-inputs.json", partial)
+    if version >= 4:
+        object_hashes = manifest["objects"]
+        if set(object_hashes) != {p.name for p in cases if p.linkage or p.c_pic}:
+            raise ValueError("MIPS relink object receipts do not match the expected linkage profiles")
+    results, placements, stack_runs = {}, {}, {}
     for profile in cases:
         row, ranges = {}, {}
         original, updated = (81, 29) if profile.shrinking else (25, 37)
+        if profile.c_call:
+            original, updated = 43, 89
+        elif profile.linkage:
+            original, updated = 41, 73
+        if profile.linkage or profile.c_pic:
+            verify_linkage_objects(root / profile.name, profile, object_hashes[profile.name], digest)
         expected_results = {"original": original, "section": updated, "inplace": updated}
-        if version == 3:
+        if version >= 3 and not (profile.c_call or profile.linkage or profile.dwarf_version or profile.entry_alias):
             # The larger body returns 61, 56 and 44 for the three startup calls.
             expected_results["section-grown"] = 161
+        second_updates = version >= 10 and profile == Profile(profile.abi, profile.little)
+        if second_updates:
+            # The three calls to 2*x + 11 return 11, 13 and 25.
+            expected_results.update({f"after-{first}-{mode}": 49 for first in MODES for mode in MODES})
         if hashes[profile.name].keys() != expected_results.keys():
             raise ValueError(f"{profile.name}: unexpected set of relink products")
         for case, expected in expected_results.items():
@@ -402,23 +1132,49 @@ def execute(args):
                 raise ValueError(f"{path}: SHA-256 mismatch")
             with path.open("rb") as source:
                 image = ELFFile(source)
-                ranges[case] = inspect_elf(image, profile)
-                execute_image(path, image, profile, expected)
+                ranges[case] = inspect_elf(image, profile, require_pic_marker=args.partial_link == "pic")
+                if profile.dwarf_version:
+                    verify_dwarf(image, profile.dwarf_version, ranges[case], 14 if case == "original" else 29)
+                inputs = execute_image(path, image, profile, expected)
+                if inputs is not None:
+                    stack_runs.setdefault(profile.name, {})[case] = inputs
             row[case] = expected
         old, inplace = ranges["original"], ranges["inplace"]
         sizes = ranges["section"]["size"], inplace["size"]
         sizes_match = (max(sizes) < old["size"] if profile.shrinking
                        else sizes == (old["size"], old["size"]))
+        if suite == "c-call-upgrade-saved" and profile.isa == "mips16":
+            sizes_match = sizes[0] == sizes[1] < old["size"]
+            unused = old["size"] - inplace["size"]
+            if sizes_match:
+                nop = (0x6500).to_bytes(2, "little" if profile.little else "big")
+                with (root / profile.name / "inplace.elf").open("rb") as source:
+                    source.seek(inplace["offset"] + inplace["size"])
+                    if source.read(unused) != nop * (unused // 2):
+                        raise ValueError(f"{profile.name}: incorrect MIPS16 padding after the new function")
+        elif suite == "c-call-upgrade-pic" and profile.isa != "classic":
+            sizes_match = sizes[0] == sizes[1] <= old["size"]
+            if sizes_match and sizes[1] < old["size"]:
+                unused = old["size"] - sizes[1]
+                with (root / profile.name / "inplace.elf").open("rb") as source:
+                    source.seek(inplace["offset"] + sizes[1])
+                    if source.read(unused) != bytes(unused):
+                        raise ValueError(f"{profile.name}: incorrect extent or contents of the callee slot")
         if (inplace["va"] != old["va"] or inplace["offset"] != old["offset"]
                 or not sizes_match):
             raise ValueError(f"{profile.name}: incorrect function placement {ranges}")
-        for case in section_cases:
+        for case in (case for case in ranges if case.startswith("section")):
             section = ranges[case]
             if (section["section"] != ".calc.update"
                     or not (section["va"] >= old["va"] + old["size"]
                             or old["va"] >= section["va"] + section["size"])
                     or (case == "section-grown" and section["size"] <= old["size"])):
                 raise ValueError(f"{profile.name}: incorrect {case} placement {section} for {old}")
+        if second_updates:
+            for first in MODES:
+                moved = old if first == "section" else ranges["section"]
+                if ranges[f"after-{first}-inplace"] != ranges[first] or ranges[f"after-{first}-section"] != moved:
+                    raise ValueError(f"{profile.name}: incorrect second placement after {first}")
         results[profile.name], placements[profile.name] = row, ranges
         if profile.name == "micromips-r2-n64-be":
             from mips_elf_runtime import check_non_executable_entry
@@ -426,6 +1182,8 @@ def execute(args):
                                        profile.release, profile.exit_nr, updated)
     encode(root / "execution.json", results)
     encode(root / "placements.json", placements)
+    if stack_runs:
+        encode(root / "entry-stack-execution.json", stack_runs)
     print(f"Executed {sum(map(len, results.values()))} complete ELF files across {len(results)} profiles")
 
 
@@ -436,7 +1194,24 @@ if __name__ == "__main__":
     patch.add_argument("--root", required=True, type=Path)
     for tool in ("neverd", "mc", "llc", "lld"):
         patch.add_argument("--" + tool, required=True)
+    patch.add_argument("--clang", help="also compile the C aggregate and variadic calls with this fork Clang")
+    upgrade = commands.add_parser("upgrade")
+    upgrade.add_argument("--root", required=True, type=Path)
+    upgrade.add_argument("--neverd", required=True)
+    upgrade.add_argument("--original-tools", required=True, type=Path)
+    upgrade.add_argument("--tools", required=True, type=Path)
+    upgrade.add_argument("--c-calls", nargs="?", const="direct", choices=C_CALL_UPGRADES,
+                         help="keep direct C objects and use a direct, saved-assembly or PIC saved-assembly replacement")
+    upgrade.add_argument("--archive-tool", type=Path,
+                         help="use fork llvm-ar to check lazy member selection during a partial link")
     runtime = commands.add_parser("execute")
     runtime.add_argument("--root", required=True, type=Path)
+    for command in (upgrade, runtime):
+        command.add_argument("--partial-link", nargs="?", const="static", choices=("static", "pic"),
+                             help="combine the startup and weak definitions with a static or PIC callee")
     args = parser.parse_args()
-    (qualify if args.command == "qualify" else execute)(args)
+    if args.command == "upgrade" and args.archive_tool and not args.partial_link:
+        parser.error("--archive-tool requires --partial-link")
+    if args.command == "upgrade" and args.c_calls and args.partial_link:
+        parser.error("--c-calls and --partial-link select different input sets")
+    {"qualify": qualify, "upgrade": qualify_upgrade, "execute": execute}[args.command](args)

@@ -10239,6 +10239,8 @@ this stronger effect even when their normal path preserves integer ESP.
 Checked calls compose only their own normal-return binding effect under live
 transitive dependencies. One unproved effect on any visited path withdraws the
 summary permanently, including when a loop or join loses an earlier constant.
+The EH3/EH4 solver uses this effect at a subsequent runtime call reached by
+ordinary return. Exception dispatch from the helper checks its own bindings.
 Only a completed ordinary returning-stack proof publishes it; dispatcher paths
 retain no such summary. This neither restores a lost binding nor grants frame,
 loaded-value, nonthrowing or native-rewrite authority.
@@ -10447,8 +10449,11 @@ the current entry frame, known Win32 thread fields and mapped image data.
 Image writes additionally need writable section and segment storage outside
 read-only-after-relocation ranges. IAT disjointness alone cannot discharge a
 write fault; typed CRT data stores retain their independent receipt.
-An argument read additionally needs a uniform current near-return cleanup;
-the maximum `CalleePopBytes` over other returns cannot establish its extent.
+Uniform current near-return cleanup establishes the callee-popped argument
+extent. A direct caller can also supply one readable DWORD to a cdecl callee
+by pushing it immediately before the call in the same block. The stack proof
+checks the instruction bytes, the live stack offset and the callee's transitive
+import dependencies. This additional read permission belongs to that call.
 The permission carries no read value, frame cell, saved-SP restoration or
 native mapping. An earlier resident callable remains a separate register
 identity, while later loads and direct slot calls require reaching bindings.
@@ -10464,16 +10469,15 @@ data-address carriers. The read produces no new address receipt, and a full or
 partial destination alias still invalidates its earlier carrier. This reuses
 the ordinary current-frame and mapped-read permission instead of deciding
 readability from numerical addresses or file contents in the data tracker.
-One complete DWORD store to the exported CRT int is disjoint from the caller
-image's IAT. It consumes the receipt; a later store needs a fresh authenticated
+One complete DWORD store to the exported CRT int preserves the caller image's
+IAT. It consumes the receipt; a later store needs a fresh authenticated
 load and a still-live binding. Partial writes, arithmetic on the address,
 opaque reads, calls, trapping operations and block boundaries withdraw it.
 `RegistrationScalarPackets` owns the shared nontrapping integer barrier rule
 for this receipt and the precision-call argument packet. Required data slots
-remain transitive import dependencies. This side proof supplies no scalar
-value, frame-memory cell, saved-stack restoration or public callee memory and
-binding-preservation contract; registration-state and native EH consumers
-receive no new authority.
+remain transitive import dependencies. A caller can retain its bindings on
+return when every other operation also preserves them. Frame-memory values,
+saved-stack restoration and native EH effects require independent proofs.
 The same owner checks the exact Kernel32 PE32 exports `GetStartupInfoW`,
 `HeapSetInformation`, `InterlockedCompareExchange`, `InterlockedExchange`,
 `DecodePointer`, `EncodePointer` and `Sleep` for their SDK stdcall adjustment.
@@ -16247,7 +16251,7 @@ Its shared identity query binds both normalized header regions to the original h
 
 Windows process and driver admission share `COFFLoader::hasExpectedPEMappingInventory` to validate the real-section count and the optional header's exact bytes, position and read-only identity; each retains its independent execution preflight and creates exactly one guest header region.
 
-`PEHeaderInitialization` bounds the loader write footprint before publishing this read-only mapping. Ordinary import lookup/IAT extents, scalar base relocations and legacy load-configuration cookie destinations must exclude header pages. `PELoaderWriteRanges` shares the metadata-overlap rule with the fixed-image reader, so one write cannot change a later descriptor, terminator or configuration field. A rebased cookie destination requires its own complete scalar fixup. TLS, delay/bound imports, extended load configurations and other unmodeled writer protocols retain the refusal. The four-million-unit budget charges visited metadata bytes and section/record queries; fixed-image validation also charges that work to its caller's limits. This proves storage initialization, not a callee's effects or an unreachable control branch.
+`PEHeaderInitialization` bounds the loader write footprint before publishing this read-only mapping. Ordinary import lookup/IAT extents, scalar base relocations and legacy load-configuration cookie destinations must exclude header pages. `PELoaderWriteRanges` shares the metadata-overlap rule with the fixed-image reader, so one write cannot change a later descriptor, terminator or configuration field. On PE32 x86, the loader also accounts for the guard-check and CastGuard storage slots in an extended load configuration. MSVC's volatile-access metadata describes memory ordering. When the image has base relocations, each absolute loader-write destination requires its own complete scalar fixup. TLS, delay/bound imports, additional guard flags and other unmodeled writer protocols retain the refusal. The four-million-unit budget charges visited metadata bytes and section/record queries; fixed-image validation also charges that work to its caller's limits. This proves storage initialization, not a callee's effects or an unreachable control branch.
 
 The optional-header ImageBase field keeps an absolute data-pointer identity in DataPtrRelocSlots and DataPtrRelocTargetOwners, separately from the file's explicit BaseRelocations. Ordinary immutable-read queries exclude this field; a rebasing loader may replace it. The other header bytes pass ordinary immutable-read and fixup checks, so they stay readable for storage and initialization proofs and for the raw and fixed-image interpreter views. A decompiled route reads them through `__ImageBase` and never folds or copies them, as below. The fixed preferred-base view independently binds both mapped copies to the raw snapshot, and its v5 digest includes the changed mapping contract. Raw-environment evidence and external-exit encodings are unchanged.
 
@@ -21255,7 +21259,19 @@ Frame-offset proof keys normalize a top-level 64-bit address sum by removing its
 
 The Objective-C source exporter clears `CEmitterOptions::EmitRecordGuards` and `CEmitterOptions::UseUnalignedPointers` for the complete native unit and individual method units. Exact-width byte copies preserve unaligned memory access while keeping generated macros outside the mobile parser; conditional and mutating directives remain rejected.
 
-The reader also recognizes the exact, complete `ContractionPolicy` and AArch64 raw-call pointer-authentication blocks shared by the C emitters. Either or both may precede declarations; their text remains intact for compilation and does not contribute function definitions. The reader does not evaluate arbitrary conditional directives. Modified, truncated, wrapped or nested blocks, and subsequent macro redefinitions, remain unsupported.
+The full Objective-C report includes native C for the image. If the C writer
+refuses a function definition, this unit records its entry and reason in a
+`neverd.not-decompiled` comment. Each method uses its own ABI, storage and
+dependency evidence. A typed method can therefore be recovered even when its
+raw native definition has an address of unknown extent.
+
+For a declared narrow integer return, source-call lowering follows the low
+bytes backwards from each return through wide register moves and control-flow
+joins. An intervening register definition ends that dependency. Earlier
+full-width values in the same physical register keep their original identity
+in pointer comparisons and calls.
+
+The reader recognizes the exact floating-point contraction policy, fixed-width GCC rotate fallbacks and AArch64 raw-call pointer-authentication blocks defined by the C backend. Each block can precede declarations. The assembler preserves the original text and excludes it from the function count. The reader does not evaluate arbitrary conditional directives. Modified, truncated, wrapped or nested blocks, and subsequent macro redefinitions, remain unsupported.
 
 ## Bounded bulk directory attributes
 
@@ -21454,6 +21470,10 @@ instruction streams retain the original membership rule, and bodies retain
 root-address precedence. The union is private to the pass; later call erasure
 and register reload insertion do not change its block extents. This lookup
 supplies no additional native frame or control-flow proof.
+
+A source stretch containing an intrinsic can leave its try level only if the
+LowIR intrinsic contract proves it has value-only effects. For example, x87
+`FWAIT` can deliver a pending exception under the current filter.
 
 For LLVM-to-C, `MedLLVMRegistrationSourceSEH.cpp` consumes these display facts
 in the private source module. It preflights distinct, closed finally bodies,
@@ -21791,6 +21811,59 @@ paths at the same level still intersect their initialized bytes and values.
 `RuntimeProviders.h` generates case-insensitive LLVM `StringSwitch` queries.
 PE32 and Win64 control-FP, legacy CRT, C++ exception, SEH handler, continuation
 and jump/local-unwind contracts retain their distinct provider sets.
+PE32 also uses the UCRT stdio provider set for the caller-cleanup convention
+of `__acrt_iob_func` and `__stdio_common_vfprintf`. Proving a stream, a format
+string or the effects of output requires the arguments at the call.
+PE32 callers also remove their arguments after a returning `malloc`, `calloc`,
+`realloc` or `free` from the legacy CRT or the UCRT heap provider. Allocation
+callbacks and changes to heap storage require their own call-site evidence.
+The PE32 CRT startup ABI assigns caller cleanup to the argument, environment
+and on-exit table routines in the runtime API set, including
+`_crt_atexit` and `_crt_at_quick_exit`. The math and locale
+API sets supply `__setusermatherr` and `_configthreadlocale`, respectively.
+These call summaries describe the returning stack pointer. Import binding
+and memory effects require evidence for the invocation.
+For the UCRT startup setters `_set_app_type`, `_set_fmode` and `_set_new_mode`,
+PE32 retains live import bindings when the checked call receives a documented
+mode on the private stack. MSVC can push that value directly or call a linked
+option getter that returns an immediate in EAX and then push EAX.
+A PE32 call to `_initialize_onexit_table` can write three pointers at the
+relocated address pushed by its caller. The normal return keeps import
+bindings live when all twelve bytes occupy resident, private, writable
+data disjoint from every import slot. Registering a function in that table
+has a separate allocation path.
+The UCRT math-handler installer retains the current import bindings on ordinary
+return when the caller pushes a relocated pointer into immutable image code.
+The CRT stores the callback for a later math error. Dispatch at that later call
+requires its own evidence. [Microsoft CRT math-handler installation](https://learn.microsoft.com/en-us/cpp/c-runtime-library/setusermatherr)
+The Windows CRT startup also installs a top-level filter. Its returning
+`SetUnhandledExceptionFilter` call preserves import bindings when the
+argument is a relocated pointer into immutable code. A later exception
+dispatch requires its own handler proof.
+For the PE32 `InitializeSListHead` startup call, both the output pointer and
+the import operand carry loader relocations. Its Win32 header occupies eight
+aligned bytes in private writable image storage. The complete write must be
+disjoint from the import table before the caller can retain its bindings.
+For a checked `_initterm` or `_initterm_e` table, the caller collects the
+eager imports required by every returning callback before analyzing its
+first instruction. A preceding store can invalidate one of those imports.
+The walker preserves the bindings on return only if they are live at the
+call and every callback preserves them.
+An ordinary PE32 helper can return a relocated data address in EAX, with
+or without a frame pointer. The caller checks the physical call, the whole
+getter and its HIGHLOW operand. A later store must still prove its width,
+destination permissions and disjointness from every import slot.
+The ordinary stack proof keeps a scalar pushed before a checked store to a
+CRT-owned cell for the immediately following direct call. The actual push
+establishes the private word at ESP. The live accessor establishes that EAX
+still points outside the stack. Under these inputs, the bound integer proof
+checks the reached branches, the return cleanup, and the exact image-relative
+reads and writes. A nested call can contribute reads from a checked, call-free
+integer leaf. The caller consumes only the proved low result byte for control
+flow. Other invocations of the same target have their own inputs and effects.
+An operand-free `FNCLEX` preserves the integer frame on ordinary continuation.
+The PE32 frame transfer drops both bytes of its previous x87 status value so
+that a later `FNSTSW` cannot reuse stale exception flags or condition codes.
 `X86/RegistrationRuntimeImports.def` owns registration cleanup, jump and
 local-unwind names; `Windows/SEHRuntimeImports.def` maps the Win64 CRT memory
 entries to their routine kinds and provider queries. Symbol names remain case

@@ -96,7 +96,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
   const auto [BorrowECX, ThrowProof, IndependentScalarReturn,
               DiscardReturnValue, CopyObjectSize, Initializer, Initializers,
               ObjectCallbacks, CallbackStackPopBytes, ScalarArguments,
-              ScalarRegisters, ReturnValue, ExcludeCalls, OriginalImage,
+              ScalarRegisters, ReturnValue, Calls, OriginalImage,
               ClosedIntegerEffects, StackPopBytes, Dispatch] = Options;
   if (ClosedIntegerEffects)
     *ClosedIntegerEffects = true;
@@ -106,11 +106,16 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
     StackPopBytes->reset();
   if (Dispatch)
     Dispatch->reset();
-  if ((ReturnValue || ScalarRegisters || ExcludeCalls || StackPopBytes ||
-       Dispatch) &&
+  const bool BoundInteger = ScalarArguments && ClosedIntegerEffects &&
+                            Calls != BoundFrameCalls::Raise;
+  if ((ReturnValue || ScalarRegisters || Calls != BoundFrameCalls::Raise ||
+       StackPopBytes || Dispatch) &&
       !ScalarArguments)
     return false;
-  if (OriginalImage && (!ScalarArguments || !ExcludeCalls || !ReturnValue))
+  if (Calls == BoundFrameCalls::ReadOnlyLeaves && !BoundInteger)
+    return false;
+  if (OriginalImage &&
+      (!ScalarArguments || Calls != BoundFrameCalls::CallFree || !ReturnValue))
     return false;
   if (ScalarArguments &&
       (BorrowECX || ThrowProof || DiscardReturnValue || CopyObjectSize ||
@@ -245,17 +250,22 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
       Transfer.beginInstruction(Op.Addr);
       BorrowTransfer.beginInstruction(Op.Addr);
       CopySourceTransfer.beginInstruction(Op.Addr);
+      const auto Memory = lowMemoryOperands(Op);
+      std::optional<int32_t> ArgumentRead;
+      if ((ClosedDispatch || BoundInteger) && Op.Opcode == NdOp::LOAD &&
+          Memory.Complete && Memory.Address &&
+          Memory.AccessSize == sizeof(uint32_t)) {
+        const auto Address = Transfer.read(*Memory.Address);
+        if (Address.Offset && *Address.Offset >= 8 &&
+            ScalarArguments->contains(*Address.Offset) &&
+            (!BoundInteger || (Address == FrameValue::frame(*Address.Offset) &&
+                               Op.MemoryOrdering == NdMemoryOrdering::None)))
+          ArgumentRead = *Address.Offset;
+      }
       if (ClosedDispatch) {
-        const auto Memory = lowMemoryOperands(Op);
-        const auto Address =
-            Memory.Address ? Transfer.read(*Memory.Address) : FrameValue{};
-        const bool ArgumentRead = Op.Opcode == NdOp::LOAD && Memory.Complete &&
-                                  Address.Offset && *Address.Offset >= 8 &&
-                                  Memory.AccessSize == 4 &&
-                                  ScalarArguments->count(*Address.Offset);
         if (ArgumentRead)
           DispatchEffects.ArgumentEnd =
-              std::max(DispatchEffects.ArgumentEnd, *Address.Offset + 4);
+              std::max(DispatchEffects.ArgumentEnd, *ArgumentRead + 4);
         if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
           const auto SP =
               State.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride]
@@ -286,11 +296,12 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
                     Image, Op, Transfer, sizeof(uint32_t), Work)));
         }
       }
+      const bool CheckLeaf =
+          Calls == BoundFrameCalls::ReadOnlyLeaves && Op.Opcode == NdOp::CALL;
       if (ClosedIntegerEffects && *ClosedIntegerEffects) {
         const bool ThrowCall = ThrowProof && Op.Opcode == NdOp::CALL &&
                                Op.Addr == ThrowProof->ThrowCallVA &&
                                Op.Seq == ThrowProof->ThrowOpSeq;
-        const auto Memory = lowMemoryOperands(Op);
         const auto Object = Memory.Address
                                 ? BorrowTransfer.read(*Memory.Address)
                                 : FrameValue{};
@@ -303,16 +314,16 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
         // The private-frame proof below separately excludes incoming storage
         // and writes to that PC. Image permissions exclude every IAT write.
         *ClosedIntegerEffects =
-            ThrowCall || hasClosedRegistrationIntegerEffect(Op) ||
+            CheckLeaf || ThrowCall || hasClosedRegistrationIntegerEffect(Op) ||
             ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
              Memory.AccessSize <= sizeof(uint32_t) &&
-             (BoundObject || hasClosedOrdinaryRegistrationMemoryAccess(
-                                 Image, Op, Transfer, sizeof(uint32_t), Work)));
+             (BoundObject || (BoundInteger && ArgumentRead) ||
+              hasClosedOrdinaryRegistrationMemoryAccess(
+                  Image, Op, Transfer, sizeof(uint32_t), Work)));
       }
       auto BorrowValue = BorrowTransfer.evaluate(Op, false);
       auto CopySourceValue = CopySourceTransfer.evaluate(Op, false);
       std::optional<FrameValue> ImageValue;
-      const auto Memory = lowMemoryOperands(Op);
       if (Memory.Address) {
         if (!Memory.Complete ||
             !Charge(State.Frame.Cells.size() + State.Borrow.Cells.size() +
@@ -322,6 +333,10 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
           return false;
         const auto Address = Transfer.read(*Memory.Address);
         const auto ImageVA = Address.preferredAddress();
+        if (BoundInteger && ImageVA &&
+            !hasResidentRegistrationData(Image, Address,
+                                         Memory.StoredValue != nullptr, Work))
+          return false;
         const auto Object = BorrowTransfer.read(*Memory.Address);
         const auto CopySource = CopySourceTransfer.read(*Memory.Address);
         if ((Object.MayBeFrame && !Object.Offset) ||
@@ -479,7 +494,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
       std::optional<FrameValue> AfterCallObject;
       bool AfterCallScalar = false;
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        if (ExcludeCalls)
+        if (Calls == BoundFrameCalls::CallFree ||
+            (Calls == BoundFrameCalls::ReadOnlyLeaves && !CheckLeaf))
           return false;
         if (BorrowECX && !Initializer && !ObjectCallbacks)
           return false;
@@ -488,7 +504,23 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
           if (const auto It = Initializers->find({Op.Addr, Op.Seq});
               It != Initializers->end())
             Init = &It->second;
-        if (Init) {
+        if (CheckLeaf) {
+          const auto &SP =
+              State.Frame.Registers[x86reg::RSP / x86reg::GeneralRegStride];
+          if (!SP.Offset || SP != FrameValue::frame(*SP.Offset) ||
+              *SP.Offset < INT32_MIN + 4 || *SP.Offset > 4)
+            return false;
+          const auto Leaf = checkedBoundIntegerCall(
+              Image, Function, Op, {}, {}, BoundFrameCalls::CallFree, Work);
+          if (!Leaf || !Leaf->Memory.Writes.empty() ||
+              !Charge(Leaf->Memory.Reads.size() + State.Frame.Cells.size() +
+                      State.Initialized.size() + 1))
+            return false;
+          Effects.Reads.insert(Leaf->Memory.Reads.begin(),
+                               Leaf->Memory.Reads.end());
+          AfterCallSP = *SP.Offset;
+          AfterCallResult = Leaf->Result;
+        } else if (Init) {
           if (Op.Opcode != NdOp::CALL || Op.NumInputs != 1 ||
               !Op.Inputs[0].isConst() || Op.Inputs[0].Size != 4 ||
               Op.Inputs[0].Offset != Init->Object.Target)
@@ -587,6 +619,7 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
           Threw = true;
           break;
         }
+        const bool InvalidateScratch = CheckLeaf || !AfterCallSP;
         if (!AfterCallSP) {
           if (Initializer)
             return false;
@@ -622,6 +655,8 @@ bool hasPrivateCallerFrame(const LowFunc &Function, const BinaryImage &Image,
           if (int64_t(*SP) + Pop > INT32_MAX)
             return false;
           AfterCallSP = int32_t(int64_t(*SP) + Pop);
+        }
+        if (InvalidateScratch) {
           // A callee owns everything below call SP and may overwrite its
           // outgoing argument area. A later read needs a fresh local store.
           for (auto It = State.Initialized.begin();

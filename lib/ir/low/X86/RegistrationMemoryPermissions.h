@@ -22,6 +22,7 @@ struct BinaryImage;
 struct LowOp;
 namespace registration_state {
 class FrameTransfer;
+struct FrameValue;
 }
 namespace registration_abi {
 
@@ -75,6 +76,12 @@ inline bool hasClosedRegistrationIntegerEffect(const LowOp &Op) {
   }
 }
 
+/// An exact image-relative address in resident private storage. Permissions
+/// and access width are checked separately by the ordinary memory proof.
+bool hasResidentRegistrationData(const BinaryImage &Image,
+                                 const registration_state::FrameValue &Address,
+                                 bool Write, size_t &Work);
+
 /// Only the ordinary entry frame, known Win32 thread fields and complete
 /// mapped image ranges. Writes also require writable storage. No scalar,
 /// frame cell, IAT disjointness or native mapping is produced.
@@ -85,8 +92,8 @@ bool hasClosedOrdinaryRegistrationMemoryAccess(
 
 /// An ordinary returning helper may retain every existing import binding
 /// only through closed integer effects. Calls compose their own receipts;
-/// faults, FP/intrinsics and writes outside its current private frame do not
-/// inherit the weaker integer-stack preservation policy.
+/// stores require private stack storage or an exact resident image destination
+/// disjoint from every IAT. This supplies no value for the written bytes.
 bool preservesOrdinaryRegistrationBindings(
     const BinaryImage &Image, const LowOp &Op,
     const registration_state::FrameTransfer &Transfer,

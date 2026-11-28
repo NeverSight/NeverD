@@ -43,6 +43,7 @@
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthLoadC.h"
 #include "neverd/backend/c/render/AArch64/AArch64WritebackMemoryC.h"
+#include "neverd/backend/c/render/CRotateBuiltins.h"
 #include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/ir/SourceCallABI.h"
@@ -1924,28 +1925,9 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   };
   if (HasFloatingArithmetic)
     c_float::writeContractionPolicy(OS);
-  const auto WriteRotate = [&](unsigned Bytes, unsigned Bits,
-                               llvm::StringRef Type) {
-    if (!(PossibleRotateWidths & (1u << Bytes)))
-      return;
-    OS << "#if defined(__GNUC__) && !defined(__clang__) && "
-          "!__has_builtin(__builtin_rotateleft"
-       << Bits << ")\n#define __builtin_rotateleft" << Bits
-       << "(V, A) __extension__ ({ \\\n"
-       << "    __auto_type __neverd_rotate_value = (" << Type << ")(V); \\\n"
-       << "    unsigned int __neverd_rotate_amount = (A) & " << Bits - 1
-       << "u; \\\n"
-       << "    (" << Type
-       << ")(__neverd_rotate_amount ? "
-          "((__neverd_rotate_value << __neverd_rotate_amount) | "
-          "(__neverd_rotate_value >> ("
-       << Bits
-       << " - __neverd_rotate_amount))) : "
-          "__neverd_rotate_value); })\n#endif\n\n";
-  };
-#define NEVERD_C_ROTATE_BUILTIN(Bytes, Bits, Type)                             \
-  WriteRotate(Bytes, Bits, Type);
-#include "neverd/backend/c/render/CRotateBuiltins.def"
+  for (const auto &Builtin : CRotateBuiltins)
+    if (PossibleRotateWidths & (1u << Builtin.Bytes))
+      OS << Builtin.Preamble;
   if (NeedsMicroMode)
     OS << mips::MicroModeCPrelude;
   if (NeedsMicroModeReference)

@@ -27,6 +27,14 @@ namespace neverd::coff_loader {
   }
 #include "neverd/loader/COFF/RuntimeProviders.def"
 
+inline bool isX86MathCleanupProvider(llvm::StringRef Module) {
+  return isUCRTMathProvider(Module) || Module.equals_insensitive("msvcrt.dll");
+}
+
+inline bool isX64CRTStdioProvider(llvm::StringRef Module) {
+  return isUCRTStdioProvider(Module);
+}
+
 } // namespace neverd::coff_loader
 
 #endif // NEVERD_LOADER_COFF_RUNTIMEPROVIDERS_H

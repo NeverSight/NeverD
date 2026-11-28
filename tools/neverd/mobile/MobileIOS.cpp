@@ -329,8 +329,12 @@ ios::Object recoverWorkerImage(const ios::WorkerRequest &request,
     if (!count)
       throw Error("native decompiler recovered no function bodies; use "
                   "--metadata-only for metadata inspection");
-    auto reported = batch.getInteger("native_function_count");
-    if (!reported || *reported < 0 || uint64_t(*reported) != count)
+    const auto inventory = number(batch, "native_function_count", -1);
+    const auto emitted =
+        batch.get("native_emitted_function_count")
+            ? number(batch, "native_emitted_function_count", -1)
+            : inventory;
+    if (emitted < 0 || inventory < emitted || uint64_t(emitted) != count)
       throw Error("native source report disagrees with emitted function count");
     if (!batch.getObject("objc_metadata"))
       throw Error("native source report has invalid Objective-C metadata");

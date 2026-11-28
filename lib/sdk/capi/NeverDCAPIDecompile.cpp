@@ -17,6 +17,7 @@
 #include "LLVMFunctionView.h"
 #include "LibraryPresentation.h"
 #include "SessionImpl.h"
+#include "SourceDefinitionNotes.h"
 #include "SourceEdits.h"
 
 #include "neverd/Limits.h"
@@ -316,23 +317,6 @@ std::string missingHighFunctionReason(const PipelineResult &Result,
                                        "function not found in HighIR");
 }
 
-/// A note for each function the pipeline refused, with why, which a whole
-/// unit begins with: a refused function is otherwise missing from it with
-/// no word, where asking for it alone names the reason.
-std::string notDecompiledNote(llvm::StringRef Name, va_t Entry,
-                              llvm::StringRef Reason) {
-  // Neither a name nor a reason, which may quote one, can end the comment
-  // it stands in.
-  auto Commented = [](std::string Text) {
-    for (size_t At = Text.find("*/"); At != std::string::npos;
-         At = Text.find("*/", At))
-      Text.replace(At, 2, "* /");
-    return Text;
-  };
-  return "/* neverd.not-decompiled: " + Commented(Name.str()) + " at 0x" +
-         llvm::utohexstr(Entry) + ": " + Commented(Reason.str()) + " */\n";
-}
-
 std::string refusedFunctionNotes(const PipelineResult &Result,
                                  const std::set<va_t> &AlreadyNoted) {
   std::vector<const PipelineFunctionAudit *> Refused;
@@ -379,18 +363,6 @@ std::string leftOutDefinitionNotes(const PipelineResult &Result) {
   return Notes.empty() ? Notes : Notes + "\n";
 }
 
-/// A note for each definition the unit's C left out, which follows the
-/// pipeline's: its C could not be written, for the reason the writer gives.
-std::string refusedDefinitionNotes(
-    const std::vector<CEmitterOptions::RefusedDefinition> &Refused) {
-  std::string Notes;
-  for (const auto &Definition : Refused)
-    Notes += notDecompiledNote(
-        Definition.Name.empty() ? "sub_" + llvm::utohexstr(Definition.Entry)
-                                : Definition.Name,
-        Definition.Entry, "c-emission-failed; " + Definition.Reason);
-  return Notes.empty() ? Notes : Notes + "\n";
-}
 } // namespace
 
 /// Whether the program has local types, whose records a unit defines: a

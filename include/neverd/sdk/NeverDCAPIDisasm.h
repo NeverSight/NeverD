@@ -416,7 +416,8 @@ NEVERD_API const char *neverd_objc_methods_json(neverd_session_t Sess,
                                                 size_t MaxFunctions);
 
 /// Run the same Objective-C analysis and source publication checks, omitting
-/// native_source and per-method source strings from the JSON result. All
+/// native_source, its optional native_emitted_function_count and per-method
+/// source strings from the JSON result. All
 /// coverage, diagnostics and dependency evidence retain the full-mode meaning.
 /// The report adds sources_omitted=true. This is not a source-code artifact.
 /// Returns NULL on failure; free successful results with neverd_free_string.

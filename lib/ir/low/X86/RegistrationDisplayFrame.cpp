@@ -32,6 +32,7 @@
 #include "RegistrationABIPrivate.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -1493,8 +1494,8 @@ private:
     }
   }
 
-  /// Whether what \p Block does from \p Begin up to \p End calls nothing and
-  /// touches only the frame.
+  /// Whether the stretch touches only the frame and has no call, indirect
+  /// transfer or intrinsic with effects beyond its value.
   bool isQuiet(const LowBlock &Block, va_t Begin, va_t End) const {
     std::map<Location, int64_t> Local;
     va_t Instruction = InvalidVA;
@@ -1506,7 +1507,9 @@ private:
         Local = {{locationOf(FP), 0}};
       }
       if (isCall(Op) || Op.Opcode == NdOp::RETURN ||
-          Op.Opcode == NdOp::INDIR_BR)
+          Op.Opcode == NdOp::INDIR_BR ||
+          (Op.Opcode == NdOp::INTRINSIC &&
+           !lowIntrinsicHasOnlyValueEffects(Op)))
         return false;
       if ((Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::LOAD) &&
           (!Op.NumInputs || !Local.count(locationOf(Op.Inputs[0])) ||

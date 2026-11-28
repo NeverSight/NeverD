@@ -17,10 +17,29 @@
 #include "neverd/ir/RegistrationState.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/loader/BinaryImage.h"
+
+#include "llvm/BinaryFormat/COFF.h"
 
 #include <cstdint>
 
 namespace neverd::registration_abi {
+
+bool hasResidentRegistrationData(const BinaryImage &Image,
+                                 const registration_state::FrameValue &Address,
+                                 bool Write, size_t &Work) {
+  using namespace llvm::COFF;
+  if (!Address.ImageAddress ||
+      Address !=
+          registration_state::FrameValue::imageAddress(*Address.ImageAddress) ||
+      !chargeCalleeWork(Work, Image.Sections.size() + 1))
+    return false;
+  const auto *Section = Image.getSectionFor(*Address.ImageAddress);
+  return Section &&
+         !(Section->Type &
+           (IMAGE_SCN_MEM_DISCARDABLE | IMAGE_SCN_MEM_SHARED)) &&
+         (!Write || (Section->Type & IMAGE_SCN_CNT_INITIALIZED_DATA));
+}
 
 bool hasClosedOrdinaryRegistrationMemoryAccess(
     const BinaryImage &Image, const LowOp &Op,
@@ -81,13 +100,15 @@ bool preservesOrdinaryRegistrationBindings(
       return false;
     if (Op.Opcode == NdOp::STORE) {
       const auto Address = Transfer.read(*Memory.Address);
-      // This summary protects all caller bindings, not just the dependencies
-      // used by this body. It also cannot let a changed return PC dispatch
-      // unexamined code. Keep writes strictly below the original entry SP.
-      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-          !Address.Offset || Address != FrameValue::frame(*Address.Offset) ||
-          int64_t(*Address.Offset) + Memory.AccessSize > 0)
+      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         return false;
+      if (Address.Offset && Address == FrameValue::frame(*Address.Offset)) {
+        // A store into the caller's return PC could dispatch arbitrary code.
+        if (int64_t(*Address.Offset) + Memory.AccessSize > 0)
+          return false;
+      } else if (!hasResidentRegistrationData(Image, Address, true, Work)) {
+        return false;
+      }
     }
     return hasClosedOrdinaryRegistrationMemoryAccess(Image, Op, Transfer,
                                                      CallerArgumentBytes, Work);
