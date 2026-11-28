@@ -44,7 +44,7 @@ bool observeOrdered(uint32_t Word, uintptr_t Base, unsigned Lane,
 }
 #elif defined(RETURN_MODEL_WRITEBACK)
 extern int compareStructureWriteback(int Enabled);
-#else
+#elif defined(RETURN_MODEL_CURSOR)
 extern int compareCursorModes(int Enabled, uintptr_t StackTop);
 #endif
 

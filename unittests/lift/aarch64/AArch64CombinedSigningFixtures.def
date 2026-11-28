@@ -1,0 +1,361 @@
+//===- AArch64CombinedSigningFixtures.def - Joined arm64e frames ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifdef ASYNC_FRAME_TEXT
+ASYNC_FRAME_TEXT(kSpillSnapshots, "resolved_active_spill_snapshots")
+ASYNC_FRAME_TEXT(kRejectedExitRows, "rejected_image_exit_rows")
+ASYNC_FRAME_TEXT(kCombinedMove, "mov x15, x10")
+ASYNC_FRAME_TEXT(kCombinedAdd, "add x15, x10, #0")
+ASYNC_FRAME_TEXT(kCombinedSub, "sub x15, x10, #0, lsl #12")
+ASYNC_FRAME_TEXT(kCombinedOr, "orr x15, x10, xzr")
+ASYNC_FRAME_TEXT(kCombinedXor, "eor x15, x10, xzr")
+ASYNC_FRAME_TEXT(kCombinedAddReg, "add x15, x10, xzr")
+ASYNC_FRAME_TEXT(kCombinedSubReg, "sub x15, x10, xzr")
+ASYNC_FRAME_TEXT(kCombinedLsr, "lsr x15, x10, #0")
+ASYNC_FRAME_TEXT(kCombinedAsr, "asr x15, x10, #0")
+ASYNC_FRAME_TEXT(kCombinedRor, "ror x15, x10, #0")
+ASYNC_FRAME_TEXT(kCombinedOrSelf, "orr x15, x10, x10")
+ASYNC_FRAME_TEXT(kCombinedAndSelf, "and x15, x10, x10")
+ASYNC_FRAME_TEXT(kCombinedXorLeft, "eor x15, xzr, x10")
+ASYNC_FRAME_TEXT(kCombinedNarrow, "mov w15, w10")
+ASYNC_FRAME_TEXT(kCombinedChanged, "add x15, x10, #1")
+ASYNC_FRAME_TEXT(kCombinedShift, "orr x15, xzr, x10, lsl #1")
+ASYNC_FRAME_TEXT(kCombinedShiftedSelf, "and x15, x10, x10, lsr #1")
+ASYNC_FRAME_TEXT(kCombinedExtract, "extr x15, x11, x10, #0")
+ASYNC_FRAME_TEXT(kCombinedSelect, "csel x15, x10, x10, eq")
+ASYNC_FRAME_TEXT(kCombinedShiftReg, "lslv x15, x10, xzr")
+ASYNC_FRAME_TEXT(kCombinedRotateReg, "rorv x15, x10, xzr")
+ASYNC_FRAME_TEXT(kCombinedExtendedZero, "sub x15, x10, wzr, sxtw")
+ASYNC_FRAME_TEXT(kCombinedOtherSelect, "csel x15, x10, x11, eq")
+ASYNC_FRAME_TEXT(kCombinedLostExtract, "extr x15, x11, x10, #1")
+ASYNC_FRAME_TEXT(kCombinedOtherShift, "lsrv x15, x10, x11")
+ASYNC_FRAME_TEXT(kCombinedSaveOffset, R"asm(
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ str x15, [sp, #8]
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadOffset, R"asm(
+ ldr x15, [sp, #8]
+ add sp, sp, #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSavePairFirst, R"asm(
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ stp x15, xzr, [sp, #8]
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadPairFirst, R"asm(
+ ldp x15, x13, [sp, #8]
+ add sp, sp, #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSavePairSecond, R"asm(
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ stp xzr, x15, [sp]
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadPairSecond, R"asm(
+ ldp x13, x15, [sp]
+ add sp, sp, #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSavePairWriteback, R"asm(
+ stp x13, x15, [sp, #-32]!
+ .cfi_def_cfa_offset 32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadPairWriteback, R"asm(
+ ldp x13, x15, [sp], #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSaveScalarWriteback, R"asm(
+ str x15, [sp, #-32]!
+ .cfi_def_cfa_offset 32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadScalarWriteback, R"asm(
+ ldr x15, [sp], #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSaveUnaligned, R"asm(
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ stur x15, [sp, #5]
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadUnaligned, R"asm(
+ ldur x15, [sp, #5]
+ add sp, sp, #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSaveBase, R"asm(
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ add x14, sp, #8
+ str x15, [x14]
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadBase, R"asm(
+ ldr x15, [x14]
+ add sp, sp, #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSaveChain, R"asm(
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ str x15, [sp, #8]
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadChain, R"asm(
+ ldr x12, [sp, #8]
+ str x12, [sp, #16]
+ mov x12, xzr
+ ldr x15, [sp, #16]
+ add sp, sp, #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSaveOrdered, R"asm(
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ add x14, sp, #8
+ stlr x15, [x14]
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadOrdered, R"asm(
+ ldar x15, [x14]
+ add sp, sp, #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSaveIndex, R"asm(
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ mov x14, #8
+ str x15, [sp, x14]
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadIndex, R"asm(
+ ldr x15, [sp, #8]
+ add sp, sp, #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSaveScaled, R"asm(
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ str x15, [sp, #8]
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadScaled, R"asm(
+ mov w14, #1
+ ldr x15, [sp, w14, uxtw #3]
+ add sp, sp, #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSaveWrongIndex, R"asm(
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ str x15, [sp, #8]
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadWrongIndex, R"asm(
+ mov x14, #16
+ ldr x15, [sp, x14]
+ add sp, sp, #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedSaveUnknownIndex, R"asm(
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ str x15, [sp, #8]
+)asm")
+ASYNC_FRAME_TEXT(kCombinedLoadUnknownIndex, R"asm(
+ ldr x15, [sp, x2]
+ add sp, sp, #32
+)asm")
+ASYNC_FRAME_TEXT(kCombinedDefault, "-DNEVERD_COMBINED_DEFAULT")
+ASYNC_FRAME_TEXT(kCombinedArmSpill, "-DNEVERD_COMBINED_ARMSPILL")
+ASYNC_FRAME_TEXT(kCombinedExitReload, "-DNEVERD_COMBINED_EXITRELOAD")
+ASYNC_FRAME_TEXT(kCombinedBrokenCFI, "-DNEVERD_COMBINED_BROKENCFI")
+ASYNC_FRAME_TEXT(kCombinedAdjacent, "-DNEVERD_COMBINED_ADJACENT")
+ASYNC_FRAME_TEXT(kCombinedPartial, "-DNEVERD_COMBINED_PARTIAL")
+ASYNC_FRAME_TEXT(kCombinedAlias, "-DNEVERD_COMBINED_ALIAS")
+ASYNC_FRAME_TEXT(kCombinedReused, "-DNEVERD_COMBINED_REUSED")
+ASYNC_FRAME_TEXT(kCombinedBadSP, "-DNEVERD_COMBINED_BADSP")
+ASYNC_FRAME_TEXT(kCombinedBadCopy, "-DNEVERD_COMBINED_BADCOPY")
+ASYNC_FRAME_TEXT(kCombinedConditional, "-DNEVERD_COMBINED_CONDITIONAL")
+ASYNC_FRAME_TEXT(kCombinedOrderedByte, "-DNEVERD_COMBINED_ORDEREDBYTE")
+ASYNC_FRAME_TEXT(kCombinedTornIndex, "-DNEVERD_COMBINED_TORNINDEX")
+ASYNC_FRAME_TEXT(kCombinedLostLR, "-DNEVERD_COMBINED_LOSTLR")
+ASYNC_FRAME_TEXT(kCombinedCall, "-DNEVERD_COMBINED_CALL")
+ASYNC_FRAME_TEXT(kCombinedResign, "-DNEVERD_COMBINED_RESIGN")
+ASYNC_FRAME_TEXT(kCombinedWrongKey, "-DNEVERD_COMBINED_WRONGKEY")
+ASYNC_FRAME_TEXT(kCombinedBothLost, "-DNEVERD_COMBINED_BOTHLOST")
+ASYNC_FRAME_TEXT(kCombinedBadFirst, "-DNEVERD_COMBINED_BADFIRST")
+ASYNC_FRAME_TEXT(kCombinedBody, R"asm(
+ .text
+ .globl _signal_tick
+ .p2align 2
+_signal_tick:
+ .cfi_startproc
+#ifdef NEVERD_SIGN_WITH_B
+#define SIGN .inst 0xdac1a7fe
+#define AUTH .inst 0xdac195fe
+#define OTHER_AUTH .inst 0xdac191fe
+#else
+#define SIGN .inst 0xdac1a3fe
+#define AUTH .inst 0xdac191fe
+#define OTHER_AUTH .inst 0xdac195fe
+#endif
+ .macro save_carrier
+ {1}
+ mov x10, xzr
+ mov x15, xzr
+ .endm
+ .macro reload_carrier
+ {2}
+#ifdef NEVERD_COMBINED_BROKENCFI
+ .cfi_adjust_cfa_offset -32
+#else
+ .cfi_def_cfa_offset 0
+#endif
+ .endm
+ nop
+ cbnz x1, Lright
+Lfirst:
+ SIGN
+ adr x10, Lfirst
+ {0}
+#ifdef NEVERD_COMBINED_ARMSPILL
+ .cfi_remember_state
+ save_carrier
+#endif
+ b Ljoin
+Lright:
+#ifdef NEVERD_COMBINED_ARMSPILL
+ .cfi_restore_state
+#endif
+Lsecond:
+ SIGN
+ adr x10, Lsecond
+ {0}
+#ifdef NEVERD_COMBINED_ARMSPILL
+ save_carrier
+#endif
+Ljoin:
+ .cfi_same_value x19
+ .cfi_escape 0x2e, 0
+#ifndef NEVERD_COMBINED_ARMSPILL
+ save_carrier
+#endif
+#ifdef NEVERD_COMBINED_ADJACENT
+ strb w1, [sp, #16]
+#elif defined(NEVERD_COMBINED_PARTIAL)
+ strb w1, [sp, #15]
+#elif defined(NEVERD_COMBINED_ALIAS)
+ str x1, [x2]
+#elif defined(NEVERD_COMBINED_REUSED)
+ add sp, sp, #32
+ .cfi_def_cfa_offset 0
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+#elif defined(NEVERD_COMBINED_CONDITIONAL)
+ add x14, sp, #8
+ stxr w12, x1, [x14]
+#elif defined(NEVERD_COMBINED_ORDEREDBYTE)
+ add x14, sp, #15
+ stlrb w1, [x14]
+#elif defined(NEVERD_COMBINED_TORNINDEX)
+ mov w14, #1
+ strh w1, [sp, w14, uxtw #1]
+ mov w14, #7
+ strh w1, [sp, w14, uxtw #1]
+#endif
+#if defined(NEVERD_COMBINED_EXITRELOAD) || defined(NEVERD_COMBINED_BROKENCFI)
+ .cfi_remember_state
+ cbnz x3, Lalternate
+ reload_carrier
+#else
+ reload_carrier
+ cbnz x3, Lalternate
+#endif
+#if defined(NEVERD_COMBINED_BADFIRST) || defined(NEVERD_COMBINED_BOTHLOST)
+ mov w15, w15
+#endif
+ AUTH
+ str x15, [x0]
+ mov x0, x15
+ ret
+Lalternate:
+#if defined(NEVERD_COMBINED_EXITRELOAD) || defined(NEVERD_COMBINED_BROKENCFI)
+ .cfi_restore_state
+ reload_carrier
+#endif
+#ifdef NEVERD_COMBINED_BADSP
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+#elif defined(NEVERD_COMBINED_BADCOPY)
+ mov w15, w15
+#elif defined(NEVERD_COMBINED_LOSTLR) || defined(NEVERD_COMBINED_BOTHLOST)
+ mov x30, x9
+#elif defined(NEVERD_COMBINED_CALL)
+ blr x4
+#elif defined(NEVERD_COMBINED_RESIGN)
+ pacibsp
+#endif
+#ifdef NEVERD_COMBINED_WRONGKEY
+ OTHER_AUTH
+#else
+ AUTH
+#endif
+#ifdef NEVERD_COMBINED_BADSP
+ add sp, sp, #32
+ .cfi_def_cfa_offset 0
+#endif
+ str x15, [x0, #8]
+ str x15, [x0]
+ mov x0, x15
+ ret
+ .cfi_endproc
+)asm")
+#endif
+
+#ifdef COMBINED_SIGNING_CASE
+// Copy, stack transfer, exit layout and publication expectation.
+COMBINED_SIGNING_CASE(Move, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(Add, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(Sub, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(Or, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(Xor, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(AddReg, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(SubReg, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(Lsr, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(Asr, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(Ror, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(OrSelf, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(AndSelf, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(XorLeft, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(Sub, PairFirst, Default, Distinct)
+COMBINED_SIGNING_CASE(Sub, PairSecond, Default, Distinct)
+COMBINED_SIGNING_CASE(Sub, PairWriteback, Default, Distinct)
+COMBINED_SIGNING_CASE(Sub, ScalarWriteback, Default, Distinct)
+COMBINED_SIGNING_CASE(Sub, Unaligned, Default, Distinct)
+COMBINED_SIGNING_CASE(Sub, Base, Default, Distinct)
+COMBINED_SIGNING_CASE(Sub, Chain, Default, Distinct)
+COMBINED_SIGNING_CASE(Sub, Ordered, Default, Distinct)
+COMBINED_SIGNING_CASE(Sub, Index, Default, Distinct)
+COMBINED_SIGNING_CASE(Sub, Scaled, Default, Distinct)
+COMBINED_SIGNING_CASE(Add, Offset, ArmSpill, Distinct)
+COMBINED_SIGNING_CASE(Add, Offset, ExitReload, Distinct)
+COMBINED_SIGNING_CASE(Add, Offset, Adjacent, Distinct)
+COMBINED_SIGNING_CASE(Extract, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(Select, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(ShiftReg, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(RotateReg, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(ExtendedZero, Offset, Default, Distinct)
+COMBINED_SIGNING_CASE(OtherSelect, Offset, Default, Refuse)
+COMBINED_SIGNING_CASE(LostExtract, Offset, Default, Refuse)
+COMBINED_SIGNING_CASE(OtherShift, Offset, Default, Refuse)
+COMBINED_SIGNING_CASE(Narrow, Offset, Default, Refuse)
+COMBINED_SIGNING_CASE(Changed, Offset, Default, Refuse)
+COMBINED_SIGNING_CASE(Shift, Offset, Default, Refuse)
+COMBINED_SIGNING_CASE(ShiftedSelf, Offset, Default, Refuse)
+COMBINED_SIGNING_CASE(Add, WrongIndex, Default, Refuse)
+COMBINED_SIGNING_CASE(Add, UnknownIndex, Default, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, BrokenCFI, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, Partial, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, Alias, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, Reused, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, BadSP, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, BadCopy, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, Conditional, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, OrderedByte, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, TornIndex, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, LostLR, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, Call, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, Resign, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, WrongKey, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, BothLost, Refuse)
+COMBINED_SIGNING_CASE(Add, Offset, BadFirst, Refuse)
+#undef COMBINED_SIGNING_CASE
+#endif

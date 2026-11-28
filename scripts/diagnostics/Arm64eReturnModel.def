@@ -5,21 +5,32 @@
 //===----------------------------------------------------------------------===//
 
 // The FVP starts at EL1 with EL2 and EL3 absent.
-#if defined(RETURN_MODEL_CURSOR) || defined(RETURN_MODEL_ORDERED) ||            \
-    defined(RETURN_MODEL_WRITEBACK)
+#if defined(RETURN_MODEL_CURSOR) || defined(RETURN_MODEL_ORDERED) ||           \
+    defined(RETURN_MODEL_WRITEBACK) || defined(RETURN_MODEL_JOINED)
 #define RETURN_MODEL_NORMAL_MEMORY
-// Each 2 MiB block holds either shared read-only code or one writable stack.
+// Code and both stacks share a level-two table. The joined guest includes
+// distant branches and can occupy several blocks. Reserve the last two entries
+// for its stacks so that growing the instruction inventory cannot cover them.
 #define RETURN_MODEL_TEXT_BASE 0x80000000
-#define RETURN_MODEL_EL0_DATA 0x80200000
-#define RETURN_MODEL_EL1_DATA 0x80400000
 #define RETURN_MODEL_BLOCK_BYTES 0x200000
-#define RETURN_MODEL_STACK_EL1 (RETURN_MODEL_EL1_DATA + RETURN_MODEL_BLOCK_BYTES)
-#define RETURN_MODEL_STACK_EL0 (RETURN_MODEL_EL0_DATA + RETURN_MODEL_BLOCK_BYTES)
+#define RETURN_MODEL_TABLE_ENTRIES 512
+#ifdef RETURN_MODEL_JOINED
+#define RETURN_MODEL_TEXT_BLOCKS (RETURN_MODEL_TABLE_ENTRIES - 2)
+#else
+#define RETURN_MODEL_TEXT_BLOCKS 1
+#endif
+#define RETURN_MODEL_EL0_DATA                                                  \
+  (RETURN_MODEL_TEXT_BASE + RETURN_MODEL_TEXT_BLOCKS * RETURN_MODEL_BLOCK_BYTES)
+#define RETURN_MODEL_EL1_DATA (RETURN_MODEL_EL0_DATA + RETURN_MODEL_BLOCK_BYTES)
+#define RETURN_MODEL_FIRST_STACK_SYMBOL _returnModelFirstStack
+#define RETURN_MODEL_STACK_EL1                                                 \
+  (RETURN_MODEL_EL1_DATA + RETURN_MODEL_BLOCK_BYTES)
+#define RETURN_MODEL_STACK_EL0                                                 \
+  (RETURN_MODEL_EL0_DATA + RETURN_MODEL_BLOCK_BYTES)
 #define RETURN_MODEL_MMU 1
 #define RETURN_MODEL_NORMAL_WB 0xff
 #define RETURN_MODEL_PAGE_SHIFT 12
 #define RETURN_MODEL_L1_SHIFT 30
-#define RETURN_MODEL_TABLE_ENTRIES 512
 #define RETURN_MODEL_ENTRY_BYTES 8
 #define RETURN_MODEL_TABLE 3
 // Level 2 block, access flag set, inner shareable, MAIR index zero.
@@ -106,6 +117,8 @@
 #endif
 #define RETURN_MODEL_NEWLINE "\n"
 #define RETURN_MODEL_EXCEPTION "RETURN-MODEL unexpected exception\n"
-#define RETURN_MODEL_OBSERVATION "RETURN-MODEL compared EL1 and EL0 EnPACM/EnPACM0="
+#define RETURN_MODEL_OBSERVATION                                               \
+  "RETURN-MODEL compared EL1 and EL0 EnPACM/EnPACM0="
 #define RETURN_MODEL_ZERO '0'
-#define RETURN_MODEL_PASS "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings\n"
+#define RETURN_MODEL_PASS                                                      \
+  "RETURN-MODEL passed EL1 and EL0 at all four EnPACM settings\n"

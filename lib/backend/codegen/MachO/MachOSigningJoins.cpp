@@ -52,6 +52,7 @@ struct Instruction {
   std::optional<va_t> BranchTarget;
   bool Call = false;
   bool MayReload = false;
+  bool WritesSP = false;
 };
 
 using Origins = llvm::SmallVector<std::pair<va_t, va_t>, 2>;
@@ -65,6 +66,7 @@ struct Proof {
   bool Unknown = false;
   bool Mismatch = false;
   bool NeedsSpills = false;
+  bool WritesSigningSP = false;
 };
 
 // Walk the two reaching definitions together. A join with two different
@@ -158,6 +160,7 @@ Proof reachingSigners(const LowFunc &CFG,
           Result.WritesToConsumer |= Prepared.lookup(PC);
       }
       if (Signer == InvalidVA) {
+        Result.WritesSigningSP |= I.WritesSP;
         if (I.Signing && !I.Signing->Authenticate && I.Signing->Key == Key) {
           Signer = PC;
         } else if (I.Signing || I.Call ||
@@ -295,6 +298,7 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
     return Result;
   llvm::DenseMap<va_t, Instruction> Code;
   uint32_t Read = 0, ReadTwice = 0, Written = 0, Reserved = 0;
+  bool SignsLocally = false;
   for (const auto &B : CFG.Blocks)
     for (const auto &Boundary : B.InstructionBoundaries) {
       const auto PC = Boundary.Address;
@@ -320,6 +324,9 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
       };
       Fact.Reads = Mask({Reads, NR});
       Fact.Writes = Mask({Writes, NW});
+      Fact.WritesSP = llvm::any_of(llvm::ArrayRef(Writes, NW), [](auto R) {
+        return R == AARCH64_REG_SP || R == AARCH64_REG_WSP;
+      });
       Fact.Call = cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL);
       if (Fact.Call)
         Fact.Writes |= (uint32_t(1) << kVolatileEnd) - 1;
@@ -327,6 +334,7 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
       Read |= Fact.Reads;
       Written |= Fact.Writes;
       Fact.Signing = machOPCSigningInstruction(I.Id);
+      SignsLocally |= Fact.Signing && !Fact.Signing->Authenticate;
       const auto &D = I.Raw->detail->aarch64;
       const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
       if ((I.Id == AARCH64_INS_B || I.Id == AARCH64_INS_CBZ ||
@@ -371,10 +379,16 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
   llvm::DenseMap<va_t, uint32_t> Prepared;
   std::optional<AArch64FrameAccesses> Accesses;
   std::vector<AArch64RecoveredUnwindRow> Rows;
+  // A shared signing PC can move for one exit even when another lost its LR
+  // or its modifier before the predecessor walk reaches the join.
+  const bool ProveEveryExit = SignsLocally && Consumers.size() > 1;
   for (const auto &[Block, PC] : Consumers) {
     const auto &I = Code.at(PC);
-    if (!I.Signing || !I.Modifier)
+    if (!I.Signing || !I.Modifier) {
+      if (ProveEveryExit)
+        return {.Unresolved = true};
       continue;
+    }
     const auto R = *I.Modifier;
     const auto Trace = [&] {
       return reachingSigners(CFG, Code, *Block, PC, R, I.Signing->Key, Prepared,
@@ -382,16 +396,35 @@ MachOSigningJoins machOSigningJoins(const BinaryImage &Image, Decoder &Decode,
                              Frame ? Frame->CodeRange.Begin : 0);
     };
     auto Paths = Trace();
-    if (Paths.NeedsSpills && Frame && !Accesses) {
+    if ((Paths.NeedsSpills || Paths.WritesSigningSP) && Frame && !Accesses) {
       Accesses.emplace();
       auto Recovered =
           recoverDarwinAArch64Unwind(Image, *Frame, {}, &*Accesses);
       if (Recovered) {
         Rows = std::move(*Recovered);
-        Paths = Trace();
+        if (Paths.NeedsSpills)
+          Paths = Trace();
       } else {
         llvm::consumeError(Recovered.takeError());
       }
+    }
+    if (ProveEveryExit &&
+        (Paths.Unknown || Paths.Mismatch || Paths.Definitions.empty()))
+      return {.Unresolved = true};
+    if (Paths.WritesSigningSP && !Paths.Definitions.empty()) {
+      // A correct second modifier does not compensate for a changed first
+      // modifier. Compare SP at the actual signing and authentication PCs.
+      const auto Offset = [&](va_t At) -> std::optional<int64_t> {
+        if (Rows.empty())
+          return std::nullopt;
+        return aarch64UnwindRowAt(Rows, At - Frame->CodeRange.Begin)
+            .StackOffset;
+      };
+      const auto SP = Offset(PC);
+      if (!SP || llvm::any_of(Paths.Definitions, [&](const auto &Origin) {
+            return Offset(Origin.second) != SP;
+          }))
+        return {.Unresolved = true};
     }
     if (!Paths.Joined &&
         (!Paths.CrossesEdge || (!Paths.Mismatch && Paths.Definitions.empty())))

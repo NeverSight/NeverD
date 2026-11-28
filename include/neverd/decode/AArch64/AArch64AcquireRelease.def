@@ -1,0 +1,18 @@
+//===- AArch64AcquireRelease.def - Ordered scalar transfers ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// Unconditional acquire loads and release stores. A zero byte count uses the
+/// W/X data operand's width. Exclusive stores do not define a cell on failure.
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_A64_ACQUIRE_RELEASE
+NEVERD_A64_ACQUIRE_RELEASE(LDAR, true, 0)
+NEVERD_A64_ACQUIRE_RELEASE(LDARB, true, 1)
+NEVERD_A64_ACQUIRE_RELEASE(LDARH, true, 2)
+NEVERD_A64_ACQUIRE_RELEASE(STLR, false, 0)
+NEVERD_A64_ACQUIRE_RELEASE(STLRB, false, 1)
+NEVERD_A64_ACQUIRE_RELEASE(STLRH, false, 2)
+#undef NEVERD_A64_ACQUIRE_RELEASE
+#endif
