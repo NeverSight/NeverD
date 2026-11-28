@@ -28,6 +28,11 @@ inline const auto &modeRegisters(const X86ModeState &S) {
   return S.Core.Core.Core.Core.Core.Core;
 }
 
+inline uint64_t modeInstructionAddress(const X86ModeState &S, bool Long64) {
+  const auto PC = modeRegisters(S).PC;
+  return Long64 ? PC : uint32_t(S.Core.Core.Core.CS.Base + PC);
+}
+
 inline uint8_t modeCPL(const X86ModeState &S,
                        const translate::X86PagingState &C) {
   if (!(C.CR0 & 1) || S.RetainedRealCS)
@@ -57,7 +62,7 @@ fetchX86SystemInstruction(X86ModeState &S, translate::X86PagedMemory &M,
     Out.Exception = X86MemoryException{13, 0, {}};
     return false;
   }
-  const uint64_t Address = Long64 ? R.PC : uint32_t(CS.Base + R.PC);
+  const uint64_t Address = modeInstructionAddress(S, Long64);
   if (S.Debug &&
       (!M.sgxMemory() || M.sgxMemory()->instructionBreakpointsAt(Address))) {
     const auto Matches = x86ExecutionBreakpoints(
