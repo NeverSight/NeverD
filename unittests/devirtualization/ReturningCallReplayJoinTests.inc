@@ -122,8 +122,9 @@ TEST(InterpreterSpecialization, ReturningCallUnchangedJoinStillChargesScans) {
   // guest PC (8). RSP and DF have unsafe entry origins; new flags are fresh.
   constexpr uint64_t SafeBytes = 250;
   // A second edge adds one projection scan and four bounded merge scans.
-  // COND_BR also reads one flag byte beyond the unconditional target input.
-  constexpr uint64_t ExtraWork = 5 * SafeBytes + 1;
+  // COND_BR reads one more flag byte; inverse projection scans three affine
+  // candidate registers on that edge.
+  constexpr uint64_t ExtraWork = 5 * SafeBytes + 1 + 3;
   std::array<uint64_t, 2> Work{};
   for (bool DuplicateEdge : {false, true}) {
     ReturningCallReadCounter P;
