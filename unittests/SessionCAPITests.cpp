@@ -5650,6 +5650,45 @@ TEST_F(SessionCAPITest, ThePrintedSignatureOfAHeadersLongReadsBack) {
       << takeString(neverd_last_error(Session));
 }
 
+TEST_F(SessionCAPITest, ARecordedPrototypeSurvivesAnUnavailableBody) {
+  constexpr unsigned Stride = 0x10;
+  std::string Code(2 * Stride, '\xcc');
+  // Both functions have a valid first instruction and an invalid encoding.
+  for (unsigned Offset : {0u, Stride})
+    Code.replace(Offset, 5, "\x89\xc8\x0f\x04\xc3", 5);
+  const auto Path = write("unavailable-body.exe", makePE64(Code));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  auto &State = *neverd::sdk::toSession(Session);
+  const auto Entry = neverd_session_entry_addr(Session);
+  auto Known = neverd::Symbol::makeFunc(Entry, Stride);
+  Known.Name = "CloseHandle";
+  Known.Origin = neverd::NameOrigin::Stated;
+  State.Img.Symbols.push_back(Known);
+  State.Img.Symbols.push_back(neverd::Symbol::makeFunc(Entry + Stride, Stride));
+  neverd::sdk::SessionTestAccess::resetFunctions(State);
+
+  ASSERT_TRUE(takeString(neverd_decompile(Session, Entry)).empty());
+  ASSERT_FALSE(takeString(neverd_last_error(Session)).empty());
+  auto Type = llvm::json::parse(
+      takeString(neverd_func_type_json(Session, Entry, nullptr)));
+  ASSERT_TRUE(bool(Type)) << llvm::toString(Type.takeError());
+  ASSERT_NE(Type->getAsObject(), nullptr);
+  const auto &Reply = *Type->getAsObject();
+  EXPECT_EQ(Reply.getBoolean("stated"), false);
+  EXPECT_EQ(Reply.getString("declaration"),
+            "WINBOOL CloseHandle(HANDLE hObject)");
+  const auto *Parameters = Reply.getArray("parameters");
+  ASSERT_TRUE(Parameters && Parameters->size() == 1);
+  ASSERT_NE(Parameters->front().getAsObject(), nullptr);
+  EXPECT_EQ(Parameters->front().getAsObject()->getString("location"), "rcx");
+  EXPECT_TRUE(takeString(neverd_last_error(Session)).empty());
+  EXPECT_TRUE(takeString(neverd_decompile(Session, Entry)).empty());
+  EXPECT_FALSE(takeString(neverd_last_error(Session)).empty());
+
+  EXPECT_EQ(neverd_func_type_json(Session, Entry + Stride, nullptr), nullptr);
+  EXPECT_FALSE(takeString(neverd_last_error(Session)).empty());
+}
+
 TEST_F(SessionCAPITest, ADeclarationThatHidesAPrototypeKeepsTheContext) {
   // A caller and the image's own CloseHandle, which the Windows headers
   // declare.

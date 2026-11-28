@@ -194,6 +194,15 @@ llvm::json::Object declarationReply(Session &S,
 
 namespace neverd::sdk {
 
+std::optional<FunctionSym> entryPrototype(Session &S, va_t Entry) {
+  if (auto *Debug = S.decompileDebug())
+    if (auto Function = Debug->resolveFunction(Entry);
+        Function && Function->Addr == Entry &&
+        !Function->PrototypeDeclaration.empty())
+      return Function;
+  return std::nullopt;
+}
+
 std::optional<CurrentDeclaration>
 currentDeclaration(neverd_session_t Sess, Session &S, va_t Entry,
                    const types::TypeLibrary &Library) {
@@ -209,8 +218,20 @@ currentDeclaration(neverd_session_t Sess, Session &S, va_t Entry,
     // A C tag alone loses namespaces and template arguments; resolving that
     // projection against the whole type catalog can select another record.
     const char *Page = neverd_ir_view_json(Sess, Entry, "c", 0, 1);
-    if (!Page)
+    if (!Page) {
+      const std::string SourceError = S.LastError;
+      if (auto Prototype = entryPrototype(S, Entry)) {
+        auto Read = types::parseFunctionDeclaration(
+            Prototype->PrototypeDeclaration, Library);
+        if (Read.ok()) {
+          S.clearError();
+          return CurrentDeclaration{std::move(Prototype->PrototypeDeclaration),
+                                    std::move(Read), false};
+        }
+      }
+      S.setError(SourceError);
       return std::nullopt;
+    }
     neverd_free_string(Page);
     const auto *Source =
         S.findFunctionSource(Entry, Session::SourceRoute::PlainC);

@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "FunctionDeclaration.h"
 #include "ImportSlots.h"
 #include "InstructionFlow.h"
 #include "JSONText.h"
@@ -1237,15 +1238,11 @@ const char *neverd_function_presentation_json(neverd_session_t Sess,
         Row["prototype"] = EntryDeclaration;
         Row["prototype_name"] = "DllEntryPoint";
       }
-    } else if (auto *Debug = S->decompileDebug()) {
-      if (const auto Function = Debug->resolveFunction(Entry);
-          Function && Function->Addr == Entry &&
-          !Function->PrototypeDeclaration.empty()) {
-        Row["prototype"] = Function->PrototypeDeclaration;
-        Row["prototype_name"] = Function->Name;
-        if (Entry == Img.Entry && !S->LocalTypeEntryDeclaration.empty())
-          Row["prototype_name"] = "DllEntryPoint";
-      }
+    } else if (const auto Prototype = entryPrototype(*S, Entry)) {
+      Row["prototype"] = Prototype->PrototypeDeclaration;
+      Row["prototype_name"] = Prototype->Name;
+      if (Entry == Img.Entry && !S->LocalTypeEntryDeclaration.empty())
+        Row["prototype_name"] = "DllEntryPoint";
     }
   }
   S->clearError();
