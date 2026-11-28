@@ -8,10 +8,12 @@
 //===----------------------------------------------------------------------===//
 
 TEST_F(X64ContinuationExportTest, PagedReturnEntryValidatesTheSelection) {
-  load({0xc3, 0xc3}, {{0x1000, 1}, {0x1001, 1}});
+  // XOR EBP, EBP projects an arbitrary AF bit into RFLAGS. Its packed
+  // comparison is a numeric operand of a bitwise operation in LLVM-to-C.
+  load({0xc3, 0xc3, 0x33, 0xed, 0xc3}, {{0x1000, 1}, {0x1001, 1}, {0x1002, 3}});
   for (bool LLVM : {false, true}) {
     const auto Selection = request(
-        R"("entries":[4096,4097],"paged_memory":true,"return_stack_events":true)");
+        R"("entries":[4096,4097,4098],"paged_memory":true,"return_stack_events":true)");
     const char *Report = nullptr;
     const auto Both = take(neverd_x64_continuation_source_v1(
         Session, Selection.data(), Selection.size(), LLVM, &Report));
@@ -20,11 +22,17 @@ TEST_F(X64ContinuationExportTest, PagedReturnEntryValidatesTheSelection) {
     ASSERT_TRUE(bool(Parsed));
     auto *Contract = Parsed->getAsObject()->getObject("return_stack_events");
     ASSERT_NE(Contract, nullptr);
-    ASSERT_EQ(Contract->getArray("entries")->size(), 2u);
+    ASSERT_EQ(Contract->getArray("entries")->size(), 3u);
     EXPECT_EQ(Contract->getString("resume"),
               "neverd_x64_resume_paged_transfers_v6");
     EXPECT_EQ(Parsed->getAsObject()->getString("call_return_policy"), "stop");
     EXPECT_NE(Both.find("neverd_x64_enter_paged_1001_v6("), std::string::npos);
+    const auto File = tmpFile("return-entry.c");
+    std::ofstream(File) << Both;
+    const auto Built =
+        exec(NEVERD_TEST_CLANG,
+             {"-std=c11", "-Werror", "-fsyntax-only", File.string()});
+    ASSERT_TRUE(Built.ok()) << Built.err;
 
     const auto One = take(neverd_x64_paged_return_entry_source_v1(
         Session, 0x1001, Selection.data(), Selection.size(), LLVM, &Report));
