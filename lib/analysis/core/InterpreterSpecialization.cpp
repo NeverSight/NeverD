@@ -2423,6 +2423,10 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
     std::set<uint64_t> Slots;
     for (const auto &Domain : Incoming.FrameValueDomains)
       Slots.insert(Domain.first);
+    // A live physical return word is a bounded candidate, not an asserted
+    // target. Prove its full current domain before carrying it to a successor.
+    Slots.insert(Frame.NativeReturnSlots.begin(),
+                 Frame.NativeReturnSlots.end());
     const auto Hints =
         Refinement.FrameWordHints.find({Successor.Address, Successor.Mode});
     if (Hints != Refinement.FrameWordHints.end())
