@@ -2870,6 +2870,20 @@ archived guest inventories also passed.
 [Hosted Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46046283283) ·
 [Arm FVP execution](https://github.com/gmh5225/test_mac_intel/actions/runs/46051104410)
 
+Fourteen multi-entry fixtures cover IA and IB with forward signers and signers
+at or beyond the backward immediate limit. Across O0 publication and O2
+republication, the tests checked 56 images, 242 unwind rows, 92 interrupted
+signing PCs and 28 relocated authenticators. Twenty contradictory cases
+were rejected. Four generations of a mixed code and data image preserved the
+unwind state across embedded data. The free macOS Release run passed
+366 cases with zero skips. For each of the M4 and hosted Release exports,
+the Arm model ran 84 original and published bodies with two inputs at EL0
+and EL1 under all four EnPACM settings (1,344 calls per export).
+[Qualification record](evidence/arm64e-distant-joined-signers-2026-11-28.json) ·
+[macOS Release](https://github.com/gmh5225/test_mac_intel/actions/runs/46109512420) ·
+[Arm FVP, M4 export](https://github.com/gmh5225/test_mac_intel/actions/runs/46110737909) ·
+[Arm FVP, hosted export](https://github.com/gmh5225/test_mac_intel/actions/runs/46113033008)
+
 ### Native x1 runner qualification
 
 - [ ] Run the r6 native checks for 128-bit LRCPC3, two-modifier PAuth_LR,
