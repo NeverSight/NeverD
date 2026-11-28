@@ -286,6 +286,10 @@ MIPS16 o32 in both byte orders. At each of `-O0`, `-O2`, `-Os` and
 `-O3`, the tests compile both translation units directly to objects and
 through saved assembly with Clang’s `-save-temps=obj`. Both paths run the
 original executable and both replacement placements.
+The regular `-O2` and `-Os` cases also read an eight-element array defined
+in the caller. The callee computes its weighted sum inside the rebuilt
+function. The caller checks the result after the update. The execution
+records include the linked function size for each optimization level.
 Four more MIPS16 builds pass a 2,064-byte array to a separately compiled
 helper. The callee checks both ends of that array along with the incoming
 stack arguments after the frame grows beyond one SAVE instruction. The n64

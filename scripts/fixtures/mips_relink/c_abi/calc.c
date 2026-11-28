@@ -1,5 +1,9 @@
 #include "call.h"
 
+#ifdef CHECK_SIZE_LOOP
+extern const unsigned weights[8];
+#endif
+
 __attribute__((noinline, section(".text.calc")))
 struct Result calc(struct Input value, unsigned seed, ...) {
   __builtin_va_list args;
@@ -10,6 +14,13 @@ struct Result calc(struct Input value, unsigned seed, ...) {
   u64 different = __builtin_va_arg(args, u64);
   int last = __builtin_va_arg(args, int);
   __builtin_va_end(args);
+
+#ifdef CHECK_SIZE_LOOP
+  unsigned sum = 0;
+  for (unsigned i = 0; i < 8; ++i)
+    sum += (i + 1) * weights[i];
+  first += sum - 562u;
+#endif
 
 #ifdef CHECK_LARGE_FRAME
   unsigned char frame[2064];
