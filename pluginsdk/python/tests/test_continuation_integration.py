@@ -83,6 +83,20 @@ class ContinuationIntegrationTests(unittest.TestCase):
                 self.assertEqual(self.host.owned_string(
                     "neverd_x64_continuation_source_v1", self.session,
                     self.request, len(self.request), route, None), source)
+                self.assertEqual(self.host.owned_string(
+                    "neverd_x64_continuation_source_with_observation_v1", self.session,
+                    self.request, len(self.request), None, 0, route, None), source)
+
+    def test_saved_observation_is_size_delimited(self):
+        for data, size in ((None, 1), (b"{}", 0), (b"{}", 2),
+                           (b"{}", ctypes.c_size_t(-1).value)):
+            with self.subTest(data=data, size=size):
+                manifest = ctypes.c_void_p(1)
+                self.assertIsNone(self.host.owned_string(
+                    "neverd_x64_continuation_source_with_observation_v1", self.session,
+                    self.request, len(self.request), data, size, 0, ctypes.byref(manifest)))
+                self.assertIsNone(manifest.value)
+                self.assertTrue(self.host.owned_string("neverd_last_error", self.session))
 
     def test_failure_clears_manifest_and_reports_error(self):
         for request, size, route in (

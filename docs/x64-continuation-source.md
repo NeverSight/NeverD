@@ -1357,12 +1357,20 @@ The exporter verifies it against the image and the V6 request.
 
 Pass the observed load base as a second argument when the image was relocated.
 Use `neverd-xbegin-capture cancel` to disarm before resuming. The destination
-file must be new. The resulting fragment can be reused in an existing request
-without a debugger connection.
+file must be new. To reuse the observation offline, pass the GDB fragment or
+the complete request saved by the QEMU probe alongside the target request.
 
 ```sh
-jq --slurpfile capture /tmp/xbegin.json '. + $capture[0]' request.json > bound-request.json
+neverd decompile image.exe --x64-continuation=request.json \
+  --x64-xbegin-observation=/tmp/xbegin.json --continuation-report=report.json -o state.c
 ```
+
+The target request selects the instructions or entries, dispatch and RTM
+options. Only the saved `qemu_xbegin_fault_v1` field is imported. An identical
+inline record can be supplied again. Conflicting records fail before output.
+The report embeds the complete bound request for subsequent offline exports.
+SDK clients can pass the two buffers to
+`neverd_x64_continuation_source_with_observation_v1`.
 
 | Capture field | Contents |
 | --- | --- |

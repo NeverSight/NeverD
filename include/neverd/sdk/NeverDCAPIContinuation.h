@@ -100,6 +100,16 @@ neverd_x64_continuation_source_v1(neverd_session_t Sess,
                                   const char *RequestJSON, size_t RequestSize,
                                   int UseLLVM, const char **ManifestJSON);
 
+/// Export the same request with a separately saved GDB or QEMU observation.
+/// Only the qemu_xbegin_fault_v1 field is imported from ObservationJSON.
+/// An existing binding must match. The two JSON buffers are size-delimited.
+/// Passing NULL and zero for the observation uses the request alone.
+/// Source and ManifestJSON follow the ownership rules above.
+NEVERD_API const char *neverd_x64_continuation_source_with_observation_v1(
+    neverd_session_t Sess, const char *RequestJSON, size_t RequestSize,
+    const char *ObservationJSON, size_t ObservationSize, int UseLLVM,
+    const char **ManifestJSON);
+
 /// Export an i386 image's selected protected 16/32-bit original instructions.
 /// RequestJSON declares profile protected-legacy-v1 and instructions containing
 /// address (linear uint32), code_bits (16/32) and size (1..15). The executor's
