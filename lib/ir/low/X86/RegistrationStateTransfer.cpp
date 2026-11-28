@@ -785,10 +785,9 @@ bool RegistrationStateSolver::transferBlock(size_t I, const Domain &Before,
         }
       }
     }
-    // Stack cleanup does not preserve a future runtime target. A separate
-    // imported normal-return effect may retain a still-live binding, but it
-    // cannot repair earlier loss or authorize the exceptional path above.
-    if (UnprovedCallEffects && !(ImportedCall && PreserveImportBindings))
+    // The checked normal-return effect also applies to an ordinary helper.
+    // Its exceptional continuation keeps the binding loss recorded above.
+    if (UnprovedCallEffects && !PreserveImportBindings)
       After.JumpBindingsIntact = false;
     recordSEHStackRestore(Op, After, Transfer, Value);
     if (ProveCxxDispatch &&

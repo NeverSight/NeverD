@@ -10239,6 +10239,8 @@ this stronger effect even when their normal path preserves integer ESP.
 Checked calls compose only their own normal-return binding effect under live
 transitive dependencies. One unproved effect on any visited path withdraws the
 summary permanently, including when a loop or join loses an earlier constant.
+The EH3/EH4 solver uses this effect at a subsequent runtime call reached by
+ordinary return. Exception dispatch from the helper checks its own bindings.
 Only a completed ordinary returning-stack proof publishes it; dispatcher paths
 retain no such summary. This neither restores a lost binding nor grants frame,
 loaded-value, nonthrowing or native-rewrite authority.
