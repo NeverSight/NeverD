@@ -11752,5 +11752,37 @@ Ihr vorheriger Graph ist weiterhin verfügbar.</translation>
         <source>Advanced options (JSON)</source>
         <translation>Erweiterte Optionen (JSON)</translation>
     </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>Tensoren oder Operatoren suchen</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>Graphbereich</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>Deklarationen</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>GGUF neu erstellen…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>Setzen Sie template_policy in den erweiterten Optionen auf keep, remove oder replace.</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Abhängigkeiten</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>Herkunft</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>Adaptermatrizen</translation>
+    </message>
 </context>
 </TS>

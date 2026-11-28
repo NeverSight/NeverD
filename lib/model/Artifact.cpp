@@ -12,12 +12,14 @@
 #include "neverd/support/FilePath.h"
 #include "neverd/support/SHA256.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <utility>
 
@@ -171,16 +173,8 @@ void Package::addTensor(std::string Name, Tensor T) {
   validName(Name);
   if (!Tensors.emplace(Name, std::move(T)).second)
     throw Error("duplicate tensor identity");
-  // Layer numbers are a name-based view, including MLX module prefixes.
-  llvm::StringRef S(Name);
-  auto Tail =
-      S.starts_with("blk.") ? S.drop_front(4) : S.split(".layers.").second;
-  if (Tail.empty() && S.starts_with("layers."))
-    Tail = S.drop_front(7);
-  auto Parts = Tail.split('.');
-  unsigned Layer;
-  if (!Parts.second.empty() && !Parts.first.getAsInteger(10, Layer)) {
-    auto &Count = Layers[std::to_string(Layer)];
+  if (auto Layer = tensorLayer(Name)) {
+    auto &Count = Layers[std::to_string(*Layer)];
     Count = Count.is_null() ? 1 : Count.get<unsigned>() + 1;
   }
 }
@@ -197,6 +191,7 @@ void Package::finding(std::string Rule, std::string Source,
                         {"severity", Severity},
                         {"category", Category},
                         {"confidence", Confidence},
+                        {"analysis_method", "offline static inspection"},
                         {"message", Message},
                         {"evidence", std::move(Evidence)}});
 }
@@ -234,7 +229,8 @@ Json publish(const Package &P, const Options &O) {
   Json Rows = Json::array();
   Json Members = Json::array();
   size_t Index = 0;
-  uint64_t Read = 0, FileBytes = 0, Known = 0;
+  uint64_t Read = 0, FileBytes = 0, Known = 0, Elements = 0;
+  std::map<std::string, std::vector<std::pair<uint64_t, uint64_t>>> Intervals;
   for (const auto &[Name, F] : P.Files) {
     Members.push_back(
         {{"id", Name}, {"size", F->size()}, {"snapshot_id", F->snapshotID()}});
@@ -242,8 +238,15 @@ Json publish(const Package &P, const Options &O) {
     FileBytes = sum(FileBytes, F->size());
   }
   for (const auto &[Name, T] : P.Tensors) {
-    if (T.Bytes)
+    Elements = sum(Elements, T.Elements);
+    if (T.Bytes) {
       Known = sum(Known, *T.Bytes);
+      if (*T.Bytes)
+        Intervals[T.FileId].emplace_back(T.Offset, sum(T.Offset, *T.Bytes));
+    }
+    if (!O.Search.empty() &&
+        !llvm::StringRef(Name).contains_insensitive(O.Search))
+      continue;
     if (Index++ < O.Offset || Rows.size() >= O.Limit)
       continue;
     Rows.push_back(
@@ -254,9 +257,22 @@ Json publish(const Package &P, const Options &O) {
          {"logical_elements", T.Elements},
          {"offset", T.HasOffset ? Json(T.Offset) : Json(nullptr)},
          {"storage_bytes", T.Bytes ? Json(*T.Bytes) : Json(nullptr)}});
+    if (auto Layer = tensorLayer(Name))
+      Rows.back()["named_layer"] = *Layer;
     if (T.Packing)
       Rows.back()["storage_block"] = {{"elements", T.Packing->Elements},
                                       {"bytes", T.Packing->Bytes}};
+  }
+  uint64_t Unique = 0;
+  for (auto &[Member, Ranges] : Intervals) {
+    llvm::sort(Ranges);
+    uint64_t End = 0;
+    for (auto [Begin, Next] : Ranges) {
+      if (Next > End) {
+        Unique = sum(Unique, Next - std::max(Begin, End));
+        End = Next;
+      }
+    }
   }
   Json Templates = Json::array();
   for (const auto &[Source, Record] : P.Templates)
@@ -265,6 +281,22 @@ Json publish(const Package &P, const Options &O) {
           {"snapshot_id", P.snapshotID()},
           {"members", std::move(Members)},
           {"artifacts", P.Artifacts},
+          {"declarations", P.Declarations},
+          {"adapter_pairs", P.AdapterPairs},
+          {"adapter_pair_count", P.AdapterPairCount},
+          {"dependencies", P.Dependencies},
+          {"dependency_count", P.DependencyCount},
+          {"provenance", P.Provenance},
+          {"provenance_coverage", P.Provenance.empty()
+                                      ? "no local claims or attestations found"
+                                      : "reported local evidence only"},
+          {"graph_count", P.GraphCount},
+          {"matching_graph_count", P.MatchingGraphs},
+          {"graph_offset", O.GraphOffset},
+          {"matching_tensor_count", Index},
+          {"logical_elements", Elements},
+          {"unique_known_storage_bytes", Unique},
+          {"shared_known_storage_bytes", Known - Unique},
           {"declared_architectures", P.Architectures},
           {"named_layer_tensor_counts", P.Layers},
           {"inferred_projection_layouts", P.ProjectionLayouts},
@@ -288,6 +320,13 @@ Json publish(const Package &P, const Options &O) {
           {"gap_count", P.GapCount}};
 }
 } // namespace
+std::string encodeReport(const Json &Report) {
+  auto Out = std::make_shared<ReportOutput>();
+  nlohmann::detail::serializer<Json> Encoder(Out, ' ',
+                                             Json::error_handler_t::replace);
+  Encoder.dump(Report, false, true, 0);
+  return std::move(Out->Text);
+}
 std::string scan(const fs::path &Input, const Options &O) {
   Json Report = {
       {"schema", "neverd.model-scan.v1"},
@@ -338,11 +377,16 @@ std::string scan(const fs::path &Input, const Options &O) {
     if (Report.contains("baseline"))
       Partial = Report["baseline"]["gap_count"] != 0 ||
                 !Report["comparison"]["comparison_complete"].get<bool>();
+    const auto Root = fs::canonical(
+        fs::is_directory(Input) ? Input : fs::absolute(Input).parent_path());
     for (const auto &P : Packages) {
       P->verify();
       Partial |= P->GapCount != 0;
       Review |= P->ReviewCount != 0;
-      Report["packages"].push_back(publish(*P, O));
+      auto Data = publish(*P, O);
+      auto Relative = pathToUTF8(P->Root.lexically_relative(Root));
+      Data["relative_root"] = Relative == "." ? "" : Relative + "/";
+      Report["packages"].push_back(std::move(Data));
     }
     bool Cancelled = O.Cancel && O.Cancel();
     Report["status"] = Cancelled ? "cancelled"
@@ -371,11 +415,7 @@ std::string scan(const fs::path &Input, const Options &O) {
     Report["exit_code"] = 1;
   }
   try {
-    auto Out = std::make_shared<ReportOutput>();
-    nlohmann::detail::serializer<Json> Encoder(Out, ' ',
-                                               Json::error_handler_t::replace);
-    Encoder.dump(Report, false, true, 0);
-    return std::move(Out->Text);
+    return encodeReport(Report);
   } catch (const Stop &E) {
     return Json{{"schema", "neverd.model-scan.v1"},
                 {"status", "partial"},
@@ -402,7 +442,38 @@ std::string scanJSON(const char *Path, const char *Settings,
       J = std::move(Combined);
     }
     for (auto &[Key, V] : J.items()) {
-      if (Key == "baseline") {
+      if (Key == "tensor_mapping") {
+        TensorMapping Map{V.at("candidate_snapshot").get<std::string>(),
+                          V.at("baseline_snapshot").get<std::string>(),
+                          {}};
+        const auto &Names = V.at("names");
+        if (!Names.is_object() || Names.empty())
+          throw Error("tensor mapping requires a nonempty name map");
+        for (auto &[Candidate, Base] : Names.items()) {
+          auto B = Base.get<std::string>();
+          validName(Candidate);
+          validName(B);
+          Map.Names.emplace(Candidate, std::move(B));
+        }
+        O.Mapping = std::move(Map);
+      } else if (Key == "absolute_tolerance" || Key == "relative_tolerance") {
+        if (!V.is_number())
+          throw Error("expected a numeric tolerance");
+        const double Tolerance = V.get<double>();
+        if (!std::isfinite(Tolerance) || Tolerance < 0)
+          throw Error("invalid numeric tolerance");
+        (Key == "absolute_tolerance" ? O.AbsoluteTolerance
+                                     : O.RelativeTolerance) = Tolerance;
+      } else if (Key == "sample_bytes_per_tensor")
+        O.SampleBytes = natural(V);
+      else if (Key == "search" || Key == "graph_scope") {
+        auto S = V.get<std::string>();
+        if (!S.empty())
+          validName(S);
+        (Key == "search" ? O.Search : O.GraphScope) = std::move(S);
+      } else if (Key == "graph_offset")
+        O.GraphOffset = natural(V);
+      else if (Key == "baseline") {
         auto S = V.get<std::string>();
         validName(S);
         O.Baseline = utf8Path(S);
@@ -429,7 +500,11 @@ std::string scanJSON(const char *Path, const char *Settings,
       } else
         throw Error("unknown model scan option");
     }
-    if (J.contains("compare_bytes") && O.Baseline.empty())
+    if ((J.contains("compare_bytes") || O.Mapping ||
+         J.contains("sample_bytes_per_tensor") ||
+         J.contains("absolute_tolerance") ||
+         J.contains("relative_tolerance")) &&
+        O.Baseline.empty())
       throw Error("weight comparison requires a baseline");
     return scan(utf8Path(Path ? Path : ""), O);
   } catch (const Stop &E) {

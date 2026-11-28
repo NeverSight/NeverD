@@ -11788,5 +11788,37 @@ Your previous graph is still available.</source>
         <source>Advanced options (JSON)</source>
         <translation>Дополнительные параметры (JSON)</translation>
     </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>Поиск тензоров или операторов</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>Область графа</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>Объявления</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>Пересобрать GGUF…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>В дополнительных параметрах задайте для template_policy значение keep, remove или replace.</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Зависимости</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>Происхождение</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>Матрицы адаптера</translation>
+    </message>
 </context>
 </TS>

@@ -20,6 +20,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cmath>
 
 namespace neverd::model {
 namespace {
@@ -117,47 +119,83 @@ Json opset(Proto R) {
   }
   return O;
 }
+Json valueType(Proto R, unsigned Depth) {
+  if (Depth > limits::kDepth)
+    throw Error("ONNX type nesting limit");
+  Json Type = Json::object();
+  while (R.Pos < R.End) {
+    auto X = R.next();
+    if (X.Id == 6) {
+      Type["denotation"] = R.label(X);
+      continue;
+    }
+    if (X.Id != 1 && X.Id != 4 && X.Id != 5 && X.Id != 7 && X.Id != 8 &&
+        X.Id != 9) {
+      Type["opaque_type_field"] = X.Id;
+      continue;
+    }
+    if (Type.contains("kind"))
+      throw Error("multiple ONNX value type alternatives");
+    auto T = R.sub(X);
+    Type["kind"] = X.Id == 1   ? "tensor"
+                   : X.Id == 4 ? "sequence"
+                   : X.Id == 5 ? "map"
+                   : X.Id == 7 ? "opaque"
+                   : X.Id == 8 ? "sparse_tensor"
+                               : "optional";
+    while (T.Pos < T.End) {
+      auto F = T.next();
+      if ((X.Id == 4 || X.Id == 9) && F.Id == 1)
+        Type["element"] = valueType(T.sub(F), Depth + 1);
+      else if (X.Id == 5 && F.Id == 1)
+        Type["key_type"] = integer(F);
+      else if (X.Id == 5 && F.Id == 2)
+        Type["value"] = valueType(T.sub(F), Depth + 1);
+      else if (X.Id == 7 && (F.Id == 1 || F.Id == 2))
+        Type[F.Id == 1 ? "domain" : "name"] = T.label(F);
+      else if ((X.Id == 1 || X.Id == 8) && F.Id == 1)
+        Type["element_type"] = integer(F);
+      else if ((X.Id == 1 || X.Id == 8) && F.Id == 2) {
+        auto S = T.sub(F);
+        auto &Shape = Type["shape"] = Json::array();
+        while (S.Pos < S.End) {
+          auto D = S.next();
+          if (D.Id != 1)
+            continue;
+          S.B.entry();
+          auto Dim = S.sub(D);
+          Json Value = nullptr;
+          while (Dim.Pos < Dim.End) {
+            auto I = Dim.next();
+            if ((I.Id == 1 || I.Id == 2) && !Value.is_null())
+              throw Error("multiple ONNX dimension alternatives");
+            if (I.Id == 1) {
+              if (integer(I) > INT64_MAX)
+                throw Error("negative ONNX dimension");
+              Value = I.Value;
+            } else if (I.Id == 2)
+              Value = Dim.label(I);
+          }
+          Shape.push_back(std::move(Value));
+        }
+      }
+    }
+  }
+  return Type;
+}
+
 Json port(Proto R) {
   Json V = Json::object();
   while (R.Pos < R.End) {
     auto X = R.next();
     if (X.Id == 1)
       V["name"] = R.label(X);
-    if (X.Id != 2)
-      continue;
-    auto T = R.sub(X);
-    while (T.Pos < T.End) {
-      auto K = T.next();
-      if (K.Id != 1) {
-        V["type_field"] = K.Id;
-        continue;
-      }
-      auto D = T.sub(K);
-      while (D.Pos < D.End) {
-        auto A = D.next();
-        if (A.Id == 1)
-          V["element_type"] = integer(A);
-        if (A.Id != 2)
-          continue;
-        auto S = D.sub(A);
-        V["shape"] = Json::array();
-        while (S.Pos < S.End) {
-          auto Dim = S.next();
-          if (Dim.Id != 1)
-            continue;
-          S.B.entry();
-          auto M = S.sub(Dim);
-          Json Value = nullptr;
-          while (M.Pos < M.End) {
-            auto I = M.next();
-            if (I.Id == 1)
-              Value = integer(I);
-            if (I.Id == 2)
-              Value = M.label(I);
-          }
-          V["shape"].push_back(Value);
-        }
-      }
+    if (X.Id == 2) {
+      auto Type = valueType(R.sub(X), 0);
+      for (auto Key : {"shape", "element_type"})
+        if (Type.contains(Key))
+          V[Key] = Type[Key];
+      V["type"] = std::move(Type);
     }
   }
   return V;
@@ -186,7 +224,15 @@ std::optional<uint64_t> externalNumber(const Json &Refs, const char *Key) {
 class GraphReader {
   Package &P;
   const std::string &Source;
-  std::string tensor(Proto R, const std::string &Scope) {
+  struct Scope {
+    std::string Parent;
+    uint64_t ParentNode = 0;
+    std::map<std::string, std::pair<uint64_t, size_t>> Producers;
+    std::set<std::string> Initializers, Inputs;
+  };
+  std::map<std::string, Scope> Scopes;
+  std::string tensor(Proto R, const std::string &Scope,
+                     bool Attribute = false) {
     Tensor T;
     T.FileId = Source;
     T.HasOffset = false;
@@ -271,6 +317,8 @@ class GraphReader {
         break;
       }
     }
+    if (Name.empty() && Attribute)
+      Name = "value";
     if (Name.empty() || !Type)
       throw Error("unnamed or untyped graph initializer");
     T.Type = "onnx:" + std::to_string(Type);
@@ -330,8 +378,98 @@ class GraphReader {
     P.addTensor(Scope + "/" + Name, std::move(T));
     return Name;
   }
-  Json node(Proto R, const std::string &Id, unsigned Depth) {
+  Json attribute(Proto A, const std::string &Path, const std::string &Parent,
+                 uint64_t Owner, unsigned Depth) {
+    Json Attr = {{"offset", A.Pos}, {"end", A.End}};
+    size_t Children = 0;
+    while (A.Pos < A.End) {
+      auto K = A.next();
+      switch (K.Id) {
+      case 1:
+        Attr["name"] = A.label(K);
+        break;
+      case 20:
+        Attr["type"] = integer(K);
+        break;
+      case 21:
+        Attr["ref_attr_name"] = A.label(K);
+        break;
+      case 2:
+        if (K.Wire != 5)
+          throw Error("invalid ONNX float attribute");
+        Attr["float_bits"] =
+            llvm::support::endian::read32le(A.metadata(K.At, 4).data());
+        break;
+      case 3:
+        Attr["int"] = std::bit_cast<int64_t>(integer(K));
+        break;
+      case 6:
+      case 11: {
+        auto Child = Path + "/graph" + std::to_string(Children++);
+        Scopes[Child].Parent = Parent;
+        Scopes[Child].ParentNode = Owner;
+        graph(A.sub(K), Child, Depth + 1, false);
+        Attr["graphs"].push_back(Child);
+        break;
+      }
+      case 5:
+      case 10: {
+        auto Child = Path + "/tensor" + std::to_string(Children++);
+        auto Name = tensor(A.sub(K), Child, true);
+        Attr["tensors"].push_back(Child + "/" + Name);
+        break;
+      }
+      case 4:
+      case 7:
+      case 8:
+      case 9: {
+        // Preserve string bytes by digest. Large numeric lists are represented
+        // by their encoded fields and coordinates instead of a JSON value dump.
+        P.B.entry();
+        Json F = {{"field", K.Id},
+                  {"wire", K.Wire},
+                  {"offset", K.At},
+                  {"end", K.End}};
+        if (K.Wire == 0)
+          F["integer"] = std::bit_cast<int64_t>(K.Value);
+        else {
+          if (K.End - K.At > P.B.HeaderLeft)
+            throw Stop("ONNX attribute exceeds metadata budget");
+          P.B.HeaderLeft -= K.End - K.At;
+          F["sha256"] = hashRange(A.F, K.At, K.End - K.At, P.B);
+        }
+        Attr["fields"].push_back(std::move(F));
+        break;
+      }
+      case 14:
+      case 15:
+        P.B.entry();
+        Attr["types"].push_back(valueType(A.sub(K), Depth + 1));
+        break;
+      case 13:
+        break; // Documentation is optional and may contain private text.
+      default:
+        P.B.entry();
+        Attr["opaque_fields"].push_back({{"field", K.Id},
+                                         {"wire", K.Wire},
+                                         {"offset", K.At},
+                                         {"end", K.End}});
+        P.gap(Source, "ONNX attribute field preserved as an opaque range",
+              {{"attribute", Path},
+               {"field", K.Id},
+               {"offset", K.At},
+               {"end", K.End}});
+      }
+    }
+    return Attr;
+  }
+  Json node(Proto R, const std::string &Id, const std::string &Parent,
+            uint64_t Owner, unsigned Depth) {
+    const uint64_t Begin = R.Pos;
     Json N = {{"id", Id},
+              {"evidence_level", "observed"},
+              {"confidence", "serialized"},
+              {"artifact", Source},
               {"inputs", Json::array()},
               {"outputs", Json::array()},
               {"attributes", Json::array()}};
@@ -341,10 +479,12 @@ class GraphReader {
       case 1:
         P.B.entry();
         N["inputs"].push_back(R.label(X));
+        N["input_fields"].push_back({{"offset", X.At}, {"end", X.End}});
         break;
       case 2:
         P.B.entry();
         N["outputs"].push_back(R.label(X));
+        N["output_fields"].push_back({{"offset", X.At}, {"end", X.End}});
         break;
       case 3:
         N["name"] = R.label(X);
@@ -360,23 +500,9 @@ class GraphReader {
         break;
       case 5: {
         P.B.entry();
-        auto A = R.sub(X);
-        Json Attr = {{"offset", X.At}, {"end", X.End}};
-        unsigned Sub = 0;
-        while (A.Pos < A.End) {
-          auto K = A.next();
-          if (K.Id == 1)
-            Attr["name"] = A.label(K);
-          if (K.Id == 20)
-            Attr["type"] = integer(K);
-          if (K.Id == 6 || K.Id == 11) {
-            auto Path = Id + "/attr" + std::to_string(N["attributes"].size()) +
-                        "/graph" + std::to_string(Sub++);
-            graph(A.sub(K), Path, Depth + 1, false);
-            Attr["graphs"].push_back(Path);
-          }
-        }
-        N["attributes"].push_back(std::move(Attr));
+        auto Path = Id + "/attr" + std::to_string(N["attributes"].size());
+        N["attributes"].push_back(
+            attribute(R.sub(X), Path, Parent, Owner, Depth));
         break;
       }
       default:
@@ -391,7 +517,11 @@ class GraphReader {
           "graph.custom-domain", Source, "info", "operator", "declared",
           "Operator uses a nonstandard domain. Its implementation was not "
           "loaded.",
-          {{"node", Id}, {"domain", N["domain"]}, {"op_type", N["op_type"]}});
+          {{"node", Id},
+           {"offset", Begin},
+           {"end", R.End},
+           {"domain", N["domain"]},
+           {"op_type", N["op_type"]}});
     return N;
   }
 
@@ -409,9 +539,12 @@ public:
               {"nodes", Json::array()},
               {"inputs", Json::array()},
               {"outputs", Json::array()}};
-    std::map<std::string, std::pair<uint64_t, size_t>> Producers;
-    std::set<std::string> Initializers, Inputs;
+    auto &Context = Scopes[Path];
+    auto &Producers = Context.Producers;
+    auto &Inputs = Context.Inputs;
+    auto &Initializers = Context.Initializers;
     SHA256Stream Topology;
+    uint64_t MatchCount = 0;
     uint64_t Count = 0;
     while (R.Pos < R.End) {
       auto X = R.next();
@@ -419,7 +552,8 @@ public:
         G["name"] = R.label(X);
       else if (X.Id == (Function ? 7u : 1u)) {
         P.B.entry();
-        auto N = node(R.sub(X), Path + "/node" + std::to_string(Count), Depth);
+        auto N = node(R.sub(X), Path + "/node" + std::to_string(Count), Path,
+                      Count, Depth);
         N["offset"] = X.At;
         N["end"] = X.End;
         Topology.update(llvm::StringRef(
@@ -433,18 +567,54 @@ public:
               !Producers.emplace(Value, std::pair(Count, Slot)).second)
             throw Error("duplicate ONNX value producer");
         }
-        if (Count >= P.B.Opts.Offset && G["nodes"].size() < P.B.Opts.Limit)
+        for (auto Attr : N.at("attributes")) {
+          Attr.erase("offset");
+          Attr.erase("end");
+          for (auto Key : {"fields", "opaque_fields"})
+            if (auto It = Attr.find(Key); It != Attr.end())
+              for (auto &F : *It) {
+                F.erase("offset");
+                F.erase("end");
+              }
+          Topology.update(llvm::StringRef(Attr.dump()));
+        }
+        auto Matches = [&](const char *Key) {
+          return N.contains(Key) &&
+                 llvm::StringRef(N.at(Key).get_ref<const std::string &>())
+                     .contains_insensitive(P.B.Opts.Search);
+        };
+        if ((P.B.Opts.Search.empty() || Matches("id") || Matches("name") ||
+             Matches("op_type") || Matches("domain")) &&
+            MatchCount++ >= P.B.Opts.Offset &&
+            G["nodes"].size() < P.B.Opts.Limit)
           G["nodes"].push_back(std::move(N));
         ++Count;
-      } else if (Function && (X.Id == 4 || X.Id == 5))
+      } else if (Function && (X.Id == 4 || X.Id == 5)) {
         G[X.Id == 4 ? "inputs" : "outputs"].push_back(R.label(X));
+        G[X.Id == 4 ? "input_fields" : "output_fields"].push_back(
+            {{"offset", X.At}, {"end", X.End}});
+      } else if (Function && X.Id == 6)
+        G["attribute_names"].push_back(R.label(X));
+      else if (Function && X.Id == 11) {
+        P.B.entry();
+        G["default_attributes"].push_back(attribute(
+            R.sub(X),
+            Path + "/default" + std::to_string(G["default_attributes"].size()),
+            Path, 0, Depth));
+      } else if (Function && X.Id == 13)
+        G["overload"] = R.label(X);
       else if (Function && X.Id == 10)
         G["domain"] = R.label(X);
       else if (Function && X.Id == 9)
         G["opsets"].push_back(opset(R.sub(X)));
-      else if (!Function && (X.Id == 11 || X.Id == 12)) {
+      else if (X.Id == (Function ? 12u : 13u)) {
+        P.B.entry();
+        G["value_info"].push_back(port(R.sub(X)));
+      } else if (!Function && (X.Id == 11 || X.Id == 12)) {
         P.B.entry();
         G[X.Id == 11 ? "inputs" : "outputs"].push_back(port(R.sub(X)));
+        G[X.Id == 11 ? "input_fields" : "output_fields"].push_back(
+            {{"offset", X.At}, {"end", X.End}});
       } else if (!Function && X.Id == 5)
         Initializers.insert(tensor(R.sub(X), Path));
       else if (!Function && X.Id == 15)
@@ -462,7 +632,12 @@ public:
         auto &Value = Node.at("inputs")[Slot].get_ref<const std::string &>();
         if (Value.empty())
           continue;
-        Json Edge = {{"input_slot", Slot}, {"value", Value}};
+        Json Edge = Node.at("input_fields").at(Slot);
+        Edge.update(Json{{"input_slot", Slot},
+                         {"value", Value},
+                         {"artifact", Source},
+                         {"evidence_level", "observed"},
+                         {"confidence", "serialized port name"}});
         if (auto It = Producers.find(Value); It != Producers.end()) {
           Edge["source"] = "node";
           Edge["node"] = Path + "/node" + std::to_string(It->second.first);
@@ -479,13 +654,84 @@ public:
       }
       Node["input_edges"] = std::move(Edges);
     }
-    Topology.update(
-        llvm::StringRef(Json::array({G.at("inputs"), G.at("outputs")}).dump()));
+    Json Signature = Json::object();
+    for (auto Key : {"name", "domain", "overload", "inputs", "outputs",
+                     "value_info", "opsets", "attribute_names"})
+      if (G.contains(Key))
+        Signature[Key] = G[Key];
+    Topology.update(llvm::StringRef(Signature.dump()));
     P.Fingerprints["graph-topology/" + Path] =
         llvm::toHex(Topology.final(), true);
+    size_t OutputIndex = 0;
+    for (auto &Out : G["outputs"]) {
+      auto Name = Out.is_string() ? Out.get<std::string>()
+                                  : Out.value("name", std::string{});
+      Json E = {{"value", Name},
+                {"evidence_level", "observed"},
+                {"artifact", Source}};
+      E.update(G.at("output_fields").at(OutputIndex++));
+      E["confidence"] = "serialized port name";
+      if (auto It = Producers.find(Name); It != Producers.end()) {
+        E["source"] = "node";
+        E["node"] = Path + "/node" + std::to_string(It->second.first);
+        E["output_slot"] = It->second.second;
+      } else
+        E["source"] = Initializers.contains(Name) ? "initializer"
+                      : Inputs.contains(Name) ? "graph-input"
+                                              : "unresolved-or-enclosing-scope";
+      G["output_edges"].push_back(std::move(E));
+    }
     G["node_count"] = Count;
     G["node_offset"] = P.B.Opts.Offset;
-    P.Graphs.push_back(std::move(G));
+    G["matching_node_count"] = MatchCount;
+    G["evidence_level"] = "observed";
+    G["parent_scope"] =
+        Context.Parent.empty() ? Json(nullptr) : Json(Context.Parent);
+    G["topology_sha256"] = P.Fingerprints["graph-topology/" + Path];
+    ++P.GraphCount;
+    if ((P.B.Opts.GraphScope.empty() || Path == P.B.Opts.GraphScope) &&
+        P.MatchingGraphs++ >= P.B.Opts.GraphOffset &&
+        P.Graphs.size() < P.B.Opts.Limit)
+      P.Graphs.push_back(std::move(G));
+  }
+  void resolveCaptures() {
+    for (auto &G : P.Graphs) {
+      auto resolve = [&](Json &E) {
+        if (E.at("source") != "unresolved-or-enclosing-scope")
+          return;
+        const auto &Name = E.at("value").get_ref<const std::string &>();
+        auto *Child = &Scopes.at(G.at("id").get_ref<const std::string &>());
+        while (!Child->Parent.empty()) {
+          P.B.tick();
+          auto &Parent = Scopes.at(Child->Parent);
+          if (auto It = Parent.Producers.find(Name);
+              It != Parent.Producers.end() &&
+              It->second.first < Child->ParentNode) {
+            E["source"] = "enclosing-node";
+            E["node"] =
+                Child->Parent + "/node" + std::to_string(It->second.first);
+            E["output_slot"] = It->second.second;
+            E["scope"] = Child->Parent;
+            break;
+          }
+          if (Parent.Inputs.contains(Name) ||
+              Parent.Initializers.contains(Name)) {
+            E["source"] = Parent.Initializers.contains(Name)
+                              ? "enclosing-initializer"
+                              : "enclosing-input";
+            E["scope"] = Child->Parent;
+            break;
+          }
+          Child = &Parent;
+        }
+      };
+      for (auto &N : G.at("nodes"))
+        for (auto &E : N.at("input_edges"))
+          resolve(E);
+      if (G.contains("output_edges"))
+        for (auto &E : G.at("output_edges"))
+          resolve(E);
+    }
   }
 };
 } // namespace
@@ -515,6 +761,7 @@ void readONNX(Package &P, const std::string &Name) {
     if (X.Id == 20)
       P.gap(Name, "training graph not inspected", {{"offset", X.At}});
   }
+  Reader.resolveCaptures();
   if (!IR || !Graph)
     throw Error("missing ONNX IR version or graph");
   if (IR > 14)
@@ -523,7 +770,8 @@ void readONNX(Package &P, const std::string &Name) {
       {{"id", Name},
        {"format", "onnx"},
        {"observed_fields_sha256", llvm::toHex(Observed.final(), true)},
-       {"hash_scope", "offset, length and bytes of each metadata read"},
+       {"hash_scope", "read protobuf framing, labels and scalar fields; "
+                      "separate attribute digests exclude tensor data"},
        {"ir_version", IR},
        {"opsets", Ops},
        {"size", F.size()}});

@@ -11716,5 +11716,37 @@ Your previous graph is still available.</source>
         <source>Advanced options (JSON)</source>
         <translation>高级选项（JSON）</translation>
     </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>搜索张量或算子</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>计算图作用域</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>声明</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>重建 GGUF…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>请在高级选项中将 template_policy 设为 keep、remove 或 replace。</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>依赖项</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>来源证据</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>适配器矩阵</translation>
+    </message>
 </context>
 </TS>

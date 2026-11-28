@@ -11716,5 +11716,37 @@ Your previous graph is still available.</source>
         <source>Advanced options (JSON)</source>
         <translation>詳細オプション（JSON）</translation>
     </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>テンソルまたは演算子を検索</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>グラフのスコープ</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>宣言</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>GGUF を再構築…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>詳細オプションで template_policy に keep、remove、replace のいずれかを指定してください。</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>依存関係</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>来歴</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>アダプター行列</translation>
+    </message>
 </context>
 </TS>

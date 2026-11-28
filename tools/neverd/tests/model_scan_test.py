@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 
 CLI = sys.argv.pop(1)
 WORKER = sys.argv.pop(1) if len(sys.argv) > 1 else None
@@ -137,6 +138,25 @@ class ModelScan(unittest.TestCase):
                 self.assertIn("model_scan", client.hello["capabilities"])
                 response = client.call("model_scan", {"path": str(self.file)})
                 self.assertEqual(response["payload"], report)
+                serialized = client.call(
+                    "model_scan", {"path": str(self.file), "serialized_report": True}
+                )["payload"]["report_json"]
+                self.assertEqual(json.loads(serialized), report)
+                copied = self.root / "worker-copy.gguf"
+                rebuilt = client.call(
+                    "model_rebuild_gguf",
+                    {
+                        "path": str(self.file),
+                        "output": str(copied),
+                        "options": {"template_policy": "keep"},
+                    },
+                )
+                self.assertEqual(rebuilt["payload"]["status"], "verified")
+                self.assertEqual(
+                    hashlib.sha256(copied.read_bytes()).hexdigest(),
+                    rebuilt["payload"]["output_sha256"],
+                )
+
         if SDK:
             lib = ctypes.CDLL(SDK)
             scan = lib.neverd_model_scan_json_v1
@@ -425,6 +445,256 @@ class ModelScan(unittest.TestCase):
         )
         self.assertIn("filename disagrees", json.dumps(self.scan(name, code=1)))
 
+    def test_verified_gguf_reconstruction(self):
+        rows = [("late", [2], 0, 96, b"abcdefgh"), ("early", [1], 0, 0, b"1234")]
+        metadata = [
+            ("tokenizer.chat_template", 8, "original"),
+            ("tokenizer.chat_template.named", 8, "keep me"),
+            ("general.name", 8, "test"),
+        ]
+        for endian in "<>":
+            original = gguf(rows, metadata, endian=endian, trailer=b"inert trailer")
+            self.file.write_bytes(original)
+            for action in ["keep", "remove", "replace"]:
+                options = {"template_policy": action}
+                if action == "replace":
+                    options["template_text"] = "replacement"
+                dest = self.root / ("new-" + action + ".gguf")
+                result = self.scan(
+                    self.file,
+                    "--rebuild-gguf=" + str(dest),
+                    "--model-options=" + json.dumps(options),
+                )
+                self.assertEqual(result["status"], "verified")
+                data = dest.read_bytes()
+                self.assertEqual(
+                    result["input_sha256"], hashlib.sha256(original).hexdigest()
+                )
+                self.assertEqual(
+                    result["output_sha256"], hashlib.sha256(data).hexdigest()
+                )
+                self.assertEqual(self.file.read_bytes(), original)
+                self.assertNotIn(b"inert trailer", data)
+                self.assertEqual(len(result["tensors"]), len(rows))
+                for t in result["tensors"]:
+                    before = original[
+                        t["input_offset"] : t["input_offset"] + t["length"]
+                    ]
+                    after = data[t["output_offset"] : t["output_offset"] + t["length"]]
+                    self.assertEqual(before, after)
+                    self.assertEqual(t["sha256"], hashlib.sha256(before).hexdigest())
+                p = self.scan(dest)["packages"][0]
+                templates = {t["variant"]: t["sha256"] for t in p["templates"]}
+                self.assertEqual(
+                    templates["named"], hashlib.sha256(b"keep me").hexdigest()
+                )
+                if action == "remove":
+                    self.assertNotIn("default", templates)
+                else:
+                    self.assertEqual(
+                        templates["default"],
+                        hashlib.sha256(
+                            (b"replacement" if action == "replace" else b"original")
+                        ).hexdigest(),
+                    )
+                self.scan(
+                    self.file,
+                    "--rebuild-gguf=" + str(dest),
+                    "--model-options=" + json.dumps(options),
+                    code=1,
+                )
+                self.assertEqual(dest.read_bytes(), data)
+                dest.unlink()
+        self.scan(
+            self.file,
+            "--rebuild-gguf=" + str(self.file),
+            '--model-options={"template_policy":"keep"}',
+            code=1,
+        )
+        self.assertEqual(self.file.read_bytes(), original)
+        dest = self.root / "refused.gguf"
+        for fixture in [
+            gguf([("w", [1], 138, 0, b"0")]),
+            gguf([("w", [1], 0, 1, b"abcd")]),
+            gguf(rows)[:-1],
+        ]:
+            self.file.write_bytes(fixture)
+            self.scan(
+                self.file,
+                "--rebuild-gguf=" + str(dest),
+                '--model-options={"template_policy":"keep"}',
+                code=1,
+            )
+            self.assertFalse(dest.exists())
+        self.assertEqual(list(self.root.glob(".neverd-*.tmp")), [])
+
+    def test_rebuild_cancel_or_mutation_does_not_publish(self):
+        if not SDK:
+            self.skipTest("C SDK unavailable")
+        lib = ctypes.CDLL(SDK)
+        stop_type = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
+        fn = lib.neverd_model_rebuild_gguf_json_v1
+        fn.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            stop_type,
+            ctypes.c_void_p,
+        ]
+        fn.restype = ctypes.c_void_p
+        lib.neverd_free_string.argtypes = [ctypes.c_void_p]
+        output = self.root / "output.gguf"
+        for mutate in [False, True]:
+            data = gguf([("w", [32768], 0, 0, bytes(131072))])
+            self.file.write_bytes(data)
+            seen = []
+
+            def probe(_):
+                if not seen and list(self.root.glob(".neverd-*.tmp")):
+                    seen.append(True)
+                    if mutate:
+                        with self.file.open("ab") as f:
+                            f.write(b"intentional test mutation")
+                return int(bool(seen) and not mutate)
+
+            report_ptr = fn(
+                os.fsencode(self.file),
+                os.fsencode(output),
+                b'{"template_policy":"keep"}',
+                stop_type(probe),
+                None,
+            )
+            self.assertTrue(report_ptr)
+            try:
+                report = json.loads(ctypes.string_at(report_ptr))
+            finally:
+                lib.neverd_free_string(report_ptr)
+            self.assertTrue(seen)
+            self.assertEqual(report["status"], "failed" if mutate else "cancelled")
+            self.assertFalse(output.exists())
+            self.assertEqual(list(self.root.glob(".neverd-*.tmp")), [])
+
+    def test_mapping_sampling_tolerances_and_adapter_shapes(self):
+        dirs = [self.root / "candidate", self.root / "baseline"]
+        for d, n, values in zip(
+            dirs,
+            ["layers.0.renamed", "original"],
+            [[1.0, 3.0, float("inf")], [1.125, 4.0, float("nan")]],
+        ):
+            d.mkdir()
+            (d / "weights.safetensors").write_bytes(
+                safetensors([(n, "F32", [3], struct.pack("<3f", *values))])
+            )
+        candidate, base = dirs
+        source, old = [self.scan(d)["packages"][0]["snapshot_id"] for d in dirs]
+        mapping = {
+            "candidate_snapshot": source,
+            "baseline_snapshot": old,
+            "names": {"layers.0.renamed": "original"},
+        }
+        options = {"tensor_mapping": mapping, "absolute_tolerance": 0.125}
+
+        def compare(opts, code=0):
+            return self.scan(
+                candidate,
+                "--baseline",
+                base,
+                "--model-options=" + json.dumps(opts),
+                code=code,
+            )
+
+        c = compare(options)["comparison"]
+        self.assertEqual(c, compare(options)["comparison"])
+        row = c["tensor_rows"][0]
+        self.assertEqual(row["baseline_tensor"], "original")
+        self.assertEqual(row["numeric"]["nonfinite_pairs"], 1)
+        self.assertEqual(row["numeric"]["outside_tolerance_pairs"], 1)
+        self.assertEqual(c["numeric_layers"][0]["finite_pairs"], 2)
+        partial = compare(dict(options, sample_bytes_per_tensor=5), 1)["comparison"]
+        self.assertEqual(partial["counts"], {"sample-different": 1})
+        self.assertEqual(partial["bytes_compared_per_side"], 4)
+        self.assertEqual(partial["compared_storage_elements"], 1)
+        self.assertEqual(partial["candidate_known_bytes_skipped"], 8)
+        (base / "config.json").write_text("{}")
+        self.assertIn("snapshot changed", compare(options, 1)["error"])
+        other = candidate / "adapter.safetensors"
+        other.write_bytes(
+            safetensors(
+                [
+                    ("m.lora_A.weight", "F32", [2, 3], bytes(24)),
+                    ("m.lora_B.weight", "F32", [4, 2], bytes(32)),
+                ]
+            )
+        )
+        (candidate / "adapter_config.json").write_text('{"r":3}')
+        p = self.scan(candidate)["packages"][0]
+        self.assertEqual(p["adapter_pairs"][0]["rank"], 2)
+        self.assertEqual(p["adapter_pairs"][0]["status"], "declared-rank-conflict")
+        (base / "weights.safetensors").write_bytes(
+            safetensors([("large", "F64", [1], struct.pack("<d", -sys.float_info.max))])
+        )
+        (candidate / "weights.safetensors").write_bytes(
+            safetensors([("large", "F64", [1], struct.pack("<d", sys.float_info.max))])
+        )
+        (candidate / "adapter_config.json").unlink()
+        r = self.scan(
+            candidate / "weights.safetensors",
+            "--baseline",
+            base / "weights.safetensors",
+        )["comparison"]
+        self.assertEqual(
+            r["tensor_rows"][0]["numeric"]["absolute_difference_overflows"], 1
+        )
+
+    def test_checkpoint_instructions_archives_and_references(self):
+        # Data-only instructions with an inert, unresolved module name.
+        stream = b"cfixture_module\nInertType\n."
+        for method in [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED]:
+            archive = self.root / "model.pt"
+            with zipfile.ZipFile(archive, "w") as z:
+                z.writestr("model/data.pkl", stream, compress_type=method)
+                z.writestr("model/data/0", bytes(2 << 20))
+            p = self.scan(archive, code=2)["packages"][0]
+            a = next(a for a in p["artifacts"] if a["format"] == "checkpoint-zip")
+            self.assertEqual(a["member_count"], 2)
+            self.assertLess(p["bytes_read"], 2048)
+            self.assertEqual(a["members"][1]["coverage"], "payload-skipped")
+            f = p["findings"][0]["evidence"]
+            self.assertEqual(
+                (f["module"], f["symbol"], f["offset"]),
+                ("fixture_module", "InertType", 0),
+            )
+            self.assertEqual(f["coordinate_space"], "decoded-member")
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("../escape.pkl", b"N.")
+        self.assertTrue(self.scan(archive, code=1)["packages"][0]["coverage_gaps"])
+        path = self.root / "plain.pkl"
+        path.write_bytes(b"\x80\x04C" + bytes([len(stream)]) + stream + b".")
+        self.assertFalse(self.scan(path)["packages"][0]["findings"])
+        path.write_bytes(b"\x80\x07N.")
+        self.assertTrue(self.scan(path, code=1)["packages"][0]["coverage_gaps"])
+        folder = self.root / "package"
+        folder.mkdir()
+        (folder / "loader.py").write_text(
+            '# __import__(x)\nlook = "importlib.import_module(x)"\nimport fixture_module\nimportlib.import_module(name)\n'
+        )
+        (folder / "config.json").write_text(
+            '{"auto_map":{"A":"loader.Inert","B":"missing.Class"},"license":"MIT"}'
+        )
+        (folder / "requirements.txt").write_text("fixture-package==1.2.3\n")
+        (folder / "release.sig").write_bytes(b"dummy")
+        p = self.scan(folder, code=1)["packages"][0]
+        self.assertEqual(
+            sum(f["rule"] == "package.loader-call" for f in p["findings"]), 1
+        )
+        self.assertEqual(
+            {e["resolution"] for e in p["dependencies"]},
+            {"local", "missing-local", "declared-module", "declared-exact-version"},
+        )
+        self.assertIn(
+            "present-unverified", {e["verification"] for e in p["provenance"]}
+        )
+
     def test_package_loading_declarations_and_opaque_components(self):
         processor = self.root / "processor_config.json"
         processor.write_text(
@@ -443,7 +713,8 @@ class ModelScan(unittest.TestCase):
             {"package.custom-loader", "package.remote-code-enabled"},
         )
         self.assertEqual(
-            {g["source"] for g in p["coverage_gaps"]}, {"loader.py", "weights.ckpt"}
+            {g["source"] for g in p["coverage_gaps"]},
+            {"processor_config.json", "weights.ckpt"},
         )
         self.assertEqual(p["tensor_payload_bytes_read"], 0)
 
@@ -536,7 +807,7 @@ class ModelScan(unittest.TestCase):
             self.assertEqual(self.scan(config)["packages"][0]["gap_count"], 0)
 
         for data, reason in [
-            (br'{"a":[{"b":1,"\u0062":2}]}', "duplicate JSON object key"),
+            (rb'{"a":[{"b":1,"\u0062":2}]}', "duplicate JSON object key"),
             (nested(64, b"0"), "JSON nesting exceeds limit"),
             (nested(65, b""), "JSON nesting exceeds limit"),
             (b"[]", "invalid JSON object"),
@@ -566,6 +837,46 @@ class ModelScan(unittest.TestCase):
         self.file.write_bytes(gguf(tensors))
         self.assertEqual(self.scan()["packages"][0]["inferred_projection_layouts"], [])
 
+    def test_structure_evidence_and_filtered_graph_pages(self):
+        model = self.root / "g.onnx"
+        before = field(4, "Identity") + field(1, "input") + field(2, "v")
+        nested = field(2, "child") + field(
+            1, field(4, "Custom") + field(7, "local.domain") + field(1, "v")
+        )
+        attr = field(1, "branch") + field(20, 5) + field(6, nested)
+        select = field(4, "If") + field(5, attr) + field(2, "out")
+        symbol = field(1, field(2, "batch"))
+        info = field(1, "out") + field(2, field(1, field(1, 1) + field(2, symbol)))
+        graph = field(2, "root") + field(1, before) + field(1, select) + field(13, info)
+        model.write_bytes(field(1, 9) + field(7, graph))
+        p = self.scan(model)["packages"][0]
+        child, root = p["graphs"]
+        self.assertEqual(root["value_info"][0]["shape"], ["batch"])
+        self.assertEqual(child["nodes"][0]["input_edges"][0]["node"], "graph/node0")
+        self.assertEqual(child["parent_scope"], root["id"])
+        opts = {"search": "custom", "graph_scope": child["id"]}
+        page = self.scan(model, "--model-options=" + json.dumps(opts))["packages"][0]
+        self.assertEqual(page["graph_count"], 2)
+        self.assertEqual(page["matching_graph_count"], 1)
+        self.assertEqual(page["graphs"][0]["nodes"], child["nodes"])
+        out = self.run_cli("scan", "--gguf", str(model), "--model-text")
+        self.assertEqual(out.returncode, 0)
+        self.assertIn(b'Graph "graph"', out.stdout)
+        self.assertIn(b"local.domain", out.stdout)
+
+        model.unlink()
+        (self.root / "config.json").write_text(
+            '{"num_hidden_layers":2,"tie_word_embeddings":true}'
+        )
+        (self.root / "model.safetensors").write_bytes(
+            safetensors([("layers.3.w", "F32", [1], bytes(4))])
+        )
+        package = self.scan(self.root, code=1)["packages"][0]
+        self.assertEqual(package["tensors"][0]["named_layer"], 3)
+        self.assertIn(
+            "exceeds declared layer count", package["coverage_gaps"][0]["reason"]
+        )
+
     def test_external_initializer_and_bounded_tensor_window(self):
         path = self.root / "model.onnx"
         raw = self.root / "weights.data"
@@ -573,25 +884,46 @@ class ModelScan(unittest.TestCase):
 
         def initializer(location, offset="4", length="12"):
             tensor = field(8, "weights") + field(2, 2) + field(1, 12) + field(14, 1)
-            for k, v in (("location", location), ("offset", offset), ("length", length)):
+            for k, v in (
+                ("location", location),
+                ("offset", offset),
+                ("length", length),
+            ):
                 tensor += field(13, field(1, k) + field(2, v))
             path.write_bytes(field(1, 9) + field(7, field(5, tensor)))
 
         initializer(raw.name)
-        self.assertEqual(self.scan(path, code=1)["packages"][0]["tensor_payload_bytes_read"], 0)
+        self.assertEqual(
+            self.scan(path, code=1)["packages"][0]["tensor_payload_bytes_read"], 0
+        )
         p = self.scan(path, "--onnx-external-data")["packages"][0]
         self.assertEqual(p["tensor_payload_bytes_read"], 0)
         t = p["tensors"][0]
-        self.assertEqual((t["artifact"], t["offset"], t["storage_bytes"]), (raw.name, 4, 12))
+        self.assertEqual(
+            (t["artifact"], t["offset"], t["storage_bytes"]), (raw.name, 4, 12)
+        )
         settings = {"tensor_range": {"name": "graph/weights", "offset": 3, "length": 5}}
-        r = self.scan(path, "--onnx-external-data", "--model-options=" + json.dumps(settings))
-        self.assertEqual(r["tensor_range"]["sha256"], hashlib.sha256(bytes(range(3, 8))).hexdigest())
+        r = self.scan(
+            path, "--onnx-external-data", "--model-options=" + json.dumps(settings)
+        )
+        self.assertEqual(
+            r["tensor_range"]["sha256"], hashlib.sha256(bytes(range(3, 8))).hexdigest()
+        )
         self.assertEqual(r["packages"][0]["tensor_payload_bytes_read"], 5)
         self.assertEqual(r["packages"][0]["snapshot_id"], p["snapshot_id"])
-        for location, offset, length in [(raw.name, "-1", "12"), (raw.name, "4", "20"),
-                                         ("../escape", "4", "12"), ("https://example.invalid/x", "0", "12")]:
+        for location, offset, length in [
+            (raw.name, "-1", "12"),
+            (raw.name, "4", "20"),
+            ("../escape", "4", "12"),
+            ("https://example.invalid/x", "0", "12"),
+        ]:
             initializer(location, offset, length)
-            self.assertGreater(self.scan(path, "--onnx-external-data", code=1)["packages"][0]["gap_count"], 0)
+            self.assertGreater(
+                self.scan(path, "--onnx-external-data", code=1)["packages"][0][
+                    "gap_count"
+                ],
+                0,
+            )
 
     def test_onnx_unpacked_initializer_is_skipped_without_reading_values(self):
         model = self.root / "typed.onnx"
@@ -619,18 +951,22 @@ class ModelScan(unittest.TestCase):
         self.assertEqual(
             [g["nodes"][0]["op_type"] for g in p["graphs"]], ["Identity", "If"]
         )
+        edge = p["graphs"][1]["nodes"][1]["input_edges"][0]
         self.assertEqual(
-            p["graphs"][1]["nodes"][1]["input_edges"],
-            [
-                {
-                    "input_slot": 0,
-                    "value": "v",
-                    "source": "node",
-                    "node": "graph/node0",
-                    "output_slot": 0,
-                }
-            ],
+            {
+                k: edge[k]
+                for k in ("input_slot", "value", "source", "node", "output_slot")
+            },
+            dict(
+                input_slot=0,
+                value="v",
+                source="node",
+                node="graph/node0",
+                output_slot=0,
+            ),
         )
+        self.assertEqual(model.read_bytes()[edge["offset"] : edge["end"]], b"v")
+        self.assertEqual(edge["evidence_level"], "observed")
         self.assertEqual(p["tensors"][0]["name"], "graph/weight")
         self.assertEqual(p["tensor_payload_bytes_read"], 0)
         model.write_bytes(field(1, 9) + b"\x3a\x7f")

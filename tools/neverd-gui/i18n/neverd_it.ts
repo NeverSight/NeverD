@@ -11752,5 +11752,37 @@ Il grafo precedente è ancora disponibile.</translation>
         <source>Advanced options (JSON)</source>
         <translation>Opzioni avanzate (JSON)</translation>
     </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>Cerca tensori o operatori</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>Ambito del grafo</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>Dichiarazioni</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>Ricostruisci GGUF…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>Imposta template_policy su keep, remove o replace nelle opzioni avanzate.</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Dipendenze</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>Provenienza</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>Matrici dell’adattatore</translation>
+    </message>
 </context>
 </TS>

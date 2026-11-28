@@ -35,6 +35,12 @@ bool companion(std::string_view S) {
          std::end(Companions);
 }
 std::string_view opaqueFormat(std::string_view Name) {
+  if (Name == "requirements.txt" || Name == "pyproject.toml")
+    return "dependency-manifest";
+  if (Name == "README.md" || Name.starts_with("LICENSE") ||
+      Name.ends_with(".sig") || Name.ends_with(".attestation") ||
+      Name.ends_with(".sigstore.json"))
+    return "provenance";
   if (Name.ends_with(".py"))
     return "python-source";
   if (Name.ends_with(".dll") || Name.ends_with(".so") ||
@@ -130,6 +136,35 @@ void readCompanion(Package &P, const std::string &Name) {
     else if (Name == "chat_template.json")
       throw Error("companion lacks chat_template field");
     if (Name == "config.json") {
+      auto declarations = [&](const Json &Config, llvm::StringRef Prefix) {
+        for (auto Field :
+             {"model_type", "num_hidden_layers", "tie_word_embeddings"}) {
+          auto It = Config.find(Field);
+          if (It == Config.end())
+            continue;
+          auto Kind = std::string_view(Field) == "num_hidden_layers"
+                          ? "layer_count"
+                      : std::string_view(Field) == "tie_word_embeddings"
+                          ? "weight_tying"
+                          : "architecture";
+          if ((Kind == std::string_view("layer_count") &&
+               !It->is_number_unsigned()) ||
+              (Kind == std::string_view("weight_tying") && !It->is_boolean()) ||
+              (Kind == std::string_view("architecture") && !It->is_string()))
+            throw Error("invalid model structure declaration");
+          if (It->is_string())
+            validName(It->get_ref<const std::string &>());
+          P.Declarations.push_back({{"artifact", Name},
+                                    {"field", (Prefix + Field).str()},
+                                    {"kind", Kind},
+                                    {"value", *It},
+                                    {"evidence_level", "declared"}});
+        }
+      };
+      declarations(J, "");
+      if (auto Text = J.find("text_config");
+          Text != J.end() && Text->is_object())
+        declarations(*Text, "text_config.");
       if (auto A = J.find("model_type"); A != J.end()) {
         auto S = A->get<std::string>();
         validName(S);
@@ -150,6 +185,7 @@ void readCompanion(Package &P, const std::string &Name) {
       else if (auto V = J.find("quantization"); V != J.end())
         P.Fingerprints["quantization"] = digest(V->dump());
     }
+    inspectReferences(P, Name, J);
     if (J.contains("auto_map") && !J["auto_map"].empty())
       P.finding("package.custom-loader", Name, "review", "loader-declaration",
                 "declared",
@@ -257,20 +293,11 @@ void inspect(Package &P, const Names &Files,
       protectedRead(P, Name, [&] {
         if (Name.ends_with(".onnx"))
           readONNX(P, Name);
-        else if (checkpoint(Name)) {
-          P.Artifacts.push_back({{"id", Name},
-                                 {"format", "uninspected-checkpoint"},
-                                 {"size", P.file(Name).size()}});
-          P.gap(Name, "checkpoint serialization and weights not inspected");
-        } else if (auto Format = opaqueFormat(Name); !Format.empty()) {
-          P.Artifacts.push_back({{"id", Name},
-                                 {"format_hint", Format},
-                                 {"format", "uninspected-component"},
-                                 {"size", P.file(Name).size()}});
-          P.gap(Name,
-                "component identified by filename; contents not inspected",
-                {{"format_hint", Format}});
-        } else
+        else if (checkpoint(Name))
+          inspectCheckpoint(P, Name);
+        else if (auto Format = opaqueFormat(Name); !Format.empty())
+          inspectComponent(P, Name, Format);
+        else
           readGGUF(P, Name);
       });
   }
@@ -362,9 +389,12 @@ void inspect(Package &P, const Names &Files,
       (Total && Parts.size() != *Total) ||
       (TotalTensors && P.Tensors.size() != *TotalTensors))
     P.gap(P.Id, "missing or inconsistent GGUF split inventory");
-  P.ProjectionLayouts = projectionLayouts(P);
+  inspectStructure(P);
 }
 } // namespace
+bool isNumberedGGUF(llvm::StringRef Name) {
+  return splitPart(Name).has_value();
+}
 std::vector<std::unique_ptr<Package>> readInputs(const fs::path &Input,
                                                  Budget &B) {
   if (Input.empty())

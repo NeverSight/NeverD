@@ -1262,6 +1262,12 @@ _declare(
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
+    "neverd_model_rebuild_gguf_json_v1",
+    "const char *",
+    ["const char *", "const char *", "const char *", "neverd_cancel_probe_fn", "void *"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
     "neverd_jvm_recover_json_v1",
     "const char *",
     ["const char *", "const char *", "neverd_cancel_probe_fn", "void *"],

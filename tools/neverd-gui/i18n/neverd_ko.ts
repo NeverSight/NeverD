@@ -11716,5 +11716,37 @@ Your previous graph is still available.</source>
         <source>Advanced options (JSON)</source>
         <translation>고급 옵션(JSON)</translation>
     </message>
+    <message>
+        <source>Search tensors or operators</source>
+        <translation>텐서 또는 연산자 검색</translation>
+    </message>
+    <message>
+        <source>Graph scope</source>
+        <translation>그래프 범위</translation>
+    </message>
+    <message>
+        <source>Declarations</source>
+        <translation>선언</translation>
+    </message>
+    <message>
+        <source>Rebuild GGUF…</source>
+        <translation>GGUF 재구성…</translation>
+    </message>
+    <message>
+        <source>Set template_policy to keep, remove or replace in Advanced options.</source>
+        <translation>고급 옵션에서 template_policy를 keep, remove 또는 replace로 설정하세요.</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>의존성</translation>
+    </message>
+    <message>
+        <source>Provenance</source>
+        <translation>출처</translation>
+    </message>
+    <message>
+        <source>Adapter matrices</source>
+        <translation>어댑터 행렬</translation>
+    </message>
 </context>
 </TS>

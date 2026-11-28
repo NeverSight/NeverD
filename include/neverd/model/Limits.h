@@ -30,6 +30,8 @@ inline constexpr size_t kReportBytes = 4 << 20;
 inline constexpr unsigned kDepth = 64;
 inline constexpr size_t kChunk = 64 << 10;
 inline constexpr uint64_t kGapBytes = 4ULL << 20;
+/// Maximum size of either file in a verified GGUF reconstruction.
+inline constexpr uint64_t kRebuildBytes = 64ULL << 30;
 inline constexpr uint64_t kCompareBytes = 64ULL << 20;
 inline constexpr size_t kPage = 32;
 inline constexpr size_t kMaxPage = 512;
