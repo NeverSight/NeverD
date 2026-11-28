@@ -1018,7 +1018,7 @@ TEST(RegistrationJumpState, ImageEffectsGateLaterCapture) {
 TEST(RegistrationJumpState, OpaqueCallsRevokeExceptionalRuntimeBindings) {
   for (bool Filter : {false, true}) {
     SCOPED_TRACE(Filter);
-    for (unsigned Mutation = 0; Mutation != 2; ++Mutation) {
+    for (unsigned Mutation = 0; Mutation != 3; ++Mutation) {
       SCOPED_TRACE(Mutation);
       auto F = makeJumpFrame(0);
       F.Blocks.resize(8);
@@ -1082,7 +1082,13 @@ TEST(RegistrationJumpState, OpaqueCallsRevokeExceptionalRuntimeBindings) {
         return Op.Addr == 0x111a;
       };
       std::vector<RegistrationSEHControlContract> Controls;
-      RegistrationStateSolver Solver(F, 0, 0, nullptr, nullptr, nullptr,
+      std::vector<RegistrationCalleeStackContract> Stacks;
+      if (Mutation == 2) {
+        // A normal-return effect cannot reach an exceptional continuation.
+        Stacks.push_back({0x4300, 0, false});
+        Stacks.back().PreservesImportBindings = true;
+      }
+      RegistrationStateSolver Solver(F, 0, 0, nullptr, nullptr, &Stacks,
                                      nullptr, &Controls, nullptr, nullptr,
                                      &Runtime);
       const auto Result = Solver.run();
