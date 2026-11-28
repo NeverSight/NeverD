@@ -81,21 +81,26 @@ class QualificationError(ValueError):
         self.missing_evidence = missing_evidence
 
 
-def audit(document: ET.Element, expected: tuple[str, ...], exit_code: int) -> dict:
+def _checked_cases(document: ET.Element, expected: tuple[str, ...]) -> list[tuple[str, ET.Element]]:
     if document.tag != "testsuites":
         raise ValueError("expected GoogleTest XML testsuites")
-    cases = list(document.iter("testcase"))
-    names = [f"{case.get('classname')}.{case.get('name')}" for case in cases]
-    if Counter(names) != Counter(expected):
+    cases = [(f"{case.get('classname')}.{case.get('name')}", case)
+             for case in document.iter("testcase")]
+    counts = Counter(name for name, _ in cases)
+    if counts != Counter(expected):
         raise ValueError(
             "test identities differ: "
-            f"missing={sorted(set(expected) - set(names))}, "
-            f"unexpected={sorted(set(names) - set(expected))}, "
-            f"duplicates={[n for n, c in Counter(names).items() if c != 1]}"
+            f"missing={sorted(set(expected) - counts.keys())}, "
+            f"unexpected={sorted(counts.keys() - set(expected))}, "
+            f"duplicates={[name for name, count in counts.items() if count != 1]}"
         )
+    return cases
+
+
+def _audit_outcomes(document: ET.Element, cases: list[tuple[str, ET.Element]], exit_code: int) -> dict:
     rejected = []
     first_failure = None
-    for name, case in zip(names, cases):
+    for name, case in cases:
         problem = next((child for child in case if child.tag in
                         {"failure", "error", "skipped"}), None)
         status, result = case.get("status"), case.get("result")
@@ -123,11 +128,18 @@ def audit(document: ET.Element, expected: tuple[str, ...], exit_code: int) -> di
             raise ValueError("GoogleTest total differs from actual testcase count")
     if exit_code != 0:
         raise QualificationError(f"test process failed with exit code {exit_code}")
-    return {"passed": len(cases), "failed": 0, "skipped": 0, "tests": names}
+    return {"passed": len(cases), "failed": 0, "skipped": 0,
+            "tests": [name for name, _ in cases]}
+
+
+def audit(document: ET.Element, expected: tuple[str, ...], exit_code: int) -> dict:
+    return _audit_outcomes(document, _checked_cases(document, expected), exit_code)
 
 
 RESULT_CHECKS = {
     "results": "fresh GoogleTest XML from the test process",
+    "case inventory": "XML results for the expected test identities",
+    "binary identity": "matching test binary hashes before and after execution",
     "result metadata": "valid run-level execution evidence when supplied",
     "case audit": "a successful result for every discovered test identity",
 }
@@ -176,15 +188,21 @@ class QualificationReport:
         else:
             stage["state"] = "passed"
 
-    def run_tests(self, args: list[str], xml: Path, names: tuple[str, ...], **options) -> dict:
+    def run_tests(self, args: list[str], xml: Path, names: tuple[str, ...], *,
+                  binary_digest: str, **options) -> dict:
         with self.check("results"):
             result = subprocess.run([*args, "--gtest_output=xml:" + str(xml)], **options)
             self.exit_code = result.returncode
             document = ET.parse(xml).getroot()
+        with self.check("case inventory"):
+            cases = _checked_cases(document, names)
+        with self.check("binary identity"):
+            if sha256(Path(args[0])) != binary_digest:
+                raise QualificationError("qualification binary changed during execution")
         with self.check("result metadata"):
             self.observations = recorded_execution(document)
         with self.check("case audit"):
-            return audit(document, names, result.returncode)
+            return _audit_outcomes(document, cases, result.returncode)
 
     def write(self, path: Path):
         result = verification_report.summarize({"schema": verification_report.SCHEMA,
@@ -291,7 +309,8 @@ def run_profile(options, output: Path, progress: QualificationReport) -> int:
         with log:
             report["outcome"] = progress.run_tests(
                 [str(binary), "--gtest_filter=" + ":".join(names)], output / "results.xml",
-                names, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=3600)
+                names, binary_digest=report["binary_sha256"], env=env, stdout=log,
+                stderr=subprocess.STDOUT, timeout=3600)
     except (ValueError, ET.ParseError, OSError, subprocess.SubprocessError) as error:
         report["error"] = str(error)
         if isinstance(error, QualificationCasesFailed):

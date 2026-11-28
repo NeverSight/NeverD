@@ -23078,7 +23078,11 @@ rejected GoogleTest case retains its XML diagnostic. A test can identify a
 missing observation with `RecordProperty("neverd_missing_evidence", description)`.
 The runner reads optional execution observations from the root GoogleTest
 property `neverd_execution_evidence`. A global test environment can record this
-JSON object at teardown. A property on an individual test applies only to that
+JSON object at teardown. Both runners first match the XML test identities to the
+expected inventory and the test binary to its pre-run digest. If either check
+fails, the report leaves comparison counts unrecorded and caller execution
+unknown. After both checks pass, a skipped or failed case can still carry
+observations from the run. A property on an individual test applies only to that
 test. An ordinary GoogleTest pass count supplies neither execution observation.
 
 Other producers can use the same reader with a local JSON document. Supply the
