@@ -553,7 +553,9 @@ void AnalysisService::receive(const QJsonObject &message, qint64 bytes) {
               .contains(QStringLiteral("defer_view_preparation")))
         restore["defer_view_preparation"] = true;
     }
-    warmTypeLibraries_ = !prepareViews_ &&
+    // Source preparation already loads the session's type libraries. Sending
+    // another idle request here would preempt the function being prepared.
+    warmTypeLibraries_ = !restore.value("prepare_views").toBool() &&
                          restore.value("render_ahead").toBool() &&
                          message.value("capabilities")
                              .toArray()

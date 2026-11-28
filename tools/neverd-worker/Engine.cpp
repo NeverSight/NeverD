@@ -3867,10 +3867,12 @@ void Engine::prepareViews() {
         selected != warmed.end() && selected->is_string())
       page = parseAddress(selected->get_ref<const std::string &>());
   } else {
-    const int count =
-        page ? ::neverd::limits::worker::kSummaryPreparationFunctions
-             : ::neverd::limits::worker::kInitialViewPreparationFunctions;
-    (void)backendJson(warm(session_, page.value_or(0), count), true);
+    // The store identifies one entry. Its neighbours belong to the paged
+    // summary job and need no call-graph preparation for this view.
+    (void)backendJson(
+        warm(session_, page.value_or(0),
+             ::neverd::limits::worker::kInitialViewPreparationFunctions),
+        true);
   }
   if (page) {
     const int index = neverd_func_find_by_addr(session_, *page);
