@@ -16,6 +16,7 @@ import tempfile
 import time
 
 from call_summaries_test import prefill
+from discovery_ready_test import wait_for_file
 from local_name_cache_test import request
 from render_ahead_test import done, latest, render_ahead, unfixtured
 from source_cache_test import A, B, C, ok, source
@@ -119,6 +120,30 @@ def check_opening_preparation(clients, executable, root):
             page = reply["payload"]
             assert page["fixture_prepares"] == page["fixture_pages"] == 1, page
             assert page["text"] == fresh["text"]
+        deferred = dict(explicit, call_summaries=True, render_ahead=True,
+                        render_store="write", prepare_views=True, defer_view_preparation=True)
+
+        def marker(name):
+            return Path(str(binary) + "." + name)
+
+        marker("check-opening-inventory").touch()
+        with Client(executable) as replica:
+            ok(replica, "analysis_restore", deferred)
+            render_ahead(replica, done)
+            summaries(replica, lambda state: state == "deferred")
+            assert marker("opening-warm-order").read_text() == "settled"
+
+        marker("opening-warm-order").unlink()
+        marker("pause-opening-discovery").touch()
+        with Client(executable) as replica:
+            ok(replica, "analysis_restore", deferred)
+            wait_for_file(marker("opening-discovery-waiting"))
+            page = ok(replica, "decompile", {"address": A, "representation": "source",
+                                             "limit": 4, "refresh": True})
+            assert marker("opening-discovery-cancelled").is_file()
+            assert not marker("opening-warm-order").exists()
+            assert page["text"] == fresh["text"]
+
         with Client(executable) as reader:
             opened = ok(reader, "open", {"path": str(binary), "read_only": True,
                                         "analysis": True, "initial_render_snapshot": True})

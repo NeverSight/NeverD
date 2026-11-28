@@ -1006,8 +1006,10 @@ initial preparation after discovery, without waiting for the first F5.
 
 A client that warms views while idle can also request `defer_view_preparation:true`
 when the worker advertises that capability. For a completed render store, restore
-acknowledges the validated revision first. The worker yields to queued requests
-before warming the shared indexes and again before lifting the recorded entry.
+acknowledges the validated revision first. Engines with cancellable discovery
+settle the function inventory before warming the recorded entry's call graph.
+A queued request interrupts discovery. The worker also checks the queue before
+warming the shared indexes and before lifting the recorded entry.
 Fresh stores and clients requiring synchronous preparation keep the usual
 `prepare_views` completion guarantee.
 

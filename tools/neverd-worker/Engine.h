@@ -224,7 +224,7 @@ private:
   Json browseCacheIdentity(Json identity,
                            const std::vector<project_files::File> &unread);
   Json restoreAnalysis(const Json &snapshot);
-  void prepareViews();
+  void prepareViews(std::function<bool()> requestWaiting = {});
   Json updateAnalysisNames(const Json &snapshot);
   /// Whether the project's files hold \p snapshot's user state.
   bool projectHolds(const std::string &path, const Json &snapshot);

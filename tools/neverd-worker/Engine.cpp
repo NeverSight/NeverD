@@ -23,6 +23,7 @@
 #include "neverd/sdk/NeverDCAPIPersist.h"
 #include "neverd/sdk/NeverDCAPIQuery.h"
 #include "neverd/sdk/NeverDCAPISafety.h"
+#include "neverd/sdk/NeverDCAPISession.h"
 #include "neverd/sdk/NeverDCAPISigs.h"
 #include "neverd/support/FileStamp.h"
 #include "neverd/support/ProjectFiles.h"
@@ -71,6 +72,11 @@ constexpr std::size_t MaxAnalysisSectionBytes =
     neverd::sdk::kMaxAnalysisSectionBytes;
 constexpr std::size_t MaxAnalysisSectionState =
     neverd::sdk::kMaxAnalysisSectionStateBytes;
+
+int cancellationRequested(void *context) {
+  const auto &probe = *static_cast<const std::function<bool()> *>(context);
+  return probe && probe();
+}
 
 std::vector<unsigned char> sectionBytes(const std::string &hex) {
   if (hex.empty() || hex.size() % 2 || hex.size() / 2 > MaxAnalysisSectionBytes)
@@ -3850,17 +3856,31 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
   return metadata();
 }
 
-void Engine::prepareViews() {
+void Engine::prepareViews(std::function<bool()> requestWaiting) {
   using WarmFunction = const char *(*)(neverd_session_t, neverd_va_t, int);
   const auto warm = engineSymbol<WarmFunction>("neverd_warm_functions_json");
   if (!warm)
     throw Error("unsupported", "This engine cannot prepare source views");
-  if (loadProgress_)
-    loadProgress_("prepare_views", 0, 0, "Preparing shared view indexes");
   // One page also prepares the image-wide widths, types and symbol names.
   // Later selections reuse those exact facts; no full-program C is emitted.
   auto page =
       summariesDeferred_ ? keptWarmPage(renderStore_.get()) : std::nullopt;
+  if (page && requestWaiting) {
+    // Publishing newly discovered entries invalidates call-graph facts built
+    // against the old inventory. Settle it before warming the recorded entry.
+    static const auto discover =
+        engineSymbol<decltype(&neverd_session_discover_functions_cancellable)>(
+            "neverd_session_discover_functions_cancellable");
+    if (discover) {
+      if (discover(session_, cancellationRequested, &requestWaiting) < 0)
+        return;
+      summaryDiscovered_ = true;
+      if (requestWaiting())
+        return;
+    }
+  }
+  if (loadProgress_)
+    loadProgress_("prepare_views", 0, 0, "Preparing shared view indexes");
   static const auto initial =
       engineSymbol<SessionJsonFunction>("neverd_warm_initial_view_json");
   if (!page && initial) {
@@ -4795,7 +4815,7 @@ void Engine::afterReply(const std::function<bool()> &requestWaiting) {
   // Recheck the queue between warming shared indexes and lifting the entry.
   const auto idle = [&] { return !requestWaiting || !requestWaiting(); };
   if (std::exchange(openingViewWarmup_, false) && idle())
-    prepareViews();
+    prepareViews(requestWaiting);
   // A restore changes the project revision. Consume this opening hint behind
   // its reply, after ordinary revision invalidation and before the idle grace
   // for whole-project jobs. A foreground request already queued gets the lane.
@@ -5008,10 +5028,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     else if (analyzer != "both")
       throw Error("invalid_request", "analyzer must be both, audit or hunt");
     options.context = &cancelled_;
-    options.cancel = [](void *context) -> int {
-      const auto &probe = *static_cast<const std::function<bool()> *>(context);
-      return probe && probe();
-    };
+    options.cancel = cancellationRequested;
     // Preserve the versioned SDK report verbatim, including address spellings.
     return transport::parseBackendJson(
         backendText(scan(session_, &options), false));
