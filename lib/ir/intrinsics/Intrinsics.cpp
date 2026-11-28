@@ -62,11 +62,19 @@ struct CNameTable {
     C(Intrinsic::GoCurrentGoroutine, "__neverd_go_getg");
 #define NEVERD_INTEGER_MEMORY_INTRINSIC(Id, Value, Name) C(Intrinsic::Id, Name);
 #include "neverd/ir/intrinsics/IntegerMemory.def"
-#define NEVERD_PPC_DIVIDE(Id, Value, RecordId, RecordValue, XO, Bytes, Signed, \
-                          Mnemonic)                                            \
+#define NEVERD_PPC_FIXED_POINT(Kind, Id, Value, RecordId, RecordValue, Bytes,  \
+                               Signed, Mnemonic)                               \
   C(Intrinsic::Id, "neverd_ppc_" Mnemonic);                                    \
   C(Intrinsic::RecordId, "neverd_ppc_" Mnemonic "_record");
-#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.def"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.def"
+#define NEVERD_RISCV_CYCLE(Id, Value, Word, High, Name)                        \
+  C(Intrinsic::Id, "neverd_riscv_" Name);
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+#define NEVERD_PPC_VMX(Id, Value, Word, Name)                                  \
+  C(Intrinsic::Id, "neverd_ppc_" Name);
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.def"
+    C(Intrinsic::RISCVFloating, "neverd_riscv_floating");
+    C(Intrinsic::RISCVFPControl, "neverd_riscv_fp_control");
     C(Intrinsic::GoClosureContext, "__neverd_go_closure_context");
 
 #include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64_cnames.inc"
@@ -169,18 +177,23 @@ struct SideEffectTable {
 #define NEVERD_INTEGER_MEMORY_INTRINSIC(Id, Value, Name)                       \
   SIDEEFFECT(Intrinsic::Id);
 #include "neverd/ir/intrinsics/IntegerMemory.def"
+#define NEVERD_RISCV_CYCLE(Id, ...) SIDEEFFECT(Intrinsic::Id);
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
     SIDEEFFECT(Intrinsic::Syscall);
+    SIDEEFFECT(Intrinsic::RISCVFloating);
+    SIDEEFFECT(Intrinsic::RISCVFPControl);
     SIDEEFFECT(Intrinsic::RawEnvironmentRequirementV1);
     SIDEEFFECT(Intrinsic::ArchitecturalValueV1);
     SIDEEFFECT(Intrinsic::RawReturningCallV1);
 #include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64_sideeffect.inc"
 #include "neverd/ir/intrinsics/ARM/intrinsics_arm_sideeffect.inc"
 #include "neverd/ir/intrinsics/X86/intrinsics_x86_sideeffect.inc"
-// Each native divide supplies its own architecturally unspecified result bits.
-#define NEVERD_PPC_DIVIDE(Id, Value, RecordId, ...)                            \
+// Each native arithmetic instruction supplies its own architecturally
+// unspecified result bits.
+#define NEVERD_PPC_FIXED_POINT(Kind, Id, Value, RecordId, ...)                 \
   SIDEEFFECT(Intrinsic::Id);                                                   \
   SIDEEFFECT(Intrinsic::RecordId);
-#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.def"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.def"
 // Fresh unpredictable definitions must not be merged with one another.
 // Their dead outputs are removed by the validated MedIR DCE rule.
 #define NEVERD_MIPS_MERGE_LOAD(Id, ...) SIDEEFFECT(Intrinsic::Id);

@@ -658,6 +658,9 @@ struct MedFunc {
 
   /// Source projection only; never an authenticated semantic return contract.
   std::optional<SourceFunctionTypeHint> SourceTypeHint;
+  /// Static scans must check the loader bindings before using this return.
+  bool UsesStaticAllocatorBinding = false;
+  bool PreservesStaticAllocationBindings = false;
   /// Internal bookkeeping: Param operands already use source declaration
   /// indices, rather than generic ABI register / pointer-sized stack slots.
   bool SourceParametersBound = false;

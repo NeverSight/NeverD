@@ -105,6 +105,37 @@ std::optional<va_t> addSignedOffsetBias(va_t Offset, int64_t Bias) {
   return Offset - Magnitude;
 }
 
+// --emit-relocs can retain the exact initializer of a linked data word.
+// Validate the two section owners and the already linked bytes. A retained
+// record supplies provenance without performing another relocation.
+template <typename ELFT>
+void recordLinkedDataInitializer(const RelocationEntry &R,
+                                 const typename ELFT::Shdr &Storage,
+                                 llvm::ArrayRef<typename ELFT::Shdr> Sections,
+                                 BinaryImage &Img) {
+  using namespace llvm::ELF;
+  constexpr unsigned Width = sizeof(typename ELFT::Addr);
+  if (!R.ELF->Symbol || !isAbsoluteSymbolRelocation(Img.Arch, R.Type) ||
+      R.Address < Storage.sh_addr ||
+      !rangeInBounds(R.Address - Storage.sh_addr, Width, Storage.sh_size))
+    return;
+  const auto &Sym = *R.ELF->Symbol;
+  if ((Sym.Type != STT_OBJECT && Sym.Type != STT_SECTION) ||
+      !Sym.SectionIndex || Sym.SectionIndex >= Sections.size() ||
+      Sym.SectionIndex >= SHN_LORESERVE)
+    return;
+  const auto &Owner = Sections[Sym.SectionIndex];
+  const auto Target = addSignedOffsetBias(Sym.Value, R.Addend);
+  if ((Owner.sh_flags & (SHF_ALLOC | SHF_EXECINSTR | SHF_TLS)) != SHF_ALLOC ||
+      !Target || *Target < Owner.sh_addr ||
+      *Target - Owner.sh_addr >= Owner.sh_size)
+    return;
+  const uint8_t *Bytes = Img.readVA(R.Address, Width);
+  if (Bytes && readPtr(Bytes, ELFT::Is64Bits,
+                       ELFT::Endianness == llvm::endianness::little) == *Target)
+    recordAbsolutePointerRelocation(Img, R.Address, *Target, Owner.sh_addr);
+}
+
 } // namespace
 
 template <typename ELFT>
@@ -146,6 +177,13 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
 
     llvm::StringRef SecName = getSectionName<ELFT>(ShStrTab, SH);
     const bool FromProgram = Index >= FileSectionCount;
+    const auto *Storage = getShdr<ELFT>(Sections, SH.sh_info);
+    const bool RetainedData =
+        Img.LoadsAtLinkAddress && !FromProgram && IsRela &&
+        !(SH.sh_flags & SHF_ALLOC) && SymSH && SymSH->sh_type == SHT_SYMTAB &&
+        Storage && Storage->sh_type == SHT_PROGBITS &&
+        (Storage->sh_flags & (SHF_ALLOC | SHF_EXECINSTR | SHF_TLS)) ==
+            SHF_ALLOC;
     uint64_t Ordinal = 0;
     auto Record = [&](RelocationEntry RE, uint32_t SymIdx, uint64_t RawInfo) {
       RE.ELF = ELFRelocationProvenance{
@@ -191,6 +229,8 @@ void collectRelocations(const llvm::object::ELFFile<ELFT> &ELF,
         }
       }
 
+      if (RetainedData)
+        recordLinkedDataInitializer<ELFT>(RE, *Storage, Sections, Img);
       if (!IsRelocatable) {
         elf_loader::recordIRelativeResolver(
             RE.Type, RE.Address,

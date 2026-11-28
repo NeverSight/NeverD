@@ -6,8 +6,10 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
 
@@ -377,6 +379,49 @@ int main(void) {
 )");
 }
 
+TEST(HighValueForward, ConditionalUseStillReadsTheCapturedMemberOnBothPaths) {
+  const auto Word = NdType::makeInt(8, false);
+  const auto Record = NdType::makeNamedRecord("Observed", 16);
+  Record->FieldDisplayNames = {"pad", "observed"};
+  Record->FieldDisplayOffsets = {0, 8};
+  Record->FieldDisplayTypes = {Word, Word};
+  const auto Pointer = NdType::makePtr(Record);
+  const auto Address =
+      op(NdOp::INT_ADD, typedParameter(0, Pointer), constant(8));
+  Address->Type = NdType::makePtr(Word);
+  auto Select = op(NdOp::SELECT, typedParameter(1, Word), local(17, Word));
+  Select->Operands.push_back(constant(42));
+  Select->Type = Word;
+  auto F = function("read_before_choice",
+                    {assign(local(17, Word), HighExpr::makeLoad(Address, Word)),
+                     result(Select)});
+  F.Params = {{"arg0", Pointer}, {"arg1", Word}};
+  auto Branch = F;
+  Branch.Name = "read_before_branch";
+  Branch.Body = {F.Body.front(),
+                 when(typedParameter(1, Word), {result(local(17, Word))}),
+                 result(constant(42))};
+  const auto C = emit({F, Branch});
+  ASSERT_NE(C.find("->observed"), std::string::npos) << C;
+  // Instrument the field read in the emitted C. The test can observe its
+  // evaluation without depending on platform-specific memory faults.
+  compileAndRun(std::string(R"(
+#include <stdint.h>
+typedef struct Observed { uint64_t pad, cells[1]; } Observed;
+static unsigned reads;
+static unsigned count_read(void) { ++reads; return 0; }
+#define observed cells[count_read()]
+)") + C + R"(
+int main(void) {
+  Observed data = {0, {99}};
+  if (read_before_choice(&data, 0) != 42 || reads != 1) return 1;
+  if (read_before_choice(&data, 1) != 99 || reads != 2) return 2;
+  if (read_before_branch(&data, 0) != 42 || reads != 3) return 3;
+  return read_before_branch(&data, 1) != 99 || reads != 4;
+}
+)");
+}
+
 TEST(HighValueForward, TypedIndexedLoadEvaluatesCallAddressOnce) {
   const auto Word = NdType::makeInt(8, false);
   auto Index = HighExpr::makeCall("next_index", 0x2100, {});
@@ -680,6 +725,39 @@ int main(void) { return other_slot(7) == 7 && other_slot(9) == 9 ? 0 : 1; }
 )");
 }
 
+TEST(HighValueForward, SkippedOperandStillFoldsAFrameSlotRead) {
+  // A read at a fixed frame displacement observes nothing beyond the
+  // function's own frame: it may run only on the path that uses its value.
+  const auto Word = NdType::makeInt(8, false);
+  auto Nonzero = [] {
+    return op(NdOp::INT_NOTEQUAL, input(), constant(0), true);
+  };
+  auto Choice = op(NdOp::SELECT, Nonzero(), local(1, Word));
+  Choice->Operands.push_back(constant(42));
+  Choice->Type = Word;
+  auto Both = op(NdOp::BOOL_AND, Nonzero(),
+                 op(NdOp::INT_EQUAL, local(1, Word), constant(7), true), true);
+  std::vector<HighFunc> Functions;
+  for (const auto &[Name, Value] :
+       {std::pair<const char *, ExprPtr>{"slot_choice", Choice},
+        std::pair<const char *, ExprPtr>{"slot_both", Both}}) {
+    HighFunc F = function(
+        Name, {store(frameSlot(16), input()),
+               assign(local(1, Word), HighExpr::makeLoad(frameSlot(16), Word)),
+               result(Value)});
+    F.FrameSize = 64;
+    Functions.push_back(std::move(F));
+  }
+  const std::string Source = emit(Functions);
+  EXPECT_TRUE(declarationOf(Source, "t1").empty()) << Source;
+  compileAndRun(Source + R"(
+int main(void) {
+  return slot_choice(7) != 7 || slot_choice(0) != 42 || slot_both(7) != 1 ||
+         slot_both(5) != 0 || slot_both(0) != 0;
+}
+)");
+}
+
 TEST(HighValueForward, SlotLoadStaysBeforeAStoreComputedFromTheFrame) {
   // Two words at -40 and -32 are one array.  A store to the first plus a
   // run-time offset writes the second when the offset is 8, whether the
@@ -820,6 +898,133 @@ int main(void) {
 )");
 }
 
+TEST(HighValueForward, CallCaptureRetainsTheAssignmentConversion) {
+  constexpr va_t Callee = 0x2600;
+  class CallDebug : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != Callee)
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Addr = Address;
+      Function.Name = "return_word";
+      Function.ReturnType = NdType::makeInt(8, true);
+      Function.Params = {{"value", NdType::makeInt(8, false)}};
+      return Function;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  auto Probe = [&] {
+    auto E = HighExpr::makeCall("return_word", Callee, {input()});
+    E->Type = NdType::makeInt(8, true);
+    return E;
+  };
+  auto Capture = [&](const char *Name, TypeRef Type, bool Signed) {
+    auto Local = local(19, Type);
+    Local->Var.Size = Type->Size;
+    ExprPtr Condition = Signed ? op(NdOp::INT_SLESS, Local,
+                                    HighExpr::makeConst(0, Type->Size), true)
+                               : Local;
+    return function(Name, {assign(Local, Probe()),
+                           when(Condition, {result(constant(3))}),
+                           result(constant(4))});
+  };
+  const auto Byte = Capture("captured_byte", NdType::makeInt(1, false), false);
+  const auto Word = Capture("captured_word", NdType::makeInt(4, true), true);
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(HighCEmitter().emit({Byte, Word}, Out, Options, &Debug));
+  EXPECT_TRUE(declarationOf(Source, "t19").empty()) << Source;
+  compileAndRun(Source + R"(
+static unsigned calls;
+int64_t return_word(uint64_t value) {
+  ++calls;
+  return (int64_t)value;
+}
+int main(void) {
+  const uint64_t inputs[] = {0, 1, 0x100, 0x1ff, 0x7fffffff, 0x80000000,
+                             UINT64_C(0x100000000), UINT64_MAX};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    const uint64_t x = inputs[i];
+    calls = 0;
+    if (captured_byte(x) != ((uint8_t)x ? 3u : 4u) || calls != 1) return 1;
+    if (captured_word(x) != (((x >> 31) & 1) ? 3u : 4u) || calls != 2) return 2;
+  }
+  return 0;
+}
+)");
+}
+
+TEST(HighValueForward, ReturnedCallCaptureConvertsOnlyWhereTheReturnDoesNot) {
+  // A captured call result returned as it is converts to the return type at
+  // the return. Through a capture at least as wide as the return type, the
+  // assignment's conversion keeps the same bits and prints nothing; a
+  // narrower capture keeps its conversion, and so does a capture a Boolean
+  // returns, since that conversion tests the whole value for zero.
+  constexpr va_t Callee = 0x2700;
+  class CallDebug : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != Callee)
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Addr = Address;
+      Function.Name = "return_bits";
+      Function.ReturnType = NdType::makeInt(8, true);
+      Function.Params = {{"value", NdType::makeInt(8, false)}};
+      return Function;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  auto Returned = [&](const char *Name, TypeRef Type) {
+    auto Call = HighExpr::makeCall("return_bits", Callee, {input()});
+    Call->Type = NdType::makeInt(8, true);
+    auto Local = local(23, Type);
+    Local->Var.Size = Type->Size;
+    return function(Name, {assign(Local, Call), result(Local)});
+  };
+  const auto Word = Returned("returned_word", NdType::makeInt(8, false));
+  const auto Byte = Returned("returned_byte", NdType::makeInt(1, false));
+  auto Flag = Returned("returned_flag", NdType::makeInt(1, false));
+  Flag.ReturnType = NdType::makeInt(1, false);
+  Flag.ReturnType->SourceName = kSourceBooleanCType;
+  // MSVC declarations spell the same type `bool`.
+  auto Spelled = Returned("returned_bool", NdType::makeInt(1, false));
+  Spelled.ReturnType = NdType::makeInt(1, false);
+  Spelled.ReturnType->SourceName = "bool";
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  ASSERT_TRUE(
+      HighCEmitter().emit({Word, Byte, Flag, Spelled}, Out, Options, &Debug));
+  EXPECT_TRUE(declarationOf(Source, "t23").empty()) << Source;
+  EXPECT_EQ(Source.find("(uint64_t)(return_bits"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("(uint8_t)"), std::string::npos) << Source;
+  compileAndRun(Source + R"(
+static unsigned calls;
+int64_t return_bits(uint64_t value) {
+  ++calls;
+  return (int64_t)value;
+}
+int main(void) {
+  const uint64_t inputs[] = {0, 1, 0x7f, 0x80, 0x1ff, 0x7fffffff, 0x80000000,
+                             UINT64_C(0x8000000000000000), UINT64_MAX};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    const uint64_t x = inputs[i];
+    calls = 0;
+    if (returned_word(x) != x || calls != 1) return 1;
+    if (returned_byte(x) != (uint8_t)x || calls != 2) return 2;
+    if (returned_flag(x) != ((uint8_t)x != 0) || calls != 3) return 3;
+    if (returned_bool(x) != ((uint8_t)x != 0) || calls != 4) return 4;
+  }
+  return 0;
+}
+)");
+}
+
 TEST(HighValueForward, AnExtendedLowByteKeepsItsConversion) {
   // t1 = (int64_t)(int8_t)x is read once: the use reads the sign-extended
   // low byte, not x, which the views around it merely surround.
@@ -954,6 +1159,66 @@ int main(void) {
     if (tested(x) != (x < 10 ? 1 : 2) || calls != 1) return 1;
     if (tested_against_local(x) != 1 || calls != 2) return 2;
   }
+  return 0;
+}
+)");
+}
+
+TEST(HighValueForward, LargeFunctionsFoldLocalUsesAndKeepLoopSnapshots) {
+  auto Probe = [] {
+    auto Call = HighExpr::makeCall("large_probe", 0x2000, {input()});
+    Call->Type = NdType::makeInt(8, true);
+    return Call;
+  };
+  auto Negative = [](int Id) {
+    return op(NdOp::INT_SLESS, local(Id), constant(0), true);
+  };
+  HighStmt Break;
+  Break.Kind = StmtKind::Break;
+  HighFunc F =
+      function("large_test", {assign(local(1), Probe()),
+                              when(Negative(1), {result(constant(0))}),
+                              assign(local(2), Probe()),
+                              loop(Negative(2), {Break}), result(local(2))});
+  F.Body.insert(F.Body.begin(), limits::kMaxValueForwardSites, HighStmt{});
+  const std::string Source = emit({F});
+  EXPECT_NE(Source.find("if (large_probe(arg0) < 0)"), std::string::npos);
+  EXPECT_NE(Source.find("t2 = large_probe(arg0);"), std::string::npos);
+  compileAndRun(Source + R"(
+static unsigned calls;
+int64_t large_probe(uint64_t x) { ++calls; return (int64_t)x - 2; }
+int main(void) {
+  for (uint64_t x = 0; x < 6; ++x) {
+    calls = 0;
+    if (large_test(x) != (x < 2 ? 0 : x - 2)) return 1;
+    if (calls != (x < 2 ? 1u : 2u)) return 2;
+  }
+  return 0;
+}
+)");
+}
+
+TEST(HighValueForward, LargeFunctionKeepsACaptureBeforeABackwardTarget) {
+  auto Probe = HighExpr::makeCall("label_probe", 0x2400, {input()});
+  Probe->Type = NdType::makeInt(8, true);
+  auto Test = when(op(NdOp::INT_SLESS, local(9), constant(0), true),
+                   {result(constant(13))});
+  Test.Addr = 0x1020;
+  HighStmt Back;
+  Back.Kind = StmtKind::Goto;
+  Back.GotoTarget = Test.Addr;
+  auto Again = when(input(), {assign(input(), constant(0)), Back});
+  HighFunc F = function("large_backedge", {assign(local(9), Probe), Test, Again,
+                                           result(input())});
+  F.Body.insert(F.Body.begin(), limits::kMaxValueForwardSites, HighStmt{});
+  const std::string Source = emit({F});
+  EXPECT_NE(Source.find("t9 = label_probe(arg0);"), std::string::npos);
+  compileAndRun(Source + R"(
+static unsigned calls;
+int64_t label_probe(uint64_t x) { ++calls; return (int64_t)x; }
+int main(void) {
+  if (large_backedge(1) != 0 || calls != 1) return 1;
+  if (large_backedge(UINT64_MAX) != 13 || calls != 2) return 2;
   return 0;
 }
 )");

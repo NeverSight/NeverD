@@ -2757,6 +2757,47 @@ TEST(SymExpr, ProductsKeepAllBitsDemandedAcrossUsers) {
   }
 }
 
+TEST(SymExpr, ShortMultiwordScalesPreserveSignedProductsAndPartialLimbs) {
+  std::mt19937_64 Random(0x6c696d6273);
+  for (unsigned W : {257u, 513u, 1025u, 1984u, 1985u, 4101u}) {
+    SymContext C;
+    const auto X = C.mkVar("x", W);
+    for (unsigned Shift : {0u, 3u, 64u, 127u, W - 196}) {
+      const unsigned High = Shift == W - 196 ? 193 : 97;
+      const auto Unit = llvm::APInt::getOneBitSet(W, High) +
+                        llvm::APInt::getOneBitSet(W, 65) + 5;
+      for (bool Negative : {false, true}) {
+        SCOPED_TRACE(testing::Message()
+                     << W << '/' << Shift << '/' << Negative);
+        const auto K = (Negative ? -Unit : Unit).shl(Shift);
+        const auto Root = C.mkMul(C.mkConst(K), X);
+        SymEvalPlan Plan(C, Root);
+        for (unsigned I = 0; I != 12; ++I) {
+          auto Value = llvm::APInt(W, 0);
+          for (unsigned J = 0; J < W; J += 64)
+            Value |= llvm::APInt(W, Random()).shl(J);
+          if (I == 0)
+            Value.clearAllBits();
+          else if (I == 1)
+            Value.setAllBits();
+          auto Want = (Value.shl(High) + Value.shl(65) + Value.shl(2) + Value)
+                          .shl(Shift);
+          if (Negative)
+            Want.negate();
+          EXPECT_EQ(Plan.eval({Value}), Want);
+          EXPECT_EQ(C.eval(Root, {Value}), Want);
+          const auto V = C.mkConst(Value), Coeff = C.mkConst(K);
+          EXPECT_EQ(C.constValue(C.mkMul(Coeff, V)), Want);
+          EXPECT_EQ(C.constValue(C.mkMul(V, Coeff)), Want);
+          const auto MinusThree = C.mkConst(-llvm::APInt(W, 3));
+          EXPECT_EQ(C.constValue(C.mkMul({V, MinusThree, Coeff})),
+                    Want - Want.shl(2));
+        }
+      }
+    }
+  }
+}
+
 TEST(SymExpr, NegatingAWideProductPreservesCanonicalFactors) {
   SymContext C;
   constexpr unsigned W = 513;
@@ -3198,6 +3239,37 @@ TEST(SymExpr, BinaryProductsPreserveOpaqueOperandsAndModularOverflow) {
       EXPECT_EQ(C.eval(Product, Inputs), (A & ~llvm::APInt(Width, 1)) * ~B);
       EXPECT_EQ(C.eval(Square, Inputs), ~B * ~B);
       EXPECT_EQ(C.eval(Scaled, Inputs), Coefficient * ~B);
+    }
+  }
+}
+
+TEST(SymExpr, WidePrefixPlansRetainCarriesSignsAndSharedHighUses) {
+  constexpr unsigned Width = 1031;
+  SymContext C;
+  const auto X = C.mkVar("x", 97), Y = C.mkVar("y", 73);
+  const auto SX = C.mkSExt(X, Width), ZY = C.mkZExt(Y, Width);
+  const auto Bias = llvm::APInt::getAllOnes(Width) - 18;
+  const auto Mixed = C.mkAdd({C.mkConst(Bias), C.mkMul(C.mkConst(Width, 7), SX),
+                              C.mkMul(C.mkConst(Width, 9), ZY)});
+  const auto Other = C.mkAdd(C.mkConst(Width, 5), ZY);
+  for (const unsigned Bits : {65u, 97u, 129u, 131u}) {
+    const auto Scale = llvm::APInt(Width, 3).shl(Width - Bits);
+    const auto Product = C.mkMul({C.mkConst(Scale), Mixed, Mixed, Other});
+    const auto High = llvm::APInt::getHighBitsSet(Width, 55);
+    SymEvalPlan Packed(C, Product);
+    SymEvalPlan Shared(C, C.mkXor(Product, C.mkAnd(Mixed, C.mkConst(High))));
+    for (unsigned I = 0; I < 32; ++I) {
+      auto A = llvm::APInt::getAllOnes(97) - 3 * I;
+      auto B = llvm::APInt::getAllOnes(73) - 5 * I;
+      if (I & 1)
+        A.clearSignBit();
+      if (I & 2)
+        B.clearBit(63);
+      const llvm::APInt Inputs[] = {A, B};
+      const auto F = Bias + 7 * A.sext(Width) + 9 * B.zext(Width);
+      const auto Expected = Scale * F * F * (B.zext(Width) + 5);
+      EXPECT_EQ(Packed.eval(Inputs), Expected);
+      EXPECT_EQ(Shared.eval(Inputs), Expected ^ (F & High));
     }
   }
 }

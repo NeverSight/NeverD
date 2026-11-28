@@ -992,8 +992,16 @@ MedFunc LowToMedConverter::convertFunction(
   if (SEHPhysical)
     Physical = std::move(SEHPhysical->Function);
   if (Image && isMIPS(TheArch) && Image->Arch == TheArch &&
-      Fmt == BinaryFormat::ELF)
-    Physical = projectMIPSPICGlobalPointer(SourceLow, *Image);
+      Fmt == BinaryFormat::ELF) {
+    const auto StaticSlot = [&](va_t Slot) {
+      return StaticAllocatorSlots->contains(Slot) ||
+             StaticReleaseSlots->contains(Slot);
+    };
+    Physical = projectMIPSPICGlobalPointer(
+        SourceLow, *Image,
+        StaticAllocatorSlots ? llvm::function_ref<bool(va_t)>(StaticSlot)
+                             : nullptr);
+  }
   const LowFunc &Low = Physical ? *Physical : SourceLow;
   if (isPowerPC(TheArch))
     requirePPCConditionalReturnLinks(Low);
@@ -2245,6 +2253,8 @@ MedFunc LowToMedConverter::convertFunction(
               Image->PPC32PLTGOTDisplacements.contains(Op.Inputs[0].ConstVal))
             throw LowToMedConversionError("PPC32 PIC PLT call requires SSA");
     Func.SkippedSSA = true;
+    if (isPowerPC(TheArch))
+      materializePredicatedEffects(Func, Low);
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);
     if (QualifyMIPSReturns)
@@ -2357,7 +2367,8 @@ MedFunc LowToMedConverter::convertFunction(
     simplifyCfg(Func);
     debugVerifyMedFunc(Func, "simplifyCfg");
 
-    // ARM predication and MIPS annulled slots use execution-unit guards.
+    // ARM predication, MIPS annulled slots and PowerPC conditional transfers
+    // use execution-unit guards.
     // Materialize that micro-CFG before SSA so the skip path keeps the incoming
     // architectural registers while the effect path receives the new
     // definitions.  Doing this in the LLVM emitter would be too late: SSA would
@@ -2413,8 +2424,44 @@ MedFunc LowToMedConverter::convertFunction(
         ResultInputs = EntrySignature->ReturnType->Kind == NdTypeKind::Struct
                            ? EntrySignature->ReturnComponents.size()
                            : 1;
-      MIPSReturnsQualified =
-          hasMIPSSourceReturnTargets(Low, Func, TheArch, Fmt, ResultInputs);
+      llvm::SmallVector<uint32_t, 2> StaticAllocatorCalls;
+      bool AllStaticCallsBound = true;
+      if (StaticAllocatorSlots) {
+        for (const auto &B : Func.Blocks) {
+          for (size_t I = 0; I < B.Ops.size(); ++I) {
+            const auto &Call = B.Ops[I];
+            if (Call.Opcode == NdOp::CALL) {
+              if (!Call.NumInputs || !Call.Inputs[0].isConst() ||
+                  !SourceCalleeFunctions ||
+                  !SourceCalleeFunctions->contains(Call.Inputs[0].ConstVal))
+                AllStaticCallsBound = false;
+              continue;
+            }
+            if (Call.Opcode != NdOp::INDIR_CALL)
+              continue;
+            const auto Bound =
+                Call.NumInputs && Call.CallSiteId
+                    ? resolveMedCallTarget(B, I, Call.Inputs[0],
+                                           &CallTargetWork, TheArch, Image)
+                    : std::nullopt;
+            if (!Bound || !Bound->ThroughSlot ||
+                B.Ops[Bound->LoadIndex].Output.Size != 4) {
+              AllStaticCallsBound = false;
+              continue;
+            }
+            if (StaticAllocatorSlots->contains(Bound->Address))
+              StaticAllocatorCalls.push_back(Call.CallSiteId);
+            else if (!StaticReleaseSlots->contains(Bound->Address))
+              AllStaticCallsBound = false;
+          }
+        }
+      }
+      MIPSReturnsQualified = hasMIPSSourceReturnTargets(
+          Low, Func, TheArch, Fmt, ResultInputs, StaticAllocatorCalls,
+          &Func.UsesStaticAllocatorBinding,
+          StaticAllocatorSlots && AllStaticCallsBound
+              ? &Func.PreservesStaticAllocationBindings
+              : nullptr);
       if (!MIPSReturnsQualified)
         throw LowToMedConversionError("MIPS source return target is not proven "
                                       "to preserve the incoming link and mode");

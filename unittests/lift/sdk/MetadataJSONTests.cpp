@@ -431,21 +431,23 @@ TEST(NeverDMetadataJSON, SafetyRejectsPartiallyLiftedFunctionInventory) {
   SessionGuard Session;
   ASSERT_TRUE(neverd_session_load(Session, Input.path().c_str()))
       << takeString(neverd_last_error(Session));
-  neverd_safety_options Options{};
-  Options.struct_size = sizeof(Options);
-  for (auto Analyze : {neverd_session_hunt_json, neverd_session_audit_json}) {
-    const std::string JSON = takeString(Analyze(Session, &Options));
-    auto Parsed = json::parse(JSON);
-    ASSERT_TRUE(static_cast<bool>(Parsed))
-        << toString(Parsed.takeError()) << "\n"
-        << JSON;
-    const json::Object *Root = Parsed->getAsObject();
-    ASSERT_NE(Root, nullptr);
-    EXPECT_FALSE(Root->getBoolean("ok").value_or(true));
-    EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
-    EXPECT_EQ(Root->getString("confidence"), "LOW");
-    ASSERT_TRUE(Root->getString("error").has_value());
-    EXPECT_NE(Root->getString("error")->find("incomplete safety lift"),
-              StringRef::npos);
+  const std::string JSON =
+      takeString(neverd_session_scan_json(Session, nullptr));
+  auto Parsed = json::parse(JSON);
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << toString(Parsed.takeError()) << "\n"
+                                         << JSON;
+  const auto *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  EXPECT_EQ(Root->getBoolean("ok"), false);
+  EXPECT_EQ(Root->getBoolean("coverage_complete"), false);
+  EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
+  const auto *Analyzers = Root->getObject("analyzers");
+  ASSERT_NE(Analyzers, nullptr);
+  for (auto Name : {"audit", "hunt"}) {
+    const auto *Summary = Analyzers->getObject(Name);
+    ASSERT_NE(Summary, nullptr);
+    EXPECT_EQ(Summary->getString("state"), "unsupported");
+    EXPECT_TRUE(Summary->getString("error").value_or("").contains(
+        "incomplete safety lift"));
   }
 }

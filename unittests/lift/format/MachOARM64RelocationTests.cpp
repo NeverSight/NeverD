@@ -6,6 +6,8 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/loader/MachO/MachOArm64e.h"
+#include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/loader/MachO/MachOMetadataPointer.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -45,6 +47,7 @@ struct SymbolSpec {
   uint64_t Address = 0;
   uint8_t Type = static_cast<uint8_t>(N_SECT) | static_cast<uint8_t>(N_EXT);
   uint8_t Section = 1;
+  uint16_t Description = 0;
 };
 
 template <typename T>
@@ -66,7 +69,8 @@ uint32_t relocationWord(const RawRelocation &Reloc) {
 std::vector<uint8_t>
 makeObjectWithSymbols(uint32_t CPUType, llvm::ArrayRef<uint8_t> SectionData,
                       llvm::ArrayRef<RawRelocation> Relocations,
-                      llvm::ArrayRef<SymbolSpec> Symbols) {
+                      llvm::ArrayRef<SymbolSpec> Symbols,
+                      std::optional<uint32_t> CPUSubtype = std::nullopt) {
   constexpr size_t HeaderSize = sizeof(mach_header_64);
   constexpr size_t SegmentCommandSize =
       sizeof(segment_command_64) + sizeof(section_64);
@@ -89,9 +93,10 @@ makeObjectWithSymbols(uint32_t CPUType, llvm::ArrayRef<uint8_t> SectionData,
   mach_header_64 Header{};
   Header.magic = MH_MAGIC_64;
   Header.cputype = CPUType;
-  Header.cpusubtype = CPUType == CPU_TYPE_ARM64
-                          ? static_cast<uint32_t>(CPU_SUBTYPE_ARM64_ALL)
-                          : static_cast<uint32_t>(CPU_SUBTYPE_X86_64_ALL);
+  Header.cpusubtype =
+      CPUSubtype.value_or(CPUType == CPU_TYPE_ARM64
+                              ? static_cast<uint32_t>(CPU_SUBTYPE_ARM64_ALL)
+                              : static_cast<uint32_t>(CPU_SUBTYPE_X86_64_ALL));
   Header.filetype = MH_OBJECT;
   Header.ncmds = 2;
   Header.sizeofcmds = CommandsSize;
@@ -144,6 +149,7 @@ makeObjectWithSymbols(uint32_t CPUType, llvm::ArrayRef<uint8_t> SectionData,
     Symbol.n_strx = NameOffsets[I];
     Symbol.n_type = Symbols[I].Type;
     Symbol.n_sect = Symbols[I].Section;
+    Symbol.n_desc = Symbols[I].Description;
     Symbol.n_value = Symbols[I].Address;
     writeObject(Bytes, SymbolOffset + I * sizeof(nlist_64), Symbol);
   }
@@ -523,6 +529,137 @@ TEST(MachOX64Relocation, PCRelativeUsesEndOfFieldAddendAndTailSize) {
   }
 }
 
+#define MACHO_OBJECT_BINDING_VALUE(Type, Name, Value)                          \
+  constexpr Type Name{Value};
+#include "MachOObjectBindingFixtures.def"
+
+struct BindingFields {
+  uint64_t Auth, Plain, GOT;
+  uint32_t Call, Definition;
+};
+
+constexpr RawRelocation pointerRelocation(uint32_t Offset, uint32_t Type) {
+  return {.Offset = Offset,
+          .Length = macho_loader::arm64e::kObjectPointerLength,
+          .Type = Type};
+}
+
+constexpr auto AuthReloc = pointerRelocation(offsetof(BindingFields, Auth),
+                                             ARM64_RELOC_AUTHENTICATED_POINTER);
+constexpr auto PlainReloc =
+    pointerRelocation(offsetof(BindingFields, Plain), ARM64_RELOC_UNSIGNED);
+constexpr auto GOTReloc =
+    pointerRelocation(offsetof(BindingFields, GOT), ARM64_RELOC_POINTER_TO_GOT);
+constexpr RawRelocation CallReloc{.Offset = offsetof(BindingFields, Call),
+                                  .IsPCRel = true,
+                                  .Type = ARM64_RELOC_BRANCH26};
+constexpr uint8_t UndefinedExternal = uint8_t(N_UNDF) | uint8_t(N_EXT);
+
+llvm::Expected<BinaryImage>
+loadArm64eBindings(llvm::ArrayRef<RawRelocation> Relocations,
+                   const SymbolSpec &Symbol) {
+  std::vector<uint8_t> Data(sizeof(BindingFields));
+  writeLE<uint64_t>(Data.data() + AuthReloc.Offset, AuthWord);
+  writeLE<uint32_t>(Data.data() + CallReloc.Offset, BranchAndLink);
+  auto Bytes = makeObjectWithSymbols(CPU_TYPE_ARM64, Data, Relocations,
+                                     {Symbol}, CPU_SUBTYPE_ARM64E);
+  llvm::StringRef Contents(reinterpret_cast<const char *>(Bytes.data()),
+                           Bytes.size());
+  return MachOLoader().loadBuffer(llvm::MemoryBufferRef(Contents, {}));
+}
+
+TEST(MachOARM64Relocation, WeakAuthenticatedImportRetainsUnresolvedRecipe) {
+  for (bool WithGOT : {false, true}) {
+    SCOPED_TRACE(WithGOT);
+    std::vector<RawRelocation> Relocations{AuthReloc};
+    if (WithGOT)
+      Relocations.push_back(GOTReloc);
+    auto Image = loadArm64eBindings(
+        Relocations, {0, UndefinedExternal, NO_SECT, N_WEAK_REF});
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    ASSERT_EQ(Image->MachOAuthenticatedPointers.size(), 1u);
+    const auto &Auth = Image->MachOAuthenticatedPointers.at(SectionVA);
+    EXPECT_TRUE(Auth.WeakImport);
+    EXPECT_EQ(Auth.Symbol, TargetName);
+    EXPECT_EQ(Auth.Target, InvalidVA);
+    EXPECT_FALSE(Auth.LibraryOrdinal);
+    EXPECT_TRUE(Auth.Module.empty());
+    EXPECT_EQ(Auth.Addend, AuthAddend);
+    EXPECT_EQ(Auth.Key, AuthKeyDA);
+    EXPECT_EQ(Auth.Diversity, AuthDiversity);
+    EXPECT_TRUE(Auth.AddressDiversity);
+    EXPECT_EQ(Auth.EncodedValue, AuthWord);
+    const auto *Bytes = Image->readVA(SectionVA, sizeof(AuthWord));
+    ASSERT_NE(Bytes, nullptr);
+    EXPECT_EQ(readLE<uint64_t>(Bytes), AuthWord);
+    EXPECT_FALSE(macho_loader::readMetadataPointerTarget(*Image, SectionVA));
+    EXPECT_FALSE(Image->CodePtrRelocSlots.count(SectionVA));
+    EXPECT_FALSE(Image->DataPtrRelocSlots.count(SectionVA));
+  }
+}
+
+TEST(MachOARM64Relocation, DirectPointersAndGOTUseDistinctTargets) {
+  constexpr va_t Target = SectionVA + offsetof(BindingFields, Definition);
+  for (uint16_t Description : {uint16_t(0), uint16_t(N_WEAK_DEF)}) {
+    SCOPED_TRACE(Description);
+    SymbolSpec Symbol{Target};
+    Symbol.Description = Description;
+    auto Image = loadArm64eBindings(
+        {GOTReloc, AuthReloc, PlainReloc, CallReloc}, Symbol);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    ASSERT_EQ(Image->MachOAuthenticatedPointers.size(), 1u);
+    const auto &Auth = Image->MachOAuthenticatedPointers.at(SectionVA);
+    EXPECT_FALSE(Auth.WeakImport);
+    EXPECT_EQ(Auth.Target, Target + AuthAddend);
+    EXPECT_EQ(macho_loader::readMetadataPointerTarget(*Image, SectionVA),
+              Target + AuthAddend);
+    const auto *Fields = Image->readVA(SectionVA, sizeof(BindingFields));
+    ASSERT_NE(Fields, nullptr);
+    EXPECT_EQ(readLE<uint64_t>(Fields + PlainReloc.Offset), Target);
+    constexpr uint32_t CallWords =
+        (Target - (SectionVA + CallReloc.Offset)) / sizeof(uint32_t);
+    EXPECT_EQ(readLE<uint32_t>(Fields + CallReloc.Offset),
+              BranchAndLink | CallWords);
+    const va_t Cell = readLE<uint64_t>(Fields + GOTReloc.Offset);
+    EXPECT_NE(Cell, Target);
+    const auto *Contents = Image->readVA(Cell, sizeof(Target));
+    ASSERT_NE(Contents, nullptr);
+    EXPECT_EQ(readLE<uint64_t>(Contents), Target);
+  }
+}
+
+TEST(MachOARM64Relocation, ReferenceToWeakDefinitionRemainsAStrongImport) {
+  // Darwin uses the N_WEAK_DEF bit as N_REF_TO_WEAK on undefined symbols.
+  auto Image = loadArm64eBindings({AuthReloc},
+                                  {0, UndefinedExternal, NO_SECT, N_WEAK_DEF});
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  ASSERT_EQ(Image->MachOAuthenticatedPointers.size(), 1u);
+  const auto &Auth = Image->MachOAuthenticatedPointers.at(SectionVA);
+  const auto *Extern = Image->findSymbol(TargetName);
+  ASSERT_NE(Extern, nullptr);
+  EXPECT_FALSE(Auth.WeakImport);
+  EXPECT_EQ(Auth.Target, Extern->Addr + AuthAddend);
+}
+
+TEST(MachOX64Relocation, DirectPointerAndGOTDisplacementUseDistinctTargets) {
+  constexpr va_t Target = SectionVA + offsetof(BindingFields, Definition);
+  constexpr uint32_t GOTOffset = offsetof(BindingFields, GOT);
+  const RawRelocation Direct = pointerRelocation(0, X86_64_RELOC_UNSIGNED);
+  const RawRelocation GOT{
+      .Offset = GOTOffset, .IsPCRel = true, .Type = X86_64_RELOC_GOT};
+  std::vector<uint8_t> Data(sizeof(BindingFields));
+  auto Image = relocatedImage(Arch::X64, CPU_TYPE_X86_64, Data, {Direct, GOT},
+                              {{Target}});
+  ASSERT_TRUE(Image);
+  const auto &Bytes = Image->Segments.front().Data;
+  EXPECT_EQ(readLE<uint64_t>(Bytes.data()), Target);
+  const int32_t Displacement = readLE<int32_t>(Bytes.data() + GOTOffset);
+  const va_t Cell = SectionVA + GOTOffset + sizeof(Displacement) + Displacement;
+  EXPECT_NE(Cell, Target);
+  const auto *Contents = Image->readVA(Cell, sizeof(Target));
+  ASSERT_NE(Contents, nullptr);
+  EXPECT_EQ(readLE<uint64_t>(Contents), Target);
+}
 } // namespace
 
 TEST(MachOARM64Relocation, AuthenticatedPointerKeepsSigningRecipe) {

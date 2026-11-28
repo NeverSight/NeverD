@@ -123,17 +123,16 @@ for flip in report.flips:
 
 إزاحة السجل هي إزاحة بايت في ملف سجلات NeverD، وليست مؤشراً أصلياً أو رقم سجل. التقرير غير شامل دائماً، وتبقى حالات UNSAT وحدود المحلل ورفض الإسقاط أو إعادة التشغيل نتائج قلب ذات أنواع محددة وليست استثناءات.
 
-### تدقيق وصيد أمان الذاكرة
+### فحص أمان الذاكرة
 
-تعيد `session.audit()` و`session.hunt()` تقارير JSON محلولة (نفس مخطط CLI). تتطلب جلسة أصلية مرفوعة:
+تشغّل `session.scan()` كلا المحللين وتعيد النتائج والتغطية في تقرير واحد. [دليل الفحص الموحد بالإنجليزية](../memory-safety-scan.md).
 
 ```python
-audit = session.audit()
-hunt = session.hunt(max_paths=64, max_steps=1 << 16)
-print(audit.get("ok"), hunt.get("findings"))
+report = session.scan(max_paths=64, max_steps=1 << 16)
+print(report["verdict"], report["analyzers"])
 ```
 
-ترفض جلسات EVM وSBF هذه الاستدعاءات.
+مع مدخلات EVM وSBF، تُرجع التحليلات المحددة الحالة `unsupported`.
 
 متغيرات الأحداث الستة غير القابلة للتغيير هي `BINARY_LOADED` و`BINARY_CLOSING` و`FUNCTION_SELECTED` و`ADDRESS_CHANGED` و`ANALYSIS_DONE` و`PATCH_APPLIED`. تُنسخ سلاسل الحمولة أثناء callback؛ وتكون الحقول غير المتعلقة بنوع الحدث `None`.
 

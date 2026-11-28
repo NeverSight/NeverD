@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NeverD native memory-safety scan v1",
+  "type": "object",
+  "required": ["schema", "schema_version", "format", "arch", "ok", "coverage_complete", "verdict", "analyzers", "findings"],
+  "properties": {
+    "schema": {"const": "neverd.memory-safety-scan"},
+    "schema_version": {"const": 1},
+    "format": {"type": "string"},
+    "arch": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "coverage_complete": {"type": "boolean"},
+    "verdict": {"$ref": "#/$defs/verdict"},
+    "analyzers": {
+      "type": "object",
+      "required": ["audit", "hunt"],
+      "properties": {
+        "audit": {"$ref": "#/$defs/analyzer"},
+        "hunt": {"$ref": "#/$defs/analyzer"}
+      }
+    },
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/group"}}
+  },
+  "$defs": {
+    "verdict": {"enum": ["SAFE", "UNSAFE", "UNKNOWN"]},
+    "count": {"type": "integer", "minimum": 0},
+    "address": {"type": "string", "pattern": "^0x[0-9A-Fa-f]+$"},
+    "analyzer": {
+      "type": "object",
+      "required": ["state", "scanned", "skipped", "observations", "unknown", "budget_hit"],
+      "properties": {
+        "state": {"enum": ["completed", "disabled", "canceled", "unsupported", "budget_exhausted", "failed"]},
+        "scanned": {"$ref": "#/$defs/count"},
+        "skipped": {"$ref": "#/$defs/count"},
+        "observations": {"$ref": "#/$defs/count"},
+        "unknown": {"$ref": "#/$defs/count"},
+        "budget_hit": {"type": "boolean"},
+        "verdict": {"$ref": "#/$defs/verdict"},
+        "error": {"type": "string"}
+      },
+      "if": {"properties": {"state": {"const": "disabled"}}},
+      "then": {"not": {"required": ["verdict"]}},
+      "else": {"required": ["verdict"]}
+    },
+    "group": {
+      "type": "object",
+      "required": ["property", "location", "scope", "verdict", "observations"],
+      "properties": {
+        "property": {"type": "string"},
+        "location": {
+          "type": "object",
+          "required": ["function_va", "call_va"],
+          "properties": {
+            "function_va": {"$ref": "#/$defs/address"},
+            "call_va": {"$ref": "#/$defs/address"},
+            "block": {"$ref": "#/$defs/count"},
+            "op": {"$ref": "#/$defs/count"},
+            "seq": {"$ref": "#/$defs/count"}
+          }
+        },
+        "scope": {
+          "type": "object",
+          "required": ["kind", "sink"],
+          "properties": {
+            "kind": {"enum": ["audit", "hunt", "catalog_call_effects", "catalog_debug_signature"]},
+            "sink": {"type": "string"},
+            "role": {"type": "string"},
+            "arg_index": {"$ref": "#/$defs/count"},
+            "nonnull_allocation_va": {"$ref": "#/$defs/address"},
+            "requires_return": {"type": "boolean"},
+            "required_events": {"type": "array", "items": {"$ref": "#/$defs/event"}},
+            "forbidden_events": {"type": "array", "items": {"$ref": "#/$defs/event"}},
+            "constraints": {"type": "string"},
+            "capacity": {"$ref": "#/$defs/count"},
+            "capacity_precision": {"type": "string"}
+          }
+        },
+        "verdict": {"$ref": "#/$defs/verdict"},
+        "observations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["analyzer", "finding"],
+            "properties": {
+              "analyzer": {"enum": ["audit", "hunt"]},
+              "finding": {
+                "description": "The original audit/hunt v1 finding, including its evidence and provenance.",
+                "type": "object",
+                "required": ["class", "function", "function_va", "name", "name_source", "call_va", "sink", "flow", "verdict", "confidence", "reachability", "evidence"],
+                "properties": {
+                  "verdict": {"$ref": "#/$defs/verdict"},
+                  "function_va": {"$ref": "#/$defs/address"},
+                  "call_va": {"$ref": "#/$defs/address"},
+                  "reachability": {"type": "object"},
+                  "evidence": {"type": "object"}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "required": ["va", "seq", "block", "op", "opcode"],
+      "properties": {
+        "va": {"$ref": "#/$defs/address"},
+        "seq": {"type": "integer"},
+        "block": {"type": "integer"},
+        "op": {"type": "integer"},
+        "opcode": {"type": "string"}
+      }
+    }
+  }
+}

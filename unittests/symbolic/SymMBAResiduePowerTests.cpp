@@ -873,6 +873,274 @@ TEST(SymMBAResiduePowers, ParityMajorityDoesNotReplaceTheZeroBranchProof) {
     }
 }
 
+TEST(SymMBAResiduePowers, SampledProductAndRewrittenTailKeepAllAddends) {
+  constexpr unsigned Width = 257, Observed = 135;
+  SymContext C;
+  auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+  auto U = C.mkVar("u", Width), V = C.mkVar("v", Width);
+  auto Two = C.mkConst(Width, 2);
+  auto Sum = [&](SymRef A, SymRef B) {
+    return C.mkAdd(C.mkXor(A, B), C.mkMul(Two, C.mkAnd(A, B)));
+  };
+  auto Product = [&](SymRef Body, unsigned Offset) {
+    const auto Factor = C.mkAdd(C.mkConst(Width, Offset), Body);
+    llvm::SmallVector<SymRef, 40> Factors(33, Factor);
+    Factors.push_back(C.mkConst(llvm::APInt(Width, 3).shl(Width - Observed)));
+    return C.mkMul(Factors);
+  };
+  const auto Original = C.mkAdd(Product(Sum(X, Y), 7), Sum(U, V));
+  const auto P = Product(C.mkAdd(X, Y), 7), Tail = C.mkAdd(U, V);
+  const auto Result = C.mkAdd(P, Tail);
+  ASSERT_NE(Original, Result);
+  EXPECT_TRUE(detail::agreeOnSamples(C, Original, Result, 12));
+  EXPECT_FALSE(detail::agreeOnSamples(
+      C, Original, C.mkAdd(Result, C.mkConst(Width, 1)), 12));
+  EXPECT_FALSE(detail::agreeOnSamples(
+      C, Original, C.mkAdd(Product(C.mkAdd(X, Y), 9), Tail), 12));
+}
+
+TEST(SymMBAResiduePowers, RepeatedFieldsKeepTheirLastSquareAndOddCopies) {
+  for (unsigned Precision : {4u, 5u, 12u, 13u, 130u, 131u}) {
+    const unsigned Bits = Precision / 2, Shift = Precision - Bits;
+    const unsigned K = Shift - 1, Width = Precision + 7;
+    for (unsigned Copies : {2u, 3u, 4u, 6u}) {
+      SCOPED_TRACE(::testing::Message() << Precision << ':' << Copies);
+      SymContext C;
+      auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+      auto A = C.mkSExt(C.mkExtract(X, 1, Bits), Width);
+      auto B = C.mkZExt(C.mkExtract(Y, 0, Bits), Width);
+      auto Z = C.mkZExt(C.mkExtract(X, 0, Bits), Width);
+      auto Weight = [&](int N, unsigned Zeros) {
+        return C.mkConst(llvm::APInt(Width, N, true).shl(Zeros));
+      };
+      auto Affine = [&](int Offset, unsigned Zeros) {
+        llvm::SmallVector<SymRef, 4> Terms{Weight(Offset, 0),
+                                           C.mkMul(Weight(-3, Zeros), A),
+                                           C.mkMul(Weight(5, K), B)};
+        if (Copies == 6)
+          Terms.push_back(C.mkMul(Weight(7, K), Z));
+        return C.mkAdd(Terms);
+      };
+      auto F = Affine(-3, K), G = Affine(2, K);
+      auto Neighbor = Affine(7, K - 1);
+      auto Outer = Weight(3, Width - Precision);
+      llvm::SmallVector<SymRef, 16> Factors{Outer, G, G, Neighbor};
+      Factors.append(Copies, F);
+      auto Input = C.mkMul(Factors);
+      auto Fold = [&](size_t Work, size_t Bytes) {
+        detail::WorkBudget Budget(Work);
+        return detail::foldDistributedProduct(C, Input, Budget, Bytes, nullptr);
+      };
+      EXPECT_EQ(Fold(1, 1 << 20), Input);
+      EXPECT_EQ(Fold(65536, 1), Input);
+      auto Reduced = Fold(65536, 1 << 20);
+      ASSERT_NE(Reduced, Input);
+      SymEvalPlan Plan(C, Reduced);
+      for (unsigned I = 0; I < 16; ++I)
+        for (unsigned J = 0; J < 16; ++J) {
+          std::array Values{llvm::APInt::getAllOnes(Width) - 2 * I,
+                            llvm::APInt(Width, J)};
+          if (I & 1)
+            Values[1].setBit(Bits - 1);
+          if (J & 1)
+            Values[0].clearBit(Bits);
+          const auto U = Values[0].extractBits(Bits, 1).sext(Width);
+          const auto V = Values[1].trunc(Bits).zext(Width);
+          auto Linear = 5 * V;
+          if (Copies == 6)
+            Linear += 7 * Values[0].trunc(Bits).zext(Width);
+          const auto H = (Linear - 3 * U).shl(K);
+          auto Expected = llvm::APInt(Width, 3).shl(Width - Precision) *
+                          (2 + H) * (2 + H) *
+                          (7 + Linear.shl(K) - (3 * U).shl(K - 1));
+          for (unsigned N = 0; N < Copies; ++N)
+            Expected *= H - 3;
+          ASSERT_EQ(Plan.eval(Values), Expected);
+        }
+    }
+  }
+}
+
+TEST(SymMBAResiduePowers, RepeatedPowersRetainQuadraticsAndResidualCopies) {
+  for (const auto [Precision, D] : {std::pair{8u, 2u},
+                                    {9u, 3u},
+                                    {16u, 3u},
+                                    {25u, 4u},
+                                    {38u, 7u},
+                                    {130u, 4u},
+                                    {131u, 8u}}) {
+    const unsigned Bits = Precision / 2, Shift = Precision - Bits;
+    const unsigned Width = Precision + 5, K = Shift - D, Group = 1u << D;
+    for (const unsigned Extra : {0u, 1u, Group - 1}) {
+      SCOPED_TRACE(::testing::Message() << Precision << ':' << Extra);
+      SymContext C;
+      const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+      const auto A = C.mkSExt(C.mkExtract(X, 1, Bits), Width);
+      const auto B = C.mkZExt(C.mkExtract(Y, 0, Bits), Width);
+      auto literal = [&](int N, unsigned S = 0) {
+        return C.mkConst(llvm::APInt(Width, N, true).shl(S));
+      };
+      auto affine = [&](int Offset, int AX, int BY) {
+        return C.mkAdd({literal(Offset), C.mkMul(literal(AX, K), A),
+                        C.mkMul(literal(BY, K), B)});
+      };
+      const int OtherOffset = Extra == 1 ? 2 : 5;
+      const auto F = affine(-3, -5, 3), G = affine(OtherOffset, 7, 2);
+      const auto Scale = literal(3, Width - Precision);
+      llvm::SmallVector<SymRef, 64> Factors{Scale};
+      Factors.append(Group + Extra, F);
+      Factors.append(3 * Group, G);
+      const auto Original = C.mkMul(Factors);
+      size_t Bytes = 1 << 20;
+      detail::WorkBudget Budget(65536);
+      const auto Result =
+          detail::foldDistributedProduct(C, Original, Budget, Bytes, nullptr);
+      ASSERT_NE(Result, Original);
+      SymEvalPlan Eval(C, Result);
+      for (unsigned I = 0; I < 16; ++I)
+        for (unsigned J = 0; J < 16; ++J) {
+          std::array Values{llvm::APInt(Width, I), llvm::APInt(Width, J)};
+          if (J & 1)
+            Values[0].setBit(Bits);
+          const auto U = Values[0].extractBits(Bits, 1).sext(Width);
+          const auto V = Values[1].trunc(Bits).zext(Width);
+          const auto First = (3 * V - 5 * U).shl(K) - 3;
+          const auto Second = (7 * U + 2 * V).shl(K) + OtherOffset;
+          auto Expected = llvm::APInt(Width, 3).shl(Width - Precision);
+          for (unsigned N = 0; N < Group + Extra; ++N)
+            Expected *= First;
+          for (unsigned N = 0; N < 3 * Group; ++N)
+            Expected *= Second;
+          ASSERT_EQ(Eval.eval(Values), Expected);
+        }
+    }
+  }
+}
+
+TEST(SymMBAResiduePowers, SparseFieldRunsStayFactoredWithinBudget) {
+  constexpr unsigned Width = 257, Precision = 40, Shift = 15, Rows = 65;
+  std::mt19937_64 Random(0x526f77506f776572ULL);
+  for (bool EvenSingleton : {false, true}) {
+    SCOPED_TRACE(EvenSingleton);
+    SymContext C;
+    const auto Z = C.mkVar("z", Width);
+    llvm::SmallVector<SymRef, 16> Factors{
+        C.mkConst(llvm::APInt(Width, 3).shl(Width - Precision))};
+    for (unsigned I = 0; I < Rows; ++I) {
+      const auto A = C.mkZExt(C.mkExtract(Z, 3 * I, 3), Width);
+      const auto Field = C.mkExtract(Z, 3 * ((I + 1) % Rows), 3);
+      const auto B = I % 2 ? C.mkSExt(Field, Width) : C.mkZExt(Field, Width);
+      const bool Single = EvenSingleton && I == 0;
+      const auto F =
+          C.mkAdd({C.mkConst(Width, Single ? 2u : 2 * I + 1),
+                   C.mkMul(C.mkConst(Width, (1 + 2 * (I % 3)) << Shift), A),
+                   C.mkMul(C.mkConst(Width, (3 + I % 2) << Shift), B)});
+      Factors.append(Single ? 1u : 8u + (I + 1 == Rows), F);
+    }
+    const auto Input = C.mkMul(Factors);
+    MBAOptions Options;
+    Options.MaxWork = 65536;
+    const auto R = simplifyMBADeep(C, Input, Options);
+    ASSERT_LT(R.Work, Options.MaxWork);
+    ASSERT_LT(R.SizeAfter, R.SizeBefore / 2);
+    SymEvalPlan Original(C, Input), Reduced(C, R.Expr);
+    for (unsigned Trial = 0; Trial < 128; ++Trial) {
+      std::array<uint64_t, 5> Words{};
+      for (auto &Word : Words)
+        Word = Trial == 0 ? 0 : Trial == 1 ? UINT64_MAX : Random();
+      const std::array Values{llvm::APInt(Width, Words)};
+      ASSERT_EQ(Reduced.eval(Values), Original.eval(Values)) << Trial;
+    }
+  }
+}
+
+TEST(SymMBAResiduePowers, RepeatedPowersKeepLiveFourthDegrees) {
+  // With five observed bits (c + 2*h)^4 still contains 16*h^4.
+  constexpr unsigned Width = 16;
+  SymContext C;
+  const auto X = C.mkZExt(C.mkVar("x", 4), Width);
+  const auto Y = C.mkSExt(C.mkVar("y", 4), Width);
+  const auto F = C.mkAdd({C.mkConst(Width, 3), C.mkMul(C.mkConst(Width, 6), X),
+                          C.mkMul(C.mkConst(Width, 10), Y)});
+  const auto Original = C.mkMul({C.mkConst(Width, 1u << 11), F, F, F, F});
+  size_t Bytes = 1 << 20;
+  detail::WorkBudget Budget(65536);
+  const auto Folded =
+      detail::foldDistributedProduct(C, Original, Budget, Bytes, nullptr);
+  SymEvalPlan Plan(C, Folded);
+  for (unsigned A = 0; A != 16; ++A)
+    for (unsigned B = 0; B != 16; ++B) {
+      std::array Values{llvm::APInt(4, A), llvm::APInt(4, B)};
+      const auto V = 3 + 6 * Values[0].zext(Width) + 10 * Values[1].sext(Width);
+      EXPECT_EQ(Plan.eval(Values),
+                llvm::APInt(Width, 1u << 11) * V * V * V * V);
+    }
+}
+
+TEST(SymMBAResiduePowers, SmallOddPowerBlocksKeepTheirFullResidues) {
+  constexpr unsigned Width = 13;
+  SymContext C;
+  const auto X = C.mkVar("x", 4), Y = C.mkVar("y", 4);
+  const auto A = C.mkZExt(X, Width), B = C.mkSExt(Y, Width);
+  auto literal = [&](int V) { return C.mkConst(llvm::APInt(Width, V, true)); };
+  const auto F =
+      C.mkAdd({literal(-3), C.mkMul(literal(6), A), C.mkMul(literal(-2), B)});
+  const auto G =
+      C.mkAdd({literal(5), C.mkMul(literal(-10), A), C.mkMul(literal(14), B)});
+  llvm::SmallVector<SymRef, 64> Factors{literal(8)};
+  Factors.append(16, F);
+  Factors.append(30, G);
+  const auto Original = C.mkMul(Factors);
+  size_t Bytes = 1 << 20;
+  detail::WorkBudget Budget(65536);
+  const auto Result =
+      detail::foldDistributedProduct(C, Original, Budget, Bytes, nullptr);
+  ASSERT_NE(Result, Original);
+  SymEvalPlan Plan(C, Result);
+  for (unsigned I = 0; I < 16; ++I)
+    for (unsigned J = 0; J < 16; ++J) {
+      std::array Values{llvm::APInt(4, I), llvm::APInt(4, J)};
+      const auto U = Values[0].zext(Width), V = Values[1].sext(Width);
+      auto Expected = llvm::APInt(Width, 8);
+      for (unsigned K = 0; K < 16; ++K)
+        Expected *= 6 * U - 2 * V - 3;
+      for (unsigned K = 0; K < 30; ++K)
+        Expected *= 5 - 10 * U + 14 * V;
+      ASSERT_EQ(Plan.eval(Values), Expected);
+    }
+}
+
+TEST(SymMBAResiduePowers, PackedProductsCompeteWithExpandedNativeArithmetic) {
+  constexpr unsigned Width = 16;
+  SymContext C;
+  const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+  const auto A = C.mkZExt(C.mkExtract(X, 1, 4), Width);
+  const auto B = C.mkZExt(C.mkExtract(Y, 1, 2), Width);
+  const auto D = C.mkSExt(C.mkExtract(Y, 1, 2), Width);
+  const auto E = C.mkSExt(C.mkExtract(X, 1, 3), Width);
+  const auto H = C.mkZExt(C.mkExtract(Y, 0, 2), Width);
+  auto literal = [&](int V) { return C.mkConst(llvm::APInt(Width, V, true)); };
+  auto scale = [&](int V, SymRef R) { return C.mkMul(literal(V), R); };
+  llvm::SmallVector<SymRef, 80> Factors{literal(-384)};
+  Factors.append(16, C.mkAdd({literal(7), scale(4, A), scale(-4, B)}));
+  Factors.append(
+      26, C.mkAdd({literal(5), scale(28, D), scale(-12, A), scale(12, E)}));
+  Factors.append(24, C.mkAdd({literal(3), scale(4, E), scale(12, H)}));
+  const auto Original = C.mkMul(Factors);
+  MBAOptions Options;
+  Options.MaxWork = 65536;
+  const auto Result = simplifyMBADeep(C, Original, Options);
+  EXPECT_LT(Result.Work, Options.MaxWork);
+  // The packed form costs 149. The fully expanded arithmetic reading costs 100.
+  EXPECT_LE(C.readabilityCost(Result.Expr), 100u);
+  SymEvalPlan Before(C, Original), After(C, Result.Expr);
+  for (unsigned XV = 0; XV < 32; ++XV)
+    for (unsigned YV = 0; YV < 8; ++YV) {
+      std::array Values{llvm::APInt(Width, XV), llvm::APInt(Width, YV)};
+      ASSERT_EQ(After.eval(Values), Before.eval(Values));
+    }
+}
+
 TEST(SymMBAResiduePowers, DistributedFieldsCountEachScalarFactorOnce) {
   for (const unsigned Bits : {4u, 17u, 65u}) {
     const unsigned Width = 3 * Bits + 2, Shift = Bits + 1;
@@ -1215,6 +1483,126 @@ TEST(SymMBAResiduePowers, MasksBeforeAndAfterScalingKeepTheirCarryOrder) {
 
 TEST(SymMBAResiduePowers, EvenScalesLimitWhichMaskHolesCanAffectCarries) {
   checkMaskedWeightedDeltas(FieldMasks::CarryWindow);
+}
+
+TEST(SymMBAResiduePowers,
+     SparseMasksObserveShiftsAndCarriesAtProductPrecision) {
+  for (unsigned Bits : {8u, 65u}) {
+    const unsigned Precision = 2 * Bits, Width = 3 * Bits + 5;
+    const auto Scale = llvm::APInt::getOneBitSet(Width, Width - Precision);
+    const auto Visible = llvm::APInt::getLowBitsSet(Width, Bits - 1);
+    const auto Noise = llvm::APInt::getOneBitSet(Width, Precision + 2);
+    llvm::APInt Stripe(Width, 0);
+    for (unsigned I = 0; I < Bits - 1; I += 2)
+      Stripe.setBit(I);
+    for (bool KeepCarry : {false, true}) {
+      SymContext C;
+      const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+      const auto SX = C.mkSExt(C.mkExtract(X, 0, Bits), Width);
+      const auto ZY = C.mkZExt(C.mkExtract(Y, 0, Bits), Width);
+      llvm::SmallVector<SymRef, 32> Factors{C.mkConst(Scale)};
+      auto Constant = Scale;
+      for (unsigned I = 0; I < 31; ++I) {
+        const auto W = llvm::APInt(Width, 2 * I + 1).shl(Bits);
+        const auto Sum =
+            C.mkAdd(C.mkMul(C.mkConst(W), SX), C.mkMul(C.mkConst(-W), ZY));
+        auto A = Stripe, B = (Visible ^ Stripe).shl(1);
+        auto K =
+            llvm::APInt(Width, 2) - llvm::APInt::getOneBitSet(Width, Bits + 1);
+        if (I % 3 == 1) {
+          K = 6;
+          A = Visible & ~llvm::APInt(Width, 7);
+          B = 15;
+        }
+        if (KeepCarry && !I) {
+          // An odd part of three carries a retained bit into a disjoint hole.
+          K = 6;
+          A = 1;
+          B = 4;
+        }
+        const auto Input = C.mkAnd(C.mkConst(A.shl(Bits) | Noise | 1), Sum);
+        const auto Delta = C.mkAnd(C.mkConst(B.shl(Bits) | Noise | 3),
+                                   C.mkMul(C.mkConst(K), Input));
+        auto Offset = llvm::APInt(Width, 2 * I + 1);
+        if (I % 3 == 2) {
+          Offset |= B.shl(Bits);
+          Factors.push_back(C.mkOr(C.mkConst(Offset), Delta));
+        } else {
+          Factors.push_back(C.mkAdd(C.mkConst(Offset), Delta));
+        }
+        Constant *= Offset;
+      }
+      detail::WorkBudget Budget(65536);
+      size_t Storage = 1u << 20;
+      const auto Root = C.mkMul(Factors);
+      const auto Reduced =
+          detail::foldProductResidues(C, Root, Budget, Storage);
+      if (!KeepCarry) {
+        EXPECT_EQ(Reduced, C.mkConst(Constant));
+      } else {
+        EXPECT_FALSE(C.isConst(Reduced));
+        SymEvalPlan Original(C, Root), Candidate(C, Reduced);
+        for (unsigned I = 0; I < 16; ++I) {
+          const std::array<llvm::APInt, 2> Input = {llvm::APInt(Width, I),
+                                                    llvm::APInt(Width, I / 3)};
+          EXPECT_EQ(Candidate.eval(Input), Original.eval(Input));
+        }
+      }
+    }
+  }
+}
+
+TEST(SymMBAResiduePowers, RecoversAnEmbeddedProductScaleAtTheOriginalWidth) {
+  for (unsigned Width : {32u, 129u}) {
+    SymContext C;
+    const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width),
+               Z = C.mkVar("z", Width);
+    const auto A = C.mkZExt(C.mkExtract(X, 3, 8), Width),
+               B = C.mkSExt(C.mkExtract(Y, 7, 8), Width);
+    auto literal = [&](uint64_t K) { return C.mkConst(Width, K); };
+    const auto Weight =
+        C.mkAdd(C.mkMul(literal(256), A), C.mkMul(literal(768), B));
+    const auto P = C.mkAdd(literal(5), Weight), Q = C.mkOr(literal(7), Weight);
+    const auto Scale = llvm::APInt::getOneBitSet(Width, Width - 16);
+    for (bool OddCoefficient : {false, true}) {
+      // Moving the common power outside exposes the product precision.
+      // The lower-weight factor still multiplies the entire projected result.
+      const auto Embedded =
+          C.mkAdd(C.mkConst(Scale * 17), C.mkMul(C.mkConst(-(Scale * 3)), X));
+      llvm::SmallVector<SymRef, 16> Factors{
+          Embedded, C.mkAdd(literal(3), C.mkMul(literal(12), Y))};
+      if (OddCoefficient)
+        Factors.push_back(literal(11));
+      for (unsigned I = 0; I != 521; ++I)
+        Factors.push_back(I % 2 ? P : Q);
+      const auto Root = C.mkAdd(Z, C.mkMul(Factors));
+      auto fold = [&](SymRef E) {
+        detail::WorkBudget Budget(65536);
+        size_t Storage = 1u << 20;
+        return detail::foldProductResidues(C, E, Budget, Storage);
+      };
+      const auto Small = fold(Root);
+      ASSERT_NE(Small, Root);
+      // A single low offset bit removes the hidden scale.
+      Factors[0] = C.mkAdd(Embedded, literal(1));
+      const auto Neighbor = C.mkAdd(Z, C.mkMul(Factors)),
+                 NeighborResult = fold(Neighbor);
+      SymEvalPlan Original(C, Root), Result(C, Small), Other(C, Neighbor),
+          OtherResult(C, NeighborResult);
+      bool ChangedValue = false;
+      for (unsigned I = 0; I != 32; ++I) {
+        const std::array<llvm::APInt, 3> Input = {
+            llvm::APInt(Width, 0x75937a29U * I),
+            llvm::APInt(Width, 0x8d112f1dU * (I + 1)),
+            llvm::APInt(Width, 0xf042531bU - I)};
+        const auto Expected = Original.eval(Input), Close = Other.eval(Input);
+        EXPECT_EQ(Result.eval(Input), Expected);
+        EXPECT_EQ(OtherResult.eval(Input), Close);
+        ChangedValue |= Expected != Close;
+      }
+      EXPECT_TRUE(ChangedValue);
+    }
+  }
 }
 
 TEST(SymMBAResiduePowers, HighestBitWeightsShareOneParityProduct) {

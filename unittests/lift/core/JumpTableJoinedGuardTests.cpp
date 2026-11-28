@@ -376,6 +376,48 @@ protected:
     EXPECT_TRUE(Built.ok()) << Built.err;
     return Object;
   }
+
+  // bash's expand_subscript_string helper enters its 97-case dispatch from a
+  // zero byte that skips the range guard, so no guard dominates the load.
+  // Variant 1 sends one value past the table down that path instead,
+  // variant 2 adds an unrelated compare literal of 254, variant 3 enters the
+  // dispatch with an unchecked byte, and variant 4 guards a 16-bit value, so
+  // the lane's width bounds nothing.
+  fs::path wideFixture(unsigned Cases, unsigned Variant = 0) {
+    const std::string Stem =
+        "wide" + std::to_string(Cases) + '-' + std::to_string(Variant);
+    const fs::path Source = tmpFile(Stem + ".s");
+    const fs::path Object = tmpFile(Stem + ".o");
+    std::ofstream Out(Source);
+    Out << ".text\n.globl jt_wide_join\n.type jt_wide_join,@function\n"
+           "jt_wide_join:\n  movzbl %dil,%r10d\n";
+    if (Variant == 1)
+      Out << "  cmp $" << Cases + 1 << ",%r10d\n  je .Ldispatch\n";
+    else if (Variant == 3)
+      Out << "  testl %edx,%edx\n  jne .Ldispatch\n";
+    else
+      Out << "  test %r10b,%r10b\n  je .Ldispatch\n";
+    Out << (Variant == 4 ? "  movzwl %si,%r10d\n" : "  movzbl %sil,%r10d\n")
+        << "  cmp $" << Cases - 1 << ",%r10d\n  ja .Ldefault\n"
+           ".Ldispatch:\n  lea .Ltable(%rip),%r8\n"
+           "  movslq (%r8,%r10,4),%rax\n  add %r8,%rax\n  jmp *%rax\n";
+    for (unsigned I = 0; I < Cases; ++I)
+      Out << ".Lcase" << I << ":\n  mov $" << I + 1000 << ",%eax\n  ret\n";
+    Out << (Variant == 2 ? ".Ldefault:\n  cmp $254,%edx\n  sete %al\n"
+                           "  movzbl %al,%eax\n  ret\n"
+                         : ".Ldefault:\n  mov $99,%eax\n  ret\n")
+        << ".size jt_wide_join,.-jt_wide_join\n"
+           ".section .rodata\n.p2align 2\n.Ltable:\n";
+    for (unsigned I = 0; I < Cases; ++I)
+      Out << "  .long .Lcase" << I << "-.Ltable\n";
+    Out << ".section .note.GNU-stack,\"\",@progbits\n";
+    Out.close();
+    const auto Built =
+        exec(NEVERD_TEST_CLANG, {"-target", "x86_64-unknown-linux-gnu", "-c",
+                                 Source.string(), "-o", Object.string()});
+    EXPECT_TRUE(Built.ok()) << Built.err;
+    return Object;
+  }
 };
 
 TEST_F(JumpTableJoinedGuard, AStricterFilterKeepsAnIndependentDenseGuard) {
@@ -757,6 +799,104 @@ int main(void) {
         const auto Run = exec(Exe.string(), {});
         EXPECT_TRUE(Run.ok()) << Run.err;
       }
+    }
+  }
+}
+
+TEST_F(JumpTableJoinedGuard, WideJoinedDomainsKeepEveryCase) {
+  // The sizes cross each word of the feasible set and reach the joined
+  // ceiling.
+  for (unsigned Cases : {63u, 64u, 65u, 97u, 128u, 129u, 173u, 255u}) {
+    SCOPED_TRACE(Cases);
+    auto Image = neverd::loadBinary(wideFixture(Cases));
+    ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+    neverd::CFGBuilder Builder;
+    const auto Low = build(*Image, Builder, "jt_wide_join");
+    ASSERT_EQ(Low.JumpTables.size(), 1u);
+    EXPECT_EQ(Low.JumpTables.front().Targets.size(), Cases);
+    std::vector<uint32_t> Slots(Cases);
+    for (unsigned I = 0; I < Cases; ++I)
+      Slots[I] = I;
+    EXPECT_EQ(Low.JumpTables.front().SlotIndices, Slots);
+    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  }
+}
+
+TEST_F(JumpTableJoinedGuard, WideJoinedDomainsRefuseUnboundedOrHoledPaths) {
+  // 256 cases of a 16-bit value need a literal past the joined ceiling (a
+  // byte index of 256 cases is bounded by its own width). The hole variant's
+  // equality path reads one slot past the table. At the ceiling, an
+  // unchecked byte can still be 255: a counterexample, not a domain.
+  for (auto [Cases, Variant] :
+       {std::pair{256u, 4u}, std::pair{97u, 1u}, std::pair{255u, 3u}}) {
+    SCOPED_TRACE(std::to_string(Cases) + ':' + std::to_string(Variant));
+    auto Image = neverd::loadBinary(wideFixture(Cases, Variant));
+    ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+    neverd::CFGBuilder Builder;
+    const auto Low = build(*Image, Builder, "jt_wide_join");
+    EXPECT_TRUE(Low.JumpTables.empty());
+    EXPECT_FALSE(Low.UnsafeIndirectBranchAddresses.empty());
+  }
+}
+
+TEST_F(JumpTableJoinedGuard, AWideLiteralElsewhereKeepsASmallJoinedDomain) {
+  // The literal raises the proposed envelope to the ceiling; the proof still
+  // asks only for the three feasible members.
+  auto Image = neverd::loadBinary(wideFixture(3, 2));
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  neverd::CFGBuilder Builder;
+  const auto Low = build(*Image, Builder, "jt_wide_join");
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().SlotIndices,
+            (std::vector<uint32_t>{0, 1, 2}));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JumpTableJoinedGuard, GeneratedSourceExecutesAWideJoinedDomain) {
+  const fs::path Object = wideFixture(97);
+  for (unsigned Route : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Route);
+    const fs::path Source =
+        tmpFile("wide-joined-" + std::to_string(Route) + ".c");
+    std::vector<std::string> Args = {"decompile", Object.string(),
+                                     "--func",    "jt_wide_join",
+                                     "-o",        Source.string()};
+    if (Route)
+      Args.push_back("--llvm");
+    if (Route == 2)
+      Args.push_back("--no-opt");
+    const auto Decompiled = exec(ndBin(), Args);
+    ASSERT_TRUE(Decompiled.ok()) << Decompiled.err;
+    std::ofstream Out(Source, std::ios::app);
+    Out << R"(
+static int check(uint64_t first, uint64_t second) {
+  uint32_t entry = (uint8_t)first, index = (uint8_t)second;
+  uint64_t expected = entry == 0 ? 1000 : index <= 96 ? 1000 + index : 99;
+  return jt_wide_join(first, second) != expected;
+}
+int main(void) {
+  for (uint64_t a = 0; a < 256; ++a)
+    for (uint64_t b = 0; b < 256; ++b)
+      if (check(a, b)) return 1;
+  const uint64_t edges[] = {0, 1, 96, 97, 255, 256, UINT64_C(0x100000000),
+                            UINT64_MAX};
+  for (unsigned a = 0; a < sizeof(edges)/sizeof(edges[0]); ++a)
+    for (unsigned b = 0; b < sizeof(edges)/sizeof(edges[0]); ++b)
+      if (check(edges[a], edges[b])) return 2;
+  return 0;
+}
+)";
+    Out.close();
+    for (const char *Optimization : {"-O0", "-O2"}) {
+      SCOPED_TRACE(Optimization);
+      const auto Exe = tmpFile("wide-joined-run");
+      const auto Built = exec(NEVERD_TEST_CLANG,
+                              {"-std=c11", Optimization, "-fsanitize=undefined",
+                               "-fsanitize-trap=undefined", Source.string(),
+                               "-o", Exe.string()});
+      ASSERT_TRUE(Built.ok()) << Built.err;
+      const auto Run = exec(Exe.string(), {});
+      EXPECT_TRUE(Run.ok()) << Run.err;
     }
   }
 }

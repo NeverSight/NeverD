@@ -4,6 +4,22 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>Исследовать классы JVM и JAR-файлы…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Исследовать байт-код Java, типизированное промежуточное представление и восстановленные методы</translation>
+    </message>
+    <message>
+        <source>Memory Safety Scan...</source>
+        <translation>Проверка безопасности памяти...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>Проверить время жизни объектов, инициализацию, границы и строки формата</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>Переключить плавающее рабочее пространство с дизассемблированием, псевдокодом и выводом</translation>
     </message>
@@ -1342,6 +1358,22 @@
     <message>
         <source>Find conditional strings computed by functions</source>
         <translation>Найти условные строки, вычисляемые функциями</translation>
+    </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Восстановить исходный код Lua…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Восстановить код Lua и изучить прототипы функций</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Просмотреть код Python и компоненты пакета</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Восстановить исходный код Python…</translation>
     </message>
 </context>
 <context>
@@ -11223,6 +11255,375 @@ Your previous graph is still available.</source>
     <message>
         <source>Loading %1…</source>
         <translation>Загрузка %1…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>Проверка безопасности памяти</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>&amp;Анализаторы</translation>
+    </message>
+    <message>
+        <source>All checks</source>
+        <translation>Все проверки</translation>
+    </message>
+    <message>
+        <source>Lifetime and initialization</source>
+        <translation>Время жизни и инициализация</translation>
+    </message>
+    <message>
+        <source>Bounds and format strings</source>
+        <translation>Границы и строки формата</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>Результаты</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>Вердикт</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>Свойство</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>Адрес</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Функция</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>Анализаторы</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>Обоснование результата</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>&amp;Проверить</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>Отменить проверку</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>Отмена проверки…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>Идёт проверка…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>Проверка отменена до запуска.</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>Вердикт: %1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1: %2 (проверено %3, пропущено %4, без заключения %5)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>Исследовать классы JVM и JAR-файлы</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Обзор…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>Артефакт</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>Базовые записи JAR</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>Включить предварительные возможности</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>Среда выполнения</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>Локальные зависимости…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Очистить</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Зависимости</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>Класс или элемент</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>Метод</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>Показать состав</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>Анализировать выбранное</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Исходный код Java</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>Байт-код</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>Типизированное промежуточное представление</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Сведения</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Соответствия байт-кода</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>Копировать представление</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>Экспортировать представление…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Экспортировать отчёт…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>Открыть артефакт JVM</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>Представление выбранной среды</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>Все методы</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Восстановить исходный код Lua</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Обзор…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>&amp;Файл</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>Определить по файлу</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>Официальный Luau</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>Официальный Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>&amp;Профиль</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>Восстановить</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Запуск процесса анализа…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>Прототип</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>Исходный код</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Соответствия байткода</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Данные анализа</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>Копировать исходный код</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>Экспортировать исходный код…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Экспортировать отчёт…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Открыть файл Lua</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>Отмена…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>Экспортировать в новый файл</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Исходный код Lua (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>Процесс анализа остановлен.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>Восстановление исходного кода…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>Этот процесс не поддерживает восстановление кода Lua.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>Чтение файла…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Отменено</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>Прототип %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>Исходная строка %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>Компонент</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>Точки входа скриптов</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>Экспорт нативного компонента…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Папка…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Функция</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>Функция %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>Нативный компонент экспортирован.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>Открыть папку PyInstaller</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Открыть артефакт Python</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>Открыть в анализаторе машинного кода…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>Этот рабочий процесс не поддерживает восстановление исходного кода Python.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Исходный код Python (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Восстановить исходный код Python</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>Сохранить нативный компонент в новый файл</translation>
     </message>
 </context>
 </TS>

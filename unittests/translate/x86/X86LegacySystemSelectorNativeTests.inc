@@ -89,6 +89,8 @@ TEST_P(X86LegacySystemSelectorNativeTest, EveryTypePrivilegeAndPresence) {
 }
 
 TEST_P(X86LegacySystemSelectorNativeTest, EveryFlagAndLimitNibble) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Form : {2u, 3u})
     for (unsigned Flags = 0; Flags != 256; ++Flags) {
       ASSERT_NO_FATAL_FAILURE(
@@ -129,6 +131,8 @@ TEST_P(X86LegacySystemSelectorNativeTest, WidthsRegistersAndMemory) {
 
 TEST_P(X86LegacySystemSelectorNativeTest,
        NullLocalBoundsReadOnlyAndSplitTables) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (unsigned Form : {2u, 3u})
     for (uint16_t Selector : {0u, 1u, 2u, 3u, 4u, 7u, 0x103bu, 0x103fu})
       for (unsigned TableCase = 0; TableCase != 8; ++TableCase) {
@@ -161,6 +165,8 @@ TEST_P(X86LegacySystemSelectorNativeTest,
 }
 
 TEST_P(X86LegacySystemSelectorNativeTest, TableFaultRepairAndOriginalRetry) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   RepairPage = 0x8000;
   for (unsigned Form : {2u, 3u})
     for (bool Code32 : {false, true})

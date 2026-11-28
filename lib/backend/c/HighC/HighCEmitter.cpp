@@ -532,7 +532,7 @@ void HighCWriter::prepareFunctionIdentifiers(
   std::map<std::string, std::vector<std::string>> SymbolsByStem;
   std::map<std::string, std::set<std::string>> SourcesBySymbol;
   std::set<std::string> ImageHeaderSymbols;
-  std::set<const HighExpr *> Calls;
+  HighExprSet Calls;
   std::function<void(const ExprPtr &)> VisitCall = [&](const ExprPtr &Expr) {
     if (!Expr || !Calls.insert(Expr.get()).second)
       return;
@@ -602,20 +602,24 @@ std::string HighCWriter::functionIdentifier(const HighFunc &Func) const {
 }
 
 std::string HighCWriter::functionIdentifier(llvm::StringRef SourceName) const {
-  if (auto It = FunctionIdentifiersBySourceName.find(SourceName.str());
+  const std::string_view Name(SourceName.data(), SourceName.size());
+  if (auto It = FunctionIdentifiersBySourceName.find(Name);
       It != FunctionIdentifiersBySourceName.end())
     return It->second;
-  if (auto It = ExternalSourceIdentifiers.find(SourceName.str());
+  if (auto It = ExternalSourceIdentifiers.find(Name);
       It != ExternalSourceIdentifiers.end())
     return It->second;
-  if (auto It = ExternalFunctionIdentifiers.find(SourceName.str());
+  if (auto It = ExternalFunctionIdentifiers.find(Name);
       It != ExternalFunctionIdentifiers.end())
     return It->second;
   // A reference keeps its symbol's exact C name, which it links by.
-  std::string Identifier = canonicalizeCProjectionIdentifier(
-      cNameOfSymbol(SourceName, Opts.Format, Opts.TheArch), "nd_function");
-  ReferencedFunctionSymbols.try_emplace(Identifier, SourceName.str());
-  return Identifier;
+  auto [Spelled, First] = ReferenceIdentifiers.try_emplace(SourceName);
+  if (First) {
+    Spelled->second = canonicalizeCProjectionIdentifier(
+        cNameOfSymbol(SourceName, Opts.Format, Opts.TheArch), "nd_function");
+    ReferencedFunctionSymbols.try_emplace(Spelled->second, SourceName.str());
+  }
+  return Spelled->second;
 }
 
 std::string HighCWriter::memoryTypeName(const TypeRef &Ty) const {
@@ -3868,7 +3872,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   // can address a load and also escape as a returned or stored value.
   std::set<const ExprPtr *> AccessOperands;
   std::vector<const HighExpr *> ImageConstants;
-  std::set<const HighExpr *> SeenImageConstants;
+  HighExprSet SeenImageConstants;
   auto NoteAccessAddress = [&](const ExprPtr &Address,
                                const TypeRef &Access = nullptr,
                                bool Written = false) {
@@ -4262,7 +4266,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   // slots. A shared node may have both kinds of use; bounded tables and
   // escaping image addresses consume this same classification.
   std::vector<va_t> Values;
-  std::set<const HighExpr *> ValueExpressions, SeenAddresses, SeenValues;
+  HighExprSet ValueExpressions, SeenAddresses, SeenValues;
   const HighFunc *ValueFunction = nullptr;
   // An escaping address needs backing for every byte its object owns. A
   // missing or over-limit extent cannot fall back to a guessed scalar. This

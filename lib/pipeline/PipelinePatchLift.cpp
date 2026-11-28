@@ -30,9 +30,12 @@
 #include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/Parallel.h"
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Function.h"
@@ -67,7 +70,7 @@ bool isFatalOptimizationStop(OptimizationStopReason Stop) {
          Stop == OptimizationStopReason::VerificationFailed;
 }
 
-std::string functionAdmissionDiagnostic(va_t Entry,
+std::string functionAdmissionDiagnostic(const BinaryImage &Img, va_t Entry,
                                         const PipelineFunctionAudit *Audit) {
   std::string Message =
       "function 0x" + llvm::utohexstr(Entry) + " was not admitted";
@@ -76,14 +79,22 @@ std::string functionAdmissionDiagnostic(va_t Entry,
   Message += " (" +
              std::string(pipelineFunctionDispositionName(Audit->Disposition)) +
              ")";
-  if (!Audit->Diagnostic.empty())
+  if (!Audit->Diagnostic.empty()) {
     Message += "; " + Audit->Diagnostic;
-  else if (!Audit->DecodeFailures.empty())
-    Message += "; decode failure at 0x" +
-               llvm::utohexstr(Audit->DecodeFailures.front());
-  else if (!Audit->UnsupportedInstructions.empty())
+  } else if (!Audit->DecodeFailures.empty()) {
+    // An AArch32 entry no evidence gave a mode decodes in neither; the mode
+    // is what failed, and the caller can assert it.
+    const va_t Failed = Audit->DecodeFailures.front();
+    const auto NoMode = normalizeCodeAddress(Failed, Img.Arch, Img.Mode) ==
+                                normalizeCodeAddress(Entry, Img.Arch, Img.Mode)
+                            ? missingARMModeReason(Img, Entry)
+                            : std::nullopt;
+    Message += NoMode ? "; " + *NoMode
+                      : "; decode failure at 0x" + llvm::utohexstr(Failed);
+  } else if (!Audit->UnsupportedInstructions.empty()) {
     Message += "; unsupported instruction at 0x" +
                llvm::utohexstr(Audit->UnsupportedInstructions.front());
+  }
   return Message;
 }
 
@@ -113,7 +124,7 @@ bool admitsRequestedFunctions(const BinaryImage &Img,
                      });
     Error = "selected " + std::string(ModeName) + " " +
             functionAdmissionDiagnostic(
-                Requested,
+                Img, Requested,
                 Audit != Result.FunctionAudits.end() ? &*Audit : nullptr);
     return false;
   }
@@ -122,8 +133,8 @@ bool admitsRequestedFunctions(const BinaryImage &Img,
 
 /// An empty module is not a successful lift of bodies every one of which was
 /// refused. Names the first such refusal in \p Error.
-bool admitsSomeFunction(const PipelineResult &Result, const char *ModeName,
-                        std::string &Error) {
+bool admitsSomeFunction(const BinaryImage &Img, const PipelineResult &Result,
+                        const char *ModeName, std::string &Error) {
   if (!Result.MedFuncs.empty())
     return true;
   for (const auto &Audit : Result.FunctionAudits)
@@ -131,7 +142,7 @@ bool admitsSomeFunction(const PipelineResult &Result, const char *ModeName,
         Audit.Disposition == PipelineFunctionDisposition::RejectedIncomplete ||
         Audit.Disposition == PipelineFunctionDisposition::MedIRFailed) {
       Error = "no " + std::string(ModeName) + " functions were admitted; " +
-              functionAdmissionDiagnostic(Audit.Entry, &Audit);
+              functionAdmissionDiagnostic(Img, Audit.Entry, &Audit);
       return false;
     }
   return true;
@@ -181,7 +192,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // Intentional runtime/import skips and read-only analysis retain their
   // existing outcome.
   if (!Opts.MedAnalysisOnly &&
-      !admitsSomeFunction(Result, ModeName, Result.Error))
+      !admitsSomeFunction(Img, Result, ModeName, Result.Error))
     return false;
   if (Opts.PatchMode)
     for (const MedFunc &Function : Result.MedFuncs) {
@@ -356,12 +367,15 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     if (!refuseObservedCallReturnReads(Img, Result, refusalFailsRun(Opts),
                                        Dbg) ||
         !admitsRequestedFunctions(Img, Opts, Result, ModeName, Result.Error) ||
-        !admitsSomeFunction(Result, ModeName, Result.Error))
+        !admitsSomeFunction(Img, Result, ModeName, Result.Error))
       return false;
   }
 
   if (Opts.SourceProjection && !Opts.PatchMode)
     pipeline_detail::projectMIPS16EntryCalls(Img, Result.MedFuncs, Dbg);
+
+  if (!Opts.emitsMachineLLVM())
+    return true;
 
   std::vector<std::pair<va_t, std::string>> ImportMap;
   for (const auto &[Addr, Name] : Img.getImportAddressNames())
@@ -385,7 +399,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                    Result.MedFuncs.size() >= 8 &&
                    !requiresSerialLLVMEmission(Result.MedFuncs, Img);
 
-  llvm::SmallVector<va_t> NativeStackEntries;
+  llvm::SmallVector<va_t> NativeRegisterEntries;
   // The bodies the module declares only, by index into MedFuncs, with why.
   std::vector<std::pair<size_t, std::string>> LeftOut;
   if (UseShards) {
@@ -425,19 +439,29 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     const bool OmitRefused = Opts.OmitRefusedLLVMBodies && !Opts.PatchMode &&
                              !Result.InterpreterMachineSourceABI;
     std::vector<char> Mask;
-    if (Opts.PatchMode && Img.isArm64e())
+    if (Opts.PatchMode && Img.isArm64e()) {
+      llvm::DenseMap<va_t, const LowFunc *> Source;
+      for (const auto &LF : Result.LowFuncs)
+        Source.try_emplace(LF.Entry, &LF);
+      auto Starts = llvm::to_vector(llvm::make_first_range(Source));
+      llvm::sort(Starts);
       for (const auto &[Index, F] : llvm::enumerate(Result.MedFuncs))
-        if (needsMachONativeStackIndex(F)) {
+        if (needsMachONativeRegisterBody(F, Img, Source.lookup(F.Entry),
+                                         Starts)) {
           if (Mask.empty())
             Mask.assign(Result.MedFuncs.size(), 1);
           Mask[Index] = 0;
-          NativeStackEntries.push_back(F.Entry);
+          NativeRegisterEntries.push_back(F.Entry);
         }
+    }
     uint64_t UnhandledValueIntrinsics = 0;
     // Why a refused body fails a lift that cannot leave it out.
     std::string Refusal;
     for (;;) {
       MedLLVMEmitter MedEmitter;
+      MedEmitter.setRelocatedDispatchLabels(
+          Opts.PatchMode && Img.isMachO() && Img.Arch == Arch::AArch64 &&
+          !Img.IsRelocatable && !Img.isArm64e());
       // The mask holds only bodies the unit notes left out.
       MedEmitter.setMaskedBodiesOwnedElsewhere(!Mask.empty());
       MedEmitter.setPreserveUnknownSourceValues(Opts.SourceProjection &&
@@ -560,7 +584,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
         Admitted.push_back(Audit.Entry);
     if (auto Error =
             lowerMachORegisterResults(*Result.LlvmModule, Img, Admitted,
-                                      NativeStackEntries, Result.LowFuncs)) {
+                                      NativeRegisterEntries, Result.LowFuncs)) {
       Result.Error = llvm::toString(std::move(Error));
       Result.LlvmModule.reset();
       Result.LLVMSources.reset();

@@ -22,11 +22,13 @@
 #include "neverd/backend/codegen/SourcePatchDependencies.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
+#include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/LanguageRuntime.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/AArch64Literal.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -57,6 +59,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -246,10 +250,13 @@ void checkAppleChainedRecipes(llvm::StringRef Info,
         EXPECT_EQ(Addend, uint64_t(Recipe.Addend));
         ASSERT_TRUE(
             Import[kImportModule + Weak].consume_back(kClosingParenthesis));
-        EXPECT_EQ(Import[kImportModule + Weak],
-                  llvm::sys::path::filename(Recipe.Module)
-                      .split(kLibraryVersionSeparator)
-                      .first);
+        auto Module = llvm::sys::path::filename(Recipe.Module)
+                          .split(kLibraryVersionSeparator)
+                          .first;
+        if (Recipe.LibraryOrdinal ==
+            llvm::MachO::BIND_SPECIAL_DYLIB_WEAK_LOOKUP)
+          Module = kWeakLookupProvider;
+        EXPECT_EQ(Import[kImportModule + Weak], Module);
       }
       EXPECT_EQ(Imports, 1u);
     }
@@ -1773,6 +1780,684 @@ TEST_P(MachOArm64eNativeObjectInstallation, GeneratedExecutableStarts) {
 
 INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeObjectInstallation,
                          ::testing::Combine(::testing::Values(kO0, kO2),
+                                            ::testing::Bool()));
+
+enum class PublishedFrame { Compact, Indexed, DwarfOnly, Mixed, Redundant };
+enum class AnonymousInitializer { None, Plain, Authenticated };
+
+class MachOArm64ePublishedFrames
+    : public ::testing::TestWithParam<
+          std::tuple<PublishedFrame, AnonymousInitializer>> {};
+
+TEST_P(MachOArm64ePublishedFrames, PublishesAndUnwinds) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  const auto [Format, Init] = GetParam();
+  const bool Anonymous =
+      Format == PublishedFrame::Compact || Format == PublishedFrame::Indexed;
+  llvm::SmallString<kPathCapacity> Directory;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory(kObjectArtifactPrefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Assembly = (Root / kDwarfSourceFile).string();
+  const auto Source = (Root / kSourceFile).string();
+  const auto DriverSource = (Root / kRuntimeLoaderFile).string();
+  const auto Driver = (Root / kRuntimeLoaderBinary).string();
+  const auto Object = (Root / kObjectFile).string();
+  const auto RejectedObject = (Root / kAnonymousRejectedObject).string();
+  const auto Original = (Root / kOriginalFile).string();
+  const auto AppleObject = (Root / kAppleFrameReferenceObject).string();
+  const auto Apple = (Root / kAnonymousAppleImage).string();
+  const auto Published = (Root / kInstalledFile).string();
+  std::ofstream(Assembly) << (Anonymous ? kAnonymousFrameAssembly
+                                        : kStandaloneFDEAssembly);
+  std::ofstream(Source) << kAnonymousFrameSource;
+  std::ofstream(DriverSource) << kAnonymousFrameDriver;
+
+  const auto Compile = [&](llvm::ArrayRef<llvm::StringLiteral> Profile,
+                           llvm::ArrayRef<llvm::StringRef> Inputs,
+                           llvm::StringRef Output) {
+    llvm::SmallVector<llvm::StringRef> Args{kCompiler};
+    llvm::append_range(Args, Profile);
+    llvm::append_range(Args, Inputs);
+    llvm::append_range(Args, kOutputArgs);
+    Args.push_back(Output);
+    return llvm::sys::ExecuteAndWait(kCompiler, Args);
+  };
+  const char *Profile = std::getenv(kExecutableEnvironment);
+  const bool Native =
+      Profile && llvm::StringRef(Profile) == kAnonymousSystemProfile;
+  const llvm::ArrayRef<llvm::StringLiteral> DriverArgs =
+      Native ? llvm::ArrayRef(kRuntimeCompileArgs)
+             : llvm::ArrayRef(kBindingDriverArgs);
+  ASSERT_EQ(Compile(DriverArgs, {DriverSource}, Driver), 0);
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  auto DriverImage = Reader->load(Driver);
+  ASSERT_TRUE(bool(DriverImage)) << llvm::toString(DriverImage.takeError());
+  ASSERT_EQ(DriverImage->Arch, Arch::AArch64);
+  ASSERT_EQ(DriverImage->isArm64e(), Native);
+  RecordProperty(kAnonymousDriverProperty, DriverArgs[1].str());
+  ASSERT_EQ(Compile(kCompileArgs, {kO2, Source}, Original), 0);
+  const auto Run = [&](llvm::StringRef Image, llvm::StringRef Symbol,
+                       llvm::StringRef Result, llvm::StringRef Count) {
+    return llvm::sys::ExecuteAndWait(Driver,
+                                     {Driver, Image, Symbol, Result, Count});
+  };
+  ASSERT_EQ(Run(Original, kAnonymousOriginalEntry, kAnonymousOriginalResult,
+                kAnonymousNoInit),
+            0);
+  llvm::SmallVector<llvm::StringRef> Options;
+  if (Format == PublishedFrame::Indexed)
+    Options.push_back(kAnonymousIndexOption);
+  if (Format == PublishedFrame::Mixed)
+    Options.push_back(kMixedFDEOption);
+  if (Format == PublishedFrame::Redundant)
+    Options.push_back(kRedundantFDEOption);
+  if (Init != AnonymousInitializer::None)
+    Options.push_back(kAnonymousInitOption);
+  if (Init == AnonymousInitializer::Authenticated)
+    Options.push_back(kAnonymousSignedInitOption);
+  Options.push_back(Assembly);
+  ASSERT_EQ(Compile(kObjectCompileArgs, Options, Object), 0);
+  // Apple ld needs separate atoms to retain the private unwind rows, and
+  // classic Darwin describes a signed LR implicitly. Only the reference uses
+  // those conventions. The two objects must contain identical instructions.
+  auto ControlOptions = Options;
+  ControlOptions.insert(ControlOptions.begin(), kAppleFrameReferenceOption);
+  ASSERT_EQ(Compile(kObjectCompileArgs, ControlOptions, AppleObject), 0);
+  ASSERT_EQ(Compile(kCompileArgs, {kO2, Source, AppleObject}, Apple), 0);
+  const auto *Count =
+      Init == AnonymousInitializer::None ? kAnonymousNoInit : kAnonymousOneInit;
+  ASSERT_EQ(Run(Apple, kAnonymousEntry, kAnonymousPublishedResult, Count), 0);
+
+  auto Buffer = llvm::MemoryBuffer::getFile(Object);
+  ASSERT_TRUE(bool(Buffer));
+  auto Producer =
+      llvm::object::ObjectFile::createObjectFile((*Buffer)->getMemBufferRef());
+  ASSERT_TRUE(bool(Producer)) << llvm::toString(Producer.takeError());
+  bool HasCompact = false, HasDwarf = false;
+  llvm::StringRef ProducerText;
+  for (const auto &Section : (*Producer)->sections()) {
+    auto Name = Section.getName();
+    ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+    HasCompact |= *Name == section_names::macho::CompactUnwind;
+    HasDwarf |= *Name == kEHFrameSection;
+    if (Section.isText()) {
+      auto Bytes = Section.getContents();
+      ASSERT_TRUE(bool(Bytes)) << llvm::toString(Bytes.takeError());
+      ProducerText = *Bytes;
+    }
+  }
+  ASSERT_FALSE(ProducerText.empty());
+  auto ControlProducer =
+      llvm::object::ObjectFile::createObjectFile(AppleObject);
+  ASSERT_TRUE(bool(ControlProducer))
+      << llvm::toString(ControlProducer.takeError());
+  const auto &Reference = *ControlProducer->getBinary();
+  const auto Text = llvm::find_if(Reference.sections(),
+                                  [](const auto &S) { return S.isText(); });
+  ASSERT_NE(Text, Reference.section_end());
+  auto ControlText = Text->getContents();
+  ASSERT_TRUE(bool(ControlText)) << llvm::toString(ControlText.takeError());
+  ASSERT_EQ(*ControlText, ProducerText);
+  EXPECT_EQ(HasCompact, Format != PublishedFrame::DwarfOnly);
+  EXPECT_EQ(HasDwarf, Format != PublishedFrame::Compact);
+  // The text atom and section-start symbol can name only the mapped entry.
+  for (const auto &Symbol : (*Producer)->symbols()) {
+    auto Section = Symbol.getSection();
+    ASSERT_TRUE(bool(Section)) << llvm::toString(Section.takeError());
+    if (*Section == (*Producer)->section_end() || !(*Section)->isText())
+      continue;
+    auto Address = Symbol.getAddress();
+    ASSERT_TRUE(bool(Address)) << llvm::toString(Address.takeError());
+    ASSERT_EQ(*Address, (*Section)->getAddress());
+  }
+
+  auto Before = Reader->load(Original);
+  ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+  if (!Anonymous)
+    ASSERT_FALSE(Before->hasSection(kEHFrameSection));
+  const auto *Entry = Before->findSymbol(kAnonymousOriginalSymbol);
+  ASSERT_TRUE(Entry);
+  const SourcePatchMapping Map{kAnonymousEntry, Entry->Addr};
+  const auto Install = [&](llvm::StringRef Bytes) {
+    return installMachOObjectPatch(Bytes, *Before, {Map}, {}, Published, {});
+  };
+  const auto Reject = [&](llvm::StringRef Option, llvm::StringRef Expected) {
+    auto RejectedOptions = Options;
+    RejectedOptions.insert(RejectedOptions.begin(), Option);
+    ASSERT_EQ(Compile(kObjectCompileArgs, RejectedOptions, RejectedObject), 0);
+    auto Rejected = llvm::MemoryBuffer::getFile(RejectedObject);
+    ASSERT_TRUE(bool(Rejected));
+    auto Result = Install((*Rejected)->getBuffer());
+    ASSERT_FALSE(bool(Result));
+    const auto Error = llvm::toString(Result.takeError());
+    EXPECT_TRUE(llvm::StringRef(Error).contains(Expected)) << Error;
+    EXPECT_FALSE(std::filesystem::exists(Published));
+  };
+  if (Init != AnonymousInitializer::None)
+    ASSERT_NO_FATAL_FAILURE(
+        Reject(kAnonymousInteriorOption, kAnonymousInitError));
+  if (Init == AnonymousInitializer::Authenticated)
+    ASSERT_NO_FATAL_FAILURE(
+        Reject(kAnonymousBadInitKeyOption, kAnonymousInitError));
+  if (Format == PublishedFrame::Compact && Init == AnonymousInitializer::None)
+    ASSERT_NO_FATAL_FAILURE(Reject(kAnonymousDataOption, kAnonymousCodeError));
+  if (Format == PublishedFrame::Indexed && Init == AnonymousInitializer::None)
+    ASSERT_NO_FATAL_FAILURE(
+        Reject(kAnonymousWrongKeyOption, kAnonymousSigningError));
+
+  if (Format == PublishedFrame::DwarfOnly) {
+    ASSERT_NO_FATAL_FAILURE(
+        Reject(kConflictingExtentOption, kConflictingExtentError));
+    ASSERT_NO_FATAL_FAILURE(Reject(kMissingWriterOption, kMissingWriterError));
+  }
+  auto Patch = Install((*Buffer)->getBuffer());
+  ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
+  ASSERT_EQ(Patch->PatchedFunctions.size(), 1u);
+  auto After = Reader->load(Published);
+  ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+  if (!Anonymous)
+    EXPECT_EQ(After->hasSection(kEHFrameSection),
+              Format != PublishedFrame::Redundant);
+  const va_t Owner = Patch->PatchedFunctions.front().OwnerVA;
+  va_t FrameVA = Owner;
+  if (Anonymous) {
+    const auto *Word = After->readVA(Owner, kInstructionBytes);
+    ASSERT_TRUE(Word);
+    size_t Length;
+    const auto Target =
+        decodeDirectBranchTarget(After->Arch, InstructionMode::Default, Word,
+                                 kInstructionBytes, Owner, Length);
+    ASSERT_EQ(Target, Owner + kInstructionBytes);
+    FrameVA = *Target;
+  }
+  const auto Unwind = macho_unwind::parseCompactUnwind(*After);
+  ASSERT_EQ(Unwind.ParseStatus, ExceptionParseStatus::Complete);
+  const auto ExpectedFrames = Anonymous
+                                  ? kAnonymousProducerFrames
+                                  : 1u + (Format == PublishedFrame::Mixed);
+  const auto FrameCount = llvm::count_if(Unwind.Entries, [&](const auto &F) {
+    return F.CodeRange.Begin >= Owner &&
+           F.CodeRange.Begin < Owner + ProducerText.size();
+  });
+  EXPECT_EQ(FrameCount, ExpectedFrames);
+  RecordProperty(kPublishedFrameCountProperty, FrameCount);
+  const auto Frame = llvm::find_if(Unwind.Entries, [&](const auto &F) {
+    return F.CodeRange.Begin == FrameVA;
+  });
+  ASSERT_NE(Frame, Unwind.Entries.end());
+  const bool CompactFrame =
+      Format == PublishedFrame::Compact || Format == PublishedFrame::Redundant;
+  EXPECT_EQ(Frame->NativeEncoding & macho_unwind::kModeMask,
+            CompactFrame ? macho_unwind::kARM64ModeFrame
+                         : macho_unwind::kARM64ModeDwarf);
+  auto Signature = macho_signing::verifyStrict(Published);
+  ASSERT_FALSE(bool(Signature)) << llvm::toString(std::move(Signature));
+  EXPECT_EQ(
+      Run(Published, kAnonymousOriginalEntry, kAnonymousPublishedResult, Count),
+      0);
+#else
+  GTEST_SKIP() << kMissingHost;
+#endif
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AppleClang, MachOArm64ePublishedFrames,
+    ::testing::Combine(::testing::Values(PublishedFrame::Compact,
+                                         PublishedFrame::Indexed),
+                       ::testing::Values(AnonymousInitializer::None,
+                                         AnonymousInitializer::Plain,
+                                         AnonymousInitializer::Authenticated)));
+
+INSTANTIATE_TEST_SUITE_P(
+    StandaloneFDE, MachOArm64ePublishedFrames,
+    ::testing::Combine(::testing::Values(PublishedFrame::DwarfOnly,
+                                         PublishedFrame::Mixed,
+                                         PublishedFrame::Redundant),
+                       ::testing::Values(AnonymousInitializer::None)));
+
+class MachOArm64eNativeBindings
+    : public ::testing::TestWithParam<std::tuple<bool, bool, bool>> {};
+
+TEST_P(MachOArm64eNativeBindings, PublishesDirectAndGOTReferences) {
+#ifndef __APPLE__
+  GTEST_SKIP() << kMissingHost;
+#else
+  const auto [OriginalWeak, ObjectWeak, DefinesFallback] = GetParam();
+  llvm::SmallString<kPathCapacity> Directory;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory(kObjectArtifactPrefix, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kDwarfSourceFile).string();
+  const auto Object = (Root / kObjectFile).string();
+  auto Original = (Root / kOriginalFile).string();
+  const auto Published = (Root / kInstalledFile).string();
+  const auto Info = (Root / kDyldInfoFile).string();
+  std::ofstream(Source) << kBindingAssembly;
+  const auto Compile = [&](llvm::ArrayRef<llvm::StringLiteral> Profile,
+                           bool Weak, llvm::ArrayRef<llvm::StringRef> Inputs,
+                           llvm::StringRef Output) {
+    llvm::SmallVector<llvm::StringRef> Args{kCompiler};
+    llvm::append_range(Args, Profile);
+    if (Weak)
+      Args.push_back(kBindingWeakOption);
+    llvm::append_range(Args, Inputs);
+    llvm::append_range(Args, kOutputArgs);
+    Args.push_back(Output);
+    return llvm::sys::ExecuteAndWait(kCompiler, Args);
+  };
+  const auto Library = (Root / kRuntimeProviderFile).string();
+  const auto WeakLibraryOption = kBindingWeakLibrary + Library;
+  const auto ProviderSource = (Root / kRuntimeProviderSourceFile).string();
+  std::ofstream(ProviderSource) << kBindingProvider;
+  ASSERT_EQ(Compile(kCompileArgs, false, {ProviderSource}, Library), 0);
+  llvm::SmallVector<llvm::StringRef> Link{
+      kChainedOption, Source, OriginalWeak ? Library : WeakLibraryOption};
+  ASSERT_EQ(Compile(kCompileArgs, OriginalWeak, Link, Original), 0);
+  // Make the dylib optional while keeping its required on-disk symbol.
+  // This exercises both ways of reusing a sealed cell under a weak load
+  // command.
+  const bool RequiredInWeakDylib = !OriginalWeak && !DefinesFallback;
+  if (OriginalWeak || RequiredInWeakDylib) {
+    const llvm::StringRef WeakLoad =
+        OriginalWeak ? llvm::StringRef(Library) : kBindingSystemLibrary;
+    auto Input = llvm::MemoryBuffer::getFile(Original);
+    ASSERT_TRUE(bool(Input));
+    std::vector<uint8_t> Data((*Input)->getBufferStart(),
+                              (*Input)->getBufferEnd());
+    auto Signature = macho_signature::inspect(Data);
+    ASSERT_TRUE(bool(Signature)) << llvm::toString(Signature.takeError());
+    unsigned Changed = 0;
+    forEachMachOLoadCommand(
+        Data.data(), Data.size(),
+        [&](const uint8_t *C, uint32_t ID, uint32_t Size, bool) {
+          if (ID != llvm::MachO::LC_LOAD_DYLIB)
+            return;
+          const auto Name =
+              reinterpret_cast<const llvm::MachO::dylib_command *>(C)
+                  ->dylib.name;
+          if (Name >= Size ||
+              readFixedName(reinterpret_cast<const char *>(C + Name),
+                            Size - Name) != WeakLoad)
+            return;
+          writeLE<uint32_t>(Data.data() + (C - Data.data()),
+                            llvm::MachO::LC_LOAD_WEAK_DYLIB);
+          ++Changed;
+        });
+    ASSERT_EQ(Changed, 1u);
+    Original = (Root / kBindingWeakLoadImage).string();
+    ASSERT_TRUE(
+        std::ofstream(Original, std::ios::binary)
+            .write(reinterpret_cast<const char *>(Data.data()), Data.size()));
+    auto Signed =
+        macho_signing::adHocResign(Original, Signature->Slices.front());
+    ASSERT_FALSE(bool(Signed)) << llvm::toString(std::move(Signed));
+  }
+  llvm::SmallVector<llvm::StringRef> Input{kBindingObjectOption};
+  if (!DefinesFallback)
+    Input.push_back(kBindingReferenceOnlyOption);
+  Input.push_back(Source);
+  ASSERT_EQ(Compile(kObjectCompileArgs, ObjectWeak, Input, Object), 0);
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  auto Before = Reader->load(Original);
+  ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+  const auto *Entry = Before->findSymbol(kBindingEntrySymbol);
+  const auto *OldFields = Before->findSymbol(kBindingFieldsSymbol);
+  ASSERT_NE(Entry, nullptr);
+  ASSERT_NE(OldFields, nullptr);
+  auto Old = Before->MachOAuthenticatedPointers.find(OldFields->Addr);
+  ASSERT_NE(Old, Before->MachOAuthenticatedPointers.end());
+  ASSERT_EQ(Old->second.WeakImport, OriginalWeak);
+  ASSERT_EQ(Old->second.Symbol, kInstalledImportSymbol);
+  ASSERT_EQ(Old->second.Key, kAArch64PAuthKeyDA);
+  ASSERT_EQ(Old->second.Diversity, kObjectDiversity);
+  ASSERT_TRUE(Old->second.AddressDiversity);
+  ASSERT_EQ(Old->second.Addend, -kObjectDataAddend);
+  ASSERT_EQ(OriginalWeak,
+            llvm::any_of(Before->DyldBindSlots, [](const auto &B) {
+              return B.second.Name == kCoalescedSymbol;
+            }));
+  const auto *Marker = Before->findSymbol(kBindingMarkerSymbol);
+  const auto *OriginalCode = Before->findSymbol(kBindingOriginalCode);
+  ASSERT_NE(Marker, nullptr);
+  ASSERT_NE(OriginalCode, nullptr);
+  const auto *CodeFields =
+      Before->readVA(OriginalCode->Addr, 2 * kPointerBytes);
+  ASSERT_NE(CodeFields, nullptr);
+  const SourcePatchMapping Map{ObjectWeak ? kBindingEntry : kBindingExactEntry,
+                               Entry->Addr};
+  const SourcePatchMapping MarkerMap{kBindingExactMarker, Marker->Addr};
+  llvm::SmallVector<SourcePatchBinding> Bindings;
+  if (DefinesFallback) {
+    // Cross-bind the addresses so an implicit lookup cannot pass the control.
+    Bindings.push_back({kBindingExactCode, SourcePatchBindingKind::Function,
+                        readLE<uint64_t>(CodeFields + kPointerBytes)});
+    Bindings.push_back({kBindingExactBareCode, SourcePatchBindingKind::Function,
+                        readLE<uint64_t>(CodeFields)});
+  }
+  const SourcePatchDependency Dependency{
+      OriginalWeak ? Library : Old->second.Module, kOptionalBinding,
+      SourcePatchDependencyKind::Data};
+  auto Bytes = llvm::MemoryBuffer::getFile(Object);
+  ASSERT_TRUE(bool(Bytes));
+  const auto Install = [&](llvm::ArrayRef<SourcePatchMapping> Entries,
+                           llvm::ArrayRef<SourcePatchBinding> References,
+                           llvm::ArrayRef<SourcePatchDependency> Dependencies) {
+    return installMachOObjectPatch((*Bytes)->getBuffer(), *Before, Entries,
+                                   References, Published, {}, nullptr, nullptr,
+                                   Dependencies);
+  };
+  auto Missing = Install({Map, MarkerMap}, Bindings, {});
+  ASSERT_FALSE(bool(Missing));
+  llvm::consumeError(Missing.takeError());
+  ASSERT_FALSE(std::filesystem::exists(Published));
+  llvm::SmallVector<SourcePatchDependency> Dependencies{Dependency};
+  if (DefinesFallback)
+    Dependencies.push_back(
+        {Library, kVerbatimBinding, SourcePatchDependencyKind::Function});
+  for (const auto Name : {kBindingInterior, kBindingAbsentSpelling,
+                          kBindingExactData, kBindingExactEntry}) {
+    auto Invalid = Install({Map, {Name, Marker->Addr}}, Bindings, Dependencies);
+    ASSERT_FALSE(bool(Invalid));
+    llvm::consumeError(Invalid.takeError());
+    ASSERT_FALSE(std::filesystem::exists(Published));
+  }
+  if (DefinesFallback) {
+    auto Aliased = Bindings;
+    auto Alias = Bindings.front();
+    Alias.Symbol = kBindingCode;
+    Aliased.push_back(std::move(Alias));
+    auto Invalid = Install({Map, MarkerMap}, Aliased, Dependencies);
+    ASSERT_FALSE(bool(Invalid));
+    llvm::consumeError(Invalid.takeError());
+    ASSERT_FALSE(std::filesystem::exists(Published));
+
+    auto Conflicting = Dependencies;
+    Conflicting.push_back(
+        {Library, kBindingCode, SourcePatchDependencyKind::Function});
+    Invalid = Install({Map, MarkerMap}, Bindings, Conflicting);
+    ASSERT_FALSE(bool(Invalid));
+    const auto Detail = llvm::toString(Invalid.takeError());
+    EXPECT_TRUE(llvm::StringRef(Detail).contains(kConflictingBinding))
+        << Detail;
+    ASSERT_FALSE(std::filesystem::exists(Published));
+  }
+  auto Patch = Install({Map, MarkerMap}, Bindings, Dependencies);
+  ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
+  ASSERT_EQ(Patch->PatchedFunctions.size(), 2u);
+  EXPECT_EQ(Patch->PatchedFunctions[0].SourceFunction, Map.Symbol);
+  EXPECT_EQ(Patch->PatchedFunctions[1].SourceFunction, MarkerMap.Symbol);
+  EXPECT_EQ(Patch->PatchedFunctions[0].OwnerSymbol, kBindingEntry);
+  EXPECT_EQ(Patch->PatchedFunctions[1].OwnerSymbol, kBindingMarker);
+  auto After = Reader->load(Published);
+  ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+  const auto Unwind = macho_unwind::parseCompactUnwind(*After);
+  ASSERT_EQ(Unwind.ParseStatus, ExceptionParseStatus::Complete);
+  const auto MarkerFrame = llvm::find_if(Unwind.Entries, [&](const auto &E) {
+    return E.CodeRange.contains(Patch->PatchedFunctions[1].OwnerVA);
+  });
+  ASSERT_NE(MarkerFrame, Unwind.Entries.end());
+  EXPECT_EQ(MarkerFrame->NativeEncoding & macho_unwind::kModeMask,
+            DefinesFallback ? macho_unwind::kARM64ModeFrameless
+                            : macho_unwind::kARM64ModeDwarf);
+  auto Signature = macho_signing::verifyStrict(Published);
+  ASSERT_FALSE(bool(Signature)) << llvm::toString(std::move(Signature));
+
+  const va_t OldVA = OldFields->Addr + Patch->OriginalSectionSlide;
+  auto Preserved = After->MachOAuthenticatedPointers.find(OldVA);
+  ASSERT_NE(Preserved, After->MachOAuthenticatedPointers.end());
+  EXPECT_EQ(Preserved->second.WeakImport, Old->second.WeakImport);
+  const auto New =
+      llvm::find_if(After->MachOAuthenticatedPointers, [&](const auto &P) {
+        return P.first != OldVA && P.second.Symbol == kInstalledImportSymbol &&
+               P.second.Key == kAArch64PAuthKeyDA;
+      });
+  ASSERT_NE(New, After->MachOAuthenticatedPointers.end());
+  ASSERT_TRUE(New->second.LibraryOrdinal);
+  const auto &ExpectedImport = New->second;
+  EXPECT_EQ(ExpectedImport.WeakImport, ObjectWeak);
+  EXPECT_EQ(New->second.Module, Old->second.Module);
+  EXPECT_EQ(New->second.LibraryOrdinal, Old->second.LibraryOrdinal);
+  EXPECT_EQ(New->second.Addend, Old->second.Addend);
+  EXPECT_EQ(New->second.Diversity, Old->second.Diversity);
+  EXPECT_EQ(New->second.AddressDiversity, Old->second.AddressDiversity);
+  struct Fields {
+    uint64_t Auth, Direct, GOT;
+    int32_t Relative;
+    uint32_t Padding;
+    uint64_t Optional;
+    uint64_t CoalescedAuth, CoalescedDirect;
+    int32_t CoalescedRelative;
+    uint32_t CoalescedPadding;
+    uint64_t OptionalDirect, OptionalGOT;
+    uint64_t BareAuth, BareDirect;
+    int32_t BareRelative;
+    uint32_t BarePadding;
+    uint64_t LocalAuth, LocalDirect, LocalValue;
+  };
+  const va_t FieldsVA = New->first;
+  const auto *Data = After->readVA(FieldsVA, sizeof(Fields));
+  ASSERT_NE(Data, nullptr);
+  const va_t GOT = readLE<uint64_t>(Data + offsetof(Fields, GOT));
+  EXPECT_TRUE(After->MachOResolvedChainedPointerSlots.contains(
+      FieldsVA + offsetof(Fields, GOT)));
+  EXPECT_EQ(GOT, FieldsVA + offsetof(Fields, Relative) +
+                     readLE<int32_t>(Data + offsetof(Fields, Relative)));
+  const auto *OldData = Before->readVA(OldFields->Addr, sizeof(Fields));
+  ASSERT_NE(OldData, nullptr);
+  const va_t OldGOT = OldVA + offsetof(Fields, Relative) +
+                      readLE<int32_t>(OldData + offsetof(Fields, Relative));
+  EXPECT_EQ(OldGOT == GOT, OriginalWeak == ObjectWeak);
+  auto PreservedGOT = After->DyldBindSlots.find(OldGOT);
+  ASSERT_NE(PreservedGOT, After->DyldBindSlots.end());
+  EXPECT_EQ(PreservedGOT->second.WeakImport, Old->second.WeakImport);
+  const auto &ExpectedOriginal = Preserved->second;
+  std::vector<MachOAuthenticatedFixup> Recipes{{OldVA, ExpectedOriginal},
+                                               {FieldsVA, ExpectedImport}};
+  const auto CheckPlain =
+      [&](va_t Slot, const MachOAuthenticatedPointer &Target, int64_t Addend) {
+        auto Bound = After->DyldBindSlots.find(Slot);
+        ASSERT_NE(Bound, After->DyldBindSlots.end());
+        EXPECT_EQ(Bound->second.Name, Target.Symbol);
+        EXPECT_EQ(Bound->second.WeakImport, Target.WeakImport);
+        EXPECT_EQ(Bound->second.LibraryOrdinal, Target.LibraryOrdinal);
+        EXPECT_EQ(Bound->second.Addend, Addend);
+        MachOAuthenticatedPointer Expected;
+        Expected.Symbol = Target.Symbol;
+        Expected.WeakImport = Target.WeakImport;
+        Expected.Module = Target.Module;
+        Expected.LibraryOrdinal = Target.LibraryOrdinal;
+        Expected.Addend = Addend;
+        Recipes.push_back({Slot, Expected, true, false});
+      };
+  CheckPlain(GOT, ExpectedImport, 0);
+  CheckPlain(FieldsVA + offsetof(Fields, Direct), ExpectedImport,
+             kBindingDirectAddend);
+  const auto Coalesced = After->MachOAuthenticatedPointers.find(
+      FieldsVA + offsetof(Fields, CoalescedAuth));
+  ASSERT_NE(Coalesced, After->MachOAuthenticatedPointers.end());
+  EXPECT_EQ(Coalesced->second.Symbol, kCoalescedSymbol);
+  EXPECT_EQ(Coalesced->second.LibraryOrdinal,
+            llvm::MachO::BIND_SPECIAL_DYLIB_WEAK_LOOKUP);
+  EXPECT_FALSE(Coalesced->second.WeakImport);
+  EXPECT_EQ(Coalesced->second.Addend, kObjectDataAddend);
+  EXPECT_EQ(Coalesced->second.Key, kAArch64PAuthKeyDA);
+  EXPECT_EQ(Coalesced->second.Diversity, kObjectDiversity);
+  EXPECT_TRUE(Coalesced->second.AddressDiversity);
+  Recipes.push_back({Coalesced->first, Coalesced->second});
+  const va_t CoalescedGOT =
+      FieldsVA + offsetof(Fields, CoalescedRelative) +
+      readLE<int32_t>(Data + offsetof(Fields, CoalescedRelative));
+  CheckPlain(CoalescedGOT, Coalesced->second, 0);
+  CheckPlain(FieldsVA + offsetof(Fields, CoalescedDirect), Coalesced->second,
+             0);
+  MachOAuthenticatedPointer Rebase;
+  Rebase.Target = GOT;
+  Recipes.push_back({FieldsVA + offsetof(Fields, GOT), Rebase, true, false});
+  const auto Optional = After->MachOAuthenticatedPointers.find(
+      FieldsVA + offsetof(Fields, Optional));
+  ASSERT_NE(Optional, After->MachOAuthenticatedPointers.end());
+  EXPECT_EQ(Optional->second.Symbol, kOptionalBinding);
+  EXPECT_TRUE(Optional->second.WeakImport);
+  EXPECT_EQ(Optional->second.Key, kAArch64PAuthKeyDB);
+  EXPECT_EQ(Optional->second.Diversity, kObjectDiversity);
+  EXPECT_TRUE(Optional->second.AddressDiversity);
+  const auto Provider =
+      llvm::find_if(After->MachODylibReferences, [&](const auto &D) {
+        return D.Name == Dependency.Library;
+      });
+  ASSERT_NE(Provider, After->MachODylibReferences.end());
+  EXPECT_EQ(Provider->Weak, OriginalWeak || RequiredInWeakDylib);
+  EXPECT_EQ(Optional->second.LibraryOrdinal,
+            1 + std::distance(After->MachODylibReferences.begin(), Provider));
+  EXPECT_EQ(Optional->second.Module, Dependency.Library);
+  Recipes.push_back({Optional->first, Optional->second});
+  CheckPlain(FieldsVA + offsetof(Fields, OptionalDirect), Optional->second, 0);
+  const va_t OptionalGOT =
+      readLE<uint64_t>(Data + offsetof(Fields, OptionalGOT));
+  EXPECT_TRUE(After->MachOResolvedChainedPointerSlots.contains(
+      FieldsVA + offsetof(Fields, OptionalGOT)));
+  CheckPlain(OptionalGOT, Optional->second, 0);
+  Rebase.Target = OptionalGOT;
+  Recipes.push_back(
+      {FieldsVA + offsetof(Fields, OptionalGOT), Rebase, true, false});
+
+  const va_t LocalVA = FieldsVA + offsetof(Fields, LocalValue);
+  const auto Local = After->MachOAuthenticatedPointers.find(
+      FieldsVA + offsetof(Fields, LocalAuth));
+  ASSERT_NE(Local, After->MachOAuthenticatedPointers.end());
+  EXPECT_EQ(Local->second.Target, LocalVA);
+  EXPECT_EQ(Local->second.Key, kAArch64PAuthKeyDA);
+  EXPECT_EQ(Local->second.Diversity, kObjectDiversity);
+  EXPECT_TRUE(Local->second.AddressDiversity);
+  Recipes.push_back({Local->first, Local->second});
+  Rebase.Target = LocalVA;
+  Recipes.push_back(
+      {FieldsVA + offsetof(Fields, LocalDirect), Rebase, true, false});
+  EXPECT_EQ(readLE<uint64_t>(Data + offsetof(Fields, LocalDirect)), LocalVA);
+
+  const auto Bare = After->MachOAuthenticatedPointers.find(
+      FieldsVA + offsetof(Fields, BareAuth));
+  ASSERT_NE(Bare, After->MachOAuthenticatedPointers.end());
+  EXPECT_EQ(Bare->second.Symbol, kBareBinding);
+  EXPECT_EQ(Bare->second.Module, Library);
+  EXPECT_NE(Bare->second.LibraryOrdinal, ExpectedImport.LibraryOrdinal);
+  EXPECT_EQ(Bare->second.Key, kAArch64PAuthKeyDB);
+  EXPECT_EQ(Bare->second.Diversity, kObjectDiversity);
+  EXPECT_TRUE(Bare->second.AddressDiversity);
+  EXPECT_EQ(Bare->second.WeakImport, !ObjectWeak);
+  const auto &ExpectedBare = Bare->second;
+  Recipes.push_back({Bare->first, ExpectedBare});
+  const va_t BareGOT = FieldsVA + offsetof(Fields, BareRelative) +
+                       readLE<int32_t>(Data + offsetof(Fields, BareRelative));
+  EXPECT_NE(BareGOT, GOT);
+  CheckPlain(BareGOT, ExpectedBare, 0);
+  CheckPlain(FieldsVA + offsetof(Fields, BareDirect), ExpectedBare, 0);
+
+  const va_t Owner = Patch->PatchedFunctions.front().OwnerVA;
+  const auto LoadTarget = [&](va_t PC) -> std::optional<va_t> {
+    const auto *Code = After->readVA(PC, 2 * kInstructionBytes);
+    if (!Code)
+      return std::nullopt;
+    auto Page = aarch64::decodePCRelativeAddress(readLE<uint32_t>(Code), PC);
+    const auto Load = readLE<uint32_t>(Code + kInstructionBytes);
+    if (!Page ||
+        (Load & aarch64::kLDR_X16_X16_Mask) != aarch64::kLDR_X16_X16_Match)
+      return std::nullopt;
+    return *Page +
+           ((Load >> aarch64::kLDR_Imm12Shift) & aarch64::kLDR_Imm12Mask) *
+               kPointerBytes;
+  };
+  EXPECT_EQ(LoadTarget(Owner + kInstructionBytes), GOT);
+  const va_t Branch = Owner + kBindingCallWord * kInstructionBytes;
+  const auto *Code = After->readVA(Branch, kInstructionBytes);
+  ASSERT_NE(Code, nullptr);
+  size_t Length = 0;
+  auto Stub = decodeDirectBranchTarget(After->Arch, InstructionMode::Default,
+                                       Code, kInstructionBytes, Branch, Length);
+  ASSERT_TRUE(Stub);
+  const va_t OldBranch = Entry->Addr + kBindingCallWord * kInstructionBytes;
+  Code = Before->readVA(OldBranch, kInstructionBytes);
+  ASSERT_NE(Code, nullptr);
+  auto OldStub =
+      decodeDirectBranchTarget(Before->Arch, InstructionMode::Default, Code,
+                               kInstructionBytes, OldBranch, Length);
+  ASSERT_TRUE(OldStub);
+  EXPECT_EQ(*OldStub + Patch->OriginalSectionSlide == *Stub,
+            ObjectWeak == OriginalWeak);
+  if (ObjectWeak != OriginalWeak) {
+    auto CallSlot = LoadTarget(*Stub);
+    ASSERT_TRUE(CallSlot);
+    ASSERT_NE(*CallSlot, GOT);
+    auto Callable = After->MachOAuthenticatedPointers.find(*CallSlot);
+    ASSERT_NE(Callable, After->MachOAuthenticatedPointers.end());
+    EXPECT_EQ(Callable->second.Symbol, kInstalledImportSymbol);
+    EXPECT_EQ(Callable->second.WeakImport, ExpectedImport.WeakImport);
+    EXPECT_EQ(Callable->second.LibraryOrdinal, Old->second.LibraryOrdinal);
+    EXPECT_EQ(Callable->second.Key, kAArch64PAuthKeyIA);
+    EXPECT_FALSE(Callable->second.AddressDiversity);
+    EXPECT_EQ(Callable->second.Diversity, 0u);
+    Recipes.push_back({*CallSlot, Callable->second});
+  }
+  llvm::SmallVector<llvm::StringRef> Args{kXcrun};
+  llvm::append_range(Args, kInfoArgs);
+  Args.push_back(Published);
+  const std::optional<llvm::StringRef> Redirects[] = {std::nullopt, Info,
+                                                      std::nullopt};
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(kXcrun, Args, std::nullopt, Redirects,
+                                      kToolTimeout),
+            0);
+  auto Listing = llvm::MemoryBuffer::getFile(Info);
+  ASSERT_TRUE(bool(Listing));
+  checkAppleChainedRecipes((*Listing)->getBuffer(), After->Raw, Recipes);
+  if (std::getenv(kBindingNativeEnv)) {
+    const auto DriverSource = (Root / kRuntimeHarnessFile).string();
+    const auto Driver = (Root / kRuntimeDriverFile).string();
+    std::ofstream(DriverSource) << kBindingDriver;
+    const auto HostDriver = (Root / kBindingHostDriver).string();
+    ASSERT_EQ(Compile(kBindingDriverArgs, false, {DriverSource}, Driver), 0);
+    ASSERT_EQ(Compile(kBindingDriverArgs, false,
+                      {DriverSource, kBindingHostFallback}, HostDriver),
+              0);
+    for (bool Present : {true, false}) {
+      if (!Present)
+        ASSERT_TRUE(std::filesystem::remove(Library));
+      for (const auto &Program : {Driver, HostDriver}) {
+        const auto Run = [&](llvm::ArrayRef<llvm::StringRef> Args,
+                             bool Required) {
+          const auto Log = (Root / kToolLog).string();
+          const std::optional<llvm::StringRef> Redirects[] = {
+              std::nullopt, std::nullopt, Log};
+          const int Status = llvm::sys::ExecuteAndWait(
+              Program, Args, std::nullopt, Redirects, kToolTimeout);
+          auto Errors = llvm::MemoryBuffer::getFile(Log);
+          ASSERT_TRUE(bool(Errors));
+          if (!Present && Required) {
+            EXPECT_EQ(Status, kBindingDlopenFailure);
+            EXPECT_TRUE((*Errors)->getBuffer().contains(kMissingBareImport))
+                << (*Errors)->getBuffer().str();
+          } else {
+            EXPECT_EQ(Status, 0) << (*Errors)->getBuffer().str();
+          }
+        };
+        Run({Program, Original, Library}, OriginalWeak);
+        // Retained original fixups and newly published fixups both bind.
+        llvm::SmallVector<llvm::StringRef> PublishedArgs{
+            Program, Published, Library, kPublishedProperty};
+        if (DefinesFallback)
+          PublishedArgs.push_back(kBindingSwapped);
+        Run(PublishedArgs, OriginalWeak || ObjectWeak);
+      }
+    }
+  }
+#endif
+}
+
+INSTANTIATE_TEST_SUITE_P(AppleClang, MachOArm64eNativeBindings,
+                         ::testing::Combine(::testing::Bool(),
+                                            ::testing::Bool(),
                                             ::testing::Bool()));
 
 TEST(MachONativeRelro, DyldProtectsConstantsAndKeepsMutablePagesWritable) {

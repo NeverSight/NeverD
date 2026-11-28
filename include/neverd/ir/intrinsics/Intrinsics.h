@@ -562,9 +562,17 @@ enum class Intrinsic : uint16_t {
 
 #define NEVERD_INTEGER_MEMORY_INTRINSIC(Id, Value, Name) Id = Value,
 #include "neverd/ir/intrinsics/IntegerMemory.def"
-#define NEVERD_PPC_DIVIDE(Id, Value, RecordId, RecordValue, ...)               \
+#define NEVERD_PPC_FIXED_POINT(Kind, Id, Value, RecordId, RecordValue, ...)    \
   Id = Value, RecordId = RecordValue,
-#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.def"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.def"
+
+#define NEVERD_RISCV_CYCLE(Id, Value, ...) Id = Value,
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+#define NEVERD_PPC_VMX(Id, Value, ...) Id = Value,
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.def"
+
+  RISCVFloating = 18019,
+  RISCVFPControl = 18020,
 
   _Count = 21000
 };

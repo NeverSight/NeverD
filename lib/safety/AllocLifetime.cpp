@@ -15,6 +15,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/loader/BinaryImageModel.h"
 #include "neverd/safety/Limits.h"
 #include "neverd/safety/SinkScanner.h"
@@ -148,6 +149,7 @@ struct MemModel {
   const MedFunc &F;
   uint64_t SP = 0, FP = 0;
   bool Have = false;
+  mutable std::optional<EntryStackOffsetProof> MixedWidthStack;
   llvm::DenseMap<ValueKey, std::pair<int, int>> OpDef;
   llvm::DenseMap<ValueKey, std::pair<int, int>> PhiDef;
   llvm::DenseSet<ValueKey> AmbiguousDefs;
@@ -161,6 +163,9 @@ struct MemModel {
     SP = In.StackPointerReg;
     FP = In.FramePointerReg;
     Have = In.StackRegsKnown;
+    if (Have && In.Img && hasMIPS32BitAddressIn64BitGPR(In.Img->Arch))
+      MixedWidthStack.emplace(F, In.Img->Arch, In.Img->abiFormat(),
+                              F.EntryKind);
     const auto RecordDefinition = [&](auto &Definitions, const ValueKey &Key,
                                       std::pair<int, int> Location) {
       if (AmbiguousDefs.count(Key))
@@ -304,6 +309,11 @@ struct MemModel {
   }
 
   std::optional<int64_t> stackOffset(const MedVar &V) const {
+    // The target's stack proof recognizes a signed word adjustment to a
+    // full-width address register on n32 and MIPS III o32.
+    if (MixedWidthStack)
+      if (auto Offset = MixedWidthStack->offset(V))
+        return Offset;
     llvm::DenseSet<ValueKey> Seen;
     return stackOffsetRec(V, 0, Seen);
   }
@@ -1065,7 +1075,7 @@ public:
     buildSummaries();
   }
 
-  std::vector<Finding> run() {
+  std::vector<Finding> run(llvm::function_ref<bool()> Canceled = nullptr) {
     std::vector<Finding> All;
     if (!In.MedFuncs)
       return All;
@@ -1085,13 +1095,19 @@ public:
       All.push_back(std::move(Fn));
       return All;
     }
-    for (const MedFunc &F : *In.MedFuncs)
-      auditFunction(F, All);
     std::vector<Finding> Kept;
-    Kept.reserve(All.size());
-    for (Finding &Fn : All)
-      if (corroborate(Fn))
-        Kept.push_back(std::move(Fn));
+    for (const MedFunc &F : *In.MedFuncs) {
+      if (Canceled && Canceled())
+        break;
+      All.clear();
+      auditFunction(F, All);
+      for (Finding &Fn : All) {
+        if (Canceled && Canceled())
+          return Kept;
+        if (corroborate(Fn))
+          Kept.push_back(std::move(Fn));
+      }
+    }
     return Kept;
   }
 
@@ -1162,6 +1178,22 @@ private:
     return detail::callArgumentHasTargetPointerWidth(In.Img, CI, ArgIndex);
   }
 
+  bool releaseArgumentHasPointerWidth(const MedCallInfo &CI, int Index) const {
+    if (argumentHasPointerWidth(CI, Index))
+      return true;
+    if (!In.Img || !isMIPSN32(In.Img->Arch) || Index < 0 ||
+        static_cast<size_t>(Index) >= CI.Args.size())
+      return false;
+    const MedVar &Arg = CI.Args[Index];
+    const auto &TRI = getTargetRegInfo(In.Img->Arch);
+    const auto Registers = TRI.integerParamRegs(In.Img->abiFormat());
+    // SSA may retain the ABI argument register or propagate v0 directly
+    // into it. Release still needs the allocation's exact alias at the call.
+    return static_cast<size_t>(Index) < Registers.size() &&
+           Arg.Kind == MedVar::Reg && Arg.Size == TRI.addressRegisterBytes() &&
+           (Arg.RegOff == Registers[Index] || Arg.RegOff == TRI.IntReturnReg);
+  }
+
   bool argumentHasSizeCarrierWidth(const MedCallInfo &CI, int ArgIndex) const {
     if (ArgIndex < 0 || ArgIndex >= static_cast<int>(CI.Args.size()))
       return false;
@@ -1187,6 +1219,18 @@ private:
     return detail::hasTargetPointerWidth(In.Img, Value);
   }
 
+  // n32 returns a C pointer in the full v0 register. A wide temporary or
+  // memory value has no such ABI contract.
+  bool pointerReturnCarrier(const MedVar &Value) const {
+    if (valueHasPointerWidth(Value))
+      return true;
+    if (!In.Img || !isMIPSN32(In.Img->Arch) || Value.Kind != MedVar::Reg)
+      return false;
+    const auto &TRI = getTargetRegInfo(In.Img->Arch);
+    return Value.RegOff == TRI.IntReturnReg &&
+           Value.Size == TRI.addressRegisterBytes();
+  }
+
   bool pointerContractCompatible(const ReturnContract &Contract) const {
     if (!Contract.isPointerKind())
       return false;
@@ -1197,7 +1241,7 @@ private:
 
   ReturnContract returnContract(const MedFunc &F) const {
     ReturnContract Declared;
-    if (In.Dbg && In.Dbg->hasAuthenticatedFunctionSignatures()) {
+    if (In.Dbg && In.Dbg->hasAuthenticatedReturnDeclarations()) {
       const AuthenticatedReturnValueState State =
           In.Dbg->resolveAuthenticatedReturnValueState(F.Entry);
       Declared = {State.Kind, State.Size};
@@ -1276,7 +1320,7 @@ private:
     const auto Add = [&](const MedVar &Value) {
       if (!IsReturnCarrier(Value))
         return;
-      if (!UsesFloatingCarrier && Value.Size != TRI.PointerSize &&
+      if (!UsesFloatingCarrier && !pointerReturnCarrier(Value) &&
           !TRI.writeZeroExtends(Value.RegOff, Value.Size))
         Result.HasPotentialCarrier = true;
       const ValueKey Key = keyOf(Value);
@@ -1415,7 +1459,7 @@ private:
         Result.MayReturnNonOwnedNonNull |= !Mem.isProvenZero(Carrier);
         continue;
       }
-      if (MustAliases.count(Key) && valueHasPointerWidth(Carrier)) {
+      if (MustAliases.count(Key) && pointerReturnCarrier(Carrier)) {
         Result.SomeDefinite = true;
       } else {
         AnyPossible = true;
@@ -1465,7 +1509,7 @@ private:
                             TRI.PointerSize);
     };
     const auto Add = [&](const MedVar &Value, const MedVar &Output) {
-      if (!UsesFloatingCarrier && Output.Size != TRI.PointerSize &&
+      if (!UsesFloatingCarrier && !pointerReturnCarrier(Output) &&
           !TRI.writeZeroExtends(Output.RegOff, Output.Size))
         Result.Carriers.HasPotentialCarrier = true;
       const ValueKey Key = keyOf(Value);
@@ -1733,8 +1777,9 @@ private:
       if (E->Kind == SinkKind::Realloc && ArgIndex == E->HandleArg)
         return EscapeState::Unknown;
     if (ArgIndex == catalogFreeArg(CI))
-      return argumentHasPointerWidth(CI, ArgIndex) ? EscapeState::No
-                                                   : EscapeState::Unknown;
+      return releaseArgumentHasPointerWidth(CI, ArgIndex)
+                 ? EscapeState::No
+                 : EscapeState::Unknown;
 
     if (const MedFunc *Internal = internalCallee(CI)) {
       if (!argumentHasPointerWidth(CI, ArgIndex))
@@ -1780,7 +1825,7 @@ private:
               CI.Args[FA].isConst())
             continue;
           const ValueKey ArgKey = keyOf(CI.Args[FA]);
-          if (!argumentHasPointerWidth(CI, FA)) {
+          if (!releaseArgumentHasPointerWidth(CI, FA)) {
             HasPotentialFree |= Alias.count(ArgKey) != 0;
             continue;
           }
@@ -1805,14 +1850,14 @@ private:
       }
     }
 
+    const ReturnContract HeapContract = returnContract(F);
     for (int PI = 0; PI < static_cast<int>(F.Params.size()); ++PI) {
       if (F.Params[PI].isConst())
         continue;
-      const ReturnContract Contract = returnContract(F);
       llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(F.Params[PI]);
       llvm::DenseSet<ValueKey> MustAlias = Mem.mustAliasClosure(F.Params[PI]);
       ReturnEscapeEvents ReturnEvents =
-          returnEscapeEvents(F, Mem, Alias, MustAlias, Contract);
+          returnEscapeEvents(F, Mem, Alias, MustAlias, HeapContract);
       std::vector<FreeEvent> DefiniteEscapes = std::move(ReturnEvents.Definite);
       bool HasPotentialEscape = !ReturnEvents.Potential.empty();
       for (const MedBlock &B : F.Blocks) {
@@ -1864,7 +1909,6 @@ private:
         S.UnknownParam.insert(PI);
     }
 
-    const ReturnContract HeapContract = returnContract(F);
     if (HeapContract.hasNoValue())
       return S;
 
@@ -1878,7 +1922,7 @@ private:
         continue;
       const MedOp *Op = opAt(F, CI.BlockId, CI.OpIdx);
       if (!Op || Op->Output.isConst() || Op->Output.Size == 0 ||
-          !valueHasPointerWidth(Op->Output))
+          !pointerReturnCarrier(Op->Output))
         continue;
       llvm::DenseSet<ValueKey> Alias = Mem.aliasClosure(Op->Output);
       llvm::DenseSet<ValueKey> MustAlias = Mem.mustAliasClosure(Op->Output);
@@ -1895,7 +1939,7 @@ private:
           if (!Alias.count(FreeKey))
             continue;
           if (MustAlias.count(FreeKey) &&
-              argumentHasPointerWidth(FC, FreeArg) &&
+              releaseArgumentHasPointerWidth(FC, FreeArg) &&
               !freeArgMayFail(FC, FreeArg)) {
             DefiniteFrees.push_back({FC.BlockId, FC.OpIdx});
           } else {
@@ -2158,7 +2202,7 @@ private:
           return true;
       for (int FreeArg : freeArgsOf(CI))
         if (FreeArg < 0 || FreeArg >= static_cast<int>(CI.Args.size()) ||
-            !argumentHasPointerWidth(CI, FreeArg))
+            !releaseArgumentHasPointerWidth(CI, FreeArg))
           return true;
       if (CI.Args.empty() && catalogSink(CI) == nullptr && !internalCallee(CI))
         return true;
@@ -2260,10 +2304,23 @@ private:
             : ::neverd::limits::safety::kDefaultExplorationLoopVisits;
     if (In.Img) {
       const TargetRegInfo &TRI = getTargetRegInfo(In.Img->Arch);
+      if (isMIPSN32(In.Img->Arch)) {
+        Opts.WordCheckTarget = In.Img->Arch;
+        Opts.ByteOrder = archLittleEndian(In.Img->Arch)
+                             ? llvm::endianness::little
+                             : llvm::endianness::big;
+      }
       const uint16_t Bytes = TRI.PointerSize ? TRI.PointerSize : 8;
       for (const TargetRegisterRange &R :
-           TRI.callPreservedRanges(In.Img->abiFormat()))
-        Opts.CallPreservedRegisters.push_back({R.Offset, R.Bytes});
+           TRI.callPreservedRanges(In.Img->abiFormat())) {
+        // The prologue and epilogue test the full n32 stack register. The
+        // high word of a preserved SP does not become a fresh call result.
+        const uint16_t Preserved = Opts.WordCheckTarget != Arch::Unknown &&
+                                           R.Offset == TRI.StackPointer
+                                       ? TRI.addressRegisterBytes()
+                                       : R.Bytes;
+        Opts.CallPreservedRegisters.push_back({R.Offset, Preserved});
+      }
       Opts.TrackedCallResultRegister =
           symbolic::SymRegisterRange{TRI.IntReturnReg, Bytes};
     }
@@ -2310,6 +2367,14 @@ private:
         if (Matches != 1 || !CallResult.isValid()) {
           SawUnmodelled = true;
           continue;
+        }
+        if (In.Img && isMIPSN32(In.Img->Arch) && Ctx.width(CallResult) == 64) {
+          // An n32 allocator returns the sign extension of a C pointer.
+          // Unconstrained high bits must not turn a null pointer into a leak.
+          const symbolic::SymRef Pointer = Ctx.mkExtract(CallResult, 0, 32);
+          symbolic::SymRef Valid[] = {
+              Pred, Ctx.mkEq(CallResult, Ctx.mkSExt(Pointer, 64))};
+          Pred = Ctx.mkAnd(Valid);
         }
         symbolic::SymRef NonNull =
             Ctx.mkNe(CallResult, Ctx.mkZero(Ctx.width(CallResult)));
@@ -2402,6 +2467,17 @@ private:
                                  CI.TargetAddr, CI.IsIndirect);
         Fn.TheVerdict = Verdict::Unknown;
         Fn.TheConfidence = Confidence::Low;
+        if (Entry->Kind == SinkKind::Copy || Entry->Kind == SinkKind::Format) {
+          Fn.SharedCheck =
+              CatalogCheck{DebugConflict ? CatalogRequirement::DebugSignature
+                                         : CatalogRequirement::CallEffects,
+                           Entry->decidingArg()};
+          Fn.Kind = Entry->Kind;
+          Fn.BlockId = CI.BlockId;
+          Fn.OpIdx = CI.OpIdx;
+          if (const MedOp *Op = opAt(F, CI.BlockId, CI.OpIdx))
+            Fn.OriginSeq = Op->OriginSeq;
+        }
         Fn.Detail = DebugConflict
                         ? "debug function signature conflicts with sink summary"
                         : "no exact external-call effect summary applies";
@@ -2412,6 +2488,7 @@ private:
     if (IncludeStackReads)
       auditUninitializedStackReads(F, Mem, Out);
 
+    std::optional<ReturnContract> Contract;
     for (size_t I = 0; I < F.CallInfos.size(); ++I) {
       const MedCallInfo &CI = F.CallInfos[I];
       const HeapReturnState Allocation = allocationState(CI);
@@ -2447,7 +2524,7 @@ private:
         emitAllocationFinding(std::move(Fn));
         continue;
       }
-      if (!valueHasPointerWidth(AllocOp->Output)) {
+      if (!pointerReturnCarrier(AllocOp->Output)) {
         Finding Fn = baseFinding(F, VulnClass::HeapLeak, callVA(F, CI),
                                  callName(CI), CI.TargetAddr, CI.IsIndirect);
         Fn.TheVerdict = Verdict::Unknown;
@@ -2472,7 +2549,7 @@ private:
         for (int FA : freeArgsOf(FC)) {
           if (FA < 0 || FA >= static_cast<int>(FC.Args.size()))
             continue;
-          if (!argumentHasPointerWidth(FC, FA)) {
+          if (!releaseArgumentHasPointerWidth(FC, FA)) {
             HasPotentialFree = true;
             continue;
           }
@@ -2492,7 +2569,10 @@ private:
         }
       }
 
-      const EscapeState Escape = escapes(F, Mem, Alias, MustAlias, CI);
+      if (!Contract)
+        Contract = returnContract(F);
+      const EscapeState Escape =
+          escapes(F, Mem, Alias, MustAlias, CI, *Contract);
       const bool UnresolvedLifecycle =
           HasPotentialFree || hasUnresolvedLifecycleCall(F, G, CI);
 
@@ -2736,7 +2816,12 @@ private:
         // This audit only claims local frame bytes below the entry SP.
         if (!Offset || *Offset >= 0)
           continue;
-        if (!valueHasPointerWidth(*Addr)) {
+        // In a mixed-width frame a memory operation can address through
+        // the full GPR that carries the ABI's four-byte pointer.
+        const bool FullAddressRegister =
+            Mem.MixedWidthStack &&
+            Addr->Size == getTargetRegInfo(In.Img->Arch).addressRegisterBytes();
+        if (!valueHasPointerWidth(*Addr) && !FullAddressRegister) {
           Finding Fn;
           Fn.Origin = Track::Audit;
           Fn.Class = VulnClass::UninitializedRead;
@@ -3177,8 +3262,8 @@ private:
   EscapeState escapes(const MedFunc &F, const MemModel &Mem,
                       const llvm::DenseSet<ValueKey> &Alias,
                       const llvm::DenseSet<ValueKey> &MustAlias,
-                      const MedCallInfo &Alloc) const {
-    const ReturnContract Contract = returnContract(F);
+                      const MedCallInfo &Alloc,
+                      const ReturnContract &Contract) const {
     ReturnEscapeEvents ReturnEvents =
         returnEscapeEvents(F, Mem, Alias, MustAlias, Contract);
     std::vector<FreeEvent> DefiniteEscapes = std::move(ReturnEvents.Definite);
@@ -3259,6 +3344,13 @@ std::vector<Finding> neverd::safety::auditHeap(const AnalysisInput &In,
 std::vector<Finding> neverd::safety::auditMemory(const AnalysisInput &In,
                                                  const SinkCatalog &Cat,
                                                  const SafetyBudgets &Budgets) {
+  return auditMemory(In, Cat, Budgets, nullptr);
+}
+
+std::vector<Finding>
+neverd::safety::auditMemory(const AnalysisInput &In, const SinkCatalog &Cat,
+                            const SafetyBudgets &Budgets,
+                            llvm::function_ref<bool()> Canceled) {
   Auditor A(In, Cat, Budgets, /*IncludeStackReads=*/true);
-  return A.run();
+  return A.run(Canceled);
 }

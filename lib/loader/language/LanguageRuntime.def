@@ -19,9 +19,9 @@
 ///       other group held at all.  Groups are tried in the order listed, and
 ///       the first runtime found is the image's primary one.
 ///   NEVERD_LANGUAGE_PROBE(Id, Kind, Value)
-///       one probe of group Id: a `Section` of that name exists, a `Symbol`
-///       or import has exactly that name, one's name starts with a
-///       `SymbolPrefix`, or a non-executable segment holds the `Bytes`
+///       one probe of group Id: a `Section` has that name, a `Symbol` matches
+///       a spelling of a symbol, import, or export, a `SymbolPrefix` matches
+///       the raw name's prefix, or `Bytes` occur in a non-executable segment
 ///   NEVERD_LANGUAGE_STRING(Name, Value)  a string
 ///   NEVERD_LANGUAGE_CHAR(Name, Value)    a character
 ///   NEVERD_LANGUAGE_VALUE(Name, Value)   a number

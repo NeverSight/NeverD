@@ -123,17 +123,16 @@ for flip in report.flips:
 
 レジスタオフセットは NeverD のレジスタファイル内のバイトオフセットであり、ネイティブポインタやレジスタ番号ではありません。レポートは常に非網羅的で、UNSAT、ソルバー上限、射影拒否、再実行拒否は例外ではなく型付き反転結果として残ります。
 
-### メモリ安全性の監査とハント
+### メモリ安全性スキャン
 
-`session.audit()` と `session.hunt()` は解析済み JSON レポートを返します（CLI と同じスキーマ）。リフト済みのネイティブセッションが必要です。
+`session.scan()` は両方の解析を実行し、検出結果と解析範囲を一つのレポートにまとめます。[統合スキャンガイド（英語）](../memory-safety-scan.md)。
 
 ```python
-audit = session.audit()
-hunt = session.hunt(max_paths=64, max_steps=1 << 16)
-print(audit.get("ok"), hunt.get("findings"))
+report = session.scan(max_paths=64, max_steps=1 << 16)
+print(report["verdict"], report["analyzers"])
 ```
 
-EVM および SBF セッションではこれらの呼び出しは拒否されます。
+EVM および SBF の入力では、選択した解析の状態が `unsupported` になります。
 
 6 種類の不変イベントは `BINARY_LOADED`、`BINARY_CLOSING`、`FUNCTION_SELECTED`、`ADDRESS_CHANGED`、`ANALYSIS_DONE`、`PATCH_APPLIED` です。コールバック中に payload 文字列がコピーされ、イベント種別に無関係なフィールドは `None` になります。
 

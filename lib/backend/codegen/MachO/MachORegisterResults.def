@@ -17,7 +17,7 @@
 #define MACHO_REGISTER_MEMORY(Name)
 #endif
 #ifndef MACHO_REGISTER_PC_SIGNING
-#define MACHO_REGISTER_PC_SIGNING(Name, Operands, Returns)
+#define MACHO_REGISTER_PC_SIGNING(Name, Operation)
 #endif
 #ifndef MACHO_REGISTER_HINT
 #define MACHO_REGISTER_HINT(Name)
@@ -39,6 +39,14 @@ MACHO_REGISTER_TEXT(kInvalidBody,
 MACHO_REGISTER_TEXT(kLocal, "Lneverd_reg_${:uid}_")
 MACHO_REGISTER_TEXT(kCall, "bl ")
 MACHO_REGISTER_TEXT(kTail, "b ")
+MACHO_REGISTER_TEXT(kAddress, "adr ")
+MACHO_REGISTER_TEXT(kSigningRouteSuffix, "_sign_")
+MACHO_REGISTER_TEXT(kSigningIslandSuffix, "_auth_")
+MACHO_REGISTER_TEXT(kSigningResumeSuffix, "_resume_")
+MACHO_REGISTER_TEXT(kSigningRouteWord, ".long {0} | (((. - {1}{2}) / {3}) << {4})\n")
+MACHO_REGISTER_TEXT(kRestoreBoundary, "Lneverd_reg_fallthrough_${:uid}_")
+MACHO_REGISTER_TEXT(kRestoreAdd, "add ")
+MACHO_REGISTER_TEXT(kZeroAddressOffset, ", #0\n")
 MACHO_REGISTER_TEXT(kAddressPage, "adrp ")
 MACHO_REGISTER_TEXT(kPage, "@PAGE\n")
 MACHO_REGISTER_TEXT(kPageOffset, "@PAGEOFF\n")
@@ -101,15 +109,36 @@ MACHO_REGISTER_VALUE(unsigned, kDwarfSP, 31)
 MACHO_REGISTER_VALUE(uint32_t, kSIMDDataMask, 0x0e000000)
 MACHO_REGISTER_VALUE(uint32_t, kSIMDDataClass, 0x0e000000)
 
+// One branch after the PAC skips every adjacent authentication block.
+// An AUT needs a second instruction to return to its continuation.
+#ifdef MACHO_SIGNING_ISLAND_LAYOUT
+MACHO_SIGNING_ISLAND_LAYOUT(2, 1, 2)
+#undef MACHO_SIGNING_ISLAND_LAYOUT
+#endif
+
+// Darwin intra-procedure call registers first, then the other caller-saved
+// temporaries that do not carry NeverD's Darwin register results.
+#ifdef MACHO_SIGNING_SCRATCH
+MACHO_SIGNING_SCRATCH(X16)
+MACHO_SIGNING_SCRATCH(X17)
+MACHO_SIGNING_SCRATCH(X10)
+MACHO_SIGNING_SCRATCH(X11)
+MACHO_SIGNING_SCRATCH(X12)
+MACHO_SIGNING_SCRATCH(X13)
+MACHO_SIGNING_SCRATCH(X14)
+MACHO_SIGNING_SCRATCH(X15)
+#undef MACHO_SIGNING_SCRATCH
+#endif
+
 // These instructions retain their signing-PC displacement within the body.
-MACHO_REGISTER_PC_SIGNING(PACIASPPC, 0, false)
-MACHO_REGISTER_PC_SIGNING(PACIBSPPC, 0, false)
-MACHO_REGISTER_PC_SIGNING(PACNBIASPPC, 0, false)
-MACHO_REGISTER_PC_SIGNING(PACNBIBSPPC, 0, false)
-MACHO_REGISTER_PC_SIGNING(AUTIASPPC, 1, false)
-MACHO_REGISTER_PC_SIGNING(AUTIBSPPC, 1, false)
-MACHO_REGISTER_PC_SIGNING(RETAASPPC, 1, true)
-MACHO_REGISTER_PC_SIGNING(RETABSPPC, 1, true)
+MACHO_REGISTER_PC_SIGNING(PACIASPPC, A64_Pacia2)
+MACHO_REGISTER_PC_SIGNING(PACIBSPPC, A64_Pacib2)
+MACHO_REGISTER_PC_SIGNING(PACNBIASPPC, A64_Pacia2)
+MACHO_REGISTER_PC_SIGNING(PACNBIBSPPC, A64_Pacib2)
+MACHO_REGISTER_PC_SIGNING(AUTIASPPC, A64_Autia2)
+MACHO_REGISTER_PC_SIGNING(AUTIBSPPC, A64_Autib2)
+MACHO_REGISTER_PC_SIGNING(RETAASPPC, A64_AuthReturnIA2)
+MACHO_REGISTER_PC_SIGNING(RETABSPPC, A64_AuthReturnIB2)
 
 // These register/immediate operations have no PC-relative operand.
 MACHO_REGISTER_HINT(NOP)

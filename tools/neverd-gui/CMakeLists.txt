@@ -310,6 +310,39 @@ if(BUILD_TESTING)
   add_test(NAME NeverDGuiAppearance COMMAND neverd-gui-appearance-tests)
   set_tests_properties(NeverDGuiAppearance PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+  if(NEVERD_WORKER_REAL_ENGINE_TESTS AND TARGET neverd)
+    function(add_script_recovery_dialog_test language manifest)
+      string(TOLOWER "${language}" lower)
+      string(TOUPPER "${language}" upper)
+      set(target "neverd-gui-${lower}-tests")
+      qt_add_executable(${target} tests/${language}RecoveryDialogTests.cpp)
+      target_link_libraries(${target} PRIVATE neverd_gui_app Qt6::Test)
+      set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE FALSE)
+      target_compile_definitions(${target} PRIVATE
+        TEST_${upper}_CLI="$<TARGET_FILE:neverd>" TEST_${upper}_WORKER="$<TARGET_FILE:neverd-worker>"
+        TEST_${upper}_MANIFEST="${CMAKE_CURRENT_SOURCE_DIR}/../../unittests/${lower}/fixtures/${manifest}")
+      add_dependencies(${target} neverd neverd-worker)
+      add_test(NAME NeverDGui${language}Recovery COMMAND ${target})
+      set_tests_properties(NeverDGui${language}Recovery PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+    endfunction()
+    add_script_recovery_dialog_test(JVM jars.json)
+    add_script_recovery_dialog_test(Lua dumps.json)
+    add_script_recovery_dialog_test(Python artifacts.json)
+  endif()
+  qt_add_executable(neverd-gui-safety-scan-tests tests/SafetyScanDialogTests.cpp)
+  target_link_libraries(neverd-gui-safety-scan-tests PRIVATE neverd_gui_app Qt6::Test)
+  set_target_properties(neverd-gui-safety-scan-tests PROPERTIES WIN32_EXECUTABLE FALSE)
+  if(NEVERD_WORKER_REAL_ENGINE_TESTS AND TARGET neverd)
+    target_compile_definitions(neverd-gui-safety-scan-tests PRIVATE
+      TEST_SAFETY_CLI="$<TARGET_FILE:neverd>"
+      TEST_SAFETY_WORKER="$<TARGET_FILE:neverd-worker>"
+      TEST_SAFETY_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../../unittests/safety/fixtures/binaries/safety_cases_elf_x64")
+    add_dependencies(neverd-gui-safety-scan-tests neverd neverd-worker)
+  endif()
+  add_test(NAME NeverDGuiSafetyScan COMMAND neverd-gui-safety-scan-tests)
+  set_tests_properties(NeverDGuiSafetyScan PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
   qt_add_executable(neverd-gui-x87-tests tests/X87CapabilitiesTests.cpp)
   target_link_libraries(neverd-gui-x87-tests PRIVATE neverd_gui_app Qt6::Test)
   set_target_properties(neverd-gui-x87-tests PROPERTIES WIN32_EXECUTABLE FALSE)

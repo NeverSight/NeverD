@@ -15,6 +15,7 @@
 #include "neverd/loader/ExceptionFunction.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/FunctionBody.h"
+#include "neverd/support/AArch64Literal.h"
 #include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/DenseSet.h"
@@ -24,6 +25,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
+#include <bit>
 #include <bitset>
 #include <climits>
 #include <deque>
@@ -94,10 +96,20 @@ struct Value {
   bool operator==(const Value &) const = default;
 };
 
+// Different signing instructions can reach the same PC. Preserve only the
+// relation that holds on every path between live LR and a full-width GPR.
+struct SigningModifiers {
+  AArch64RAKey Key = AArch64RAKey::A;
+  uint32_t Registers = 0;
+  llvm::SmallVector<va_t, 2> SigningPCs;
+  bool operator==(const SigningModifiers &) const = default;
+};
+
 struct State {
   std::array<Value, kFrameRegisters> Registers;
   std::map<int64_t, Value> Stack;
   std::optional<bool> PACM = false;
+  SigningModifiers Modifiers;
 };
 
 template <typename T>
@@ -116,8 +128,40 @@ bool intersect(Value &A, const Value &B) {
   return Changed;
 }
 
+SigningModifiers signingModifiers(const State &S) {
+  auto Result = S.Modifiers;
+  const auto &LR = S.Registers[kLR].Return;
+  if (LR && LR->Kind == AArch64RASigningKind::SPAndPC &&
+      LR->Recipe == AArch64RARecipe::NonHintPAuthLR && LR->SigningPC) {
+    Result.Key = LR->Key;
+    for (unsigned R = 0; R < kLR; ++R)
+      if (S.Registers[R].CodeAddress == LR->SigningPC)
+        Result.Registers |= uint32_t(1) << R;
+    if (Result.Registers)
+      Result.SigningPCs.assign(1, *LR->SigningPC);
+  }
+  return Result;
+}
+
 bool merge(State &A, const State &B) {
   bool Changed = intersect(A.PACM, B.PACM);
+  if (A.Modifiers.Registers || B.Modifiers.Registers ||
+      A.Registers[kLR].Return != B.Registers[kLR].Return) {
+    auto Common = signingModifiers(A);
+    const auto Other = signingModifiers(B);
+    Common.Registers &= Common.Key == Other.Key ? Other.Registers : 0;
+    if (Common.Registers) {
+      for (va_t PC : Other.SigningPCs) {
+        auto It = llvm::lower_bound(Common.SigningPCs, PC);
+        if (It == Common.SigningPCs.end() || *It != PC)
+          Common.SigningPCs.insert(It, PC);
+      }
+    } else {
+      Common = {};
+    }
+    Changed |= Common != A.Modifiers;
+    A.Modifiers = std::move(Common);
+  }
   for (unsigned R = 0; R < kFrameRegisters; ++R)
     Changed |= intersect(A.Registers[R], B.Registers[R]);
   for (auto I = A.Stack.begin(); I != A.Stack.end();) {
@@ -148,6 +192,7 @@ struct FrameRow {
   int64_t CFAOffset = 0;
   std::array<AArch64UnwindRegister, kFrameRegisters> Registers;
   std::bitset<NDArm64ePreservedDCount> DeclaredD;
+  bool operator==(const FrameRow &) const = default;
 };
 
 llvm::Expected<std::map<uint64_t, FrameRow>> frameRows(const DwarfCIE &CIE,
@@ -242,6 +287,7 @@ void updateSignature(State &S, const State &Before, AArch64RAKey Key,
                      bool Authenticate, std::optional<AArch64RARecipe> Recipe,
                      std::optional<va_t> ModifierPC) {
   auto &LR = S.Registers[kLR];
+  S.Modifiers = {};
   LR = {};
   const auto &Prior = Before.Registers[kLR].Return;
   if (!Prior || Before.Registers[kSP].StackOffset != 0 ||
@@ -267,6 +313,10 @@ bool pointerOperation(State &S, const State &Before, uint32_t Word, va_t PC) {
   const auto UpdateHint = [&](Intrinsic Id, Operand Pointer, Operand Modifier) {
     const unsigned Dest = Pointer == Operand::X30 ? kLR : kHintDestination;
     S.Registers[Dest] = {};
+    if (Dest == kLR)
+      S.Modifiers = {};
+    else
+      S.Modifiers.Registers &= ~(uint32_t(1) << Dest);
     if (Dest != kLR || Modifier != Operand::SP || !Before.PACM)
       return;
     const auto Op = *aarch64PAuthOperation(Id);
@@ -286,6 +336,7 @@ bool pointerOperation(State &S, const State &Before, uint32_t Word, va_t PC) {
     return true;
 #define NEVERD_A64_PAUTH_STRIP_HINT(Insn, Encoding, Id, Pointer)               \
   case Encoding:                                                               \
+    S.Modifiers = {};                                                          \
     S.Registers[kLR] = {};                                                     \
     return true;
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.def"
@@ -294,6 +345,7 @@ bool pointerOperation(State &S, const State &Before, uint32_t Word, va_t PC) {
   }
   const auto UpdateExplicit = [&](Intrinsic Id, Operand Pointer, Operand Mod2) {
     if (Pointer != Operand::X30) {
+      S.Modifiers.Registers &= ~(uint32_t(1) << kHintDestination);
       S.Registers[kHintDestination] = {};
       return;
     }
@@ -316,6 +368,12 @@ bool pointerOperation(State &S, const State &Before, uint32_t Word, va_t PC) {
     }
     updateSignature(S, Before, Key, Op.Authenticate,
                     AArch64RARecipe::NonHintPAuthLR, Address);
+    if (Op.Authenticate && Mod2 == Operand::Rn && Before.Modifiers.Key == Key &&
+        Before.Registers[kSP].StackOffset == 0) {
+      const auto R = (Word >> kAArch64PAuthLRImmShift) & kAArch64PAuthLRRegMask;
+      if (Before.Modifiers.Registers & (uint32_t(1) << R))
+        S.Registers[kLR].Return = AArch64ReturnAddressState{};
+    }
   };
 #define NEVERD_A64_PAUTH_LR_INSTRUCTION(Mask, Encoding, Id, Pointer, Mod,      \
                                         Mod2)                                  \
@@ -454,6 +512,7 @@ void discardInactiveStack(State &S) {
 }
 
 void clobberCallState(State &S) {
+  S.Modifiers = {};
   for (unsigned R = 0; R < kVolatileEnd; ++R)
     S.Registers[R] = {};
   S.Registers[kLR] = {};
@@ -465,7 +524,7 @@ void clobberCallState(State &S) {
 }
 
 bool transfer(State &S, const State &Before, Decoder &Decode,
-              const DecodedInsn &I) {
+              const DecodedInsn &I, const BinaryImage &Image) {
   const auto &D = I.Raw->detail->aarch64;
   const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
   cs_regs Reads, Writes;
@@ -474,9 +533,13 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
                      &NumWrites) != CS_ERR_OK)
     return false;
   for (const auto R : llvm::ArrayRef(Writes, NumWrites)) {
-    if (const auto Number = reg(R))
+    if (const auto Number = reg(R)) {
       S.Registers[*Number] = {};
-    else if (const auto D = preservedDSlot(R)) {
+      if (*Number == kLR)
+        S.Modifiers = {};
+      else
+        S.Modifiers.Registers &= ~(uint32_t(1) << *Number);
+    } else if (const auto D = preservedDSlot(R)) {
       S.Registers[*D] = {};
       S.Registers[*D + NDArm64ePreservedDCount] = {};
     }
@@ -513,23 +576,36 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
       Ops[1].type == AARCH64_OP_IMM)
     if (const auto R = reg(Ops[0].reg))
       S.Registers[*R].CodeAddress = static_cast<va_t>(Ops[1].imm);
+  // The loader proves an immutable ordinary rebase. A mutable or unbound
+  // cell cannot establish the second modifier of a register authentication.
+  if (neverd::aarch64::isPointerLiteralLoad(Word))
+    if (const auto R = reg(Ops.front().reg))
+      S.Registers[*R].CodeAddress =
+          machORebasedLiteralAddress(Image, Word, I.Addr);
+  const auto CopyRegister = [&](unsigned Dest, unsigned Src) {
+    S.Registers[Dest] = Before.Registers[Src];
+    if (Dest == kLR && Src == kLR)
+      S.Modifiers = Before.Modifiers;
+    if (Dest < kLR && (Before.Modifiers.Registers & (uint32_t(1) << Src)))
+      S.Modifiers.Registers |= uint32_t(1) << Dest;
+  };
   if ((I.Id == AARCH64_INS_MOV || I.Raw->alias_id == AARCH64_INS_ALIAS_MOV) &&
       Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
       Ops[1].type == AARCH64_OP_REG && wide(Ops[0].reg) && wide(Ops[1].reg)) {
     const auto Dest = reg(Ops[0].reg), Src = reg(Ops[1].reg);
     if (Dest && Src)
-      S.Registers[*Dest] = Before.Registers[*Src];
+      CopyRegister(*Dest, *Src);
   }
   if ((I.Id == AARCH64_INS_ADD || I.Id == AARCH64_INS_SUB) && Ops.size() == 3 &&
       Ops[0].type == AARCH64_OP_REG && Ops[1].type == AARCH64_OP_REG &&
-      Ops[2].type == AARCH64_OP_IMM && !Ops[2].shift.value &&
+      Ops[2].type == AARCH64_OP_IMM && (!Ops[2].shift.value || !Ops[2].imm) &&
       wide(Ops[0].reg) && wide(Ops[1].reg)) {
     const auto Dest = reg(Ops[0].reg), Src = reg(Ops[1].reg);
     if (Dest && Src && Ops[2].imm >= 0) {
       const auto &Base = Before.Registers[*Src];
       const uint64_t Magnitude = Ops[2].imm;
       if (!Magnitude) {
-        S.Registers[*Dest] = Base;
+        CopyRegister(*Dest, *Src);
       } else {
         const bool Subtract = I.Id == AARCH64_INS_SUB;
         S.Registers[*Dest].StackOffset =
@@ -582,7 +658,7 @@ FrameRow instructionFrameRow(const State &S, const FrameRow *Declared,
     const auto Holds = [&](const Value &V) {
       return R == kLR ? V.Return.has_value() : V.IncomingRegister == R;
     };
-    if (Holds(S.Registers[R]))
+    if (Holds(S.Registers[R]) || (R == kLR && S.Modifiers.Registers))
       continue;
     auto &Rule = Row.Registers[R];
     Rule.Location = AArch64UnwindRegister::Undefined;
@@ -650,9 +726,9 @@ bool hasDarwinCallSitePersonality(ExceptionPersonality Personality) {
 // Darwin C++ and Objective-C personalities select a landing pad by its PC
 // range. Index only the owning frame's aligned, disjoint ranges. In
 // particular, the entry order of an SJLJ table does not describe PC ranges.
-llvm::Expected<std::vector<size_t>>
+llvm::Expected<llvm::SmallVector<const ItaniumCallSite *, 0>>
 landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
-            size_t Count, size_t Limit) {
+            size_t Limit) {
   const va_t DwarfLSDA = Function.Dwarf ? Function.Dwarf->LSDAVA : 0;
   const auto *Compact = Function.Compact ? &*Function.Compact : nullptr;
   const va_t CompactLSDA = Compact ? Compact->LSDAVA : 0;
@@ -660,7 +736,7 @@ landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
       Compact &&
       (Compact->HasLSDA || (Compact->NativeEncoding & macho_unwind::kHasLSDA));
   if (!Function.Itanium && !DwarfLSDA && !CompactLSDA && !HasCompactLSDA)
-    return std::vector<size_t>{};
+    return llvm::SmallVector<const ItaniumCallSite *, 0>{};
   const auto &Info = Function.Itanium;
   if (!Info || !hasDarwinCallSitePersonality(Function.Personality) ||
       !Info->IsCallSiteAddressForm || !Info->LSDAVA ||
@@ -671,7 +747,7 @@ landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
   if (Info->CallSites.size() > Limit)
     return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
 
-  std::vector<size_t> Pads(Count, Count);
+  llvm::SmallVector<const ItaniumCallSite *, 0> Pads;
   va_t PreviousEnd = Range.Begin;
   for (const auto &Site : Info->CallSites) {
     const auto Guard = Site.GuardedRange;
@@ -687,11 +763,7 @@ landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
     if (!Range.contains(Site.LandingPadVA) ||
         Site.LandingPadVA % neverd::aarch64::kInsnSize)
       return fail(kLandingPad);
-    const auto Index = [&](va_t PC) {
-      return (PC - Range.Begin) / neverd::aarch64::kInsnSize;
-    };
-    std::fill(Pads.begin() + Index(Guard.Begin),
-              Pads.begin() + Index(Guard.End), Index(Site.LandingPadVA));
+    Pads.push_back(&Site);
   }
   return Pads;
 }
@@ -839,10 +911,9 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
   if (Start % neverd::aarch64::kInsnSize || Size % neverd::aarch64::kInsnSize)
     return fail(kProfile);
   const auto Count = Size / neverd::aarch64::kInsnSize;
-  if (Count > Limits.MaxInstructions)
-    return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
-  auto Pads = landingPads(Function, {Start, Start + Size}, Count,
-                          Limits.MaxInstructions);
+  const bool Sparse = Count > Limits.MaxInstructions;
+  auto Pads =
+      landingPads(Function, {Start, Start + Size}, Limits.MaxInstructions);
   if (!Pads)
     return Pads.takeError();
   std::map<uint64_t, FrameRow> Rules;
@@ -852,7 +923,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
     if (FDE.InitialLocation != Start || CIE->IsSignalFrame ||
         CIE->ReturnAddressRegister != kLR)
       return fail(kProfile);
-    auto Parsed = frameRows(*CIE, FDE, Limits.MaxInstructions, !Pads->empty());
+    auto Parsed = frameRows(*CIE, FDE, Limits.MaxInstructions,
+                            Function.Itanium.has_value());
     if (!Parsed)
       return Parsed.takeError();
     Rules = std::move(*Parsed);
@@ -865,7 +937,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
   }
   const auto *Bytes = Image.readVA(Start, Size);
   const auto Data = Image.DataInCode.lower_bound(Start);
-  if (!Bytes || !Image.isCodeRange(Start, Size) ||
+  const auto Embedded = machOFrameDataInCode(Image, Start, Size);
+  if (!Bytes || !Embedded ||
       (Data != Image.DataInCode.end() && *Data - Start < Size))
     return fail(kCode);
   // A linker may coalesce identical compact recipes across several functions.
@@ -887,7 +960,17 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
   Decoder Decode;
   if (!Decode.init(Image))
     return fail(kCode);
-  std::vector<std::optional<State>> States(Count);
+  // Large gaps between reachable blocks need no instruction states. Keep
+  // direct indexing for small frames and charge the same instruction budget
+  // to each distinct reachable word in a sparse frame.
+  std::vector<std::optional<State>> States(Sparse ? 0 : Count);
+  std::map<size_t, State> SparseStates;
+  const auto StateAt = [&](size_t Index) -> State * {
+    if (!Sparse)
+      return States[Index] ? &*States[Index] : nullptr;
+    const auto It = SparseStates.find(Index);
+    return It == SparseStates.end() ? nullptr : &It->second;
+  };
   State Entry;
   Entry.Registers[kSP].StackOffset = 0;
   Entry.Registers[kLR].Return = AArch64ReturnAddressState{};
@@ -896,16 +979,26 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
   for (unsigned R = kFirstDSlot; R < kFrameRegisters; ++R)
     Entry.Registers[R].IncomingRegister = R;
   std::deque<size_t> Work;
-  for (size_t Index : Entries) {
-    States[Index] = Entry;
+  const auto Enqueue = [&](size_t Index, const State &Incoming) {
+    if (auto *Previous = StateAt(Index)) {
+      if (!merge(*Previous, Incoming))
+        return;
+    } else if (Sparse) {
+      SparseStates.try_emplace(Index, Incoming);
+    } else {
+      States[Index] = Incoming;
+    }
     Work.push_back(Index);
-  }
+  };
+  for (size_t Index : Entries)
+    Enqueue(Index, Entry);
   Entries.push_back(Count);
   std::optional<llvm::SmallVector<size_t>> Reentries;
   bool CheckSourceRows = false;
   size_t Transitions = 0;
   while (!Work.empty()) {
-    if (++Transitions > Limits.MaxTransitions)
+    if (++Transitions > Limits.MaxTransitions ||
+        SparseStates.size() > Limits.MaxInstructions)
       return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
     const size_t Index = Work.front();
     Work.pop_front();
@@ -914,12 +1007,16 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
     const size_t End = *Boundary;
     const uint64_t Offset = Index * neverd::aarch64::kInsnSize;
     DecodedInsn I{};
-    if (Decode.decodeOne(Bytes + Offset, Size - Offset, Start + Offset, I) !=
+    if (!machODataInCodeRanges(*Embedded, Start + Offset,
+                               neverd::aarch64::kInsnSize)
+             .empty() ||
+        Decode.decodeOne(Bytes + Offset, Size - Offset, Start + Offset, I) !=
             int(neverd::aarch64::kInsnSize) ||
         !I.Raw || !I.Raw->detail)
       return fail(kCode);
-    State After = *States[Index];
-    if (!transfer(After, *States[Index], Decode, I))
+    const auto &Before = *StateAt(Index);
+    State After = Before;
+    if (!transfer(After, Before, Decode, I, Image))
       return fail(kCode);
     if (After.Stack.size() > Limits.MaxStackCells)
       return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
@@ -928,12 +1025,7 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
     const auto Queue = [&](size_t Next, const State &Incoming) {
       if (Next < Begin || Next >= End)
         return;
-      if (!States[Next]) {
-        States[Next] = Incoming;
-        Work.push_back(Next);
-      } else if (merge(*States[Next], Incoming)) {
-        Work.push_back(Next);
-      }
+      Enqueue(Next, Incoming);
     };
     const bool IsEpilogue =
         Source && llvm::binary_search(Source->Epilogues, Offset);
@@ -956,7 +1048,12 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       return true;
     };
     const bool IsCall = cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL);
-    if (!Pads->empty() && (*Pads)[Index] != Count) {
+    const va_t PC = Start + Offset;
+    const auto Pad =
+        llvm::upper_bound(*Pads, PC, [](va_t At, const auto *Site) {
+          return At < Site->GuardedRange.End;
+        });
+    if (Pad != Pads->end() && (*Pad)->GuardedRange.contains(PC)) {
       // The unwinder preserves the callee-saved registers and frame slots.
       // The personality supplies its exception arguments. No incoming LR or
       // volatile value can be inferred from them. A protected range can also
@@ -964,7 +1061,7 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       // side of such an instruction when admitting that exceptional edge.
       State Handler = After;
       if (!IsCall) {
-        merge(Handler, *States[Index]);
+        merge(Handler, Before);
         clobberCallState(Handler);
       }
       if (!Rules.empty()) {
@@ -979,7 +1076,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
           discardInactiveStack(Handler);
         }
       }
-      Queue((*Pads)[Index], Handler);
+      Queue(((*Pad)->LandingPadVA - Start) / neverd::aarch64::kInsnSize,
+            Handler);
     }
     if (I.Id == AARCH64_INS_B || I.Id == AARCH64_INS_CBZ ||
         I.Id == AARCH64_INS_CBNZ || I.Id == AARCH64_INS_TBZ ||
@@ -1019,7 +1117,7 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       const auto R = reg(Ops.front().reg);
       if (!R)
         return fail(kCode);
-      const Value &Destination = States[Index]->Registers[*R];
+      const Value &Destination = Before.Registers[*R];
       if (const auto Target = Destination.CodeAddress) {
         if (*Target >= Start && *Target - Start < Size) {
           if (!QueueLocal(*Target))
@@ -1038,6 +1136,8 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
           return fail(IsEpilogue ? kTailReentry : kCode);
         CheckSourceRows = true;
         if (!Reentries) {
+          if (Sparse)
+            return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
           Reentries.emplace();
           for (size_t Next = 0; Next < Count; ++Next) {
             switch (classicReentry(Rules, *Source,
@@ -1075,18 +1175,42 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
       Queue(Index + 1, After);
     }
   }
+  // At an unreachable word only a declared CFI transition can change the
+  // row. End every reached run explicitly so a gap never inherits its LR.
+  llvm::SmallVector<size_t> Boundaries;
+  if (Sparse) {
+    for (const auto &[Index, S] : SparseStates) {
+      Boundaries.push_back(Index);
+      if (Index + 1 < Count)
+        Boundaries.push_back(Index + 1);
+    }
+    for (const auto &[Offset, Rule] : Rules)
+      if (Offset < Size)
+        Boundaries.push_back(Offset / neverd::aarch64::kInsnSize);
+    llvm::sort(Boundaries);
+    Boundaries.erase(std::unique(Boundaries.begin(), Boundaries.end()),
+                     Boundaries.end());
+  }
   std::vector<AArch64RecoveredUnwindRow> Result;
-  for (size_t I = 0; I < Count; ++I) {
+  const size_t RowCount = Sparse ? Boundaries.size() : Count;
+  for (size_t N = 0; N < RowCount; ++N) {
+    const auto I = Sparse ? Boundaries[N] : N;
+    const State *At = StateAt(I);
     const auto Offset = I * neverd::aarch64::kInsnSize;
     const FrameRow *Declared =
         Rules.empty() ? nullptr : &std::prev(Rules.upper_bound(Offset))->second;
     FrameRow Rule;
     std::optional<AArch64ReturnAddressState> Signing;
-    if (States[I]) {
-      const auto &S = *States[I];
+    std::optional<AArch64LiveSigningModifier> Live;
+    if (At) {
+      const auto &S = *At;
       Rule = instructionFrameRow(
           S, Declared, Function.Compact ? &*Function.Compact : nullptr);
       Signing = savedReturn(S, Rule);
+      if (!Signing && Rule.CFARegister && S.Modifiers.Registers &&
+          Rule.Registers[kLR].Location == AArch64UnwindRegister::SameValue)
+        Live.emplace(unsigned(std::countr_zero(S.Modifiers.Registers)),
+                     S.Modifiers.Key, S.Modifiers.SigningPCs);
       // Local epilogue edges use the source unwind contract. Check that
       // every reached instruction also reproduces its effective source row.
       if (CheckSourceRows && !matchesClassicRow(S, *Declared, Signing,
@@ -1095,16 +1219,15 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
     } else if (Declared) {
       Rule = *Declared;
     }
-    const auto SP =
-        States[I] ? States[I]->Registers[kSP].StackOffset : std::nullopt;
-    const auto FP =
-        States[I] ? States[I]->Registers[kFP].StackOffset : std::nullopt;
+    const auto SP = At ? At->Registers[kSP].StackOffset : std::nullopt;
+    const auto FP = At ? At->Registers[kFP].StackOffset : std::nullopt;
     if (!Result.empty() && Result.back().StackOffset == SP &&
         Result.back().FramePointerOffset == FP &&
         Result.back().CFARegister == Rule.CFARegister &&
         Result.back().CFAOffset == Rule.CFAOffset &&
         Result.back().Registers == Rule.Registers &&
-        Result.back().Signing.State == Signing)
+        Result.back().Signing.State == Signing &&
+        Result.back().LiveSigningModifier == Live)
       continue;
     Result.push_back(
         {Offset,
@@ -1114,7 +1237,9 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
          {Signing ? AArch64RAQueryStatus::Known : AArch64RAQueryStatus::Unknown,
           Signing, Signing ? nullptr : kUnknown},
          SP,
-         FP});
+         FP,
+         false,
+         std::move(Live)});
   }
   return Result;
 }
@@ -1170,6 +1295,44 @@ bool isTransparentCallSetup(const DecodedInsn &I,
 }
 
 } // namespace
+
+bool sameDarwinAArch64UnwindScope(const BinaryImage &Image,
+                                  const ExceptionFunction &Function,
+                                  llvm::ArrayRef<va_t> PCs) {
+  if (PCs.empty() || !llvm::all_of(PCs, [&](va_t PC) {
+        return Function.CodeRange.contains(PC);
+      }))
+    return false;
+  if (Function.Itanium) {
+    const auto &Sites = Function.Itanium->CallSites;
+    const auto Scope = [&](va_t PC) {
+      return llvm::find_if(Sites, [&](const auto &Site) {
+        return Site.GuardedRange.contains(PC);
+      });
+    };
+    const auto First = Scope(PCs.front());
+    if (!llvm::all_of(PCs.drop_front(),
+                      [&](va_t PC) { return Scope(PC) == First; }))
+      return false;
+  }
+  if (!Function.Dwarf)
+    return Function.Compact && !Function.Compact->ReturnAddressSigningOffset;
+  const auto &FDE = *Function.Dwarf;
+  const auto *CIE = Image.ExceptionMetadata.findCIE(FDE.CIESectionOffset);
+  if (!CIE || FDE.InitialLocation != Function.CodeRange.Begin)
+    return false;
+  auto Rules =
+      frameRows(*CIE, FDE, kMaxInstructions, Function.Itanium.has_value());
+  if (!Rules) {
+    llvm::consumeError(Rules.takeError());
+    return false;
+  }
+  const auto At = [&](va_t PC) -> const FrameRow & {
+    return std::prev(Rules->upper_bound(PC - FDE.InitialLocation))->second;
+  };
+  return llvm::all_of(PCs.drop_front(),
+                      [&](va_t PC) { return At(PC) == At(PCs.front()); });
+}
 
 llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
 recoverDarwinAArch64Unwind(const BinaryImage &Image,
@@ -1251,8 +1414,31 @@ std::optional<AArch64SystemCallerPlan>
 prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
                                 ExceptionAddressRange Range,
                                 va_t LoadedFrameStart) {
-  if (!Row.Signing.State || Row.Signing.Status != AArch64RAQueryStatus::Known ||
-      (Row.CFARegister != kSP && Row.CFARegister != kFP) ||
+  return prepareDarwinArm64eSystemCaller(Row, Range, LoadedFrameStart, {});
+}
+
+std::optional<AArch64SystemCallerPlan> prepareDarwinArm64eSystemCaller(
+    const AArch64RecoveredUnwindRow &Row, ExceptionAddressRange Range,
+    va_t LoadedFrameStart, llvm::ArrayRef<va_t> InterruptedGPRs) {
+  auto Signing = Row.Signing.State;
+  if (Row.Signing.Status == AArch64RAQueryStatus::Unknown &&
+      Row.LiveSigningModifier) {
+    const auto &Live = *Row.LiveSigningModifier;
+    if (Live.Register >= InterruptedGPRs.size())
+      return std::nullopt;
+    const auto LoadedPC = InterruptedGPRs[Live.Register];
+    if (LoadedPC < LoadedFrameStart ||
+        LoadedPC - LoadedFrameStart >= Range.size())
+      return std::nullopt;
+    const auto PC = Range.Begin + (LoadedPC - LoadedFrameStart);
+    if (!llvm::binary_search(Live.SigningPCs, PC))
+      return std::nullopt;
+    Signing = AArch64ReturnAddressState{AArch64RASigningKind::SPAndPC, Live.Key,
+                                        AArch64RARecipe::NonHintPAuthLR, PC};
+  } else if (Row.Signing.Status != AArch64RAQueryStatus::Known || !Signing) {
+    return std::nullopt;
+  }
+  if ((Row.CFARegister != kSP && Row.CFARegister != kFP) ||
       Row.CodeOffset >= Range.size() ||
       !std::in_range<ptrdiff_t>(Row.CFAOffset))
     return std::nullopt;
@@ -1295,7 +1481,7 @@ prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
       Vectors.HighOffsets[D] = High.Offset;
     }
   }
-  const auto &State = *Row.Signing.State;
+  const auto &State = *Signing;
   const bool B = State.Key == AArch64RAKey::B;
   switch (State.Kind) {
   case AArch64RASigningKind::Unsigned:

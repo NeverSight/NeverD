@@ -3560,6 +3560,24 @@ set(X86_64_TEST_SOURCES
   x86_64/test_jumptable_slot_reload_guard.s
   x86_64/test_jumptable_guard_chain.c
   x86_64/test_jumptable_masked_byte.s
+  x86_64/test_jumptable_cyclic_sad.s
+  x86_64/test_jumptable_two_machines.s
+  x86_64/test_jumptable_two_machines_escape.s
+  x86_64/test_jumptable_open_donor.s
+  x86_64/test_jumptable_narrow_guard.s
+  x86_64/test_jumptable_narrow_load.s
+  x86_64/test_jumptable_lane_entry_paths.s
+  x86_64/test_jumptable_reload_cursor.s
+  x86_64/test_jumptable_flags_carry.s
+  x86_64/test_jumptable_lane_carry.s
+  x86_64/test_jumptable_walked_extend.s
+  x86_64/test_jumptable_own_label_dispatch.s
+  x86_64/test_jumptable_scale_after_extend.s
+  x86_64/test_jumptable_alias_share.s
+  x86_64/test_jumptable_guard_session.s
+  x86_64/test_jumptable_lane_identity.s
+  x86_64/test_jumptable_token_loop.s
+  x86_64/test_jumptable_memory_reload.s
   x86_64/test_jumptable_byte_switch.s
   x86_64/test_jumptable_inclusive_postload_clobber.s
   x86_64/test_jumptable_inclusive_postload_unrelated.s
@@ -4608,6 +4626,18 @@ if(LLD_LINK_EXEC)
     COMMENT "Linking MinGW-style x64 SEH startup fixture")
   list(APPEND TEST_OBJECTS ${mingw_startup_seh_obj} ${mingw_startup_seh_exe})
 
+  set(own_label_win64_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_jumptable_own_label_win64.s")
+  set(own_label_win64_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_own_label_win64.obj")
+  add_custom_command(
+    OUTPUT ${own_label_win64_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${own_label_win64_src} -o ${own_label_win64_obj}
+    DEPENDS ${own_label_win64_src}
+    COMMENT "Compiling Win64 own-label table dispatch fixture")
+  list(APPEND TEST_OBJECTS ${own_label_win64_obj})
+
   set(coff_cxx_fh3_src
       "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff_cxx_fh3.s")
   set(coff_cxx_fh3_obj
@@ -4919,6 +4949,81 @@ if(LLD_EXEC)
     COMMENT "Linking x86-64 GCC cold fragment fixtures")
   list(APPEND ELF_EXECUTABLES ${gcc_cold_x64_obj} ${gcc_cold_x64_so}
                               ${gcc_cold_x64_stripped})
+
+  # A frameless function's isolated trap part, whose FDE begins with the
+  # entry rule, and entry-like parts that stay functions; linked with their
+  # symbols and stripped.
+  foreach(entry_like_fixture test_gcc_frameless_cold_x64
+                             test_entry_like_parts_x64)
+    set(entry_like_src
+        "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/${entry_like_fixture}.s")
+    set(entry_like_obj "${CMAKE_CURRENT_BINARY_DIR}/${entry_like_fixture}.o")
+    set(entry_like_so "${CMAKE_CURRENT_BINARY_DIR}/${entry_like_fixture}.so")
+    set(entry_like_stripped
+        "${CMAKE_CURRENT_BINARY_DIR}/${entry_like_fixture}_stripped.so")
+    add_custom_command(
+      OUTPUT ${entry_like_obj}
+      COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -c ${entry_like_src}
+              -o ${entry_like_obj}
+      DEPENDS ${entry_like_src}
+      COMMENT "Compiling x86-64 ${entry_like_fixture} fixture")
+    add_custom_command(
+      OUTPUT ${entry_like_so} ${entry_like_stripped}
+      COMMAND ${LLD_EXEC} -shared --eh-frame-hdr -o ${entry_like_so}
+              ${entry_like_obj}
+      COMMAND ${LLD_EXEC} -shared --eh-frame-hdr -s -o ${entry_like_stripped}
+              ${entry_like_obj}
+      DEPENDS ${entry_like_obj}
+      COMMENT "Linking x86-64 ${entry_like_fixture} fixtures")
+    list(APPEND ELF_EXECUTABLES ${entry_like_obj} ${entry_like_so}
+                                ${entry_like_stripped})
+  endforeach()
+
+  # x86-64 indirect jumps with restored, live and unknown stack frames,
+  # linked and stripped so no relocation names the table one of them reads.
+  set(tail_frame_x64_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_indirect_tail_frame_x64.s")
+  set(tail_frame_x64_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_indirect_tail_frame_x64.o")
+  set(tail_frame_x64_so
+      "${CMAKE_CURRENT_BINARY_DIR}/test_indirect_tail_frame_x64.so")
+  add_custom_command(
+    OUTPUT ${tail_frame_x64_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -c ${tail_frame_x64_src}
+            -o ${tail_frame_x64_obj}
+    DEPENDS ${tail_frame_x64_src}
+    COMMENT "Compiling x86-64 indirect tail frame fixture")
+  add_custom_command(
+    OUTPUT ${tail_frame_x64_so}
+    COMMAND ${LLD_EXEC} -shared --eh-frame-hdr -s -o ${tail_frame_x64_so}
+            ${tail_frame_x64_obj}
+    DEPENDS ${tail_frame_x64_obj}
+    COMMENT "Linking x86-64 indirect tail frame fixture")
+  list(APPEND ELF_EXECUTABLES ${tail_frame_x64_obj} ${tail_frame_x64_so})
+
+  # A state machine whose first state is a constant, linked so its table holds
+  # plain offsets: exact scalar recovery first takes the dispatch as a direct
+  # branch, then withdraws that guess once the cases loop back.
+  set(scalar_retracted_x64_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_jumptable_scalar_retracted.s")
+  set(scalar_retracted_x64_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_scalar_retracted.o")
+  set(scalar_retracted_x64_so
+      "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_scalar_retracted.so")
+  add_custom_command(
+    OUTPUT ${scalar_retracted_x64_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-linux-gnu -c
+            ${scalar_retracted_x64_src} -o ${scalar_retracted_x64_obj}
+    DEPENDS ${scalar_retracted_x64_src}
+    COMMENT "Compiling x86-64 withdrawn scalar dispatch fixture")
+  add_custom_command(
+    OUTPUT ${scalar_retracted_x64_so}
+    COMMAND ${LLD_EXEC} -shared -o ${scalar_retracted_x64_so}
+            ${scalar_retracted_x64_obj}
+    DEPENDS ${scalar_retracted_x64_obj}
+    COMMENT "Linking x86-64 withdrawn scalar dispatch fixture")
+  list(APPEND ELF_EXECUTABLES ${scalar_retracted_x64_obj}
+                              ${scalar_retracted_x64_so})
 
   # Functions that never return, and callers whose compiler knew it, linked
   # and stripped.

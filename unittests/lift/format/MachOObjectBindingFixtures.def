@@ -1,0 +1,15 @@
+//===- MachOObjectBindingFixtures.def - arm64e object bindings -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Apple clang's object word for .quad (_target0-4)@AUTH(da,0x1234,addr).
+
+MACHO_OBJECT_BINDING_VALUE(uint64_t, AuthWord, 0x80051234fffffffcULL)
+MACHO_OBJECT_BINDING_VALUE(int32_t, AuthAddend, -4)
+MACHO_OBJECT_BINDING_VALUE(uint16_t, AuthDiversity, 0x1234)
+MACHO_OBJECT_BINDING_VALUE(uint8_t, AuthKeyDA, 2)
+MACHO_OBJECT_BINDING_VALUE(uint32_t, BranchAndLink, 0x94000000)
+MACHO_OBJECT_BINDING_VALUE(const char *, TargetName, "_target0")
+
+#undef MACHO_OBJECT_BINDING_VALUE

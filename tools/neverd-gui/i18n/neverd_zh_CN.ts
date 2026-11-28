@@ -4,6 +4,22 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>查看 JVM 类和 JAR 文件…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>查看 Java 字节码、带类型的中间表示和重建的方法</translation>
+    </message>
+    <message>
+        <source>Memory Safety Scan...</source>
+        <translation>内存安全扫描...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>检查对象生命周期、初始化、边界和格式字符串</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>切换包含反汇编、伪代码和输出的浮动工作区</translation>
     </message>
@@ -1342,6 +1358,22 @@
     <message>
         <source>Find conditional strings computed by functions</source>
         <translation>查找函数在特定条件下计算出的字符串</translation>
+    </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>恢复 Lua 源码…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>恢复 Lua 源码并检查函数原型</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>检查 Python 代码和包组件</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>恢复 Python 源码…</translation>
     </message>
 </context>
 <context>
@@ -11151,6 +11183,375 @@ Your previous graph is still available.</source>
     <message>
         <source>Loading %1…</source>
         <translation>正在加载 %1…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>内存安全扫描</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>分析器(&amp;A)</translation>
+    </message>
+    <message>
+        <source>All checks</source>
+        <translation>全部检查</translation>
+    </message>
+    <message>
+        <source>Lifetime and initialization</source>
+        <translation>生命周期与初始化</translation>
+    </message>
+    <message>
+        <source>Bounds and format strings</source>
+        <translation>边界与格式字符串</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>发现项</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>判定</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>属性</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>地址</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>函数</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>分析器</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>发现项证据</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>扫描(&amp;S)</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>取消扫描</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>正在取消扫描…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>正在扫描…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>扫描已在开始前取消。</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>判定：%1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1：%2（已扫描 %3，已跳过 %4，结论未定 %5）</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>查看 JVM 类和 JAR 文件</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>浏览…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>制品</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>JAR 基础条目</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>启用预览特性</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>运行时</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>本地依赖项…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>清除</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>依赖项</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>类或成员</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>方法</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>查看清单</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>分析所选项</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Java 源码</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>字节码</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>带类型的中间表示</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>证据</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>字节码映射</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>复制视图</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>导出视图…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>导出报告…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>打开 JVM 制品</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>所选运行时视图</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>所有方法</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>恢复 Lua 源码</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>浏览…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>输入文件(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>按文件识别</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>上游 Luau</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>上游 Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>配置(&amp;P)</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>恢复</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>正在启动分析工作进程…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>函数原型</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>源码</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>字节码映射</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>证据</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>复制源码</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>导出源码…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>导出报告…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>打开 Lua 文件</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>正在取消…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>导出到新文件</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua 源码 (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>分析工作进程已停止。</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>正在恢复源码…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>此工作进程不支持 Lua 恢复。</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>正在读取文件…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>已取消</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>函数原型 %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>原始行号 %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>组件</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>入口脚本</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>正在导出原生组件…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>文件夹…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>函数</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>函数 %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>原生组件已导出。</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>打开 PyInstaller 文件夹</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>打开 Python 文件</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>在原生分析中打开…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>此工作进程不支持 Python 源码恢复。</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python 源码 (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>恢复 Python 源码</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>将原生组件保存到新文件</translation>
     </message>
 </context>
 </TS>

@@ -18,6 +18,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/libc/LibCNames.h"
@@ -27,6 +28,7 @@
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringSwitch.h"
 
 #include <algorithm>
 #include <cstring>
@@ -39,6 +41,56 @@
 namespace neverd {
 
 namespace {
+
+// The falling-through iteration sampled equal high words around the low
+// word. Both return registers carry this sample across the return itself.
+bool returnsRV32CycleCounter(const LowFunc &F, const TargetRegInfo &TRI) {
+  if (F.Blocks.size() != 2)
+    return false;
+  const LowBlock &Loop = F.Blocks.front(), &Exit = F.Blocks.back();
+  if (Loop.StartAddr != F.Entry || Loop.Ops.size() != 5 ||
+      Loop.Succs.size() != 2 || !Loop.hasSucc(Loop.Id) ||
+      !Loop.hasSucc(Exit.Id) || !Exit.Succs.empty() || Exit.Ops.empty() ||
+      Exit.Ops.back().Opcode != NdOp::RETURN ||
+      llvm::any_of(Exit.Ops, [&](const LowOp &Op) {
+        return Op.Addr != Exit.StartAddr || Op.Output.isReg();
+      }))
+    return false;
+
+  auto IsSample = [&](const LowOp &Op, Intrinsic Id) {
+    return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 1 &&
+           Op.Inputs[0].isConst() && Op.Inputs[0].Offset == uint64_t(Id) &&
+           Op.Output.isReg() && Op.Output.Size == TRI.PointerSize;
+  };
+  const LowOp &First = Loop.Ops[0], &Low = Loop.Ops[1], &Last = Loop.Ops[2];
+  if (!IsSample(First, Intrinsic::RISCVRdcycleh) ||
+      !IsSample(Low, Intrinsic::RISCVRdcycle) ||
+      !IsSample(Last, Intrinsic::RISCVRdcycleh) ||
+      Low.Output.Offset != TRI.IntReturnReg || First.Output == Last.Output ||
+      First.Output == Low.Output || Last.Output == Low.Output ||
+      (First.Output.Offset != TRI.IntReturnReg2 &&
+       Last.Output.Offset != TRI.IntReturnReg2))
+    return false;
+  const LowOp &Compare = Loop.Ops[3], &Branch = Loop.Ops[4];
+  return Compare.Opcode == NdOp::INT_NOTEQUAL && Compare.NumInputs == 2 &&
+         Compare.Output.isTemp() &&
+         ((Compare.Inputs[0] == First.Output &&
+           Compare.Inputs[1] == Last.Output) ||
+          (Compare.Inputs[1] == First.Output &&
+           Compare.Inputs[0] == Last.Output)) &&
+         Branch.Opcode == NdOp::COND_BR && Branch.NumInputs == 2 &&
+         Branch.Inputs[0].isConst() &&
+         Branch.Inputs[0].Offset == Loop.StartAddr &&
+         Branch.Inputs[1] == Compare.Output;
+}
+
+bool isDoubleWordShift(llvm::StringRef Name) {
+  return llvm::StringSwitch<bool>(Name)
+#define NEVERD_DOUBLE_WORD_RESULT(Name, WordBytes)
+#define NEVERD_DOUBLE_WORD_SHIFT(Name, WordBytes) .Case(Name, true)
+#include "neverd/libc/CompilerRuntimeDoubleWord.def"
+      .Default(false);
+}
 
 // Resolve a call-target operand to its absolute VA, folding the COPY / INT_ADD
 // / INT_SUB / literal-pool LOAD chain the emitter resolves — so an ARM32
@@ -430,16 +482,30 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
     {
       std::map<va_t, const MedFunc *> ByEntry;
       std::set<va_t> Proven;
-      for (const auto &MF : Result.MedFuncs) {
+      std::set<va_t> Shifts;
+      for (const auto &[Index, MF] : llvm::enumerate(Result.MedFuncs)) {
         ByEntry[MF.Entry] = &MF;
-        if (libc::returnsDoubleWord(
-                cNameOfSymbol(MF.Name, Img.Format, Img.Arch), TRI.PointerSize))
+        const auto Name = cNameOfSymbol(MF.Name, Img.Format, Img.Arch);
+        if (libc::returnsDoubleWord(Name, TRI.PointerSize)) {
           WideRetCallees.insert(MF.Entry);
-        else if ((isRISCV(Img.Arch) || isPowerPC(Img.Arch)) &&
-                 !WideRetCallees.count(MF.Entry) &&
-                 returnsDoubleWordSum(MF, TRI))
-          // The sum proof already checked both final register definitions.
-          Proven.insert(MF.Entry);
+          if ((isRISCV(Img.Arch) || isPowerPC(Img.Arch)) &&
+              isDoubleWordShift(Name))
+            Shifts.insert(MF.Entry);
+        } else if (isRISCV(Img.Arch) || isPowerPC(Img.Arch)) {
+          const auto Order = archLittleEndian(Img.Arch)
+                                 ? llvm::endianness::little
+                                 : llvm::endianness::big;
+          if ((!WideRetCallees.count(MF.Entry) &&
+               returnsDoubleWordSum(MF, TRI)) ||
+              (Index < Result.LowFuncs.size() &&
+               Result.LowFuncs[Index].Entry == MF.Entry &&
+               ((isRISCV32(Img.Arch) && !MF.SourceTypeHint &&
+                 !MF.SourceParametersBound && MF.MultiReturn.empty() &&
+                 returnsRV32CycleCounter(Result.LowFuncs[Index], TRI)) ||
+                returnsDoubleWordShift(Result.LowFuncs[Index], MF, TRI,
+                                       Order))))
+            Proven.insert(MF.Entry);
+        }
       }
       for (va_t Entry : WideRetCallees)
         if (!ByEntry.count(Entry))
@@ -465,7 +531,8 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
                        cNameOfSymbol(Import->Name, Img.Format, Img.Arch),
                        TRI.PointerSize);
           };
-          if (!returnsRegisterPairI64(Callee, TRI, TailReturnsPair))
+          if (!returnsRegisterPairI64(Callee, TRI, TailReturnsPair,
+                                      Shifts.count(Entry)))
             continue;
           Proven.insert(Entry);
           Changed = true;

@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,51 @@ namespace {
 using mips_test::ELFBytes;
 
 class MIPSLoader : public ::testing::TestWithParam<Arch> {};
+
+TEST(MIPSDynamicImports, VersionRequirementsSurviveRemovalOfSectionHeaders) {
+  for (const char *Name : {"mips64n32-released", "mips64n32el-released"}) {
+    SCOPED_TRACE(Name);
+    const auto File = std::filesystem::path(__FILE__)
+                          .parent_path()
+                          .parent_path()
+                          .parent_path() /
+                      "safety/fixtures/elf-profiles/binaries/ownership" / Name;
+    auto Buffer = llvm::MemoryBuffer::getFile(File.string());
+    ASSERT_TRUE(Buffer);
+    std::string Bytes = (*Buffer)->getBuffer().str();
+    ASSERT_GE(Bytes.size(), 52u);
+    // ELF32 e_shoff and e_sh{entsize,num,strndx} in either byte order.
+    std::fill_n(Bytes.begin() + 32, 4, 0);
+    std::fill_n(Bytes.begin() + 46, 6, 0);
+    auto Image = ELFLoader().loadBuffer(llvm::MemoryBufferRef(Bytes, Name));
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    ASSERT_TRUE(Image->MIPS);
+    EXPECT_EQ(Image->MIPS->RequiredImportVersions.size(), 2u);
+    for (const auto &[Slot, Required] : Image->MIPS->RequiredImportVersions) {
+      const auto *I = Image->findImportAt(Slot);
+      ASSERT_NE(I, nullptr);
+      EXPECT_EQ(I->IATAddr, Slot);
+      EXPECT_TRUE(I->Name == "malloc" || I->Name == "free");
+      EXPECT_EQ(Required.Library, "libc.so.6");
+      EXPECT_EQ(Required.Version, "GLIBC_2.0");
+    }
+    auto Tags = readELFProgramDynamicTable(*Image);
+    ASSERT_TRUE(bool(Tags)) << llvm::toString(Tags.takeError());
+    const auto It = llvm::find_if(*Tags, [](const auto &Tag) {
+      return Tag.Tag == llvm::ELF::DT_VERNEED;
+    });
+    ASSERT_NE(It, Tags->end());
+    const auto Offset = Image->vaToFileOffset(It->Value);
+    ASSERT_LE(Offset, Bytes.size() - 16);
+    // An auxiliary list cannot start inside the version-need record itself.
+    std::fill_n(Bytes.begin() + Offset + 8, 4, 0);
+    auto Invalid = ELFLoader().loadBuffer(llvm::MemoryBufferRef(Bytes, Name));
+    ASSERT_FALSE(bool(Invalid));
+    EXPECT_NE(llvm::toString(Invalid.takeError())
+                  .find("invalid version requirements"),
+              std::string::npos);
+  }
+}
 
 TEST_P(MIPSLoader, MapsLinkedImageAndReadsTargetOrderPointers) {
   ELFBytes File(GetParam());
@@ -714,6 +760,38 @@ TEST_P(MIPSLoader, CompletePLTVeneerNamesOnlyItsBoundImportSlot) {
   // A changed delay slot no longer states the PLT contract.
   Image->Segments[0].Data[0x10c] ^= 1;
   EXPECT_EQ(Image->findImportAt(0x10100), nullptr);
+}
+
+TEST(MIPSMixedWidthLoader, ELF32ImportSlotRequiresWordTransfers) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    for (uint32_t Flags : {0x80000020u, 0x20001000u}) {
+      // MIPS64r2 n32 and MIPS III o32 both carry ELF32 pointers.
+      for (bool Word : {true, false}) {
+        SCOPED_TRACE(::testing::Message() << Flags << " word=" << Word);
+        ELFBytes File(Target);
+        File.put(36, Flags, 4);
+        File.put(0x100, 0x3c0f0001, 4);
+        File.put(0x104, Word ? 0x8df90118 : 0xddf90118, 4);
+        File.put(0x108, 0x03200008, 4);
+        File.put(0x10c, Word ? 0x25f80118 : 0x65f80118, 4);
+        ELFLoader Loader;
+        auto Image = Loader.loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        ASSERT_TRUE(hasMIPS32BitAddressIn64BitGPR(Image->Arch));
+        Import Imported;
+        Imported.Name = "record_label";
+        Imported.IATAddr = 0x10118;
+        Image->Imports.push_back(std::move(Imported));
+        const auto *Found = Image->findImportAt(0x10100);
+        if (Word) {
+          ASSERT_NE(Found, nullptr);
+          EXPECT_EQ(Found->Name, "record_label");
+        } else {
+          EXPECT_EQ(Found, nullptr);
+        }
+      }
+    }
+  }
 }
 
 TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {

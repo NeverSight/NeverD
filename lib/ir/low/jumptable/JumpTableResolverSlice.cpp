@@ -2879,7 +2879,7 @@ struct CFGBuilder::ResolverGraphCache {
     bool Complete;
     std::vector<bool> Results;
     std::vector<bool> Completions;
-    std::vector<uint64_t> Masks;
+    std::vector<JumpTableFeasibleSet> Masks;
     std::vector<std::optional<va_t>> Addresses;
     size_t Work;
     size_t Bytes;
@@ -2999,7 +2999,7 @@ struct CFGBuilder::ResolverGraphCache {
   static std::optional<size_t> valueBatchBytes(
       const std::vector<JumpTableValueQuery> &Queries,
       const std::vector<bool> &Results, const std::vector<bool> *Completions,
-      const std::vector<uint64_t> *Masks,
+      const std::vector<JumpTableFeasibleSet> *Masks,
       const std::vector<std::optional<va_t>> *Addresses, bool Capacity) {
     size_t Bytes = sizeof(ValueBatch) + 8 * sizeof(void *);
     if (!accountValueVector(Bytes, Queries, Capacity) ||
@@ -3065,7 +3065,7 @@ struct CFGBuilder::ResolverGraphCache {
                           uint32_t Depth, size_t MatchBudget, bool Complete,
                           const std::vector<bool> &Results,
                           const std::vector<bool> *Completions,
-                          const std::vector<uint64_t> *Masks,
+                          const std::vector<JumpTableFeasibleSet> *Masks,
                           const std::vector<std::optional<va_t>> *Addresses,
                           size_t ColdWork) const {
     const auto EstimatedContext =
@@ -3104,7 +3104,7 @@ struct CFGBuilder::ResolverGraphCache {
                      Complete,
                      Results,
                      Completions ? *Completions : std::vector<bool>{},
-                     Masks ? *Masks : std::vector<uint64_t>{},
+                     Masks ? *Masks : std::vector<JumpTableFeasibleSet>{},
                      Addresses ? *Addresses
                                : std::vector<std::optional<va_t>>{},
                      ColdWork,
@@ -5365,7 +5365,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     const std::vector<va_t> *CandidateTargetsOverride, size_t *GraphWorkBudget,
     size_t LocalMatchEvidenceLimit,
     const std::set<va_t> *CandidateBranchesSharingTargets,
-    std::vector<uint64_t> *QueryUnsignedFeasibleMasks,
+    std::vector<JumpTableFeasibleSet> *QueryUnsignedFeasibleMasks,
     uint32_t ResolverDepthLimit,
     const std::map<va_t, std::vector<va_t>> *CertifiedEdgeOverrides,
     bool UseGroupContext, ResolverQueryScope *ReadOnlyScope,
@@ -5433,7 +5433,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   if (QueryAnalysisComplete)
     QueryAnalysisComplete->assign(Queries.size(), false);
   if (QueryUnsignedFeasibleMasks)
-    QueryUnsignedFeasibleMasks->assign(Queries.size(), 0);
+    QueryUnsignedFeasibleMasks->assign(Queries.size(), JumpTableFeasibleSet{});
   if (QueryConstantAddresses)
     QueryConstantAddresses->assign(Queries.size(), std::nullopt);
   if (!JumpTableProofContextComplete || !CurrentImg || Queries.empty())
@@ -9008,21 +9008,30 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           // `movzx edx, byte [rbp-0x38]` reloads next.  Otherwise the LOAD
           // defines its own occurrence, which a later use of it may compare
           // but a distinct reload cannot borrow guard evidence from.
-          const auto MayWriteMemory = [](const LowOp &Op) {
-            return Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
-                   Op.Opcode == NdOp::ATOMIC_ADD ||
-                   Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
-                   Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-                   Op.Opcode == NdOp::INTRINSIC ||
-                   Op.MemoryOrdering != NdMemoryOrdering::None;
-          };
           const auto SameLoad = [&](const LowOp &Op) {
             return Op.Opcode == NdOp::LOAD && Op.NumInputs == Def.NumInputs &&
                    Op.Output.Size == Def.Output.Size &&
                    Op.MemoryAddressSpace == Def.MemoryAddressSpace;
           };
+          // Two loads whose addresses carry the same register and
+          // displacement, with no write of that register between them, read
+          // the same address (detail::loadAddressCarrier).
+          auto loadAddressCarrier = [&](const std::vector<LowOp> &Ops,
+                                        int Before, va_t InsnAddr,
+                                        NdVar Value) {
+            return detail::loadAddressCarrier(
+                Ops, Before, InsnAddr, Value, CurrentImg->getPointerSize(),
+                [&] { return consumeEvidence(); });
+          };
+          const std::optional<std::pair<NdVar, uint64_t>> LoadCarrier =
+              HasFrameSlot ? std::nullopt
+                           : loadAddressCarrier(B.Ops, I, Def.Addr, Address);
+          const LaneView CarrierView =
+              LoadCarrier ? viewOf(LoadCarrier->first) : LaneView{};
+          const bool CarrierUsable = LoadCarrier && CarrierView.Valid;
           if ((!AddressResolved ||
-               AddressValue.Kind == ResolverResultKind::Value) &&
+               AddressValue.Kind == ResolverResultKind::Value ||
+               CarrierUsable) &&
               Def.MemoryOrdering == NdMemoryOrdering::None &&
               consumeEvidence(2)) {
             int SearchBlock = Block;
@@ -9030,18 +9039,23 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             std::set<int> Searched{Block};
             std::vector<std::pair<int, int>> CrossedEdges;
             bool Stop = false;
+            bool CarrierWritten = false;
             for (uint32_t Hop = 0;
                  !Stop && Hop < limits::kMaxJumpTableReloadSearchBlocks;
                  ++Hop) {
               const ResolverFlowBlock &Searching = Graph.Blocks[SearchBlock];
               for (int J = SearchEnd - 1; J >= 0 && !Stop; --J) {
                 const LowOp &Op = Searching.Ops[J];
-                if (!consumeEvidence() || MayWriteMemory(Op)) {
+                if (!consumeEvidence() || detail::mayWriteMemory(Op)) {
                   Stop = true;
                   break;
                 }
-                if (!SameLoad(Op))
+                if (!SameLoad(Op)) {
+                  if (CarrierUsable &&
+                      sameContainer(CarrierView, viewOf(Op.Output)))
+                    CarrierWritten = true;
                   continue;
+                }
                 const NdVar &EarlierAddress =
                     Op.NumInputs >= 2 ? Op.Inputs[1] : Op.Inputs[0];
                 if (HasFrameSlot) {
@@ -9051,8 +9065,33 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                              EarlierBase, EarlierOffset) ||
                       EarlierBase != SlotBase || EarlierOffset != SlotOffset)
                     continue;
+                } else if (const auto EarlierCarrier =
+                               CarrierUsable && !CarrierWritten &&
+                                       !sameContainer(CarrierView,
+                                                      viewOf(Op.Output))
+                                   ? loadAddressCarrier(Searching.Ops, J,
+                                                        Op.Addr, EarlierAddress)
+                                   : std::nullopt;
+                           EarlierCarrier &&
+                           EarlierCarrier->first.Space ==
+                               LoadCarrier->first.Space &&
+                           EarlierCarrier->first.Offset ==
+                               LoadCarrier->first.Offset &&
+                           EarlierCarrier->first.Size ==
+                               LoadCarrier->first.Size &&
+                           EarlierCarrier->second == LoadCarrier->second) {
+                  // Same register and displacement, and neither this load
+                  // nor anything after it wrote the register: the same
+                  // address.
                 } else {
+                  if (CarrierUsable &&
+                      sameContainer(CarrierView, viewOf(Op.Output)))
+                    CarrierWritten = true;
                   if (!resolveLoadAddress()) {
+                    // Only a same-register load further back can still
+                    // match; a load writes no memory.
+                    if (CarrierUsable)
+                      continue;
                     Stop = true;
                     break;
                   }
@@ -9744,14 +9783,15 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   auto provesUnsignedUpperBound = [&](const ResolverValue &Value,
                                       uint64_t Bound, bool &ProofComplete,
                                       bool ExactModuloRecipeOnly = false,
-                                      uint64_t *FeasibleMask = nullptr,
+                                      JumpTableFeasibleSet *FeasibleMask =
+                                          nullptr,
                                       bool RetainGuards = false) {
     ProofComplete = false;
     const bool RetainPathPredicates = FeasibleMask || RetainGuards;
     const uint16_t MaximumSize =
         ExactModuloRecipeOnly ? 2 * sizeof(uint64_t) : sizeof(uint64_t);
     if (!Value || Value->Size == 0 || Value->Size > MaximumSize || Bound == 0 ||
-        (FeasibleMask && Bound > 64))
+        (FeasibleMask && Bound > JumpTableFeasibleSet::Capacity))
       return false;
 
     const uint32_t Width = uint32_t(Value->Size) * 8u;
@@ -10385,7 +10425,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         Counterexample,
         Incomplete,
       };
-      uint64_t Mask = 0;
+      JumpTableFeasibleSet Mask;
       // Symbolize the complete selector before proving any merge arm, then
       // freeze the original-node prefix.  Full reciprocal-division recipe
       // matching may intern theorem nodes; the fixed prefix prevents a failed
@@ -10396,7 +10436,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           Ctx.numNodes() > std::numeric_limits<uint32_t>::max())
         return false;
       const size_t SelectorExpressionNodeCount = Ctx.numNodes();
-      size_t ReservedSolverQueries = 0;
+      size_t SolverQueries = 0;
       if (!consumeSymbolWork(2))
         return false;
       std::vector<ResolverValue> SyntheticValues;
@@ -10537,37 +10577,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           }
         }
         const std::optional<llvm::APInt> ConstantIndex = Ctx.asConst(Index);
-        size_t RemainingLeafSolverQueries = 0;
-        bool LeafSolverQueriesReserved = false;
-        auto consumeLeafSolverQuery = [&] {
-          if (!LeafSolverQueriesReserved) {
-            const size_t PerLeaf =
-                ConstantIndex ? 1 : static_cast<size_t>(Bound) + 1;
-            if (PerLeaf >
-                    ::neverd::limits::ir::
-                            kJumpTableResolverSliceMaxFiniteSetSolverQueries -
-                        ReservedSolverQueries ||
-                !consumeSymbolWork(PerLeaf))
-              return false;
-            ReservedSolverQueries += PerLeaf;
-            RemainingLeafSolverQueries = PerLeaf;
-            LeafSolverQueriesReserved = true;
-          }
-          if (RemainingLeafSolverQueries == 0 || !consumeSymbolWork(3))
+        // Every solver call of the proof takes one unit of its shared ceiling
+        // and also debits the local and candidate symbolic accounts.
+        auto consumeSolverQuery = [&] {
+          if (SolverQueries ==
+                  ::neverd::limits::ir::
+                      kJumpTableResolverSliceMaxFiniteSetSolverQueries ||
+              !consumeSymbolWork(3))
             return false;
-          --RemainingLeafSolverQueries;
+          ++SolverQueries;
           return true;
-        };
-        auto constrainQuery = [&](symbolic::SymRef Query) {
-          if (!PathPredicate)
-            return Query;
-          if (!consumeSymbolWork(2))
-            return symbolic::SymRef{};
-          return Ctx.mkAnd(PathPredicate, Query);
         };
         if (ConstantIndex) {
           if (PathPredicate) {
-            if (!consumeLeafSolverQuery())
+            if (!consumeSolverQuery())
               return FeasibleProofOutcome::Incomplete;
             const solver::SatResult ConstraintResult = solver::checkSat(
                 Ctx, PathPredicate, nullptr, makeSolverOptions());
@@ -10579,7 +10602,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           if (ConstantIndex->getActiveBits() > 64 ||
               ConstantIndex->getZExtValue() >= Bound)
             return FeasibleProofOutcome::Counterexample;
-          Mask |= uint64_t{1} << ConstantIndex->getZExtValue();
+          Mask.set(ConstantIndex->getZExtValue());
           return FeasibleProofOutcome::Proven;
         }
         bool RecipeIncomplete = false;
@@ -10631,45 +10654,73 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             RecipeIncomplete = false;
         }
         if (ExactRecipe) {
-          Mask |= Bound == 64 ? std::numeric_limits<uint64_t>::max()
-                              : (uint64_t{1} << Bound) - 1;
+          Mask.setPrefix(Bound);
           return FeasibleProofOutcome::Proven;
         }
         if (RecipeIncomplete)
           return FeasibleProofOutcome::Incomplete;
+        // One incremental solver holds this arm's path predicate. Prove the
+        // envelope under an assumption, then read one feasible coordinate per
+        // call from a model and exclude it until no value is left. Members an
+        // earlier arm proved cannot change the union, so they are excluded
+        // first: each later call is one new member or the last. The calls
+        // follow the members, not the proposed envelope.
+        solver::SolverOptions ModelOptions = makeSolverOptions();
+        ModelOptions.BuildModel = true;
+        solver::BitVectorSolver Solver(Ctx, ModelOptions);
+        if (PathPredicate && !Solver.assertTrue(PathPredicate))
+          return FeasibleProofOutcome::Incomplete;
         const bool FullWidthEnvelope =
             Width < 64 && Bound >= (uint64_t{1} << Width);
         if (!FullWidthEnvelope) {
-          if (!consumeLeafSolverQuery())
+          if (!consumeSolverQuery() || !consumeSymbolWork(2))
             return FeasibleProofOutcome::Incomplete;
-          symbolic::SymRef Counterexample = constrainQuery(
-              Ctx.mkNot(Ctx.mkUlt(Index, Ctx.mkConst(Width, Bound))));
-          if (!Counterexample)
-            return FeasibleProofOutcome::Incomplete;
-          const solver::SatResult Result = solver::checkSat(
-              Ctx, Counterexample, nullptr, makeSolverOptions());
+          const symbolic::SymRef Outside =
+              Ctx.mkNot(Ctx.mkUlt(Index, Ctx.mkConst(Width, Bound)));
+          const solver::SatResult Result =
+              Solver.check(llvm::ArrayRef<symbolic::SymRef>(Outside));
           if (Result == solver::SatResult::Sat)
             return FeasibleProofOutcome::Counterexample;
           if (Result != solver::SatResult::Unsat)
             return FeasibleProofOutcome::Incomplete;
         }
-        for (uint64_t Coordinate = 0; Coordinate < Bound; ++Coordinate) {
-          if (Width < 64 && Coordinate >= (uint64_t{1} << Width))
+        for (uint64_t Low = 0; Low < Bound; ++Low) {
+          if (!Mask.test(Low))
             continue;
-          if (!consumeLeafSolverQuery())
+          uint64_t High = Low;
+          while (High + 1 < Bound && Mask.test(High + 1))
+            ++High;
+          if (!consumeSymbolWork(4))
             return FeasibleProofOutcome::Incomplete;
-          symbolic::SymRef CoordinateQuery =
-              constrainQuery(Ctx.mkEq(Index, Ctx.mkConst(Width, Coordinate)));
-          if (!CoordinateQuery)
+          const symbolic::SymRef Known =
+              Low == High
+                  ? Ctx.mkEq(Index, Ctx.mkConst(Width, Low))
+                  : Ctx.mkAnd(Ctx.mkUle(Ctx.mkConst(Width, Low), Index),
+                              Ctx.mkUle(Index, Ctx.mkConst(Width, High)));
+          if (!Solver.assertFalse(Known))
             return FeasibleProofOutcome::Incomplete;
-          const solver::SatResult Result = solver::checkSat(
-              Ctx, CoordinateQuery, nullptr, makeSolverOptions());
-          if (Result == solver::SatResult::Sat)
-            Mask |= uint64_t{1} << Coordinate;
-          else if (Result != solver::SatResult::Unsat)
+          Low = High;
+        }
+        for (;;) {
+          if (!consumeSolverQuery())
+            return FeasibleProofOutcome::Incomplete;
+          const solver::SatResult Result = Solver.check();
+          if (Result == solver::SatResult::Unsat)
+            return FeasibleProofOutcome::Proven;
+          if (Result != solver::SatResult::Sat)
+            return FeasibleProofOutcome::Incomplete;
+          const llvm::APInt Member =
+              Ctx.eval(Index, Solver.model().asVarValues(Ctx));
+          // The envelope and the exclusions already rule out every other
+          // answer; one would mean the model and the formula disagree.
+          if (Member.getActiveBits() > 64 || Member.getZExtValue() >= Bound ||
+              Mask.test(Member.getZExtValue()) || !consumeSymbolWork(2))
+            return FeasibleProofOutcome::Incomplete;
+          Mask.set(Member.getZExtValue());
+          if (!Solver.assertDistinct(Index,
+                                     Ctx.mkConst(Width, Member.getZExtValue())))
             return FeasibleProofOutcome::Incomplete;
         }
-        return FeasibleProofOutcome::Proven;
       };
       const FeasibleProofOutcome Outcome = ProveFeasible(Value, 0);
       if (Outcome == FeasibleProofOutcome::Incomplete)
@@ -10678,7 +10729,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       if (Outcome == FeasibleProofOutcome::Counterexample)
         return false;
       *FeasibleMask = Mask;
-      return Mask != 0;
+      return !Mask.none();
     }
 
     std::vector<symbolic::SymRef> PathConstraints;
@@ -10845,7 +10896,8 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       if (Mask && StateComplete) {
         Results[QueryIndex] = true;
         if (QueryUnsignedFeasibleMasks)
-          (*QueryUnsignedFeasibleMasks)[QueryIndex] = *Mask;
+          (*QueryUnsignedFeasibleMasks)[QueryIndex] =
+              JumpTableFeasibleSet::fromLowWord(*Mask);
       }
       if (!StateComplete)
         markIncomplete(QueryIndex);
@@ -11096,8 +11148,16 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       // an ordinary mask or a shared physical table.
       if (JoinedFiniteSet && !CandidateValue.Value->ContainsPredecessorMerge)
         continue;
+      // Only a joined predecessor domain may prove the wider envelope.
+      const uint64_t MaximumEnvelope =
+          JoinedFiniteSet ? limits::kMaxJumpTableJoinedDomainValues
+                          : limits::kMaxJumpTableFeasibleSetValues;
+      if (Query.UnsignedUpperBound > MaximumEnvelope) {
+        markIncomplete(QueryIndex);
+        continue;
+      }
       bool ProofComplete = false;
-      uint64_t FeasibleMask = 0;
+      JumpTableFeasibleSet FeasibleMask;
       Results[QueryIndex] = provesUnsignedUpperBound(
           CandidateValue.Value, Query.UnsignedUpperBound, ProofComplete,
           /*ExactModuloRecipeOnly=*/false, &FeasibleMask);
@@ -11464,7 +11524,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                 false);
     if (QueryUnsignedFeasibleMasks)
       std::fill(QueryUnsignedFeasibleMasks->begin(),
-                QueryUnsignedFeasibleMasks->end(), 0);
+                QueryUnsignedFeasibleMasks->end(), JumpTableFeasibleSet{});
     if (QueryConstantAddresses)
       std::fill(QueryConstantAddresses->begin(), QueryConstantAddresses->end(),
                 std::nullopt);
@@ -11889,6 +11949,31 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
       Queries.push_back(std::move(Query));
       return Index;
     };
+    // In the lexical pass an operation continues the chain only through an
+    // input whose nearest earlier write in the region is an occurrence already
+    // derived in that state.  Like the region, this filters the search alone:
+    // the queries still prove each step, and a chain it misses falls back to
+    // the whole-graph pass.  Unfiltered, every operation asks about every
+    // derived occurrence, and an address computation asks the resolver for the
+    // whole value of a loop-carried index (bash's lexer spent 524 Mi there).
+    std::map<std::tuple<uint8_t, uint64_t, uint16_t>, std::pair<va_t, int>>
+        LexicalWrites;
+    auto lexicallyDerived = [&](const NdVar &Input, uint8_t State) {
+      if (!RestrictToLexicalTargetRegion)
+        return true;
+      if (!consumeWork(1 + Derived.size()))
+        return false;
+      const auto Write = LexicalWrites.find(
+          {static_cast<uint8_t>(Input.Space), Input.Offset, Input.Size});
+      if (Write == LexicalWrites.end())
+        return false;
+      return std::any_of(
+          Derived.begin(), Derived.end(), [&](const DerivedOccurrence &D) {
+            return D.State == State && sameVar(D.Occurrence.Value, Input) &&
+                   D.Occurrence.Addr == Write->second.first &&
+                   D.Occurrence.Seq == Write->second.second;
+          });
+    };
     auto addPending = [&](const LowOp &Op, uint8_t State,
                           llvm::ArrayRef<size_t> QueryIndices) {
       const std::optional<bool> Already = alreadyDerived(Op, State);
@@ -11961,6 +12046,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
               } else if (Op.Inputs[0].Size != Op.Output.Size) {
                 break;
               }
+              if (!lexicallyDerived(Op.Inputs[0], State))
+                break;
               auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
               if (!Query ||
                   !addPending(Op, Next, llvm::ArrayRef<size_t>(&*Query, 1)))
@@ -11975,7 +12062,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
                 Op.Inputs[0].Size < Op.Output.Size &&
                 Op.Output.Size <= PointerSize &&
                 ((Info.IsSigned && Op.Opcode == NdOp::INT_SEXT) ||
-                 (!Info.IsSigned && Op.Opcode == NdOp::INT_ZEXT))) {
+                 (!Info.IsSigned && Op.Opcode == NdOp::INT_ZEXT)) &&
+                lexicallyDerived(Op.Inputs[0], State)) {
               auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
               if (!Query ||
                   !addPending(Op,
@@ -11991,7 +12079,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
           case NdOp::SUBBYTES:
             if (Op.NumInputs >= 2 && Op.Inputs[1].isConst() &&
                 Op.Inputs[1].Offset == 0 &&
-                Op.Inputs[0].Size == Op.Output.Size) {
+                Op.Inputs[0].Size == Op.Output.Size &&
+                lexicallyDerived(Op.Inputs[0], State)) {
               auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
               if (!Query ||
                   !addPending(Op, State, llvm::ArrayRef<size_t>(&*Query, 1)))
@@ -12008,7 +12097,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
                     relativeTargetTransformUsesPointerWidth(
                         Op.Opcode, Op.Inputs[Side].Size,
                         Op.Inputs[1 - Side].Size, Op.Output.Size,
-                        PointerSize)) {
+                        PointerSize) &&
+                    lexicallyDerived(Op.Inputs[Side], State)) {
                   auto Query = addQuery(Op.Inputs[Side], Op, *Alternatives);
                   if (!Query || !addPending(Op, State | TargetScaled,
                                             llvm::ArrayRef<size_t>(&*Query, 1)))
@@ -12024,7 +12114,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
                 (uint64_t{1} << Op.Inputs[1].Offset) == Info.EntryScale &&
                 relativeTargetTransformUsesPointerWidth(
                     Op.Opcode, Op.Inputs[0].Size, Op.Inputs[1].Size,
-                    Op.Output.Size, PointerSize)) {
+                    Op.Output.Size, PointerSize) &&
+                lexicallyDerived(Op.Inputs[0], State)) {
               auto Query = addQuery(Op.Inputs[0], Op, *Alternatives);
               if (!Query || !addPending(Op, State | TargetScaled,
                                         llvm::ArrayRef<size_t>(&*Query, 1)))
@@ -12040,7 +12131,9 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
               for (int Side = 0; Side < 2; ++Side) {
                 if (!relativeTargetTransformUsesPointerWidth(
                         Op.Opcode, Op.Inputs[Side].Size,
-                        Op.Inputs[1 - Side].Size, Op.Output.Size, PointerSize))
+                        Op.Inputs[1 - Side].Size, Op.Output.Size,
+                        PointerSize) ||
+                    !lexicallyDerived(Op.Inputs[Side], State))
                   continue;
                 std::array<size_t, 2> QueryIndices{};
                 size_t QueryCount = 0;
@@ -12081,7 +12174,8 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
             }
             break;
           case NdOp::SELECT:
-            if (Op.NumInputs >= 3) {
+            if (Op.NumInputs >= 3 && lexicallyDerived(Op.Inputs[1], State) &&
+                lexicallyDerived(Op.Inputs[2], State)) {
               std::array<size_t, 2> QueryIndices{};
               auto TrueQuery = addQuery(Op.Inputs[1], Op, *Alternatives);
               auto FalseQuery = addQuery(Op.Inputs[2], Op, *Alternatives);
@@ -12096,6 +12190,10 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
             break;
           }
         }
+        if (RestrictToLexicalTargetRegion)
+          LexicalWrites.insert_or_assign({static_cast<uint8_t>(Op.Output.Space),
+                                          Op.Output.Offset, Op.Output.Size},
+                                         std::pair{Op.Addr, Op.Seq});
       }
     }
 
@@ -13152,6 +13250,65 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
         if (!ExactScale || Ambiguous)
           continue;
         ScaledIndex = IndexUse.Output;
+      } else if (IndexUse.NumInputs == 1 && IndexUse.Output.isReg() &&
+                 IndexUse.Output.Size > IndexUse.Inputs[0].Size &&
+                 ((IndexUse.Opcode == NdOp::INT_ZEXT &&
+                   Role.AllowZeroExtension) ||
+                  (IndexUse.Opcode == NdOp::INT_SEXT &&
+                   Role.AllowSignExtension)) &&
+                 Role.Load.Addr != InvalidVA &&
+                 Role.Load.Addr >= IndexUse.Addr) {
+        // x86 writes a 32-bit register through an implicit zero-extend of the
+        // whole register (`mov 0x6ea4(%rdi), %ecx` lifts as COPY ECX and
+        // INT_ZEXT RCX), and the LOAD's own instruction scales that register
+        // (`movslq (%r9,%rcx,4)`).  Follow the extended register forward
+        // through the rest of its block, up to the role's LOAD, while nothing
+        // writes any byte of it, calls, or runs predicated: straight-line code
+        // carries it unchanged to the one scale that reads it.
+        if (!sameVar(guestAddressView(IndexUse.Inputs[0]),
+                     guestAddressView(Index.Value)))
+          continue;
+        const NdVar &Extended = IndexUse.Output;
+        auto writesExtended = [&](const LowOp &Op) {
+          return Op.Output.Space == Extended.Space && Op.Output.Size != 0 &&
+                 Op.Output.Offset < Extended.Offset + Extended.Size &&
+                 Extended.Offset < Op.Output.Offset + Op.Output.Size;
+        };
+        ExactScale = nullptr;
+        bool Ambiguous = false;
+        bool Stopped = false;
+        for (auto It = InsnIt;
+             It != Insns.end() && !Stopped && It->first <= Role.Load.Addr;
+             ++It) {
+          if (!consumeWork(orderedSetLookupWork(BlockStarts.size())))
+            return false;
+          if (It != InsnIt &&
+              (BlockStarts.count(It->first) || It->second.IsInstructionGuard))
+            break;
+          if (!consumeProduct(It->second.Ops.size(), 2))
+            return false;
+          for (const LowOp &Op : It->second.Ops) {
+            if (It == InsnIt && Op.Seq <= IndexUse.Seq)
+              continue;
+            if ((It->first == Role.Load.Addr && Op.Seq >= Role.Load.Seq) ||
+                Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+              Stopped = true;
+              break;
+            }
+            const int Side = scaleIndexSide(Op, Role.AddressScale);
+            if (Side >= 0 && sameVar(Op.Inputs[Side], Extended)) {
+              Ambiguous |= ExactScale != nullptr;
+              ExactScale = &Op;
+            }
+            if (writesExtended(Op)) {
+              Stopped = true;
+              break;
+            }
+          }
+        }
+        if (!ExactScale || Ambiguous)
+          continue;
+        ScaledIndex = Extended;
       }
       const int IndexSide = scaleIndexSide(*ExactScale, Role.AddressScale);
       if (IndexSide < 0 ||
@@ -14433,7 +14590,27 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
     auto collectAddressProofs = [&](const LowOp &Add,
                                     std::vector<JumpTableValueQuery> &Queries,
                                     std::vector<AddressProof> &Proofs) {
+      // When one order's dynamic operand already is an authenticated index
+      // occurrence through the local copy chain, the other order would ask
+      // whether that index is the table base: the resolver must rebuild the
+      // whole index to answer what cannot hold (a loop-carried token in
+      // bash's lexer spent the candidate account there).  Prove the
+      // authenticated order alone.
+      std::array<bool, 2> LocalIndex{false, false};
+      if (!consumeWork(2 * State.DynamicAlternatives.size()))
+        return false;
       for (int BaseSide = 0; BaseSide < 2; ++BaseSide) {
+        const NdVar DynamicValue = guestAddressView(Add.Inputs[1 - BaseSide]);
+        LocalIndex[BaseSide] = std::any_of(
+            State.DynamicAlternatives.begin(), State.DynamicAlternatives.end(),
+            [&](const JumpTableValueOccurrence &Alternative) {
+              return localCopyChainMatchesUse(Alternative, DynamicValue, Add);
+            });
+      }
+      const bool AnyLocalIndex = LocalIndex[0] || LocalIndex[1];
+      for (int BaseSide = 0; BaseSide < 2; ++BaseSide) {
+        if (AnyLocalIndex && !LocalIndex[BaseSide])
+          continue;
         const NdVar &RawBaseValue = Add.Inputs[BaseSide];
         const NdVar &RawDynamicValue = Add.Inputs[1 - BaseSide];
         // x86 LowIR uses the wide physical register container for address
@@ -14465,13 +14642,7 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
                                          Role.SelectedBase))
                          : pushBaseQuery(Queries, BaseValue, Add,
                                          Role.AllowedBases, BaseValue.Size);
-        if (!consumeWork(State.DynamicAlternatives.size()))
-          return false;
-        const bool LocallyAuthenticatedIndex = std::any_of(
-            State.DynamicAlternatives.begin(), State.DynamicAlternatives.end(),
-            [&](const JumpTableValueOccurrence &Alternative) {
-              return localCopyChainMatchesUse(Alternative, DynamicValue, Add);
-            });
+        const bool LocallyAuthenticatedIndex = LocalIndex[BaseSide];
         std::optional<size_t> IndexQuery;
         if (!LocallyAuthenticatedIndex)
           IndexQuery =

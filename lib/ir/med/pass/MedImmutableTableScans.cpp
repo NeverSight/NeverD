@@ -51,6 +51,25 @@ bool independentEntry(const MedFunc &Func, const MedBlock &Block,
          ContainsEntry(Image.CodeRefTargets);
 }
 
+// Every operation the evaluator can turn into a constant needs a concrete
+// first operand. In a function without PHIs, following first operands must
+// therefore reach a literal somewhere, even for an immutable load. A COPY of
+// an external input preserves its identity but cannot start that chain.
+bool mayFoldConstants(const MedFunc &Func, size_t Budget) {
+  for (const MedBlock &Block : Func.Blocks) {
+    // Building the definition index already costs one unit per block and op.
+    if (Block.Ops.size() >= Budget)
+      return false;
+    Budget -= 1 + Block.Ops.size();
+    if (!Block.Phis.empty() || llvm::any_of(Block.Ops, [](const MedOp &Op) {
+          return Op.Output.Size && Op.NumInputs && !Op.Inputs.empty() &&
+                 Op.Inputs.front().isConst();
+        }))
+      return true;
+  }
+  return false;
+}
+
 class Evaluator {
   const MedFunc &Func;
   const BinaryImage &Image;
@@ -601,6 +620,8 @@ bool foldImmutableTableScans(MedFunc &Func, const BinaryImage &Image) {
   bool Changed = false;
   size_t Budget =
       ::neverd::limits::ir::kMedImmutableTableScansMaxEvaluationWork;
+  if (!mayFoldConstants(Func, Budget))
+    return false;
   for (unsigned Round = 0;
        Round != ::neverd::limits::ir::kMedImmutableTableScansMaxFoldRounds;
        ++Round) {

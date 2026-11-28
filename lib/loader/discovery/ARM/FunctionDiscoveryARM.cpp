@@ -13,6 +13,7 @@
 #include "../FunctionDiscoveryDetail.h"
 
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/ARM/ARMModeCLIStrings.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/Limits.h"
@@ -425,6 +426,17 @@ verifyARMFunctionModeHints(const BinaryImage &Img,
             " did not decode a reachable instruction in the asserted mode");
   }
   return llvm::Error::success();
+}
+
+std::optional<std::string> missingARMModeReason(const BinaryImage &Img,
+                                                va_t Entry) {
+  if (Img.Arch != Arch::ARM || !Img.isCodeAddress(Entry) ||
+      Img.instructionModeAt(Entry))
+    return std::nullopt;
+  return "ARM/Thumb mode cannot be established for function at 0x" +
+         llvm::utohexstr(Entry) + "; supply --" + arm_mode_cli::Option +
+         arm_mode_cli::HintEntryPrefix + arm_mode_cli::ARM + "|" +
+         arm_mode_cli::Thumb;
 }
 
 void recordARMCodePointerMode(BinaryImage &Img, uint64_t Pointer,

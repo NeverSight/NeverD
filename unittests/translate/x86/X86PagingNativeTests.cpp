@@ -17,6 +17,7 @@
 #include "X86LegacyTaskTestState.h"
 #include "X86LegacyTestState.h"
 #include "X86LegacyVM86TestState.h"
+#include "X86NativeDebugStatus.h"
 #include "X86PortDevice.h"
 #include "gtest/gtest.h"
 
@@ -45,6 +46,7 @@
 
 #include <cerrno>
 #include <cpuid.h>
+#include <csignal>
 #include <fcntl.h>
 #include <linux/kvm.h>
 #include <sched.h>
@@ -78,6 +80,27 @@ protected:
   X86PagingFeatures Features;
   kvm_sregs Initial{};
   unsigned EventComparisons = 0;
+  /// Every comparison stops within milliseconds; a guest past this bound
+  /// never reaches its stop.
+  static constexpr unsigned NativeRunSeconds = 20;
+
+  /// KVM_RUN that returns -1 with EINTR, instead of hanging the suite, when
+  /// the guest does not stop within NativeRunSeconds.
+  int runBounded() {
+    struct sigaction Wake{}, Previous{};
+    Wake.sa_handler = [](int) {};
+    sigemptyset(&Wake.sa_mask);
+    // No SA_RESTART: the pending signal ends KVM_RUN.
+    if (sigaction(SIGALRM, &Wake, &Previous))
+      return -1;
+    alarm(NativeRunSeconds);
+    const int Result = ioctl(CPU, KVM_RUN, 0);
+    const int Error = errno;
+    alarm(0);
+    sigaction(SIGALRM, &Previous, nullptr);
+    errno = Error;
+    return Result;
+  }
 
   void SetUp() override {
     KVM = open("/dev/kvm", O_RDWR | O_CLOEXEC);
@@ -431,7 +454,18 @@ protected:
     ASSERT_EQ(ioctl(CPU, KVM_SET_GUEST_DEBUG, &Debug), 0);
     if (InitialEvent == 2)
       ASSERT_EQ(ioctl(CPU, KVM_NMI, 0), 0);
-    ASSERT_EQ(ioctl(CPU, KVM_RUN, 0), 0) << errno;
+    if (runBounded() != 0) {
+      const int Error = errno;
+      kvm_regs Stopped{};
+      kvm_sregs StoppedSpecial{};
+      ioctl(CPU, KVM_GET_REGS, &Stopped);
+      ioctl(CPU, KVM_GET_SREGS, &StoppedSpecial);
+      FAIL() << (Error == EINTR ? "guest did not stop within the bound"
+                                : "KVM_RUN failed")
+             << ": errno=" << Error << " rip=0x" << std::hex << Stopped.rip
+             << " rsp=0x" << Stopped.rsp << " cr2=0x" << StoppedSpecial.cr2
+             << " rflags=0x" << Stopped.rflags;
+    }
     const bool Shutdown = DeliveryFailure == 2 || DeliveryFailure == 6;
     ASSERT_EQ(Run->exit_reason,
               unsigned(Shutdown ? KVM_EXIT_SHUTDOWN : KVM_EXIT_DEBUG));

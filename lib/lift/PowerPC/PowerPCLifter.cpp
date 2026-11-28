@@ -18,6 +18,8 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
+#include "neverd/lift/PowerPC/PowerPCPrefixed.h"
+#include "neverd/lift/PowerPC/PowerPCVMXRegisters.h"
 #include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -31,6 +33,8 @@ namespace opcode {
 enum : unsigned {
 #define NEVERD_PPC_OPCODE(Name, Value) Name = Value,
 #include "PowerPCIntegerOpcodes.def"
+#define NEVERD_PPC_VMX(Id, Value, Word, Name) Id = Word,
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.def"
 };
 } // namespace opcode
 
@@ -60,6 +64,16 @@ struct State : IntegerLiftState {
     if (Record)
       compare(0, reg(D), imm(0), true);
   }
+  void transfer(unsigned T, NdVar EA, unsigned Bytes, bool Store, bool Signed,
+                bool Reversed = false) {
+    NdVar V = Store ? resize(reg(T), Bytes) : load(EA, Bytes);
+    if (Reversed)
+      V = byteSwap(V);
+    if (Store)
+      emit(NdOp::STORE, {}, {EA, V});
+    else
+      result(T, resize(V, Width, Signed), false);
+  }
   NdVar inverse(NdVar V) {
     return op(
         NdOp::INT_XOR, V,
@@ -74,62 +88,83 @@ struct State : IntegerLiftState {
     xerBit(XEROV, V);
     xerBit(XERSO, op(NdOp::BOOL_OR, bit(special(XER), XERSO), V, 1));
   }
+  void fixedPointResult(unsigned T, Intrinsic Id, NdVar X, NdVar Y,
+                        bool Record) {
+    emitIntrinsic(Id, reg(T), {X, Y});
+    if (!Record)
+      return;
+    // The recorded comparison belongs to this execution. Its three bits and
+    // the upper GPR word may all be unspecified in 64-bit mode.
+    const NdVar CR = makeTemp(Width);
+    emit(NdOp::COPY, CR, {makeTemp(Width)});
+    for (unsigned I = 0; I != CRSO; ++I)
+      emit(NdOp::COPY, cr(I), {bit(CR, crShift(I))});
+    emit(NdOp::COPY, cr(CRSO), {bit(special(XER), XERSO)});
+  }
 };
 
-IntegerControl branch(Arch A, uint32_t W, va_t PC) {
-  unsigned Op = W >> 26;
-  bool Link = W & 1;
+bool testsCondition(unsigned BO) {
   using namespace branch_option;
-  const unsigned BO = W >> 21 & 31;
-  const bool Conditional =
-      (BO & (IgnoreCR | IgnoreCTR)) != (IgnoreCR | IgnoreCTR);
-  if (Op == opcode::B || Op == opcode::BC) {
-    const bool TestsCondition = Op == opcode::BC && Conditional;
-    // A conditional call needs a predicated link/call edge.
-    if (TestsCondition && Link)
-      return {};
-    int64_t Disp = Op == opcode::B ? llvm::SignExtend64<26>(W & 0x3fffffc)
-                                   : llvm::SignExtend64<16>(W & 0xfffc);
-    va_t Dest = ((W & 2) ? 0 : PC) + Disp;
-    // A link to the following instruction materializes the PC in LR. There
-    // is no callee, register clobber or independent function at that address.
-    if (Link && !TestsCondition && Dest == PC + ppc_elf::InstructionAlignment)
-      return {NdOp::COPY, isPowerPC64(A) ? Dest : uint32_t(Dest)};
-    return {Link             ? NdOp::CALL
-            : TestsCondition ? NdOp::COND_BR
-                             : NdOp::BRANCH,
-            isPowerPC64(A) ? Dest : uint32_t(Dest)};
-  }
-  if (Op != opcode::XL || (W & ReservedXLBits))
+  return (BO & (IgnoreCR | IgnoreCTR)) != (IgnoreCR | IgnoreCTR);
+}
+
+va_t branchAddress(Arch A, va_t Address) {
+  return isPowerPC64(A) ? Address : uint32_t(Address);
+}
+
+IntegerControl branch(Arch A, uint32_t W, va_t PC) {
+  using namespace branch_option;
+  const unsigned Op = W >> 26;
+  if (Op != opcode::B && Op != opcode::BC && Op != opcode::XL)
     return {};
-  unsigned XO = W >> 1 & 1023;
-  if (Conditional) {
-    // The two prediction bits are adjacent for CR-only tests and split for
-    // CTR-only tests. The encoding 01 is reserved in either form.
-    const bool ReservedPrediction =
-        (BO & IgnoreCTR)
-            ? (BO & (BranchIfCTRZero | PredictionTaken)) == PredictionTaken
-            : (BO & IgnoreCR) &&
-                  (BO & (BranchIfCRSet | PredictionTaken)) == PredictionTaken;
-    if (XO != opcode::BCLR || Link || (W & HintMask) == ReservedHint ||
-        ReservedPrediction)
-      return {};
-    const va_t Next = PC + ppc_elf::InstructionAlignment;
-    return {NdOp::RETURN, isPowerPC64(A) ? Next : uint32_t(Next)};
+  const bool Linked = W & Link;
+  const unsigned BO = W >> 21 & 31;
+  const bool Conditional = Op != opcode::B && testsCondition(BO);
+  // The prediction encoding 01 is reserved for CR-only and CTR-only tests.
+  if (Conditional &&
+      ((BO & IgnoreCTR)
+           ? (BO & (BranchIfCTRZero | PredictionTaken)) == PredictionTaken
+           : (BO & IgnoreCR) &&
+                 (BO & (BranchIfCRSet | PredictionTaken)) == PredictionTaken))
+    return {};
+  const va_t Next = branchAddress(A, PC + ppc_elf::InstructionAlignment);
+  if (Op != opcode::XL) {
+    const int64_t Disp =
+        Op == opcode::B ? llvm::SignExtend64<26>(W & DirectDisplacement)
+                        : llvm::SignExtend64<16>(W & ConditionalDisplacement);
+    const va_t Dest = branchAddress(A, ((W & AbsoluteAddress) ? 0 : PC) + Disp);
+    // Both outcomes of a link to the next instruction materialize the PC.
+    if (Linked && Dest == Next)
+      return {NdOp::COPY, Next};
+    return {Linked        ? NdOp::CALL
+            : Conditional ? NdOp::COND_BR
+                          : NdOp::BRANCH,
+            Dest};
   }
+  const unsigned XO = W >> 1 & 1023;
+  const unsigned Hint = W & HintMask;
+  if ((W & ReservedXLBits) || Hint == ReservedHint)
+    return {};
   if (XO == opcode::BCLR)
-    return {Link ? NdOp::INDIR_CALL : NdOp::RETURN};
-  if (XO == opcode::BCCTR)
-    return {Link ? NdOp::INDIR_CALL : NdOp::INDIR_BR};
+    return {Linked ? NdOp::INDIR_CALL : NdOp::RETURN,
+            Conditional && !Linked ? Next : InvalidVA};
+  if (XO == opcode::BCCTR && (BO & IgnoreCTR) && Hint != LROnlyHint)
+    return {Linked ? NdOp::INDIR_CALL : NdOp::INDIR_BR,
+            Conditional && !Linked ? Next : InvalidVA};
   return {};
+}
+
+NdVar decrementCTR(State &S) {
+  NdVar Counter = S.special(CTR);
+  S.emit(NdOp::INT_SUB, Counter, {Counter, S.imm(1)});
+  return Counter;
 }
 
 NdVar condition(State &S, unsigned BO, unsigned BI) {
   using namespace branch_option;
   NdVar Cond = NdVar::scalar(1, 1);
   if (!(BO & IgnoreCTR)) {
-    NdVar Counter = S.special(CTR);
-    S.emit(NdOp::INT_SUB, Counter, {Counter, S.imm(1)});
+    NdVar Counter = decrementCTR(S);
     Cond = S.op((BO & BranchIfCTRZero) ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL,
                 Counter, S.imm(0), 1);
   }
@@ -170,17 +205,25 @@ struct Transfer {
   bool Signed;
   bool Update;
   bool Requires64;
+  bool Reversed = false;
 };
 
 std::optional<Transfer> memoryTransfer(unsigned Op, unsigned XO, unsigned DS) {
   if (Op == opcode::X) {
-    switch (XO & ~32u) {
+    switch (XO) {
 #define NEVERD_PPC_DX_TRANSFER(Name, D, X, Bytes, Store, Signed)               \
   case X:                                                                      \
-    return Transfer{Bytes, Store, Signed, bool(XO & 32), false};
+  case X | opcode::IndexedUpdate:                                              \
+    return Transfer{Bytes, Store, Signed, bool(XO & opcode::IndexedUpdate),    \
+                    false};
 #define NEVERD_PPC_X64_TRANSFER(Name, X, Bytes, Store, Signed)                 \
   case X:                                                                      \
-    return Transfer{Bytes, Store, Signed, bool(XO & 32), true};
+  case X | opcode::IndexedUpdate:                                              \
+    return Transfer{Bytes, Store, Signed, bool(XO & opcode::IndexedUpdate),    \
+                    true};
+#define NEVERD_PPC_REVERSED_TRANSFER(Name, X, Bytes, Store)                    \
+  case X:                                                                      \
+    return Transfer{Bytes, Store, false, false, Bytes == 8, true};
 #include "PowerPCIntegerForms.def"
     default:
       return std::nullopt;
@@ -205,6 +248,49 @@ std::optional<Transfer> memoryTransfer(unsigned Op, unsigned XO, unsigned DS) {
   default:
     return std::nullopt;
   }
+}
+
+enum class PrefixedOp { Add, Load, SignedLoad, Store };
+
+bool prefixed(State &S, uint32_t Prefix, uint32_t Suffix) {
+  const unsigned T = Suffix >> 21 & 31, RA = Suffix >> 16 & 31;
+  const bool Relative = Prefix & prefix::Relative;
+  if (Relative && RA)
+    return false;
+
+  PrefixedOp Op;
+  unsigned Bytes;
+  // Include reserved prefix bits in the match; only R and the immediate vary.
+  const uint32_t Format =
+      Prefix & ~(prefix::Relative | prefix::HighImmediateMask);
+  switch (Format | (Suffix >> 26)) {
+#define NEVERD_PPC_PREFIXED(Name, Format, SuffixOp, Kind, Width)               \
+  case prefix::Format | SuffixOp:                                              \
+    Op = PrefixedOp::Kind;                                                     \
+    Bytes = Width;                                                             \
+    break;
+#include "PowerPCPrefixed.def"
+  default:
+    return false;
+  }
+
+  const int64_t Disp = prefix::displacement(Prefix, Suffix);
+  NdVar EA;
+  if (RA) {
+    EA = Disp ? S.op(NdOp::INT_ADD, S.reg(RA), S.imm(Disp)) : S.reg(RA);
+  } else {
+    const va_t Target = (Relative ? S.Addr : 0) + Disp;
+    if (Op != PrefixedOp::Add)
+      EA = NdVar::dataAddress(Target, S.Width);
+    else
+      EA = Relative ? NdVar::address(Target, S.Width) : S.imm(Disp);
+  }
+  if (Op == PrefixedOp::Add)
+    S.result(T, EA, false);
+  else
+    S.transfer(T, EA, Bytes, Op == PrefixedOp::Store,
+               Op == PrefixedOp::SignedLoad);
+  return true;
 }
 
 struct Logical {
@@ -261,16 +347,6 @@ uint64_t mask(unsigned Begin, unsigned End, unsigned Bits) {
          llvm::maskTrailingOnes<uint64_t>(Bits);
 }
 
-NdVar rotate(State &S, NdVar V, NdVar Shift) {
-  NdVar CountMask = NdVar::scalar(V.Size * 8 - 1, V.Size);
-  NdVar Amount = S.op(NdOp::INT_AND, Shift, CountMask);
-  NdVar Complement =
-      S.op(NdOp::INT_AND, S.op(NdOp::INT_SUB, NdVar::scalar(0, V.Size), Amount),
-           CountMask);
-  return S.op(NdOp::INT_OR, S.op(NdOp::INT_LEFT, V, Amount),
-              S.op(NdOp::INT_RIGHT, V, Complement));
-}
-
 // Count bits independently in each byte, word or doubleword of the GPR.
 // CONCAT takes its high half first in either instruction byte order.
 NdVar populationCount(State &S, NdVar V, unsigned LaneBytes) {
@@ -291,42 +367,41 @@ bool integer(State &S, Arch A, uint32_t W) {
   const unsigned Op = W >> 26, T = W >> 21 & 31, RA = W >> 16 & 31,
                  RB = W >> 11 & 31;
   const unsigned XO = W >> 1 & 1023;
-  const unsigned Arithmetic = XO & 511;
-  const bool OE = XO & 512;
+  const unsigned Arithmetic = XO & ~opcode::OverflowEnable;
+  const bool OE = XO & opcode::OverflowEnable;
   const bool Wide = S.Width == 8, Rc = W & 1;
   const uint64_t SI = llvm::SignExtend64<16>(W & 0xffff);
   NdVar X = S.reg(RA), Y = S.reg(RB), Src = S.reg(T);
   NdVar Base = RA ? X : S.imm(0);
   if (auto Flow = branch(A, W, S.Addr); Flow.Opcode != NdOp::NOP) {
     if (Flow.Opcode == NdOp::COPY) {
+      if (Op == opcode::BC && !(T & branch_option::IgnoreCTR))
+        decrementCTR(S);
       S.emit(NdOp::COPY, S.special(LR),
              {NdVar::addressFragment(Flow.Target, S.Width)});
       return true;
     }
-    if (Flow.hasReturnFallthrough()) {
-      // CTR decrements even on the not-taken edge. Guard only the transfer.
+    NdVar Dest =
+        Op == opcode::XL
+            ? S.op(NdOp::INT_AND, S.special(XO == opcode::BCLR ? LR : CTR),
+                   S.imm(-uint64_t(ppc_elf::InstructionAlignment)))
+            : NdVar::codeAddress(Flow.Target, S.Width);
+    if (Flow.Opcode == NdOp::COND_BR) {
+      S.emit(NdOp::COND_BR, {}, {Dest, condition(S, T, RA)});
+      return true;
+    }
+    // bclrl targets the old LR. LK writes the next PC and BO updates CTR on
+    // both edges. Only the transfer and its call effects are predicated.
+    const va_t Next = branchAddress(A, S.Addr + ppc_elf::InstructionAlignment);
+    if (Rc)
+      S.emit(NdOp::COPY, S.special(LR), {NdVar::codeAddress(Next, S.Width)});
+    if (Op != opcode::B && testsCondition(T)) {
       NdVar Taken = condition(S, T, RA);
       NdVar Skip = S.makeTemp(1);
       S.emit(NdOp::BOOL_NOT, Skip, {Taken});
-      S.emit(NdOp::COND_BR, {},
-             {NdVar::codeAddress(Flow.Target, S.Width), Skip});
+      S.emit(NdOp::COND_BR, {}, {NdVar::codeAddress(Next, S.Width), Skip});
     }
-    NdVar Dest;
-    if (Op == opcode::XL)
-      Dest = S.op(NdOp::INT_AND, S.special(XO == opcode::BCLR ? LR : CTR),
-                  S.imm(~uint64_t(3)));
-    else
-      Dest = NdVar::codeAddress(Flow.Target, S.Width);
-    if (Flow.Opcode == NdOp::COND_BR)
-      S.emit(NdOp::COND_BR, {}, {Dest, condition(S, T, RA)});
-    else {
-      if (Rc) {
-        va_t Next = S.Addr + 4;
-        S.emit(NdOp::COPY, S.special(LR),
-               {NdVar::codeAddress(Wide ? Next : uint32_t(Next), S.Width)});
-      }
-      S.emit(Flow.Opcode, Rc ? S.reg(3) : NdVar{}, {Dest});
-    }
+    S.emit(Flow.Opcode, Rc ? S.reg(3) : NdVar{}, {Dest});
     return true;
   }
   if (const auto Key = barrierKey(W)) {
@@ -365,10 +440,7 @@ bool integer(State &S, Arch A, uint32_t W) {
     NdVar EA = Op == opcode::X ? S.op(NdOp::INT_ADD, Base, Y)
                : Disp          ? S.op(NdOp::INT_ADD, Base, S.imm(Disp))
                                : Base;
-    if (M->Store)
-      S.emit(NdOp::STORE, {}, {EA, S.resize(Src, M->Bytes)});
-    else
-      S.result(T, S.resize(S.load(EA, M->Bytes), S.Width, M->Signed), false);
+    S.transfer(T, EA, M->Bytes, M->Store, M->Signed, M->Reversed);
     if (M->Update)
       S.emit(NdOp::COPY, X, {EA});
     return true;
@@ -381,6 +453,13 @@ bool integer(State &S, Arch A, uint32_t W) {
     return true;
   }
   switch (Op) {
+  case opcode::VMX:
+    if ((W & VXFormMask) != opcode::PPCVaddubm)
+      return false;
+    S.emitIntrinsic(
+        Intrinsic::PPCVaddubm, NdVar::reg(vr(T), VectorBytes),
+        {NdVar::reg(vr(RA), VectorBytes), NdVar::reg(vr(RB), VectorBytes)});
+    return true;
 #define NEVERD_PPC_LOGICAL_IMM(Name, Encoding, Kind, Shift, Record)            \
   case Encoding:                                                               \
     S.result(                                                                  \
@@ -430,10 +509,10 @@ bool integer(State &S, Arch A, uint32_t W) {
         Shift = Y;
       } else
         return false;
-      V = rotate(S, Src, Shift);
+      V = S.rotate(Src, Shift);
     } else {
-      V = rotate(S, S.resize(Src, 4),
-                 Op == opcode::RLWNM ? S.resize(Y, 4) : NdVar::scalar(RB, 4));
+      V = S.rotate(S.resize(Src, 4),
+                   Op == opcode::RLWNM ? S.resize(Y, 4) : NdVar::scalar(RB, 4));
       if (Wide) {
         if (MB > ME) {
           NdVar Repeated = S.makeTemp(8);
@@ -539,16 +618,7 @@ bool integer(State &S, Arch A, uint32_t W) {
       }
       S.overflow(Overflow);
     }
-    S.emitIntrinsic(D->Id, S.reg(T), {X, Y});
-    if (Rc) {
-      // Bind the comparison from the very same divide. A 64-bit word result
-      // cannot reconstruct CR0 from its defined low half.
-      const NdVar CR = S.makeTemp(S.Width);
-      S.emit(NdOp::COPY, CR, {S.makeTemp(S.Width)});
-      for (unsigned I = 0; I != CRSO; ++I)
-        S.emit(NdOp::COPY, S.cr(I), {S.bit(CR, crShift(I))});
-      S.emit(NdOp::COPY, S.cr(CRSO), {S.bit(S.special(XER), XERSO)});
-    }
+    S.fixedPointResult(T, D->Id, X, Y, Rc);
     return true;
   }
   if (const auto Form = carryForm(Arithmetic)) {
@@ -618,17 +688,32 @@ bool integer(State &S, Arch A, uint32_t W) {
     break;
 #include "PowerPCIntegerForms.def"
   case opcode::CNTLZW:
-  case opcode::CNTLZD: {
-    if (RB || (XO == opcode::CNTLZD && !Wide))
+  case opcode::CNTLZD:
+  case opcode::CNTTZW:
+  case opcode::CNTTZD: {
+    const bool Double = XO == opcode::CNTLZD || XO == opcode::CNTTZD;
+    if (RB || (Double && !Wide))
       return false;
-    NdVar In = S.resize(Src, XO == opcode::CNTLZW ? 4 : 8);
-    NdVar Count = S.makeTemp(In.Size);
-    S.emit(NdOp::LZCOUNT, Count, {In});
+    NdVar In = S.resize(Src, Double ? 8 : 4);
+    NdVar Count = XO == opcode::CNTTZW || XO == opcode::CNTTZD
+                      ? S.countTrailingZeros(In)
+                      : S.op(NdOp::LZCOUNT, In);
     V = S.resize(Count, S.Width);
     break;
   }
   case opcode::SLW:
   case opcode::SRW:
+    if (!Wide) {
+      // A six-bit count can shift every bit out of a word. Widen first so
+      // the shift is defined in LLVM and C even when the count exceeds 31.
+      NdVar Word = S.resize(Src, sizeof(uint64_t));
+      NdVar Count = S.op(NdOp::INT_AND, Y, S.imm(Word.Size * 8 - 1));
+      NdVar Shifted = S.op(XO == opcode::SLW ? NdOp::INT_LEFT : NdOp::INT_RIGHT,
+                           Word, S.resize(Count, Word.Size));
+      V = S.resize(Shifted, S.Width);
+      break;
+    }
+    [[fallthrough]];
   case opcode::SLD:
   case opcode::SRD: {
     unsigned Size = XO == opcode::SLW || XO == opcode::SRW ? 4 : 8;
@@ -676,10 +761,17 @@ bool integer(State &S, Arch A, uint32_t W) {
   case opcode::MULHWU:
   case opcode::MULHD:
   case opcode::MULHW: {
-    // Word variants leave the high half of a 64-bit destination undefined.
-    if ((XO == opcode::MULHDU || XO == opcode::MULHD) != Wide)
+    const bool Double = XO == opcode::MULHDU || XO == opcode::MULHD;
+    if (Double && !Wide)
       return false;
     const bool Signed = XO == opcode::MULHD || XO == opcode::MULHW;
+    if (!Double && Wide) {
+      const Intrinsic Id =
+          Signed ? (Rc ? Intrinsic::PPCMulhwRecord : Intrinsic::PPCMulhw)
+                 : (Rc ? Intrinsic::PPCMulhwuRecord : Intrinsic::PPCMulhwu);
+      S.fixedPointResult(T, Id, X, Y, Rc);
+      return true;
+    }
     S.result(T, S.multiplyHigh(X, Y, Signed, Signed), Rc);
     return true;
   }
@@ -689,15 +781,29 @@ bool integer(State &S, Arch A, uint32_t W) {
     S.result(T, S.op(NdOp::INT_SUB, S.imm(0), X), Rc);
     return true;
   case opcode::MULLW:
-  case opcode::MULLD: {
-    if (XO == opcode::MULLD && !Wide)
+  case opcode::MULLW | opcode::OverflowEnable:
+  case opcode::MULLD:
+  case opcode::MULLD | opcode::OverflowEnable: {
+    const unsigned Bytes =
+        Arithmetic == opcode::MULLW ? sizeof(int32_t) : sizeof(int64_t);
+    if (Bytes > S.Width)
       return false;
-    // MULLW writes the full signed product of the two low words on PPC64.
-    if (XO == opcode::MULLW && Wide) {
-      X = S.resize(S.resize(X, sizeof(int32_t)), S.Width, /*Signed=*/true);
-      Y = S.resize(S.resize(Y, sizeof(int32_t)), S.Width, /*Signed=*/true);
+    const unsigned ProductBytes = OE ? 2 * Bytes : S.Width;
+    X = S.resize(S.resize(X, Bytes), ProductBytes, /*Signed=*/true);
+    Y = S.resize(S.resize(Y, Bytes), ProductBytes, /*Signed=*/true);
+    const NdVar Product = S.op(NdOp::INT_MULT, X, Y);
+    const NdVar Result = S.resize(Product, S.Width);
+    if (OE) {
+      // OV tests the operand width even when PPC64 returns the full word
+      // product.
+      const NdVar Low = S.resize(Result, Bytes);
+      const NdVar High = S.makeTemp(Bytes);
+      S.emit(NdOp::SUBBYTES, High, {Product, NdVar::scalar(Bytes, 4)});
+      const NdVar Sign =
+          S.op(NdOp::INT_ASHR, Low, NdVar::scalar(Bytes * 8 - 1, Bytes));
+      S.overflow(S.op(NdOp::INT_NOTEQUAL, High, Sign, 1));
     }
-    S.result(T, S.op(NdOp::INT_MULT, X, Y), Rc);
+    S.result(T, Result, Rc);
     return true;
   }
   default:
@@ -720,6 +826,13 @@ void lift(Arch A, const cs_insn &I, std::vector<LowOp> &Ops) {
   if (I.size == 4 &&
       integer(S, A, readTargetEndian<uint32_t>(I.bytes, archLittleEndian(A))))
     return;
+  if (I.size == prefix::InstructionBytes && isPowerPC64(A)) {
+    const bool Little = archLittleEndian(A);
+    if (prefixed(
+            S, readTargetEndian<uint32_t>(I.bytes, Little),
+            readTargetEndian<uint32_t>(I.bytes + sizeof(uint32_t), Little)))
+      return;
+  }
   Ops.resize(S.OpsStart);
   throw UnliftedInstruction(I.address, I.mnemonic, I.op_str);
 }

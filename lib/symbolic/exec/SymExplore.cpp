@@ -24,6 +24,8 @@
 
 #include "neverd/symbolic/SymExplore.h"
 
+#include "neverd/ir/low/LowAlignmentGuard.h"
+#include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/symbolic/SymExec.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -203,8 +205,7 @@ std::optional<size_t> predicatedInstructionContinuation(const LowBlock &Block,
   if (!Block.InstructionBoundaries.empty()) {
     const LowInstructionBoundary *Boundary =
         instructionBoundaryForOp(Block, GuardIndex);
-    if (!Boundary || (Boundary->Mode != InstructionMode::ARM &&
-                      Boundary->Mode != InstructionMode::Thumb))
+    if (!Boundary || Boundary->DelaySlot)
       return std::nullopt;
     const bool IsTaggedGuard = hasLowInstructionControlFlag(
         Boundary->ControlFlags, LowInstructionControlFlag::InstructionGuard);
@@ -228,6 +229,19 @@ std::optional<size_t> predicatedInstructionContinuation(const LowBlock &Block,
     if (changesControlFlow(Block.Ops[I].Opcode))
       return GuardIndex + 1;
   return std::nullopt;
+}
+
+// A validated alignment check changes only the set of inputs reaching the
+// next operation. The path walker consumes that condition before continuing.
+SymRef alignmentPrecondition(SymContext &Ctx, SymExec &Exec, const LowOp &Op) {
+  const SymRef Address = Exec.operandValue(Op.Inputs[1]);
+  const unsigned Width = Ctx.width(Address);
+  const SymRef Mask = Ctx.mkConst(Width, Op.Inputs[2].Offset - 1);
+  const SymRef Aligned = Ctx.mkEq(Ctx.mkAnd(Address, Mask), Ctx.mkZero(Width));
+  if (Op.NumInputs == 3)
+    return Aligned;
+  const SymRef Enable = Exec.operandValue(Op.Inputs[3]);
+  return Ctx.mkOr(Aligned, Ctx.mkEq(Enable, Ctx.mkZero(Ctx.width(Enable))));
 }
 
 /// Add one side of a branch and decide every contradiction the expression
@@ -808,7 +822,21 @@ SymExploration explorePathsDetailed(SymContext &Ctx, const LowFunc &Func,
                                {Op.Addr, Op.Seq, Current.BlockId, OpIndex,
                                 Invocation, Current.Constraints});
         }
-        Result = Exec.step(Op, CallEffect ? &*CallEffect : nullptr);
+        if (isDefaultAddressAlignmentGuard(Op)) {
+          Exec.assume(alignmentPrecondition(Ctx, Exec, Op));
+          Result = StepResult::Continue;
+        } else if (Opts.WordCheckTarget != Arch::Unknown && !Opts.Concolic &&
+                   Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 2 &&
+                   Op.Inputs[0].Offset ==
+                       uint64_t(Intrinsic::MIPSRequireWord) &&
+                   mipsScalarLowShapeIsValid(Op, Opts.WordCheckTarget)) {
+          const SymRef Value = Exec.operandValue(Op.Inputs[1]);
+          Exec.assume(
+              Ctx.mkEq(Value, Ctx.mkSExt(Ctx.mkExtract(Value, 0, 32), 64)));
+          Result = StepResult::Continue;
+        } else {
+          Result = Exec.step(Op, CallEffect ? &*CallEffect : nullptr);
+        }
         for (size_t ConstraintIndex = FirstEffectConstraint;
              ConstraintIndex < Exec.pathConstraints().size(); ++ConstraintIndex)
           if (!addConstraint(Ctx, Current,

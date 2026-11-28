@@ -825,16 +825,44 @@ struct Reader {
 };
 } // namespace
 
-std::map<std::string, std::optional<MachOChainedFixups::Provider>>
-MachOChainedFixups::uniqueImportProviders() const {
-  std::map<std::string, std::optional<Provider>> Providers;
+std::optional<bool> MachOChainedFixups::Provider::bindingStrength(
+    const std::string &Name,
+    const std::map<std::string, bool> &ObjectImports) const {
+  const auto I = ObjectImports.find(Name);
+  if (I == ObjectImports.end())
+    return WeakImport;
+  // A coalescing lookup has a definition in this image even if the object
+  // would otherwise permit the symbol to be absent.
+  return !LocalWeakDefinition && I->second;
+}
+
+std::map<std::string, MachOChainedFixups::Provider>
+MachOChainedFixups::uniqueImportProviders(
+    const std::map<std::string, bool> &ObjectImports) const {
+  std::map<std::string, Provider> Providers;
   for (const auto &Import : Imports) {
-    const Provider Identity{
-        Import.Ordinal,
-        bool(Import.Flags & llvm::MachO::BIND_SYMBOL_FLAGS_WEAK_IMPORT)};
-    auto [It, Added] = Providers.emplace(Import.Name, Identity);
-    if (!Added && It->second != Identity)
-      It->second.reset();
+    const bool Weak = Import.Flags & llvm::MachO::BIND_SYMBOL_FLAGS_WEAK_IMPORT;
+    auto [It, Added] =
+        Providers.try_emplace(Import.Name, Provider{Import.Ordinal, Weak});
+    if (Added)
+      continue;
+    if (It->second.Ordinal != Import.Ordinal)
+      It->second.Ordinal.reset();
+    if (It->second.WeakImport != Weak)
+      It->second.WeakImport.reset();
+  }
+  for (const auto &Entry : ObjectImports) {
+    if (!WeakDefinitions.contains(Entry.first))
+      continue;
+    // The export itself proves the weak-lookup provider, even when the
+    // original image has no reference and therefore no import or GOT cell.
+    constexpr auto Lookup = llvm::MachO::BIND_SPECIAL_DYLIB_WEAK_LOOKUP;
+    const auto It =
+        Providers.try_emplace(Entry.first, Provider{Lookup, false}).first;
+    if (It->second.Ordinal == Lookup)
+      It->second.LocalWeakDefinition = true;
+    else
+      It->second.Ordinal.reset();
   }
   return Providers;
 }

@@ -171,6 +171,13 @@ struct PipelineOptions {
   bool MedAnalysisOnly = false;
   bool PatchMode = false;
   bool LiftMode = false;
+  /// A native lift may return the fully prepared machine MedIR without
+  /// emitting its LLVM module. Lift admission and ABI recovery still apply.
+  bool EmitLiftedLLVM = true;
+  /// Versioned allocation and release imports accepted by the static scan.
+  /// Source emission and native rewriting do not consume this model.
+  std::set<va_t> StaticAllocatorSlots;
+  std::set<va_t> StaticReleaseSlots;
   /// Retain native emission observations through LLVM replacement/deletion.
   /// This sidecar does not enable source-only transformations or infer origins
   /// for optimizer-created values.
@@ -250,6 +257,11 @@ struct PipelineOptions {
   /// jump-table and continuation rebuilds lift again.  Production callers
   /// leave it null; it never changes what a run lifts.
   size_t *RebuiltFunctionsForTesting = nullptr;
+  /// Unit-test-only: when set, a run adds the number of x87 call graph builds
+  /// its first batch made, each a lift of a function the batch also builds or
+  /// a callee outside it.  Production callers leave it null; it never changes
+  /// what a run lifts.
+  size_t *X87GraphBuildsForTesting = nullptr;
   /// Borrowed for this run only. See PipelineAnalysisCache's lifetime and
   /// invalidation contract; nullptr preserves independent analysis.
   PipelineAnalysisCache *AnalysisCache = nullptr;
@@ -264,6 +276,10 @@ struct PipelineOptions {
   /// Machine analysis and rewriting exclude presentation-only source hints.
   bool usesMachineMedIR() const {
     return PatchMode || LiftMode || MedAnalysisOnly;
+  }
+
+  bool emitsMachineLLVM() const {
+    return PatchMode || (LiftMode && EmitLiftedLLVM);
   }
 
   /// A requested LLVM source view can bind explicit declarations without

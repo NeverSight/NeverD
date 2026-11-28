@@ -4,6 +4,22 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>JVM-Klassen und JAR-Dateien untersuchen…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Java-Bytecode, typisierte IR und rekonstruierte Methoden untersuchen</translation>
+    </message>
+    <message>
+        <source>Memory Safety Scan...</source>
+        <translation>Speichersicherheitsprüfung...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>Objektlebensdauer, Initialisierung, Grenzen und Formatzeichenketten prüfen</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>Schwebenden Arbeitsbereich mit Disassemblierung, Pseudocode und Ausgabe umschalten</translation>
     </message>
@@ -1342,6 +1358,22 @@
     <message>
         <source>Find conditional strings computed by functions</source>
         <translation>Bedingte, von Funktionen berechnete Zeichenfolgen finden</translation>
+    </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Lua-Quelltext rekonstruieren…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Lua-Datei rekonstruieren und Funktionsprototypen untersuchen</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Python-Code und Paketbestandteile untersuchen</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Python-Quelltext rekonstruieren…</translation>
     </message>
 </context>
 <context>
@@ -11187,6 +11219,375 @@ Ihr vorheriger Graph ist weiterhin verfügbar.</translation>
     <message>
         <source>Loading %1…</source>
         <translation>%1 wird geladen…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>Speichersicherheitsprüfung</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>&amp;Analysatoren</translation>
+    </message>
+    <message>
+        <source>All checks</source>
+        <translation>Alle Prüfungen</translation>
+    </message>
+    <message>
+        <source>Lifetime and initialization</source>
+        <translation>Lebensdauer und Initialisierung</translation>
+    </message>
+    <message>
+        <source>Bounds and format strings</source>
+        <translation>Bereichsgrenzen und Formatstrings</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>Befunde</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>Urteil</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>Eigenschaft</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>Adresse</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Funktion</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>Analysatoren</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>Belege zum Befund</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>&amp;Prüfen</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>Prüfung abbrechen</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>Prüfung wird abgebrochen…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>Prüfung läuft…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>Die Prüfung wurde vor dem Start abgebrochen.</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>Urteil: %1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1: %2 (%3 geprüft, %4 übersprungen, %5 unbestimmt)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>JVM-Klassen und JAR-Dateien untersuchen</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Durchsuchen…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>Artefakt</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>Basis-Einträge der JAR-Datei</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>Vorschaufunktionen aktivieren</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>Laufzeit</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>Lokale Abhängigkeiten…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Leeren</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Abhängigkeiten</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>Klasse oder Eintrag</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>Methode</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>Bestand anzeigen</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>Auswahl analysieren</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Java-Quelltext</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>Bytecode</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>Typisierte IR</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Nachweise</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Bytecode-Zuordnung</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>Ansicht kopieren</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>Ansicht exportieren…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Bericht exportieren…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>JVM-Artefakt öffnen</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>Ansicht der gewählten Laufzeit</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>Alle Methoden</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Lua-Quelltext rekonstruieren</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Durchsuchen…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>&amp;Eingabedatei</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>Aus Datei erkennen</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>Upstream-Luau</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>Upstream-Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>&amp;Profil</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>Rekonstruieren</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Analyseprozess wird gestartet…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>Funktionsprototyp</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>Quelltext</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Bytecode-Zuordnungen</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Nachweise</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>Quelltext kopieren</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>Quelltext exportieren…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Bericht exportieren…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Lua-Datei öffnen</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>Wird abgebrochen…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>In neue Datei exportieren</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua-Quelltext (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>Analyseprozess wurde beendet.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>Quelltext wird rekonstruiert…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>Dieser Prozess unterstützt keine Lua-Rekonstruktion.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>Datei wird gelesen…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Abgebrochen</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>Funktionsprototyp %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>Ursprüngliche Zeile %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>Komponente</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>Startskripte</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>Native Komponente wird exportiert…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Ordner…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Funktion</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>Funktion %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>Native Komponente exportiert.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>PyInstaller-Ordner öffnen</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Python-Artefakt öffnen</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>In der nativen Analyse öffnen…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>Dieser Arbeitsprozess unterstützt keine Python-Rekonstruktion.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python-Quelltext (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Python-Quelltext rekonstruieren</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>Native Komponente in einer neuen Datei speichern</translation>
     </message>
 </context>
 </TS>

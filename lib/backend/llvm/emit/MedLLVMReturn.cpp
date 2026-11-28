@@ -402,8 +402,28 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       const MedVar *RetVar = nullptr;
       const MedVar *HiVar = nullptr;
       bool SawReturnView = false;
-      bool PassedReturn = false;
-      for (auto RIt = Blk.Ops.rbegin(); RIt != Blk.Ops.rend(); ++RIt) {
+      // A bare RV32 return also checks its link alignment. When it has just
+      // one incoming edge, both words of a proven pair can have been defined
+      // in that predecessor, including the successful iteration of a loop.
+      const MedBlock *Writes = &Blk;
+      if (WantPair && isRISCV32(TargetArch) && Blk.Preds.size() == 1 &&
+          Blk.ExceptionalPreds.empty() && Blk.Phis.empty() &&
+          llvm::all_of(Blk.Ops, [&](const MedOp &O) {
+            return O.Addr == Op.Addr && O.Output.Kind != MedVar::Reg &&
+                   O.IntrinsicOutputs.empty() && O.Opcode != NdOp::CALL &&
+                   O.Opcode != NdOp::INDIR_CALL;
+          })) {
+        if (const auto *Blocks = uniqueBlocksById())
+          if (auto Pred = Blocks->find(Blk.Preds.front());
+              Pred != Blocks->end())
+            Writes = Pred->second;
+      }
+      bool PassedReturn = Writes != &Blk;
+      for (auto RIt = Writes->Ops.rbegin(); RIt != Writes->Ops.rend(); ++RIt) {
+        if (Writes != &Blk &&
+            (RIt->Opcode == NdOp::CALL || RIt->Opcode == NdOp::INDIR_CALL ||
+             !RIt->IntrinsicOutputs.empty()))
+          break;
         if (&*RIt == &Op) {
           PassedReturn = true;
           continue;
@@ -502,16 +522,36 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                   *RetVar, RetVar->Size, Builder, /*IsValueOperand=*/true))
             RetVal = Builder.CreatePtrToInt(Sym, RetTy);
       }
-      // Splice the high half above the low half into the 64-bit result.
+      llvm::Value *SecondWord = nullptr;
       if (WantPair && RetVal && HiVar) {
         rejectEscapingAddressFragment(*HiVar,
                                       "the high half of a return value");
+        SecondWord = GetReturnValue(*HiVar);
+      } else if (WantPair && !RetVar && !HiVar &&
+                 ParamRegoffMap.count(IntRetOff) &&
+                 ParamRegoffMap.count(HiRetOff) &&
+                 registerUntouchedFromEntry(*CurMedFunc, Blk, IntRetOff,
+                                            WordBytes, TargetArch) &&
+                 registerUntouchedFromEntry(*CurMedFunc, Blk, HiRetOff,
+                                            WordBytes, TargetArch)) {
+        // A bare return can forward the entire incoming argument pair.
+        MedVar Incoming;
+        Incoming.Kind = MedVar::Reg;
+        Incoming.TheArch = TargetArch;
+        Incoming.Size = WordBytes;
+        Incoming.SSAVer = -1;
+        Incoming.RegOff = IntRetOff;
+        RetVal = getIncomingParameter(Incoming, Builder);
+        Incoming.RegOff = HiRetOff;
+        SecondWord = getIncomingParameter(Incoming, Builder);
+      }
+      if (RetVal && SecondWord) {
         auto ToLimb = [&](llvm::Value *V) {
           return Builder.CreateZExt(
               Builder.CreateZExtOrTrunc(V, sizeToType(WordBytes)), RetTy);
         };
         llvm::Value *Lo = ToLimb(RetVal);
-        llvm::Value *Hi = ToLimb(GetReturnValue(*HiVar));
+        llvm::Value *Hi = ToLimb(SecondWord);
         if (TRI.IntegerReturnPairHighFirst)
           std::swap(Lo, Hi);
         RetVal = Builder.CreateOr(Builder.CreateShl(Hi, WordBytes * 8), Lo,

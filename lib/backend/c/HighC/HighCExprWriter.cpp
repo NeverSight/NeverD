@@ -42,7 +42,9 @@
 #include "neverd/backend/IntegerMemorySource.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
-#include "neverd/backend/PowerPC/PowerPCDivisionSource.h"
+#include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
+#include "neverd/backend/RISCV/RISCVCycleSource.h"
+#include "neverd/backend/RISCV/RISCVFloatingSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthLoadC.h"
@@ -62,6 +64,7 @@
 #include "neverd/ir/high/X86/X87GuardedValueShape.h"
 #include "neverd/ir/high/X86/X87ValueShape.h"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.h"
 #include "neverd/ir/intrinsics/X86/X64Syscall.h"
 #include "neverd/ir/intrinsics/X86/X86DescriptorState.h"
 #include "neverd/ir/med/MedCallConvention.h"
@@ -1249,6 +1252,21 @@ const HighExpr &HighCWriter::lowBytesSource(const HighExpr &E,
   return *Cur;
 }
 
+ExprPtr HighCWriter::integerCallCapture(const ExprPtr &Value,
+                                        const TypeRef &To) const {
+  if (!isPlainInteger(To) || !isPlainInteger(Value->Type) ||
+      (To->Size == Value->Type->Size && To->IsSigned == Value->Type->IsSigned))
+    return {};
+  const HighExpr *Call = peelIntegerViewOps(Value.get());
+  if (Call->Kind != ExprKind::Call)
+    return {};
+  auto Cast = std::make_shared<HighExpr>();
+  Cast->Kind = ExprKind::Cast;
+  Cast->Type = Cast->CastTo = To;
+  Cast->Operands.push_back(Value);
+  return Cast;
+}
+
 bool HighCWriter::integerText(const HighExpr &E, llvm::StringRef Text) const {
   if (printedIntegerType(E))
     return true;
@@ -2340,18 +2358,62 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   std::string Name = resolvedCallTarget(E);
 
   if (E.IntrinsicId != Intrinsic::None) {
-    if (const auto D = ppc::division(E.IntrinsicId)) {
+    if (E.IntrinsicId == Intrinsic::PPCVaddubm) {
+      if (!isPowerPC(Opts.TheArch) || E.Operands.size() != 2)
+        throw std::runtime_error("invalid PowerPC vector byte addition");
+      static const std::string Bytes = typeToC(ppc::byteVectorType());
+      return "(__builtin_bit_cast(" + Bytes + ", " + exprStr(*E.Operands[0]) +
+             ") + __builtin_bit_cast(" + Bytes + ", " +
+             exprStr(*E.Operands[1]) + "))";
+    }
+    if (E.IntrinsicId == Intrinsic::RISCVFloating ||
+        E.IntrinsicId == Intrinsic::RISCVFPControl) {
+      const unsigned XLen = getTargetRegInfo(Opts.TheArch).PointerSize;
+      if (!isRISCV(Opts.TheArch) || E.Operands.empty() ||
+          E.Operands.front()->Kind != ExprKind::Const)
+        throw std::runtime_error("invalid RISC-V FP selector");
+      auto Asm = riscv::fpAssembly(E.IntrinsicId, E.Operands.front()->ConstVal,
+                                   XLen, '%');
+      if (!Asm || E.Operands.size() != 1 + Asm->Count)
+        throw std::runtime_error("invalid RISC-V FP operands");
+      std::vector<std::string> Args;
+      for (unsigned I = 0; I < Asm->Count; ++I) {
+        const auto &V = *E.Operands[1 + I];
+        std::string Arg = exprStr(V);
+        if (riscv::fpRegister(Asm->Inputs[I]) &&
+            (!V.Type || V.Type->Kind != NdTypeKind::Float))
+          Arg = "__builtin_bit_cast(" +
+                std::string(riscv::fpNativeC(Asm->Inputs[I], XLen)) + ", (" +
+                riscv::fpIntegerC(riscv::fpBytes(Asm->Inputs[I], XLen)) + ")(" +
+                Arg + "))";
+        Args.push_back(std::move(Arg));
+      }
+      std::string Result = riscv::fpSource(*Asm, Args, XLen);
+      if (riscv::fpRegister(Asm->Result) &&
+          (!E.Type || E.Type->Kind != NdTypeKind::Float))
+        return "__builtin_bit_cast(" +
+               std::string(
+                   riscv::fpIntegerC(riscv::fpBytes(Asm->Result, XLen))) +
+               ", " + Result + ")";
+      return Result;
+    }
+    if (const auto *Read = riscv::cycleRead(E.IntrinsicId)) {
+      if (!Read->admits(Opts.TheArch) || !E.Operands.empty())
+        throw std::runtime_error("invalid RISC-V cycle read");
+      return riscv::cycleSource(*Read);
+    }
+    if (const auto D = ppc::fixedPoint(E.IntrinsicId)) {
       if (!D->admits(Opts.TheArch) || E.Operands.size() != 2 ||
           E.IntrinsicOutputs.size() != unsigned(D->Record))
-        throw std::runtime_error("invalid PowerPC divide");
+        throw std::runtime_error("invalid PowerPC fixed-point operation");
       std::string Condition;
       if (D->Record) {
         Condition = varName(E.IntrinsicOutputs.front());
         if (Analysis.DeadVars.count(Condition))
           Condition.clear();
       }
-      return ppc::divisionSource(*D, exprStr(*E.Operands[0]),
-                                 exprStr(*E.Operands[1]), Condition);
+      return ppc::fixedPointSource(*D, exprStr(*E.Operands[0]),
+                                   exprStr(*E.Operands[1]), Condition);
     }
     if (integer_memory::owns(E.IntrinsicId)) {
       if (E.Operands.empty() || E.Operands.front()->Kind != ExprKind::Const)
@@ -7772,7 +7834,13 @@ const HighExpr *HighCWriter::truthTestedValue(const HighExpr *E) const {
     // only set bits, and floating negative zero has a nonzero bit pattern.
     const HighExpr &Inner = *E->Operands[0];
     const uint16_t Outer = integerViewWidth(*E);
-    const uint16_t In = integerViewWidth(Inner);
+    uint16_t In = integerViewWidth(Inner);
+    // A call the IR leaves untyped yields its declared C result.
+    if (!In && Inner.Kind == ExprKind::Call)
+      if (const TypeRef Return = knownCallReturnType(Inner);
+          Return &&
+          (Return->Kind == NdTypeKind::Int || Return->Kind == NdTypeKind::Ptr))
+        In = Return->Size;
     if (!Outer || !In || (Outer < In && !valueFitsInBytes(Inner, Outer)))
       return E;
     E = &Inner;

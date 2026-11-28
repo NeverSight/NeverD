@@ -89,6 +89,10 @@ static int realMain(int Argc, char *Argv[]) {
   // reads textual LLVM IR.
   if (PluginsCmd)
     return runPlugins(Argv[0]);
+  if (JavaCmd)
+    return runJavaRecovery();
+  if (LuaCmd || PythonCmd)
+    return runScriptRecovery();
   // identify reads the input's headers only; a file NeverD cannot load still
   // gets its rows.
   if (IdentifyCmd)
@@ -385,13 +389,12 @@ static int realMain(int Argc, char *Argv[]) {
       !loadAnalysisSections(Sess))
     return 1;
   if ((LiftCmd || DecompileCmd || DisasmCmd || CfgCmd || SymbolicCmd ||
-       AuditCmd || HuntCmd) &&
+       ScanCmd) &&
       !configureAnalysisSession(Sess))
     return 1;
 
-  // Hunt and audit name callees through the same identity view as the rest of
-  // the engine, so optional signature matching has to land before they run.
-  if ((AuditCmd || HuntCmd || DecompileCmd || FuncsCmd) &&
+  // Apply requested signatures before resolving callee names.
+  if ((ScanCmd || DecompileCmd || FuncsCmd) &&
       (SigAuto || !SigBase.getValue().empty() || !SigFile.getValue().empty() ||
        !SigDir.getValue().empty())) {
     Expected<int> MatchCount = applyRequestedSignatures(Sess, Argv[0]);
@@ -401,7 +404,7 @@ static int realMain(int Argc, char *Argv[]) {
     }
   }
 
-  if (!PatchBytesCmd && !JsonOutput && !SymbolicCmd && !AuditCmd && !HuntCmd &&
+  if (!PatchBytesCmd && !JsonOutput && !SymbolicCmd && !ScanCmd &&
       !(PatchCmd && PatchReport)) {
     const char *ArchStr = neverd_session_arch_name(Sess);
     outs() << "=== " << ProjectName << " v" << VersionString << " (" << Command
@@ -476,10 +479,8 @@ static int realMain(int Argc, char *Argv[]) {
     return runCfg(Sess);
   if (SymbolicCmd)
     return runSymbolicExplore(Sess);
-  if (AuditCmd)
-    return runAudit(Sess);
-  if (HuntCmd)
-    return runHunt(Sess);
+  if (ScanCmd)
+    return runScan(Sess);
   if (XrefsCmd)
     return runXrefs(Sess);
   if (CallGraphCmd)

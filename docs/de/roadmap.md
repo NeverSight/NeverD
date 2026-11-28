@@ -68,7 +68,7 @@ Mainnet-Semantik. Siehe [EVM-Dekompilation](evm.md).
 
 ---
 
-## 4. Speicher-Audit und Hunt
+## 4. Speichersicherheitsprüfung
 
 Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-after-Free) und gefährliche Copy-Überläufe analysieren, als strukturiertes JSON, mit einem begrenzten Solver-Modell für einen bewiesenen Überlauf. Die Analyse läuft auf dem formatneutralen IR und der gemeinsamen Identitätsansicht, daher sind **PE, ELF und Mach-O gleichrangige Ziele**, und sie nutzt die eigene symbolische Ausführung und den Bitvektor-Solver — kein externer Solver, kein Container.
 
@@ -79,16 +79,13 @@ Ein geliftetes Binärfile auf Heap-Lebensdauerfehler (Leak, Double-Free, Use-aft
 | Erreichbarkeitsevidenz | Kontrollstatus ab bekannten Einstiegen plus unabhängiger Angreifer-Fixpunkt und exakter Wurzel-/Aufrufkettenzeuge |
 | Identitätsvertrag | Senkenauflösung je Format (PE-IAT, ELF-PLT, Mach-O-dyld-Bind) und PDB-/DWARF-/MAP-Namensquellen |
 
-**Status:** Phase 1 ist für PE, ELF und Mach-O implementiert. P0 umfasst Closed-World-Analysen für Heap-Lebensdauer und gefährliche Kopien sowie additive Schema-v1-Evidenz mit `process-input-v1`-Replay für exakte literale Umgebungswerte und den ersten unterstützten `read(0)`-Familienaufruf auf der Standardeingabe; andere Eingabearten bleiben mit Begründung nicht abspielbar. P1 deckt Stack-/Global-Überläufe, uninitialisierte lokale Reads und Formatstrings ab. Unbekannte oder nur teilweise anwendbare Aufrufeffekte bleiben UNKNOWN. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) festgeschrieben, der auf jedem Host die verpflichtende PE/ELF/Mach-O × x86-64/AArch64-Matrix ausführt. Siehe [Speicher-Audit und Hunt](memory-safety.md).
+**Status:** Phase 1 ist für PE, ELF und Mach-O implementiert. P0 umfasst Closed-World-Analysen für Heap-Lebensdauer und gefährliche Kopien sowie additive Schema-v1-Evidenz mit `process-input-v1`-Replay für exakte literale Umgebungswerte und den ersten unterstützten `read(0)`-Familienaufruf auf der Standardeingabe; andere Eingabearten bleiben mit Begründung nicht abspielbar. P1 deckt Stack-/Global-Überläufe, uninitialisierte lokale Reads und Formatstrings ab. Unbekannte oder nur teilweise anwendbare Aufrufeffekte bleiben UNKNOWN. Urteils- und Identitätsabdeckung ist durch [`unittests/safety`](../../unittests/safety) und den End-to-End-[`SafetyIntegrationTests.cpp`](../../unittests/safety/SafetyIntegrationTests.cpp) festgeschrieben, der auf jedem Host die verpflichtende PE/ELF/Mach-O × x86-64/AArch64-Matrix ausführt. Siehe [Speichersicherheitsprüfung](memory-safety.md).
 
 Der aktuelle interprozedurale Slice ergänzt `reachability.status` und
 `reachability.attacker_control` in Schema v1, ohne den unabhängigen `verdict` zu
 ändern. Er berichtet `application`-, `image`- oder `export`-Wurzeln, exakte
 interne Aufrufketten und geschlossen fehlschlagende UNKNOWN-Zustände. Die
-Budgets `max_call_depth` und `max_summary_iterations` sind über C-API, beide
-CLI-Befehle und beide Python-Methoden verfügbar. `control_reachable` und
-`attacker_reachable` sind
-daher Erreichbarkeits- und keine Urteilssummen.
+Budgets `max_call_depth` und `max_summary_iterations` sind über C-API, `neverd scan` und `Session.scan()` verfügbar.
 
 P2-Analyseoberflächen und -Pläne verwenden versionierte Grenzen mit explizitem Status:
 
@@ -136,5 +133,5 @@ Rekonstruktion läuft weiter. Keine Termine zugesagt.
 | Legacy-EVM-Decoding/Lifting | Bis Fusaka abgeschlossen; regressionstestgedeckt |
 | EVM-Source-Rekonstruktion | Laufend — evidenzgestützt und konservativ |
 | Solana-eBPF-(SBF)-Dekompilation | Abgeschlossen — v0-v4, C, Rust und LLVM; regressionstestgedeckt |
-| Speicher-Audit und Hunt | Phase 1 plus Known-Entry-Erreichbarkeitsslice abgeschlossen; `lowir-concolic-v1` und Darwin-`binary-sanitizer-v1` sind experimentell; natives `process-replay-v1` bleibt hinter dem fail-closed Phase-0-Adapter nicht verfügbar |
+| Speichersicherheitsprüfung | Phase 1 plus Known-Entry-Erreichbarkeitsslice abgeschlossen; `lowir-concolic-v1` und Darwin-`binary-sanitizer-v1` sind experimentell; natives `process-replay-v1` bleibt hinter dem fail-closed Phase-0-Adapter nicht verfügbar |
 | Engine- & Produkt-Härtung | Laufend |

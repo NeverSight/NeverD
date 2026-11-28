@@ -1079,6 +1079,16 @@ TEST(FunctionDiscoveryAlignment, DataPointersRejectMisalignedAArch64Entries) {
 
   ASSERT_EQ(Img.Symbols.size(), 1u);
   EXPECT_EQ(Img.Symbols.front().Addr, 0x1008u);
+
+  Img.Format = BinaryFormat::MachO;
+  Img.Symbols.clear();
+  Img.Segments.back().Name = section_names::macho::LinkeditSeg;
+  scanDataFuncPointers(Img);
+  EXPECT_TRUE(Img.Symbols.empty());
+  Img.Segments.back().Name = section_names::macho::DataConstSeg;
+  scanDataFuncPointers(Img);
+  ASSERT_EQ(Img.Symbols.size(), 1u);
+  EXPECT_EQ(Img.Symbols.front().Addr, 0x1008u);
 }
 
 TEST(FunctionDiscoveryAlignment, RawDataPointerCandidatesRemainGuesses) {
@@ -1300,6 +1310,35 @@ TEST(FunctionDiscoveryAlignment,
   EXPECT_FALSE(Img.Symbols[0].IsFunc);
   EXPECT_EQ(Img.Symbols[1].Addr, 0x1002u);
   EXPECT_TRUE(Img.Symbols[1].IsFunc);
+}
+
+TEST(FunctionDiscoveryAlignment, ASectionSymbolOccupiesItsExactAddress) {
+  BinaryImage Img;
+  Img.Arch = Arch::X86;
+  Img.Bits = Bitness::Bits32;
+  Img.Format = BinaryFormat::COFF;
+  const std::array<uint8_t, 7> Hotpatch = {0x8b, 0xff, 0x55, 0x8b,
+                                           0xec, 0x5d, 0xc3};
+  std::vector<uint8_t> Code(32, 0xcc);
+  Code[0] = 0xc3;
+  for (size_t Off : {8, 16})
+    std::copy(Hotpatch.begin(), Hotpatch.end(), Code.begin() + Off);
+  Img.Segments.push_back(executableSegment(0x1000, Code));
+  Img.addSymbol(".text", 0x1008).IsSection = true;
+  auto &Data = Img.addSegment(".rdata", 0x2000, 12);
+  Data.Data.resize(Data.Size);
+  writeLE<uint32_t>(Data.Data.data(), 0x1008);
+  writeLE<uint32_t>(Data.Data.data() + 4, 0x1010);
+  writeLE<uint32_t>(Data.Data.data() + 8, 0x1008);
+
+  runPostLoadDiscovery(Img, "test");
+
+  ASSERT_EQ(Img.Symbols.size(), 2u);
+  EXPECT_TRUE(Img.Symbols[0].IsSection);
+  EXPECT_EQ(Img.Symbols[0].Addr, 0x1008u);
+  EXPECT_TRUE(Img.Symbols[1].IsFunc);
+  EXPECT_FALSE(Img.Symbols[1].IsBoundaryGuess);
+  EXPECT_EQ(Img.Symbols[1].Addr, 0x1010u);
 }
 
 TEST(FunctionDiscoveryAlignment,

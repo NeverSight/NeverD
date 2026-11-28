@@ -109,17 +109,21 @@ bool CFGBuilder::recoverScalarConstantBranches(const BinaryImage &Img,
                                                Decoder &Dec, LowFunc &Func,
                                                size_t &RemainingWork,
                                                ScalarImageFacts &ImageScalars) {
-  // ARM32 state-changing branches require a separate instruction-mode proof.
-  if (Img.Arch != Arch::X86 && Img.Arch != Arch::X64 &&
+  // A guarded PPC transfer retains its physical CTR operand and fallthrough.
+  // Its proven taken destinations belong to that transfer alone.
+  const bool PPC = isPowerPC(Img.Arch);
+  if (!PPC && Img.Arch != Arch::X86 && Img.Arch != Arch::X64 &&
       Img.Arch != Arch::AArch64)
     return false;
-  if (std::none_of(Insns.begin(), Insns.end(), [](const auto &Entry) {
-        const auto &Rec = Entry.second;
-        return Rec.ScalarBranchInput ||
-               (Rec.IsBranch && Rec.IsIndirect && !Rec.IsCond && !Rec.IsCall &&
-                !Rec.IsRet && !Rec.RejectedScalarBranch &&
-                !Rec.RejectedComputedTargets && Rec.JumpTableTargets.empty());
-      }))
+  const auto Candidate = [PPC](const InsnRecord &Rec) {
+    return Rec.ScalarBranchInput ||
+           (Rec.IsBranch && Rec.IsIndirect && !Rec.IsCall && !Rec.IsRet &&
+            (PPC ? Rec.IsCond && Rec.IsInstructionGuard : !Rec.IsCond) &&
+            !Rec.RejectedScalarBranch && !Rec.RejectedComputedTargets &&
+            Rec.JumpTableTargets.empty());
+  };
+  if (std::none_of(Insns.begin(), Insns.end(),
+                   [&](const auto &Entry) { return Candidate(Entry.second); }))
     return false;
 
   bool Changed = false;
@@ -194,12 +198,7 @@ bool CFGBuilder::recoverScalarConstantBranches(const BinaryImage &Img,
         break;
       }
       const auto &Terminator = Last->second;
-      if (!Terminator.ScalarBranchInput &&
-          (!Terminator.IsBranch || !Terminator.IsIndirect ||
-           Terminator.IsCond || Terminator.IsCall || Terminator.IsRet ||
-           Terminator.RejectedScalarBranch ||
-           Terminator.RejectedComputedTargets ||
-           !Terminator.JumpTableTargets.empty()))
+      if (!Candidate(Terminator))
         continue;
       // Direct edges transport register state without a new ABI invocation.
       // Recovered edges cannot justify their own proof. Independent roots and
@@ -317,10 +316,7 @@ bool CFGBuilder::recoverScalarConstantBranches(const BinaryImage &Img,
               Complete = false;
               break;
             }
-            if (Rec.IsBranch && !Rec.IsCond && !Rec.IsCall && !Rec.IsRet &&
-                !Rec.RejectedScalarBranch &&
-                (Rec.JumpTableTargets.empty() || Rec.ScalarBranchInput) &&
-                Op.NumInputs == 1 &&
+            if (Instruction == &Terminator && Op.NumInputs == 1 &&
                 (Op.Opcode == NdOp::INDIR_BR ||
                  (Op.Opcode == NdOp::BRANCH && Rec.ScalarBranchInput))) {
               Target = ValueOf(Rec.ScalarBranchInput.value_or(Op.Inputs[0]));
@@ -382,15 +378,15 @@ bool CFGBuilder::recoverScalarConstantBranches(const BinaryImage &Img,
                   (Op.Opcode == NdOp::INDIR_BR ||
                    (Op.Opcode == NdOp::BRANCH &&
                     Terminator.ScalarBranchInput))) {
-                Target = constantScalarExpression(
-                    Operations,
+                symbolic::SymContext Ctx;
+                const auto Expr = symbolicScalarExpression(
+                    Ctx, Operations,
                     Terminator.ScalarBranchInput.value_or(Op.Inputs[0]),
                     Terminator.Addr, RemainingWork, ReadImage);
+                Target = constantScalarExpression(Ctx, Expr, RemainingWork);
                 if (!Target && AllowFinite)
-                  FiniteTargets = finiteScalarExpression(
-                      Operations,
-                      Terminator.ScalarBranchInput.value_or(Op.Inputs[0]),
-                      Terminator.Addr, RemainingWork, ReadImage);
+                  FiniteTargets =
+                      finiteScalarExpression(Ctx, Expr, RemainingWork);
                 Bounded = false;
                 break;
               }
@@ -398,6 +394,12 @@ bool CFGBuilder::recoverScalarConstantBranches(const BinaryImage &Img,
               // hold for arbitrary input on this straight sequence.
               if (Path.DirectEdges.contains(Instruction) &&
                   (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR))
+                continue;
+              // Reaching the indirect transfer means its own instruction
+              // guard fell through. Keep the selector independent of the
+              // predicate and leave every earlier control boundary intact.
+              if (Instruction == &Terminator && Terminator.IsInstructionGuard &&
+                  Op.Opcode == NdOp::COND_BR)
                 continue;
               if (Operations.size() ==
                   limits::kMaxScalarBranchSymbolicOperations) {
@@ -494,7 +496,7 @@ bool CFGBuilder::recoverScalarConstantBranches(const BinaryImage &Img,
                 !Img.hasExecutableCodeOwnerRange(Target, getInsnAlignment()) ||
                 !Img.readVA(Target, getInsnAlignment()))
               return false;
-            if (!Finite)
+            if (!Finite && !Rec.IsCond)
               return true;
             // A finite dispatch is an intra-function CFG, not a set of ABI
             // calls. Do not grant it independent function entries or
@@ -522,7 +524,7 @@ bool CFGBuilder::recoverScalarConstantBranches(const BinaryImage &Img,
         if (Op.Opcode != NdOp::INDIR_BR || Op.NumInputs != 1)
           continue;
         Rec.ScalarBranchInput = Op.Inputs[0];
-        if (Finite)
+        if (Finite || Rec.IsCond)
           Rec.JumpTableTargets = *Values;
         else {
           Op.Opcode = NdOp::BRANCH;

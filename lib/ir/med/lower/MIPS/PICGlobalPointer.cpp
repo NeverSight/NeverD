@@ -145,6 +145,15 @@ public:
     return std::nullopt;
   }
 
+  std::optional<va_t> linkedWordAddress(const NdVar &Address) const {
+    const auto V = read(Address);
+    if (!WordPointers || !V || V->Base != Origin::AdjustedEntry ||
+        (V->Size != 4 && (V->Size != 8 || uint64_t(llvm::SignExtend64<32>(
+                                              V->Bits)) != V->Bits)))
+      return std::nullopt;
+    return uint32_t(V->Bits);
+  }
+
   bool readsGOTPage(const NdVar &Address, unsigned Bytes,
                     llvm::ArrayRef<va_t> Slots) const {
     const auto V = read(Address);
@@ -160,6 +169,7 @@ public:
 struct BlockProof {
   llvm::SmallVector<std::pair<size_t, uint64_t>, 4> Words;
   llvm::SmallVector<size_t, 1> Writes;
+  llvm::SmallVector<std::pair<size_t, va_t>, 0> StaticSlotLoads;
   size_t RequiredWords = 0;
   bool ReadsUnmappedGOTPage = false;
   // Each edge records how many checks can execute before taking it.
@@ -176,7 +186,8 @@ struct SkippedSlot {
 /// publishes the state just before its slot for the annulled edge.
 bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
                 llvm::ArrayRef<va_t> UnmappedGOTPageSlots, EntryValues &Values,
-                BlockProof &Proof, std::optional<SkippedSlot> &Skipped) {
+                BlockProof &Proof, std::optional<SkippedSlot> &Skipped,
+                llvm::function_ref<bool(va_t)> StaticSlot) {
   const uint16_t GPRBytes = isMIPS64(Target) ? 8 : 4;
   const bool SignedWordPointers = hasMIPS32BitAddressIn64BitGPR(Target);
   size_t End = 0;
@@ -241,6 +252,11 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
       }
       if (!Op.Output.isReg() && !Op.Output.isTemp())
         continue;
+      if (StaticSlot && Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 &&
+          Op.Output.Size == 4)
+        if (const auto Slot = Values.linkedWordAddress(Op.Inputs[0]);
+            Slot && StaticSlot(*Slot))
+          Proof.StaticSlotLoads.emplace_back(I, *Slot);
       if (Op.Opcode == NdOp::LOAD && !UnmappedGOTPageSlots.empty() &&
           Values.readsGOTPage(Op.Inputs[0], Op.Output.Size,
                               UnmappedGOTPageSlots))
@@ -266,8 +282,9 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
 
 } // namespace
 
-std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
-                                                   const BinaryImage &Image) {
+std::optional<LowFunc>
+projectMIPSPICGlobalPointer(const LowFunc &Function, const BinaryImage &Image,
+                            llvm::function_ref<bool(va_t)> StaticSlot) {
   if (!Image.MIPS || !Image.MIPS->PICGP || Function.Blocks.empty())
     return std::nullopt;
   const LowBlock &Entry = Function.Blocks.front();
@@ -313,7 +330,7 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
     std::optional<SkippedSlot> Skipped;
     const bool Full =
         scanPrefix(Block, Image.Arch, GP, Image.MIPS->UnmappedGOTPageSlots,
-                   Values, Proof, Skipped);
+                   Values, Proof, Skipped, StaticSlot);
     if (Complete && (Full || Skipped)) {
       for (int Succ : Block.Succs) {
         const auto &Next = Function.Blocks[Succ];
@@ -401,6 +418,16 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
          llvm::ArrayRef(Proof.Words).take_front(Proof.RequiredWords))
       Ops[Index].Inputs[1] = NdVar::scalar(Bits, 8);
   }
+  // Keep the runtime load. Only its address follows from the same entry t9
+  // and preserved GP provenance admitted on every predecessor above.
+  if (StaticSlot)
+    for (const auto &[Id, State] : Inputs)
+      for (const auto &[Index, Slot] : State.Proof.StaticSlotLoads) {
+        auto &Address = Projected.Blocks[Id].Ops[Index].Inputs[0];
+        const uint64_t Bits =
+            Address.Size == 8 ? llvm::SignExtend64<32>(Slot) : Slot;
+        Address = NdVar::dataAddress(Bits, Address.Size, Slot);
+      }
   return Projected;
 }
 

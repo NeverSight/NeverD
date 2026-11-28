@@ -4,6 +4,22 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>JVM 클래스 및 JAR 검사…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Java 바이트코드와 형식화된 중간 표현 및 복원한 메서드를 검사합니다</translation>
+    </message>
+    <message>
+        <source>Memory Safety Scan...</source>
+        <translation>메모리 안전성 검사...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>객체 수명, 초기화, 경계 및 서식 문자열을 검사합니다</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>디스어셈블리, 의사 코드 및 출력을 포함하는 부동 작업 공간 전환</translation>
     </message>
@@ -1342,6 +1358,22 @@
     <message>
         <source>Find conditional strings computed by functions</source>
         <translation>함수에서 계산되는 조건부 문자열 찾기</translation>
+    </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Lua 소스 복원…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Lua 소스를 복원하고 함수 프로토타입 검사</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Python 코드 및 패키지 구성 요소 검사</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Python 소스 복원…</translation>
     </message>
 </context>
 <context>
@@ -11151,6 +11183,375 @@ Your previous graph is still available.</source>
     <message>
         <source>Loading %1…</source>
         <translation>%1 불러오는 중…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>메모리 안전성 검사</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>분석기(&amp;A)</translation>
+    </message>
+    <message>
+        <source>All checks</source>
+        <translation>모든 검사</translation>
+    </message>
+    <message>
+        <source>Lifetime and initialization</source>
+        <translation>객체 수명 및 초기화</translation>
+    </message>
+    <message>
+        <source>Bounds and format strings</source>
+        <translation>경계 및 서식 문자열</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>발견 항목</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>판정</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>속성</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>주소</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>함수</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>분석기</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>발견 항목 근거</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>검사(&amp;S)</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>검사 취소</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>검사를 취소하는 중…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>검사 중…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>시작 전에 검사가 취소되었습니다.</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>판정: %1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1: %2(검사 %3개, 건너뜀 %4개, 판정 불가 %5개)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>JVM 클래스 및 JAR 검사</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>찾아보기…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>분석 대상</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>JAR 기본 항목</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>미리 보기 기능 사용</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>런타임</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>로컬 종속성…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>지우기</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>종속성</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>클래스 또는 멤버</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>메서드</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>목록 검사</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>선택 항목 분석</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>취소</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Java 소스</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>바이트코드</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>형식화된 중간 표현</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>근거</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>바이트코드 매핑</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>보기 복사</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>보기 내보내기…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>보고서 내보내기…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>JVM 파일 열기</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>선택한 런타임 보기</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>모든 메서드</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Lua 소스 복원</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>찾아보기…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>입력 파일(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>파일에서 감지</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>공식 Luau</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>공식 Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>프로필(&amp;P)</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>복원</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>취소</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>분석 작업자 시작 중…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>함수 프로토타입</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>소스</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>바이트코드 매핑</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>근거</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>소스 복사</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>소스 내보내기…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>보고서 내보내기…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Lua 파일 열기</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>취소 중…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>새 파일로 내보내기</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua 소스 (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>분석 작업자가 중지되었습니다.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>소스 복원 중…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>이 작업자는 Lua 복원을 지원하지 않습니다.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>파일 읽는 중…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>취소됨</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>함수 프로토타입 %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>원본 줄 %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>구성 요소</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>진입 스크립트</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>네이티브 구성 요소 내보내는 중…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>폴더…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>함수</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>함수 %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>네이티브 구성 요소를 내보냈습니다.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>PyInstaller 폴더 열기</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Python 파일 열기</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>네이티브 분석에서 열기…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>이 작업 프로세스에서는 Python 소스를 복원할 수 없습니다.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python 소스 (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Python 소스 복원</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>네이티브 구성 요소를 새 파일로 저장</translation>
     </message>
 </context>
 </TS>

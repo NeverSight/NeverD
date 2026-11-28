@@ -42,17 +42,9 @@ std::optional<std::string>
 validatePipelineCoverage(const PipelineResult &Result,
                          const BinaryImage *Img = nullptr);
 
-/// Hunt every copy sink for a destination overflow.
+/// Check copy sinks and propagate failures to the strict sanitizer.
 SafetyReport runHunt(const AnalysisInput &In, const SinkCatalog &Cat,
                      const SafetyBudgets &Budgets);
-
-/// Audit heap handles for lifetime defects and local stack reads for missing
-/// initialization.
-SafetyReport runAudit(const AnalysisInput &In, const SinkCatalog &Cat,
-                      const SafetyBudgets &Budgets);
-
-/// Serialise a report to the stable JSON schema.  \p Pretty adds indentation.
-std::string toJson(const SafetyReport &Report, bool Pretty = false);
 
 } // namespace neverd::safety
 

@@ -1,0 +1,145 @@
+{
+  "implementation": "bf37a956e254e823879fcee1b9f63bb71dafb7cf",
+  "dev_baseline": "c8b0efbd3345c20a0a5da9542ca1d1f6e8a6e782",
+  "llvm_prebuilt": "neverd-llvm-v23.0.0-r6",
+  "sdk_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "release_test_sha256": "245b1c416f511c08e678c0f65222f7ecc5e9dafa113429a1c414e5de8b570259",
+  "reproduced_before_fix": {
+    "dyld_rebase_to_second_instruction": {
+      "cfg_root_offsets_in_function": [
+        0,
+        4
+      ],
+      "source_bytes": 8,
+      "previous_emitted_bytes": 4,
+      "published_body_matches_all_source_bytes": true
+    },
+    "first_rx_segment_after_readonly_data": {
+      "default": {
+        "original_sha256": "e7cbc76efae286e12b1f9b5437e8ed109179a68ce0f8b008c30d1eefeb837c81",
+        "header_padding_bytes": 32,
+        "previous_published_functions": 0,
+        "fixed_published_functions": 2
+      },
+      "padded": {
+        "original_sha256": "a1aaa1abb37b1fa5c2d3460190867f78747350c0ea232909ab0bae5278eed7d7",
+        "header_padding_bytes": 256,
+        "previous_published_functions": 2,
+        "fixed_published_functions": 2
+      }
+    }
+  },
+  "six_native_cases": {
+    "AArch64LiftedImage.RebasedLiteralChecksBothSignedDisplacementLimits": {
+      "native_literal_boundary_instructions": 2
+    },
+    "AArch64LiftedImage.EncodesSignedByteAndPageAddressesAtBothLimits": {
+      "native_address_boundary_instructions": 4
+    },
+    "AArch64LiftedImage.RecognizesOnlyImmutableLocalLiteralRebases": {
+      "native_dyld_cell_images": 2
+    },
+    "AArch64LiftedImage.DistinguishesReturnedLiteralSlotsFromOtherRoots": {
+      "native_literal_root_originals": 2,
+      "native_literal_root_publications": 1,
+      "ambiguous_literal_root_rejections": 1
+    },
+    "AArch64LiftedImage.AdHocRequirementsRefusePublicationWithoutMutation": {
+      "native_requirement_original_runs": 2,
+      "executed_native_images": 0
+    },
+    "AArch64AsyncUnwind.PublishesExplicitLPStartWithEntryLandingPad": {
+      "native_entry_landing_pad_cleanups": 4
+    }
+  },
+  "execution_scope": {
+    "displacements": "Execute the actual NeverD LDR literal, ADR and ADRP words at each signed endpoint.",
+    "dyld_cells": "Call the original and published leaf and observe both local rebase slots, the outside bind and the null slot. The arm64e driver also calls through the typed signed field.",
+    "literal_roots": "Call both source images and the unambiguous publication. The conflicting alias is rejected before output is created.",
+    "requirements": "Call the same strictly signed source before and after refusal. Verify its bytes and signature and require no new output.",
+    "entry_landing_pad": "Run normal returns and real C++ exception cleanup through explicit LPStart on original and published images at O0 and O2."
+  },
+  "local_m4": {
+    "cpu": "Apple M4 Max",
+    "macos": "15.6.1",
+    "driver": "arm64",
+    "library": "arm64e",
+    "release_native_cases_passed": 6,
+    "neighboring_layout_cases": {
+      "build": "Release translation units and libraries",
+      "passed": 67,
+      "failed": 0,
+      "skipped": 0
+    },
+    "neighboring_image_and_unwind_cases": {
+      "build": "Release",
+      "passed": 21,
+      "failed": 0,
+      "skipped": 0
+    },
+    "release_ctest_passed": 6
+  },
+  "apple_originals": {
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/45917481329",
+    "actions_revision": "953fce3d0561b7950dae2854f22b94dde5db77ae",
+    "programs_per_host": 4
+  },
+  "release_replay": {
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/45927721870",
+    "actions_revision": "35f3cacf8aeb3c4c2a011d33996e7bf60534f28e",
+    "hosts": {
+      "macos-26": {
+        "cpu": "Apple M1 (Virtual)",
+        "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+        "native_pac": true,
+        "native_compiler_call_and_signed_unwind": true,
+        "six_passed": 6,
+        "extended_passed": 222,
+        "failed": 0,
+        "skipped": 0,
+        "suites": {
+          "AArch64AsyncUnwind": {
+            "tests": 141,
+            "with_native_counter": 109
+          },
+          "AArch64LiftedImage": {
+            "tests": 81,
+            "with_native_counter": 81
+          }
+        },
+        "explicit_two_modifier_layouts_checked": 128
+      },
+      "xcode-27": {
+        "cpu": "Apple M1 (Virtual)",
+        "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+        "native_pac": true,
+        "native_compiler_call_and_signed_unwind": true,
+        "six_passed": 6,
+        "extended_passed": 222,
+        "failed": 0,
+        "skipped": 0,
+        "suites": {
+          "AArch64AsyncUnwind": {
+            "tests": 141,
+            "with_native_counter": 109
+          },
+          "AArch64LiftedImage": {
+            "tests": 81,
+            "with_native_counter": 81
+          }
+        },
+        "explicit_two_modifier_layouts_checked": 128
+      }
+    }
+  },
+  "remaining_native_validation": {
+    "explicit_two_modifier_unwind_cases": 32,
+    "hardware_todo": [
+      "128-bit LRCPC3",
+      "two-modifier PAuth_LR",
+      "PC-sensitive PACM",
+      "CPTA enabled",
+      "checked writeback"
+    ]
+  }
+}

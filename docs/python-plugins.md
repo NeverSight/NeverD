@@ -39,6 +39,11 @@ CPython link dependency. A Python-enabled build stages the matching package and
 examples under `build/bin/sdk/python/`; that directory is also directly
 installable with `python3 -m pip install build/bin/sdk/python`.
 
+For macOS 15 or later deployment targets, builds with CMake 3.24 or later and
+a linker that supports delayed initialization defer the shared CPython library’s
+native initializers until the first call into Python. The library remains a
+required dependency of Python-enabled builds.
+
 ## Write a plugin
 
 One module declares exactly one decorated class:
@@ -203,18 +208,16 @@ projection refusal, replay refusal, and candidate limits remain typed flip
 results rather than exceptions. Local argument errors raise `TypeError` or
 `ValueError`; native request and schema failures raise `NeverDError`.
 
-### Memory-safety audit and hunt
+### Memory-safety scan
 
-`session.audit()` and `session.hunt()` return parsed JSON reports (the same
-schema as the CLI). They require a lifted native session:
+`session.scan()` runs both analyzers and returns their findings and coverage in one report. Use `analyzer="audit"` or `analyzer="hunt"` to select one. [Unified scan guide](memory-safety-scan.md).
 
 ```python
-audit = session.audit()
-hunt = session.hunt(max_paths=64, max_steps=1 << 16)
-print(audit.get("ok"), hunt.get("findings"))
+report = session.scan(max_paths=64, max_steps=1 << 16)
+print(report["verdict"], report["analyzers"])
 ```
 
-EVM and SBF sessions reject these calls.
+On EVM and SBF inputs, the selected analyzers report `unsupported`.
 
 ### Strict binary sanitizer publication
 

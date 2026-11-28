@@ -97,6 +97,7 @@ public:
   static std::string version();
   /// Whether the engine exposes its static x87 support matrix, independently
   /// of binary loading, host probing or execution.
+  static bool supportsSafetyScan();
   static bool reportsX87Capabilities();
   static bool reportsComputedStrings();
   /// Whether versioned machine-source recovery is available for source views.

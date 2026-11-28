@@ -1968,12 +1968,18 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
   // budget.
   if (!AliasQueries.empty()) {
     bool AliasProofComplete = false;
+    // The batch runs on a share of the candidate account and is charged what
+    // it spent: an unfinished batch only abandons its alternatives.
+    size_t AliasQueryBudget = *CandidateEvidenceBudget /
+                              limits::kJumpTableGuardAliasQueryAccountDivisor;
+    const size_t AliasQueryAllowance = AliasQueryBudget;
     const std::vector<bool> AliasResults = tableValuesMatchAtUses(
         AliasQueries, &AliasProofComplete, nullptr, InvalidVA, nullptr,
-        CandidateEvidenceBudget, /*LocalMatchEvidenceLimit=*/0,
+        &AliasQueryBudget, /*LocalMatchEvidenceLimit=*/0,
         /*CandidateBranchesSharingTargets=*/nullptr,
         /*QueryUnsignedFeasibleMasks=*/nullptr, GuardValueDepth,
         CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
+    *CandidateEvidenceBudget -= AliasQueryAllowance - AliasQueryBudget;
     if (!AliasProofComplete || AliasResults.size() != AliasQueries.size())
       goto alias_done;
     for (const PredicatedIndexAlias &Candidate : AliasCandidates) {
@@ -2007,6 +2013,77 @@ bool CFGBuilder::inferBoundsFromPreciseGuards(
     }
   }
 alias_done:
+  // The block holding \p Addr: the nearest block start at or before it.
+  auto blockContaining = [&](va_t Addr) -> std::optional<va_t> {
+    auto It = BlockStarts.upper_bound(Addr);
+    if (It == BlockStarts.begin())
+      return std::nullopt;
+    --It;
+    return *It;
+  };
+  // How the block that \p Term ends enters \p Target: by its fallthrough, or
+  // by a branch, conditional-return or table target that names it.  Empty
+  // when the evidence account runs out.
+  struct BlockEntry {
+    bool Falls = false;
+    bool Named = false;
+  };
+  auto entersBlock = [&](const InsnRecord &Term,
+                         va_t Target) -> std::optional<BlockEntry> {
+    const bool Sized = Term.Size != 0 && Term.Addr <= InvalidVA - Term.Size;
+    const va_t Fall = Sized ? Term.Addr + Term.Size : InvalidVA;
+    BlockEntry Entry;
+    bool Falls = false;
+    if (Term.IsRet && Term.IsCond && Term.IsBranch) {
+      Entry.Named = Term.BranchTarget == Target;
+    } else if (Term.IsRet) {
+      return Entry;
+    } else if (Term.IsBranch && Term.IsIndirect) {
+      Falls = Term.IsCond && Sized;
+      for (va_t Successor : Term.JumpTableTargets) {
+        if (!consumeCandidateEvidence())
+          return std::nullopt;
+        if (Successor == Target)
+          Entry.Named = true;
+      }
+    } else if (Term.IsBranch && !Term.IsIndirect && !Term.IsCall) {
+      Falls = Term.IsCond && Sized;
+      Entry.Named = Term.BranchTarget == Target;
+    } else if ((!Term.IsBranch || Term.IsCall) &&
+               (!Term.IsNoReturnCall || Term.IsCond)) {
+      Falls = Sized;
+    }
+    Entry.Falls = Falls && Fall == Target;
+    return Entry;
+  };
+  // The blocks whose terminators enter \p Target.  Empty when the account
+  // runs out or an instruction lies before every block.
+  auto blocksEntering = [&](va_t Target) -> std::optional<std::set<va_t>> {
+    std::set<va_t> Entering;
+    const InsnRecord *Pending = nullptr;
+    va_t PendingBlock = 0;
+    auto consider = [&]() {
+      const auto Entry = entersBlock(*Pending, Target);
+      if (Entry && (Entry->Falls || Entry->Named))
+        Entering.insert(PendingBlock);
+      return Entry.has_value();
+    };
+    for (const auto &[Addr, Insn] : Insns) {
+      if (!consumeCandidateEvidence())
+        return std::nullopt;
+      const auto Block = blockContaining(Addr);
+      if (!Block)
+        return std::nullopt;
+      if (Pending && *Block != PendingBlock && !consider())
+        return std::nullopt;
+      Pending = &Insn;
+      PendingBlock = *Block;
+    }
+    if (Pending && !consider())
+      return std::nullopt;
+    return Entering;
+  };
+
   // The compared register reaches the table index when this guard branch's
   // conditional fallthrough is the use block's only incoming edge and every
   // later write of that register is a same-lane copy or the lifter's
@@ -2041,6 +2118,65 @@ alias_done:
   std::set<va_t> IndexPredecessors;
   va_t IndexGuardBlock = InvalidVA;
   va_t IndexGuardBranch = InvalidVA;
+  // Every block whose terminator enters the index block, and the conditional
+  // branch whose fallthrough does. Scanned once per candidate; a terminator
+  // whose entry cannot be decided, or an exhausted account, declines.
+  auto scanIndexPredecessors = [&](va_t IndexBlock) -> bool {
+    if (IndexPredecessorsScanned)
+      return true;
+    bool Reject = false;
+    const InsnRecord *Pending = nullptr;
+    va_t PendingBlock = 0;
+    auto considerTerminator = [&](const InsnRecord &Term, va_t Block) {
+      if (Reject)
+        return;
+      const auto Entry = entersBlock(Term, IndexBlock);
+      if (!Entry) {
+        Reject = true;
+        return;
+      }
+      if (!Entry->Falls && !Entry->Named)
+        return;
+      IndexPredecessors.insert(Block);
+      if (Entry->Falls && !Entry->Named && Term.IsCond && Term.IsBranch &&
+          !Term.IsCall && !Term.IsIndirect && !Term.IsRet) {
+        IndexGuardBlock = Block;
+        IndexGuardBranch = Term.Addr;
+      }
+    };
+    for (const auto &[Addr, Insn] : Insns) {
+      if (!consumeCandidateEvidence())
+        return false;
+      const auto Block = blockContaining(Addr);
+      if (!Block) {
+        Reject = true;
+        break;
+      }
+      if (Pending && *Block != PendingBlock)
+        considerTerminator(*Pending, PendingBlock);
+      Pending = &Insn;
+      PendingBlock = *Block;
+    }
+    if (Pending)
+      considerTerminator(*Pending, PendingBlock);
+    if (Reject)
+      return false;
+    IndexPredecessorsScanned = true;
+    return true;
+  };
+  // One overlap primitive for guest registers: the same lane, or one a
+  // sub-register of the other.
+  auto regOverlaps = [&](const NdVar &A, const NdVar &B) {
+    if (!A.isReg() || !B.isReg() || A.Size == 0 || B.Size == 0)
+      return false;
+    if (A.Offset == B.Offset)
+      return true;
+    const TargetRegInfo &TRI = getTargetRegInfo(CurrentImg->Arch);
+    return TRI.isSubRegOf(A.Offset, A.Size, B.Offset, B.Size) ||
+           TRI.isSubRegOf(B.Offset, B.Size, A.Offset, A.Size);
+  };
+  // The proof's roots, read once if a structural walk needs them.
+  std::optional<std::set<va_t>> WalkRoots;
   auto structuralRegisterIndex = [&](const NdVar &Compared, va_t CompareAddr,
                                      int CompareSeq,
                                      va_t GuardBranchAddr) -> bool {
@@ -2051,13 +2187,7 @@ alias_done:
         CompareAddr == InvalidVA || CompareSeq < 0 ||
         GuardBranchAddr == InvalidVA)
       return false;
-    auto blockOf = [&](va_t Addr) -> std::optional<va_t> {
-      auto It = BlockStarts.upper_bound(Addr);
-      if (It == BlockStarts.begin())
-        return std::nullopt;
-      --It;
-      return *It;
-    };
+    const auto &blockOf = blockContaining;
     const auto CompareBlock = blockOf(CompareAddr);
     const auto IndexBlock = blockOf(Info.IndexUseAddr);
     if (!CompareBlock || !IndexBlock)
@@ -2132,72 +2262,8 @@ alias_done:
       return true;
     }
 
-    if (!IndexPredecessorsScanned) {
-      bool Reject = false;
-      const InsnRecord *Pending = nullptr;
-      va_t PendingBlock = 0;
-      auto considerTerminator = [&](const InsnRecord &Term, va_t Block) {
-        if (Reject)
-          return;
-        const bool Sized = Term.Size != 0 && Term.Addr <= InvalidVA - Term.Size;
-        const va_t Fall = Sized ? Term.Addr + Term.Size : InvalidVA;
-        bool OtherHit = false;
-        auto note = [&](va_t Target) {
-          if (Target == *IndexBlock)
-            OtherHit = true;
-        };
-        bool Falls = false;
-        if (Term.IsRet && Term.IsCond && Term.IsBranch) {
-          note(Term.BranchTarget);
-        } else if (Term.IsRet) {
-          return;
-        } else if (Term.IsBranch && Term.IsIndirect) {
-          Falls = Term.IsCond && Sized;
-          for (va_t Target : Term.JumpTableTargets) {
-            if (!consumeCandidateEvidence()) {
-              Reject = true;
-              return;
-            }
-            note(Target);
-          }
-        } else if (Term.IsBranch && !Term.IsIndirect && !Term.IsCall) {
-          Falls = Term.IsCond && Sized;
-          note(Term.BranchTarget);
-        } else if ((!Term.IsBranch || Term.IsCall) &&
-                   (!Term.IsNoReturnCall || Term.IsCond)) {
-          Falls = Sized;
-        }
-        if (Reject)
-          return;
-        const bool FallEdge = Falls && Fall == *IndexBlock;
-        if (!FallEdge && !OtherHit)
-          return;
-        IndexPredecessors.insert(Block);
-        if (FallEdge && !OtherHit && Term.IsCond && Term.IsBranch &&
-            !Term.IsCall && !Term.IsIndirect && !Term.IsRet) {
-          IndexGuardBlock = Block;
-          IndexGuardBranch = Term.Addr;
-        }
-      };
-      for (const auto &[Addr, Insn] : Insns) {
-        if (!consumeCandidateEvidence())
-          return false;
-        const auto Block = blockOf(Addr);
-        if (!Block) {
-          Reject = true;
-          break;
-        }
-        if (Pending && *Block != PendingBlock)
-          considerTerminator(*Pending, PendingBlock);
-        Pending = &Insn;
-        PendingBlock = *Block;
-      }
-      if (Pending)
-        considerTerminator(*Pending, PendingBlock);
-      if (Reject)
-        return false;
-      IndexPredecessorsScanned = true;
-    }
+    if (!scanIndexPredecessors(*IndexBlock))
+      return false;
     if (IndexPredecessors.size() != 1 ||
         *IndexPredecessors.begin() != *CompareBlock ||
         IndexGuardBlock != *CompareBlock ||
@@ -2230,6 +2296,60 @@ alias_done:
           LaneExtend = &Op;
           LaneExtendGuarded = Insn.IsInstructionGuard;
         }
+      }
+      // The lane's writer can precede the compare's block: bash loads a
+      // field with `movl 0x18(%rbx), %eax`, branches away on a test of it,
+      // and compares %eax in the block the test falls into. Follow the chain
+      // of blocks each entered only by falling through from the one before,
+      // as the guard walk does; the span below still excludes calls. A block
+      // also entered another way, as a function entry or a root of the proof
+      // (a relocated label, a landing pad), would skip the extension there,
+      // and nothing all-path checks a structural leaf, so the walk stops.
+      va_t Scan = *CompareBlock;
+      for (uint32_t Hop = 0;
+           !LaneExtend && Hop < limits::kMaxJumpTableGuardFlagSearchBlocks;
+           ++Hop) {
+        if ((CurrentFuncRange && Scan == CurrentFuncRange->first) ||
+            isKnownFunctionEntry(Scan))
+          break;
+        if (!WalkRoots)
+          WalkRoots = jumpTableProofRoots(Info);
+        if (WalkRoots->count(Scan))
+          break;
+        const auto Entering = blocksEntering(Scan);
+        if (!Entering || Entering->size() != 1 || *Entering->begin() >= Scan)
+          break;
+        const va_t Pred = *Entering->begin();
+        const InsnRecord *Last = nullptr;
+        const LowOp *Writer = nullptr;
+        bool WriterGuarded = false;
+        for (auto It = Insns.lower_bound(Pred);
+             It != Insns.end() && It->first < Scan; ++It) {
+          if (!consumeCandidateEvidence())
+            return false;
+          const auto Here = blockContaining(It->first);
+          if (!Here || *Here != Pred)
+            break;
+          Last = &It->second;
+          for (const LowOp &Op : It->second.Ops) {
+            if (!consumeCandidateEvidence())
+              return false;
+            if (overlapsCompared(Op.Output)) {
+              Writer = &Op;
+              WriterGuarded = It->second.IsInstructionGuard;
+            }
+          }
+        }
+        if (!Last)
+          break;
+        const auto Entry = entersBlock(*Last, Scan);
+        if (!Entry || !Entry->Falls || Entry->Named)
+          break;
+        if (Writer) {
+          LaneExtend = Writer;
+          LaneExtendGuarded = WriterGuarded;
+        }
+        Scan = Pred;
       }
       const bool ExtendsLane =
           LaneExtend && !LaneExtendGuarded &&
@@ -2316,14 +2436,6 @@ alias_done:
       return Op.Output.isReg() && Op.Output.Space == Compared.Space &&
              Op.Output.Offset == Compared.Offset &&
              Op.Output.Size == Compared.Size;
-    };
-    auto regOverlaps = [&](const NdVar &A, const NdVar &B) {
-      if (!A.isReg() || !B.isReg() || A.Size == 0 || B.Size == 0)
-        return false;
-      if (A.Offset == B.Offset)
-        return true;
-      return TRI.isSubRegOf(A.Offset, A.Size, B.Offset, B.Size) ||
-             TRI.isSubRegOf(B.Offset, B.Size, A.Offset, A.Size);
     };
     // `and wLane, wSrc, #0xff` then `and xIndex, xSrc, #0xff` recompute the
     // compared lane. The lifter zero-extends the W write before the compare,
@@ -2852,6 +2964,11 @@ alias_done:
     const bool TrackCopiedRegister = !SawWideIdentity && !SameOffset;
     bool CopiedBeforeCompare = false;
     bool CopyInvalid = false;
+    // The copy writes only the index's own lane and leaves the rest of the
+    // index register as it was (`mov %dl, %al` before a RAX index). Only a
+    // later zero-extend of that lane over the whole index makes the wider
+    // index the compared value.
+    bool CopiedLaneZeroExtended = false;
     auto copiedLaneRefresh = [&](const LowOp &Op) {
       if (Op.NumInputs < 1 || !Op.Output.isReg() || !Op.Inputs[0].isReg())
         return false;
@@ -2880,6 +2997,27 @@ alias_done:
              Op.Inputs[0].Size == Compared.Size;
     };
     bool LaneAndAccepted = false;
+    // GCC also copies the compared register into the index after the guard
+    // (`cmp $0x1c, %r11d; ja; mov %r11d, %eax` before an RAX index).  Nothing
+    // may write the compared register between the compare and that copy; the
+    // copy, and the lifter's zero-extend of it, are then the index's only
+    // writes before the use.  A later write of the compared register does not
+    // replace the copy.
+    bool CopiedAfterCompare = false;
+    bool CopyAfterInvalid = false;
+    // After the compare the lane's register may take the lane's zero-extend
+    // in steps: `movzbl %sil, %esi` lifts as INT_ZEXT into a temporary, a
+    // COPY of it into ESI, and the architectural INT_ZEXT of ESI into RSI.
+    // ZeroExtendedWidth is the width at which the lane's register holds the
+    // compared lane zero-extended; the temporary is that instruction's own.
+    size_t ZeroExtendedWidth = 0;
+    std::optional<std::pair<va_t, NdVar>> ZeroExtendedTemp;
+    auto extendsLaneFrom = [&](const NdVar &Input) {
+      return Input.isReg() && Input.Space == Compared.Space &&
+             Input.Offset == Compared.Offset &&
+             Input.Size ==
+                 (ZeroExtendedWidth ? ZeroExtendedWidth : Compared.Size);
+    };
     for (auto It = Insns.lower_bound(std::min(*CompareBlock, *IndexBlock));
          It != Insns.end() && It->first <= Info.IndexUseAddr; ++It) {
       if (!consumeCandidateEvidence())
@@ -2905,10 +3043,13 @@ alias_done:
             if (copyOfCompared(Op) && !Insn.IsInstructionGuard) {
               CopiedBeforeCompare = true;
               CopyInvalid = false;
+              CopiedLaneZeroExtended = false;
             } else if (!(CopiedBeforeCompare && !CopyInvalid &&
                          copiedLaneRefresh(Op))) {
               CopiedBeforeCompare = false;
               CopyInvalid = false;
+            } else if (Op.Opcode == NdOp::INT_ZEXT) {
+              CopiedLaneZeroExtended = true;
             }
           } else if (CopiedBeforeCompare && !CopyInvalid &&
                      overlapsCompared(Op.Output)) {
@@ -2938,14 +3079,40 @@ alias_done:
             regOverlaps(Op.Output, Index)) {
           if (Insn.IsInstructionGuard || !copiedLaneRefresh(Op))
             return false;
+          if (Op.Opcode == NdOp::INT_ZEXT)
+            CopiedLaneZeroExtended = true;
+          continue;
+        }
+        if (TrackCopiedRegister && !CopiedBeforeCompare && !LaneAndAccepted &&
+            !CopiedSlotIdentity && !CopyAfterInvalid &&
+            regOverlaps(Op.Output, Index)) {
+          if (!CopiedAfterCompare && copyOfCompared(Op) &&
+              !Insn.IsInstructionGuard) {
+            CopiedAfterCompare = true;
+            CopiedLaneZeroExtended = false;
+          } else if (CopiedAfterCompare && !Insn.IsInstructionGuard &&
+                     copiedLaneRefresh(Op)) {
+            if (Op.Opcode == NdOp::INT_ZEXT)
+              CopiedLaneZeroExtended = true;
+          } else {
+            CopyAfterInvalid = true;
+          }
           continue;
         }
         if (LaneAndAccepted && exactIndexWrite(Op))
           return false;
+        if (SameOffset && Index.Size > Compared.Size &&
+            Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs >= 1 &&
+            Op.Output.isTemp() && Op.Output.Size <= Index.Size &&
+            extendsLaneFrom(Op.Inputs[0]) && !Insn.IsInstructionGuard) {
+          ZeroExtendedTemp = std::pair{Op.Addr, Op.Output};
+          continue;
+        }
         if (!overlapsCompared(Op.Output))
           continue;
         if ((CopiedSlotIdentity ||
-             (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid)) &&
+             (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid) ||
+             (CopiedAfterCompare && !CopyAfterInvalid)) &&
             !regOverlaps(Op.Output, Index))
           continue;
         if (Insn.IsInstructionGuard)
@@ -2958,24 +3125,184 @@ alias_done:
                                 Op.Inputs[0].Size == Compared.Size;
         // Extending another register does not make it the table index.
         // Cross-register identities require the copy proof above.
+        const bool LaneRegisterWrite =
+            SameOffset && Index.Size > Compared.Size && Op.NumInputs >= 1 &&
+            Op.Output.Space == Compared.Space &&
+            Op.Output.Offset == Compared.Offset && Op.Output.Size <= Index.Size;
         const bool WideZeroExtend =
-            SameOffset && Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs >= 1 &&
-            Op.Output.Size == Index.Size && Index.Size > Compared.Size &&
-            Op.Output.Offset == Compared.Offset && Op.Inputs[0].isReg() &&
-            Op.Inputs[0].Offset == Compared.Offset &&
-            Op.Inputs[0].Size == Compared.Size;
+            LaneRegisterWrite &&
+            ((Op.Opcode == NdOp::INT_ZEXT && extendsLaneFrom(Op.Inputs[0]) &&
+              Op.Output.Size > Op.Inputs[0].Size) ||
+             (Op.Opcode == NdOp::COPY && ZeroExtendedTemp &&
+              ZeroExtendedTemp->first == Op.Addr &&
+              Op.Inputs[0].Space == ZeroExtendedTemp->second.Space &&
+              Op.Inputs[0].Offset == ZeroExtendedTemp->second.Offset &&
+              Op.Inputs[0].Size == ZeroExtendedTemp->second.Size &&
+              Op.Output.Size == Op.Inputs[0].Size));
         if (NarrowCopy)
           continue;
         if (WideZeroExtend) {
-          SawWideIdentity = true;
+          ZeroExtendedWidth = Op.Output.Size;
+          ZeroExtendedTemp.reset();
+          if (ZeroExtendedWidth == Index.Size)
+            SawWideIdentity = true;
           continue;
         }
         return false;
       }
     }
-    if (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid)
+    if (TrackCopiedRegister && CopiedBeforeCompare && !CopyInvalid &&
+        (Index.Size == Compared.Size || CopiedLaneZeroExtended))
+      SawWideIdentity = true;
+    if (CopiedAfterCompare && !CopyAfterInvalid &&
+        (Index.Size == Compared.Size || CopiedLaneZeroExtended))
       SawWideIdentity = true;
     return SawWideIdentity;
+  };
+
+  // A compared memory operand is the index when the index reloads it: a load
+  // of the same width through the same register and displacement,
+  // zero-extended into the index, in the block only the guard's fallthrough
+  // enters. Nothing between the two loads may write memory or that register,
+  // and no call may run before the index is used. Both loads then read one
+  // value, as the value resolver's reload identity holds, and the compare
+  // bounds the index without asking the whole guard session.
+  auto structuralMemoryIndex = [&](const std::vector<LowOp> &GuardOps,
+                                   int LoadAt, va_t GuardBranchAddr) -> bool {
+    const NdVar &Index = Info.IndexValueAtUse;
+    const LowOp &CompareLoad = GuardOps[LoadAt];
+    if (!CurrentImg || !Index.isReg() || CompareLoad.Opcode != NdOp::LOAD ||
+        CompareLoad.MemoryOrdering != NdMemoryOrdering::None ||
+        CompareLoad.Output.Size == 0 || CompareLoad.Output.Size > Index.Size ||
+        Info.IndexUseAddr == InvalidVA || Info.IndexUseSeq < 0 ||
+        GuardBranchAddr == InvalidVA || CompareLoad.Addr > GuardBranchAddr)
+      return false;
+    const auto CompareInsn = Insns.find(CompareLoad.Addr);
+    if (CompareInsn == Insns.end() || CompareInsn->second.IsInstructionGuard)
+      return false;
+    const auto CompareBlock = blockContaining(CompareLoad.Addr);
+    const auto GuardBlock = blockContaining(GuardBranchAddr);
+    const auto IndexBlock = blockContaining(Info.IndexUseAddr);
+    if (!CompareBlock || !GuardBlock || !IndexBlock ||
+        *GuardBlock != *CompareBlock || *IndexBlock == *CompareBlock)
+      return false;
+    if (!scanIndexPredecessors(*IndexBlock))
+      return false;
+    if (IndexPredecessors.size() != 1 ||
+        *IndexPredecessors.begin() != *CompareBlock ||
+        IndexGuardBlock != *CompareBlock || IndexGuardBranch != GuardBranchAddr)
+      return false;
+    auto consume = [&] { return consumeCandidateEvidence(); };
+    const unsigned PointerSize = CurrentImg->getPointerSize();
+    const auto CompareCarrier = detail::loadAddressCarrier(
+        GuardOps, LoadAt, CompareLoad.Addr,
+        detail::loadAddressOperand(CompareLoad), PointerSize, consume);
+    if (!CompareCarrier)
+      return false;
+    // The index block before the index use. A call there may change the
+    // index, the memory or the address register.
+    std::vector<LowOp> IndexOps;
+    for (auto It = Insns.lower_bound(*IndexBlock);
+         It != Insns.end() && It->first <= Info.IndexUseAddr; ++It) {
+      if (!consumeCandidateEvidence())
+        return false;
+      const auto Here = blockContaining(It->first);
+      if (!Here || *Here != *IndexBlock)
+        break;
+      if (It->second.IsInstructionGuard ||
+          (It->second.IsCall && It->first < Info.IndexUseAddr))
+        return false;
+      for (const LowOp &Op : It->second.Ops) {
+        if (!consumeCandidateEvidence())
+          return false;
+        if (Op.Addr == Info.IndexUseAddr && Op.Seq >= Info.IndexUseSeq)
+          break;
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+          return false;
+        IndexOps.push_back(Op);
+      }
+    }
+    // The index's writers back to the reload: zero-extends and same-width
+    // copies only. A temp is followed inside its consumer's instruction.
+    auto overlaps = [&](const NdVar &A, const NdVar &B) {
+      if (A.isReg() || B.isReg())
+        return regOverlaps(A, B);
+      return A.Space == B.Space && A.Size != 0 && B.Size != 0 &&
+             A.Offset < B.Offset + B.Size && B.Offset < A.Offset + A.Size;
+    };
+    NdVar Value = Index;
+    int At = static_cast<int>(IndexOps.size());
+    int ReloadAt = -1;
+    for (int Step = 0; Step < limits::kMaxQuasiCopyDepth && ReloadAt < 0;
+         ++Step) {
+      int Writer = -1;
+      for (int K = At - 1; K >= 0; --K) {
+        if (!consumeCandidateEvidence())
+          return false;
+        if (Value.isTemp() && At < static_cast<int>(IndexOps.size()) &&
+            IndexOps[K].Addr != IndexOps[At].Addr)
+          break;
+        const NdVar &Out = IndexOps[K].Output;
+        if (Out.Space == Value.Space && Out.Offset == Value.Offset &&
+            Out.Size == Value.Size) {
+          Writer = K;
+          break;
+        }
+        if (overlaps(Out, Value))
+          return false;
+      }
+      if (Writer < 0)
+        return false;
+      const LowOp &Op = IndexOps[Writer];
+      if (Op.Opcode == NdOp::LOAD) {
+        ReloadAt = Writer;
+        break;
+      }
+      const bool ZeroExtends = Op.Opcode == NdOp::INT_ZEXT &&
+                               Op.NumInputs == 1 &&
+                               Op.Inputs[0].Size < Op.Output.Size;
+      const bool Copies = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+                          Op.Inputs[0].Size == Op.Output.Size;
+      if ((!ZeroExtends && !Copies) ||
+          (!Op.Inputs[0].isReg() && !Op.Inputs[0].isTemp()))
+        return false;
+      Value = Op.Inputs[0];
+      At = Writer;
+    }
+    if (ReloadAt < 0)
+      return false;
+    const LowOp &Reload = IndexOps[ReloadAt];
+    if (Reload.MemoryOrdering != NdMemoryOrdering::None ||
+        Reload.Output.Size != CompareLoad.Output.Size ||
+        Reload.MemoryAddressSpace != CompareLoad.MemoryAddressSpace ||
+        Reload.NumInputs != CompareLoad.NumInputs)
+      return false;
+    const auto ReloadCarrier = detail::loadAddressCarrier(
+        IndexOps, ReloadAt, Reload.Addr, detail::loadAddressOperand(Reload),
+        PointerSize, consume);
+    if (!ReloadCarrier ||
+        ReloadCarrier->first.Space != CompareCarrier->first.Space ||
+        ReloadCarrier->first.Offset != CompareCarrier->first.Offset ||
+        ReloadCarrier->first.Size != CompareCarrier->first.Size ||
+        ReloadCarrier->second != CompareCarrier->second)
+      return false;
+    // From the compare's load through the guard and up to the reload.
+    const NdVar &Carrier = CompareCarrier->first;
+    for (size_t K = static_cast<size_t>(LoadAt) + 1; K < GuardOps.size(); ++K) {
+      if (!consumeCandidateEvidence())
+        return false;
+      if (detail::mayWriteMemory(GuardOps[K]) ||
+          regOverlaps(GuardOps[K].Output, Carrier))
+        return false;
+    }
+    for (int K = 0; K < ReloadAt; ++K) {
+      if (!consumeCandidateEvidence())
+        return false;
+      if (detail::mayWriteMemory(IndexOps[K]) ||
+          regOverlaps(IndexOps[K].Output, Carrier))
+        return false;
+    }
+    return true;
   };
 
   for (size_t GuardIndex = 0; GuardIndex < GuardBranchAddrs.size();
@@ -3046,6 +3373,193 @@ alias_done:
     }
     if (CondIndex < 0)
       continue;
+
+    // GCC threads `cmp $7, %edx; jle L` into `L: ...; ja default`, so the
+    // branch at L reads the flags its predecessor's compare set.  A flag is
+    // never the table index, so a leaf for it drops the whole guard.  While
+    // the branch instruction reads a flag that no earlier operation here
+    // writes, and the first block has one predecessor, which makes no call,
+    // that block runs right before it: prepend its operations, so the flag's
+    // definition and its inputs unfold there.  This only proposes syntax.
+    // Every unfolded definition keeps its all-path DefQuery, so another path
+    // into the block, or a write this walk does not see, still refuses the
+    // guard.  The search stops at the flags' nearest writer and, like the
+    // block inventory, is charged to the candidate account.
+    if (CurrentImg) {
+      const TargetRegInfo &Registers = getTargetRegInfo(CurrentImg->Arch);
+      auto overlaps = [](const NdVar &Left, const NdVar &Right) {
+        return Left.Space == Right.Space && Left.Size != 0 && Right.Size != 0 &&
+               Left.Offset < Right.Offset + Right.Size &&
+               Right.Offset < Left.Offset + Left.Size;
+      };
+      std::vector<va_t> Walked{BlockStart};
+      // A compare of a narrower low lane of the index register binds that
+      // lane through its definition, whose extension ties the lane to the
+      // index: GCC compares `%al` after `cmp $9, %eax` on what `movzbl`
+      // loaded blocks earlier. When nothing here writes the lane, that
+      // definition precedes this block, so the walk goes on for it as for a
+      // flag. It does so only where the lane can still be the index: the
+      // guard's branch enters the index's block, directly or by falling
+      // through blocks that only it enters and that leave the index register
+      // alone. It keeps what it walked only once the definition is in view,
+      // so other compares of the register's lanes keep the syntax they had.
+      const NdVar &Index = Info.IndexValueAtUse;
+      bool LaneWalk = false;
+      if (Index.isReg() && Info.IndexUseAddr != InvalidVA)
+        if (const auto IndexBlock = blockContaining(Info.IndexUseAddr)) {
+          auto Term = Insns.find(BranchAddr);
+          for (uint32_t Step = 0;
+               Term != Insns.end() &&
+               Step <= limits::kMaxJumpTableGuardFlagSearchBlocks;
+               ++Step) {
+            const InsnRecord &Rec = Term->second;
+            const auto Entry = entersBlock(Rec, *IndexBlock);
+            if (!Entry)
+              break;
+            if (Entry->Falls || Entry->Named) {
+              LaneWalk = true;
+              break;
+            }
+            if (!Rec.IsCond || !Rec.IsBranch || Rec.IsIndirect || Rec.IsCall ||
+                Rec.IsRet || Rec.Size == 0 || Rec.Addr > InvalidVA - Rec.Size)
+              break;
+            const va_t Next = Rec.Addr + Rec.Size;
+            const auto Entering = blocksEntering(Next);
+            if (!Entering || Entering->size() != 1)
+              break;
+            auto Last = Insns.end();
+            bool WritesIndex = false;
+            for (auto It = Insns.lower_bound(Next);
+                 It != Insns.end() && blockContaining(It->first) == Next &&
+                 !WritesIndex;
+                 ++It) {
+              if (!consumeCandidateEvidence())
+                break;
+              for (const LowOp &Op : It->second.Ops)
+                WritesIndex |= overlaps(Op.Output, Index);
+              Last = It;
+            }
+            if (WritesIndex || GuardBuildExhausted)
+              break;
+            Term = Last;
+          }
+        }
+      std::optional<std::pair<std::vector<LowOp>, int>> BeforeLane;
+      bool LaneCarried = false;
+      for (uint32_t Hop = 0;; ++Hop) {
+        // The flags the branch instruction reads before it writes them.
+        int First = CondIndex;
+        while (First > 0 && Ops[First - 1].Addr == BranchAddr)
+          --First;
+        std::vector<NdVar> Carried;
+        for (int I = First; I <= CondIndex; ++I) {
+          if (!consumeCandidateEvidence())
+            break;
+          for (int J = 0; J < Ops[I].NumInputs; ++J) {
+            const NdVar &Input = Ops[I].Inputs[J];
+            if (!Input.isReg() || !Registers.isFlag(Input.Offset, Input.Size))
+              continue;
+            bool WrittenBefore = false;
+            for (int K = First; K < I && !WrittenBefore; ++K)
+              WrittenBefore = overlaps(Ops[K].Output, Input);
+            if (!WrittenBefore)
+              Carried.push_back(Input);
+          }
+        }
+        // Drop the flags an earlier operation writes, the nearest first.
+        int FlagWriter = -1;
+        for (int I = First - 1; I >= 0 && !Carried.empty(); --I) {
+          if (!consumeCandidateEvidence())
+            break;
+          const NdVar &Out = Ops[I].Output;
+          const size_t Unwritten = Carried.size();
+          Carried.erase(std::remove_if(Carried.begin(), Carried.end(),
+                                       [&](const NdVar &Flag) {
+                                         return overlaps(Out, Flag);
+                                       }),
+                        Carried.end());
+          if (FlagWriter < 0 && Carried.size() != Unwritten)
+            FlagWriter = I;
+        }
+        // The compared lanes of the index register nothing here writes.
+        LaneCarried = false;
+        if (LaneWalk && Carried.empty() && FlagWriter >= 0) {
+          const va_t CompareAddr = Ops[FlagWriter].Addr;
+          int CompareFirst = FlagWriter;
+          while (CompareFirst > 0 && Ops[CompareFirst - 1].Addr == CompareAddr)
+            --CompareFirst;
+          for (int I = CompareFirst; I <= FlagWriter && !GuardBuildExhausted;
+               ++I) {
+            for (int J = 0; J < Ops[I].NumInputs; ++J) {
+              const NdVar &Input = Ops[I].Inputs[J];
+              if (!Input.isReg() || Input.Space != Index.Space ||
+                  Input.Offset != Index.Offset || Input.Size == 0 ||
+                  Input.Size >= Index.Size)
+                continue;
+              bool Written = false;
+              for (int K = 0; K < I && !Written; ++K) {
+                if (!consumeCandidateEvidence())
+                  break;
+                Written = overlaps(Ops[K].Output, Input);
+              }
+              if (!Written) {
+                Carried.push_back(Input);
+                LaneCarried = true;
+              }
+            }
+          }
+        }
+        if (GuardBuildExhausted) {
+          Info.IncompleteGuardDomain = true;
+          return false;
+        }
+        if (LaneCarried && !BeforeLane)
+          BeforeLane.emplace(Ops, CondIndex);
+        if (Carried.empty() ||
+            Hop == limits::kMaxJumpTableGuardFlagSearchBlocks)
+          break;
+        const auto Entering = blocksEntering(Walked.back());
+        if (GuardBuildExhausted) {
+          Info.IncompleteGuardDomain = true;
+          return false;
+        }
+        if (!Entering || Entering->size() != 1 ||
+            std::find(Walked.begin(), Walked.end(), *Entering->begin()) !=
+                Walked.end())
+          break;
+        const va_t Predecessor = *Entering->begin();
+        std::vector<LowOp> Prefix;
+        bool Calls = false;
+        for (auto It = Insns.lower_bound(Predecessor);
+             It != Insns.end() && blockContaining(It->first) == Predecessor &&
+             !GuardBuildExhausted;
+             ++It) {
+          if (!consumeCandidateEvidence())
+            break;
+          for (const LowOp &Op : It->second.Ops) {
+            if (!consumeCandidateEvidence(/*scan + retention=*/2))
+              break;
+            if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+              Calls = true;
+            Prefix.push_back(Op);
+          }
+        }
+        if (GuardBuildExhausted) {
+          Info.IncompleteGuardDomain = true;
+          return false;
+        }
+        if (Calls ||
+            Ops.size() + Prefix.size() > limits::kMaxJumpTableEvidenceWork / 4)
+          break;
+        Ops.insert(Ops.begin(), Prefix.begin(), Prefix.end());
+        CondIndex += static_cast<int>(Prefix.size());
+        Walked.push_back(Predecessor);
+      }
+      if (LaneCarried && BeforeLane) {
+        Ops = std::move(BeforeLane->first);
+        CondIndex = BeforeLane->second;
+      }
+    }
 
     // The narrower value whose bytes the low lane \p Lane of the register
     // written at \p WriterIndex carries unchanged, as MSVC's
@@ -3250,6 +3764,12 @@ alias_done:
             Def.Seq >= GuardSplit->Seq)
           return Finish(Node);
       }
+      // A compared memory operand the index reloads is the index too.
+      if (V.isTemp() && Info.IndexValueAtUse.isReg() &&
+          structuralMemoryIndex(Ops, DefIndex, BranchAddr)) {
+        adoptStructuralIndex();
+        return Finish(Node);
+      }
       if (!supportedGuardOpcode(Def.Opcode)) {
         // A nearby literal STORE is a proposal, not the value of this LOAD.
         // Ask the shared all-path memory/value resolver to authenticate the
@@ -3423,7 +3943,8 @@ alias_done:
           std::vector<bool> &QueryComplete, bool &Complete, size_t *Budget) {
         return tableValuesMatchAtUses(
             Queries, &Complete, &QueryComplete, InvalidVA, nullptr, Budget,
-            /*LocalMatchEvidenceLimit=*/0,
+            /*LocalMatchEvidenceLimit=*/
+            GuardQueryMatchEvidenceBudgetForTesting.value_or(0),
             /*CandidateBranchesSharingTargets=*/nullptr,
             /*QueryUnsignedFeasibleMasks=*/nullptr, GuardValueDepth,
             CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
@@ -3478,8 +3999,38 @@ alias_done:
     ProofQueryComplete = std::move(Complete);
     ProofComplete = BatchComplete;
   };
+  // The compare's own queries, asked alone against the candidate account.
+  // False when that session cannot answer them at all.
+  auto resolveStructuralQueries = [&]() {
+    std::vector<JumpTableValueQuery> StructuralQueries;
+    StructuralQueries.reserve(StructuralQueryIndices.size());
+    for (size_t Index : StructuralQueryIndices)
+      StructuralQueries.push_back(ProofQueries[Index]);
+    bool StructuralComplete = false;
+    std::vector<bool> StructuralQueryComplete;
+    const std::vector<bool> StructuralResults =
+        ResolveGuardQueries(StructuralQueries, StructuralQueryComplete,
+                            StructuralComplete, CandidateEvidenceBudget);
+    if (StructuralResults.size() != StructuralQueries.size() ||
+        StructuralQueryComplete.size() != StructuralQueries.size())
+      return false;
+    for (size_t I = 0; I < StructuralQueryIndices.size(); ++I) {
+      const size_t Index = StructuralQueryIndices[I];
+      ProofResults[Index] = StructuralResults[I];
+      ProofQueryComplete[Index] = StructuralQueryComplete[I];
+    }
+    ProofComplete = StructuralComplete;
+    return true;
+  };
   if (!ProofQueries.empty() && HasStructuralCompare) {
-    size_t SideBudget = *CandidateEvidenceBudget;
+    // The other conditions only add constraints to a compare already in
+    // hand, so their session runs on a share of the candidate account.  One
+    // that cannot finish within it leaves the compare's own queries to be
+    // asked alone, exactly as an exhausted account always did.
+    const size_t SideAllowance =
+        *CandidateEvidenceBudget /
+        limits::kJumpTableGuardSideSessionAccountDivisor;
+    size_t SideBudget = SideAllowance;
     bool BatchComplete = false;
     std::vector<bool> BatchQueryComplete;
     const std::vector<bool> BatchResults = ResolveGuardQueries(
@@ -3488,36 +4039,33 @@ alias_done:
                              BatchQueryComplete.size() == ProofQueries.size() &&
                              SideBudget != 0;
     if (BatchUsable) {
-      *CandidateEvidenceBudget = SideBudget;
+      *CandidateEvidenceBudget -= SideAllowance - SideBudget;
       assignBatch(std::move(BatchResults), std::move(BatchQueryComplete),
                   BatchComplete);
+      // The session can also run out of its own match allowance with the
+      // candidate account to spare: pcre2's pattern converter puts 22
+      // controlling conditions and 179 queries before its dispatch.  The
+      // other conditions do not decide the compare, so when that session
+      // left any of the compare's own queries unanswered, ask those alone.
+      const bool CompareUnanswered =
+          !ProofComplete &&
+          std::any_of(StructuralQueryIndices.begin(),
+                      StructuralQueryIndices.end(),
+                      [&](size_t Index) { return !ProofQueryComplete[Index]; });
+      if (CompareUnanswered && !resolveStructuralQueries()) {
+        if (SawControllingGuard)
+          Info.IncompleteGuardDomain = true;
+        return false;
+      }
     } else {
       AbandonedUnrelatedQueries = true;
       ProofResults.assign(ProofQueries.size(), false);
       ProofQueryComplete.assign(ProofQueries.size(), false);
       ProofComplete = false;
-      if (!StructuralQueryIndices.empty()) {
-        std::vector<JumpTableValueQuery> StructuralQueries;
-        StructuralQueries.reserve(StructuralQueryIndices.size());
-        for (size_t Index : StructuralQueryIndices)
-          StructuralQueries.push_back(ProofQueries[Index]);
-        bool StructuralComplete = false;
-        std::vector<bool> StructuralQueryComplete;
-        const std::vector<bool> StructuralResults =
-            ResolveGuardQueries(StructuralQueries, StructuralQueryComplete,
-                                StructuralComplete, CandidateEvidenceBudget);
-        if (StructuralResults.size() != StructuralQueries.size() ||
-            StructuralQueryComplete.size() != StructuralQueries.size()) {
-          if (SawControllingGuard)
-            Info.IncompleteGuardDomain = true;
-          return false;
-        }
-        for (size_t I = 0; I < StructuralQueryIndices.size(); ++I) {
-          const size_t Index = StructuralQueryIndices[I];
-          ProofResults[Index] = StructuralResults[I];
-          ProofQueryComplete[Index] = StructuralQueryComplete[I];
-        }
-        ProofComplete = StructuralComplete;
+      if (!StructuralQueryIndices.empty() && !resolveStructuralQueries()) {
+        if (SawControllingGuard)
+          Info.IncompleteGuardDomain = true;
+        return false;
       }
     }
   } else if (!ProofQueries.empty()) {
@@ -3566,6 +4114,11 @@ alias_done:
     ProofQueryComplete.insert(ProofQueryComplete.end(),
                               FallbackQueryComplete.begin(),
                               FallbackQueryComplete.end());
+    // ProofQueries[I] stays the query behind ProofResults[I]: the narrow-lane
+    // extension check below asks a bound leaf's identity again.
+    ProofQueries.insert(ProofQueries.end(),
+                        std::make_move_iterator(FallbackQueries.begin()),
+                        std::make_move_iterator(FallbackQueries.end()));
   }
   // Lane-source identities only add evidence: they run for lanes no query
   // above bound, and a pair that fails or cannot complete leaves its guard
@@ -3606,8 +4159,14 @@ alias_done:
       ProofResults.push_back(LaneResults[2 * I + 1]);
       ProofQueryComplete.push_back(LaneQueryComplete[2 * I + 1]);
     }
+    ProofQueries.insert(ProofQueries.end(),
+                        std::make_move_iterator(LaneQueries.begin()),
+                        std::make_move_iterator(LaneQueries.end()));
   }
   std::map<const GuardSyntaxNode *, GuardExprPtr> ExprMemo;
+  // The syntax leaf behind each materialized index leaf, for the narrow-lane
+  // extension check after the solver.
+  std::map<const GuardExpr *, const GuardSyntaxNode *> IndexLeafSources;
   std::set<const GuardSyntaxNode *> ActiveExprs;
   bool SawIncompleteProofQuery = false;
   if (!consumeGuardBuildWork())
@@ -3677,6 +4236,8 @@ alias_done:
     if (IndexMatches) {
       Expr->K = GuardExpr::Kind::Index;
       Expr->ContainsIndex = true;
+      // A discarded leaf's address can be reused; the live one wins.
+      IndexLeafSources.insert_or_assign(Expr.get(), Node.get());
       return Finish(Expr);
     }
     const bool LiteralQueryPresent =
@@ -3762,6 +4323,9 @@ alias_done:
     GuardExprPtr Expr;
     bool TableCondition = false;
     uint16_t IndexWidth = 0;
+    /// The guard compares the index lane itself (GuardSyntaxNode::
+    /// ContainsStructuralIndex).
+    bool Structural = false;
   };
   std::vector<MaterializedGuard> MaterializedGuards;
   if (!consumeGuardBuildWork(GuardRoots.size()))
@@ -3863,7 +4427,8 @@ alias_done:
         }
         return failIncomplete();
       }
-      MaterializedGuards.push_back({std::move(Expr), TableCondition, *Width});
+      MaterializedGuards.push_back({std::move(Expr), TableCondition, *Width,
+                                    Root && Root->ContainsStructuralIndex});
     }
   }
 
@@ -3884,7 +4449,26 @@ alias_done:
       break;
     }
   }
-  if (!HasCanonicalGuard && !MaterializedGuards.empty())
+  // A compare of the index lane itself, whose zero-extension into the index
+  // the structural proof established, is written over the index as directly
+  // as a full-width guard. When it is the only such compare, its view wins
+  // over full-width expressions of the index: bash tests `(%eax - 4) & ~4`
+  // on the full register before `cmp $0x13, %eax`, and keeping only that
+  // test left holes and no bound.
+  const bool CanonicalStructural =
+      std::any_of(MaterializedGuards.begin(), MaterializedGuards.end(),
+                  [&](const MaterializedGuard &Guard) {
+                    return Guard.Structural &&
+                           Guard.IndexWidth == Info.IndexValueAtUse.Size;
+                  });
+  const auto NarrowStructural = std::find_if(
+      MaterializedGuards.begin(), MaterializedGuards.end(),
+      [&](const MaterializedGuard &Guard) {
+        return Guard.Structural && Guard.IndexWidth < Info.IndexValueAtUse.Size;
+      });
+  if (!CanonicalStructural && NarrowStructural != MaterializedGuards.end())
+    SelectedIndexWidth = NarrowStructural->IndexWidth;
+  else if (!HasCanonicalGuard && !MaterializedGuards.empty())
     SelectedIndexWidth = MaterializedGuards.front().IndexWidth;
   for (MaterializedGuard &Guard : MaterializedGuards) {
     if (!consumeGuardBuildWork())
@@ -3929,7 +4513,7 @@ alias_done:
           const NdVar &Value = Op.Inputs[I];
           if (isGuardLiteral(Value) && Value.Size != 0 &&
               Value.Size <= sizeof(uint64_t) &&
-              Value.Offset < std::numeric_limits<uint64_t>::digits)
+              Value.Offset < limits::kMaxJumpTableJoinedDomainValues)
             ProposedJoinedBound =
                 std::max(ProposedJoinedBound, Value.Offset + 1);
         }
@@ -3948,7 +4532,7 @@ alias_done:
     Joined.Relation = JumpTableValueRelation::JoinedUnsignedFeasibleSet;
     Joined.UnsignedUpperBound = ProposedJoinedBound;
     std::vector<bool> Complete;
-    std::vector<uint64_t> Masks;
+    std::vector<JumpTableFeasibleSet> Masks;
     const auto Results = tableValuesMatchAtUses(
         {Joined}, nullptr, &Complete, InvalidVA, nullptr,
         CandidateEvidenceBudget, 0, nullptr, &Masks, GuardValueDepth,
@@ -3958,9 +4542,9 @@ alias_done:
     // bytes are unused, so its last reaching value bounds that table.
     // The proved mask, not the literal envelope, is the bound.
     if (Results.size() == 1 && Complete.size() == 1 && Complete[0] &&
-        Masks.size() == 1 && Results[0] && Masks[0] &&
-        ((Masks[0] & (Masks[0] + 1)) == 0 || AllowSparseDomain)) {
-      const uint32_t Bound = std::bit_width(Masks[0]);
+        Masks.size() == 1 && Results[0] && !Masks[0].none() &&
+        (Masks[0].isDensePrefix() || AllowSparseDomain)) {
+      const uint32_t Bound = Masks[0].bitWidth();
       // A prefix bounds this use but does not shrink a relocation-owned
       // object whose remaining slots may serve another dispatch.
       const bool PrefixOfOwnedObject =
@@ -4010,17 +4594,17 @@ alias_done:
       Lookup.UseAddr = Info.IndexUseAddr;
       Lookup.UseSeq = Info.IndexUseSeq;
       Lookup.Relation = JumpTableValueRelation::ReadonlyUnsignedEnvelope;
-      Lookup.UnsignedUpperBound = 64;
+      Lookup.UnsignedUpperBound = limits::kMaxJumpTableFeasibleSetValues;
       std::vector<bool> Complete;
-      std::vector<uint64_t> Masks;
+      std::vector<JumpTableFeasibleSet> Masks;
       const auto Results = tableValuesMatchAtUses(
           {Lookup}, nullptr, &Complete, InvalidVA, nullptr,
           CandidateEvidenceBudget, 0, nullptr, &Masks, GuardValueDepth,
           CertifiedEdgeOverrides, /*UseGroupContext=*/true, &QueryScope);
       if (Results.size() == 1 && Complete.size() == 1 && Complete[0] &&
-          Masks.size() == 1 && Results[0] && Masks[0] &&
-          (Masks[0] & (Masks[0] + 1)) == 0) {
-        const uint32_t Bound = std::bit_width(Masks[0]);
+          Masks.size() == 1 && Results[0] && !Masks[0].none() &&
+          Masks[0].isDensePrefix()) {
+        const uint32_t Bound = Masks[0].bitWidth();
         if (Bound >= limits::kMinJumpTableEntries) {
           if (Info.MaxEntries == 0 || Bound < Info.MaxEntries)
             Info.MaxEntries = Bound;
@@ -4592,11 +5176,88 @@ alias_done:
       Info.SemanticGuardDomainAmbiguous = true;
     return false;
   }
+  // Past the narrow lane's sign bit, sign- and zero-extension of that lane no
+  // longer agree. The bound still names the index when every index leaf of
+  // the selected guards reaches the table index zero-extended: a structural
+  // leaf (the lane itself, its zero-extend, or an AND keeping the whole lane),
+  // or a leaf whose identity also holds with sign extension excluded. That
+  // identity is the one Materialize bound the leaf with: its index query, the
+  // extended lane's query, or the lane source's. A lane read again on each
+  // entry path binds only through the extended lane: the narrowed index query
+  // names one definition, which another path does not reach.
+  // Those queries run on a copy of the account, charged only when they hold,
+  // so a lane they cannot prove fails exactly as before.
+  auto selectedLaneZeroExtended = [&]() {
+    std::vector<JumpTableValueQuery> ZeroQueries;
+    std::vector<const GuardExpr *> Work;
+    std::set<const GuardExpr *> Seen;
+    for (const auto &[Guard, TableCondition] : IndexGuards) {
+      (void)TableCondition;
+      if (Guard)
+        Work.push_back(Guard.get());
+    }
+    size_t Visits = 0;
+    while (!Work.empty()) {
+      if (++Visits > limits::kMaxJumpTableEvidenceWork)
+        return false;
+      const GuardExpr *Expr = Work.back();
+      Work.pop_back();
+      if (!Seen.insert(Expr).second)
+        continue;
+      if (Expr->K != GuardExpr::Kind::Index) {
+        for (const GuardExprPtr &Input : Expr->Inputs)
+          if (Input)
+            Work.push_back(Input.get());
+        continue;
+      }
+      const auto Source = IndexLeafSources.find(Expr);
+      if (Source == IndexLeafSources.end())
+        return false;
+      const GuardSyntaxNode &Leaf = *Source->second;
+      if (Leaf.StructuralIndex)
+        continue;
+      auto holds = [&](size_t Query) {
+        return Query < ProofQueries.size() && Query < ProofResults.size() &&
+               Query < ProofQueryComplete.size() && ProofQueryComplete[Query] &&
+               ProofResults[Query];
+      };
+      size_t Identity;
+      if (holds(Leaf.IndexQuery) &&
+          (!Leaf.IndexQueryUsesDefinition || holds(Leaf.DefQuery)))
+        Identity = Leaf.IndexQuery;
+      else if (holds(Leaf.ExtendedLaneQuery))
+        Identity = Leaf.ExtendedLaneQuery;
+      else if (holds(Leaf.LaneSourceIndexQuery) &&
+               holds(Leaf.LaneSourceDefQuery))
+        Identity = Leaf.LaneSourceIndexQuery;
+      else
+        return false;
+      JumpTableValueQuery Query = ProofQueries[Identity];
+      Query.AllowSignExtension = false;
+      ZeroQueries.push_back(std::move(Query));
+    }
+    if (ZeroQueries.empty())
+      return true;
+    size_t ZeroBudget = *CandidateEvidenceBudget;
+    bool BatchComplete = false;
+    std::vector<bool> QueryComplete;
+    const std::vector<bool> Results = ResolveGuardQueries(
+        ZeroQueries, QueryComplete, BatchComplete, &ZeroBudget);
+    if (Results.size() != ZeroQueries.size() ||
+        QueryComplete.size() != ZeroQueries.size())
+      return false;
+    for (size_t I = 0; I < Results.size(); ++I)
+      if (!QueryComplete[I] || !Results[I])
+        return false;
+    *CandidateEvidenceBudget = ZeroBudget;
+    return true;
+  };
   if (SelectedIndexWidth < Info.IndexValueAtUse.Size) {
     const unsigned SourceBits = unsigned(SelectedIndexWidth) * 8u;
     if (SourceBits == 0 ||
-        (SourceBits < 64 &&
-         FirstRejected > (uint64_t(1) << (SourceBits - 1)))) {
+        (SourceBits < 64 && FirstRejected > (uint64_t(1) << (SourceBits - 1)) &&
+         (FirstRejected > (uint64_t(1) << SourceBits) ||
+          !selectedLaneZeroExtended()))) {
       return failSemantic();
     }
   }

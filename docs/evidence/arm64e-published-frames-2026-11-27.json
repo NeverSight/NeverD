@@ -1,0 +1,459 @@
+{
+  "implementation": "7e1d4cb2677843753cb2504dbfa0b573863d88d4",
+  "dev_baseline": "4a8792d7f80da91b1d852859abafe0684416b38a",
+  "llvm_prebuilt": "neverd-llvm-v23.0.0-r6",
+  "sdk_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "release_test_sha256": "0e11a450a040fa977cb7ab7c567ed831ce7738d03c27a8d3f6186d6eb3f7970f",
+  "lifted_test_sha256": "018529d2df495f42818945bbee1a6236518a70e1a72e61d8dc43466d26d2fe8a",
+  "reproduced_before_fix": [
+    {
+      "fixture": "compact-none",
+      "apple_control": 0,
+      "object_sha256": "1117022e6e73054f7e3d7586f3591daa934ad97d61640fae5c483ca35cefac63",
+      "baseline_error": "Mach-O patch object: native unwind has no exact function symbol",
+      "wrote_output": false
+    },
+    {
+      "fixture": "compact-plain",
+      "apple_control": 0,
+      "object_sha256": "dfe0fc16f72d7f35c9bd2d73eb5f5219006e60a75c9f5722d401a8c31838fe26",
+      "baseline_error": "Mach-O patch object: initializer requires one local function relocation per pointer",
+      "wrote_output": false
+    },
+    {
+      "fixture": "compact-signed",
+      "apple_control": 0,
+      "object_sha256": "e2381bbbfc11c0b77c0ed3072ee401502c0424f91cfb06d685dd6097d912b9eb",
+      "baseline_error": "Mach-O patch object: initializer requires one local function relocation per pointer",
+      "wrote_output": false
+    },
+    {
+      "fixture": "dwarf-none",
+      "apple_control": 0,
+      "object_sha256": "2fc6a20ef496854ebfd6529908d9815c7986131a48ef107a84652bffe79013db",
+      "baseline_error": "Mach-O patch object: native unwind has no exact function symbol",
+      "wrote_output": false
+    },
+    {
+      "fixture": "dwarf-plain",
+      "apple_control": 0,
+      "object_sha256": "b0cbff2b7cb08d7a79c31d7935ad58322eae039c776b3243db3f65f398510536",
+      "baseline_error": "Mach-O patch object: initializer requires one local function relocation per pointer",
+      "wrote_output": false
+    },
+    {
+      "fixture": "dwarf-signed",
+      "apple_control": 0,
+      "object_sha256": "0f39d41a8937bfc83186646a352ddfbae509f2dce27820bf477fd2df831beb2d",
+      "baseline_error": "Mach-O patch object: initializer requires one local function relocation per pointer",
+      "wrote_output": false
+    },
+    {
+      "fixture": "classic-implicit",
+      "apple_control": 0,
+      "object_sha256": "7569def7cc9589558e51b356b853e3eb5a057bd254c391e4054fdb7543da437a",
+      "baseline_error": "Mach-O patch object: native function lacks registered unwind coverage",
+      "wrote_output": false
+    },
+    {
+      "fixture": "mixed-manual",
+      "apple_control": 0,
+      "object_sha256": "8bfb9015b3444d374d2d70b8f46d313e8e2187a1990db5ec3bc7b797e7d576f0",
+      "baseline_error": "Mach-O patch object: native function lacks registered unwind coverage",
+      "wrote_output": false
+    }
+  ],
+  "input_cases": {
+    "compact": [
+      "none",
+      "plain initializer",
+      "authenticated initializer"
+    ],
+    "indexed_dwarf": [
+      "none",
+      "plain initializer",
+      "authenticated initializer"
+    ],
+    "standalone_dwarf": [
+      "single FDE",
+      "FDE with neighboring compact leaf",
+      "FDE with matching compact coverage"
+    ]
+  },
+  "negative_cases": [
+    "initializer targets interior instruction",
+    "non-IA initializer pointer",
+    "local frame starts in embedded data",
+    "signed LR disagrees with producer CFI",
+    "FDE and compact lengths disagree",
+    "compact start lacks a pointer relocation"
+  ],
+  "m4": {
+    "cpu": "Apple M4 Max",
+    "os": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+    "compiler_original_arm64e_process": "unavailable",
+    "compiler_original_exit": -9,
+    "release_ctest": {
+      "requested": 1094,
+      "completed": 226,
+      "passed": 226,
+      "skipped": 0,
+      "complete": false,
+      "reason": "An independent arm64e dylib repeatedly stalled in the system classic linker. The same source compiled and linked with the default Apple linker. CTest blocked in its process-enumeration timeout helper."
+    },
+    "independent_linker_control": {
+      "default_arm64e_dylib": 0,
+      "classic_arm64e_dylib": "timeout",
+      "classic_deadline_seconds": 35,
+      "classic_retry": 0
+    },
+    "arm64_driver": {
+      "published_frames": 9,
+      "weak_direct_and_got_bindings": 8
+    },
+    "frames": {
+      "AppleClang/MachOArm64ePublishedFrames.PublishesAndUnwinds/0": {
+        "driver": "arm64",
+        "ranges": 27
+      },
+      "AppleClang/MachOArm64ePublishedFrames.PublishesAndUnwinds/1": {
+        "driver": "arm64",
+        "ranges": 27
+      },
+      "AppleClang/MachOArm64ePublishedFrames.PublishesAndUnwinds/2": {
+        "driver": "arm64",
+        "ranges": 27
+      },
+      "AppleClang/MachOArm64ePublishedFrames.PublishesAndUnwinds/3": {
+        "driver": "arm64",
+        "ranges": 27
+      },
+      "AppleClang/MachOArm64ePublishedFrames.PublishesAndUnwinds/4": {
+        "driver": "arm64",
+        "ranges": 27
+      },
+      "AppleClang/MachOArm64ePublishedFrames.PublishesAndUnwinds/5": {
+        "driver": "arm64",
+        "ranges": 27
+      },
+      "StandaloneFDE/MachOArm64ePublishedFrames.PublishesAndUnwinds/0": {
+        "driver": "arm64",
+        "ranges": 1
+      },
+      "StandaloneFDE/MachOArm64ePublishedFrames.PublishesAndUnwinds/1": {
+        "driver": "arm64",
+        "ranges": 2
+      },
+      "StandaloneFDE/MachOArm64ePublishedFrames.PublishesAndUnwinds/2": {
+        "driver": "arm64",
+        "ranges": 1
+      }
+    },
+    "freestanding_batches_passed": 72,
+    "real_binary_parity": {
+      "input_sha256": "5a17b4cd3f7a13ff2cf3c834dcb4390b47226d2c178c748ed40910c73d66736d",
+      "instruction_words": 109,
+      "result": "COMPLETED"
+    },
+    "retried_after_linker_recovery": [
+      "AArch64LiftedImage.ADRPreservesSourceLiteralAndFunctionAddresses",
+      "AArch64LiftedImage.FragmentedIntegerAndSIMDLiteralsSurviveRelifting",
+      "AArch64LiftedImage.RepublishesAddressReturnsBeyondLiteralPoolReach",
+      "AArch64LiftedImage.MaskedGappedRelativeTablesSurviveRelifting",
+      "AArch64LiftedImage.GappedRelativeTablesSurviveRelifting"
+    ]
+  },
+  "apple_control_investigation": {
+    "initial_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45868338206",
+    "isolated_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/45869421389",
+    "result": "Both runners completed the six compiler-original qualification controls. Private symbols retain the Apple linker rows. The macOS 26 indexed control also requires the implicit signed-LR rule. The final tests compare all bytes in the reference and producer text sections."
+  },
+  "native_actions": {
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/45875705163",
+    "hosts": {
+      "macos-26": {
+        "platform": "macOS-26.7.2-arm64-arm-64bit-Mach-O",
+        "cpu": "Apple M1 (Virtual)",
+        "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+        "ir_compiler": "Homebrew clang version 22.1.8",
+        "native_pac_and_signed_unwind_controls": 6,
+        "frame_driver": "arm64e",
+        "published_frame_cases": 9,
+        "native_binding_cases": 8,
+        "prior_37_completed": 34,
+        "total": 54,
+        "passed": 51,
+        "skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+        ],
+        "native_async_cases": {
+          "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+            "native_system_caller_steps": 10
+          },
+          "AArch64AsyncUnwind.SignalReturnResumesCallerWithRecoveredVectorLanes": {
+            "native_signal_caller_resumptions": 8
+          },
+          "AArch64AsyncUnwind.NativeLiveLRRunsLanguageCleanups": {
+            "native_noncall_language_cleanups": 8
+          },
+          "AArch64AsyncUnwind.LiftedCompactNonCallRunsInterruptedAndOuterCleanups": {
+            "native_noncall_language_cleanups": 8
+          }
+        }
+      },
+      "xcode-27": {
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "cpu": "Apple M1 (Virtual)",
+        "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+        "ir_compiler": "Homebrew clang version 22.1.8",
+        "native_pac_and_signed_unwind_controls": 6,
+        "frame_driver": "arm64e",
+        "published_frame_cases": 9,
+        "native_binding_cases": 8,
+        "prior_37_completed": 34,
+        "total": 54,
+        "passed": 51,
+        "skipped": [
+          "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+        ],
+        "native_async_cases": {
+          "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+            "native_system_caller_steps": 10
+          },
+          "AArch64AsyncUnwind.SignalReturnResumesCallerWithRecoveredVectorLanes": {
+            "native_signal_caller_resumptions": 8
+          },
+          "AArch64AsyncUnwind.NativeLiveLRRunsLanguageCleanups": {
+            "native_noncall_language_cleanups": 8
+          },
+          "AArch64AsyncUnwind.LiftedCompactNonCallRunsInterruptedAndOuterCleanups": {
+            "native_noncall_language_cleanups": 8
+          }
+        }
+      }
+    }
+  },
+  "full_release_actions": {
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/45880235245",
+    "revision": "7e1d4cb2677843753cb2504dbfa0b573863d88d4",
+    "runner": "macos-26",
+    "cpu": "Apple M1 (Virtual)",
+    "total": 1094,
+    "passed": 1091,
+    "skipped": [
+      "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+      "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+      "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM"
+    ],
+    "groups": [
+      {
+        "group": 0,
+        "total": 181,
+        "completed": 180
+      },
+      {
+        "group": 1,
+        "total": 183,
+        "completed": 183
+      },
+      {
+        "group": 2,
+        "total": 183,
+        "completed": 183
+      },
+      {
+        "group": 3,
+        "total": 182,
+        "completed": 182
+      },
+      {
+        "group": 4,
+        "total": 182,
+        "completed": 181
+      },
+      {
+        "group": 5,
+        "total": 183,
+        "completed": 182
+      }
+    ],
+    "binary_sha256": [
+      "0e11a450a040fa977cb7ab7c567ed831ce7738d03c27a8d3f6186d6eb3f7970f",
+      "018529d2df495f42818945bbee1a6236518a70e1a72e61d8dc43466d26d2fe8a"
+    ],
+    "real_binary_parity": {
+      "case": "A64FastClassifyParity.OptionalRealBinaryWalk",
+      "image": "-O0-compact.dylib",
+      "section": "__TEXT,__text",
+      "bytes": 436,
+      "sha256": "5a17b4cd3f7a13ff2cf3c834dcb4390b47226d2c178c748ed40910c73d66736d"
+    },
+    "freestanding_batches": 72,
+    "failed": 0
+  },
+  "hardware_todo": [
+    "native 128-bit LRCPC3",
+    "two-modifier PAuth_LR",
+    "PC-sensitive PACM",
+    "CPTA-on",
+    "checked writeback"
+  ],
+  "prior_skip_replay": {
+    "baseline_evidence": "docs/evidence/arm64e-verbatim-publication-replay-2026-11-26.json",
+    "inventory": 37,
+    "m4_passed": 0,
+    "m4_skipped": 37,
+    "macos-26": {
+      "completed": 34,
+      "skipped": 3
+    },
+    "xcode-27": {
+      "completed": 34,
+      "skipped": 3
+    }
+  },
+  "release_runner_inputs": {
+    "first_replay": "https://github.com/gmh5225/test_mac_intel/actions/runs/45879146304",
+    "freestanding_header": "The 72 -nostdlibinc C projection batches use the freestanding string.h from the exact source checkout through a process-scoped CPATH.",
+    "parity_input": "The reference is the 436-byte __TEXT,__text section extracted from the original Apple-linked O0 compact fixture."
+  },
+  "extended_signed_unwind_and_image_replay": {
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/45876433371",
+    "action_revision": "54a9af44ab701c4dc0658279ea1a0e786b5c8e8b",
+    "hosts": {
+      "macos-26": {
+        "suites": {
+          "AArch64AsyncUnwind": {
+            "cases": 141,
+            "cases_with_positive_runtime_counter": 108,
+            "structural_pc_signing_images": 256,
+            "pc_recipe_cases_with_native_delivery": 32,
+            "pc_recipe_native_deliveries": 256,
+            "pc_recipe_cases_without_native_delivery": 32,
+            "pc_recipe_images_without_native_delivery": 128,
+            "cases_without_positive_runtime_counter": [
+              "NativeExplicitIALiveLRRunsLanguageCleanups",
+              "NativeExplicitIALiveLRCatchesLanguageException",
+              "NativeExplicitIALiveLRRunsObjCCleanups",
+              "NativeExplicitIALiveLRCatchesObjCException",
+              "LiftedExplicitIALiveLRRunsLanguageCleanups",
+              "LiftedExplicitIALiveLRCatchesLanguageException",
+              "LiftedExplicitIALiveLRRunsObjCCleanups",
+              "LiftedExplicitIALiveLRCatchesObjCException",
+              "NativeCompactExplicitIALiveLRRunsLanguageCleanups",
+              "NativeCompactExplicitIALiveLRCatchesLanguageException",
+              "NativeCompactExplicitIALiveLRRunsObjCCleanups",
+              "NativeCompactExplicitIALiveLRCatchesObjCException",
+              "LiftedCompactExplicitIALiveLRRunsLanguageCleanups",
+              "LiftedCompactExplicitIALiveLRCatchesLanguageException",
+              "LiftedCompactExplicitIALiveLRRunsObjCCleanups",
+              "LiftedCompactExplicitIALiveLRCatchesObjCException",
+              "NativeExplicitIBLiveLRRunsLanguageCleanups",
+              "NativeExplicitIBLiveLRCatchesLanguageException",
+              "NativeExplicitIBLiveLRRunsObjCCleanups",
+              "NativeExplicitIBLiveLRCatchesObjCException",
+              "LiftedExplicitIBLiveLRRunsLanguageCleanups",
+              "LiftedExplicitIBLiveLRCatchesLanguageException",
+              "LiftedExplicitIBLiveLRRunsObjCCleanups",
+              "LiftedExplicitIBLiveLRCatchesObjCException",
+              "NativeCompactExplicitIBLiveLRRunsLanguageCleanups",
+              "NativeCompactExplicitIBLiveLRCatchesLanguageException",
+              "NativeCompactExplicitIBLiveLRRunsObjCCleanups",
+              "NativeCompactExplicitIBLiveLRCatchesObjCException",
+              "LiftedCompactExplicitIBLiveLRRunsLanguageCleanups",
+              "LiftedCompactExplicitIBLiveLRCatchesLanguageException",
+              "LiftedCompactExplicitIBLiveLRRunsObjCCleanups",
+              "LiftedCompactExplicitIBLiveLRCatchesObjCException",
+              "PublishesExplicitLPStartWithEntryLandingPad"
+            ]
+          },
+          "AArch64LiftedImage": {
+            "cases": 81,
+            "cases_with_positive_runtime_counter": 76,
+            "cases_without_positive_runtime_counter": [
+              "RebasedLiteralChecksBothSignedDisplacementLimits",
+              "EncodesSignedByteAndPageAddressesAtBothLimits",
+              "RecognizesOnlyImmutableLocalLiteralRebases",
+              "DistinguishesReturnedLiteralSlotsFromOtherRoots",
+              "AdHocRequirementsRefusePublicationWithoutMutation"
+            ]
+          }
+        },
+        "passed": 222,
+        "failed": 0,
+        "skipped": 0
+      },
+      "xcode-27": {
+        "suites": {
+          "AArch64AsyncUnwind": {
+            "cases": 141,
+            "cases_with_positive_runtime_counter": 108,
+            "structural_pc_signing_images": 256,
+            "pc_recipe_cases_with_native_delivery": 32,
+            "pc_recipe_native_deliveries": 256,
+            "pc_recipe_cases_without_native_delivery": 32,
+            "pc_recipe_images_without_native_delivery": 128,
+            "cases_without_positive_runtime_counter": [
+              "NativeExplicitIALiveLRRunsLanguageCleanups",
+              "NativeExplicitIALiveLRCatchesLanguageException",
+              "NativeExplicitIALiveLRRunsObjCCleanups",
+              "NativeExplicitIALiveLRCatchesObjCException",
+              "LiftedExplicitIALiveLRRunsLanguageCleanups",
+              "LiftedExplicitIALiveLRCatchesLanguageException",
+              "LiftedExplicitIALiveLRRunsObjCCleanups",
+              "LiftedExplicitIALiveLRCatchesObjCException",
+              "NativeCompactExplicitIALiveLRRunsLanguageCleanups",
+              "NativeCompactExplicitIALiveLRCatchesLanguageException",
+              "NativeCompactExplicitIALiveLRRunsObjCCleanups",
+              "NativeCompactExplicitIALiveLRCatchesObjCException",
+              "LiftedCompactExplicitIALiveLRRunsLanguageCleanups",
+              "LiftedCompactExplicitIALiveLRCatchesLanguageException",
+              "LiftedCompactExplicitIALiveLRRunsObjCCleanups",
+              "LiftedCompactExplicitIALiveLRCatchesObjCException",
+              "NativeExplicitIBLiveLRRunsLanguageCleanups",
+              "NativeExplicitIBLiveLRCatchesLanguageException",
+              "NativeExplicitIBLiveLRRunsObjCCleanups",
+              "NativeExplicitIBLiveLRCatchesObjCException",
+              "LiftedExplicitIBLiveLRRunsLanguageCleanups",
+              "LiftedExplicitIBLiveLRCatchesLanguageException",
+              "LiftedExplicitIBLiveLRRunsObjCCleanups",
+              "LiftedExplicitIBLiveLRCatchesObjCException",
+              "NativeCompactExplicitIBLiveLRRunsLanguageCleanups",
+              "NativeCompactExplicitIBLiveLRCatchesLanguageException",
+              "NativeCompactExplicitIBLiveLRRunsObjCCleanups",
+              "NativeCompactExplicitIBLiveLRCatchesObjCException",
+              "LiftedCompactExplicitIBLiveLRRunsLanguageCleanups",
+              "LiftedCompactExplicitIBLiveLRCatchesLanguageException",
+              "LiftedCompactExplicitIBLiveLRRunsObjCCleanups",
+              "LiftedCompactExplicitIBLiveLRCatchesObjCException",
+              "PublishesExplicitLPStartWithEntryLandingPad"
+            ]
+          },
+          "AArch64LiftedImage": {
+            "cases": 81,
+            "cases_with_positive_runtime_counter": 76,
+            "cases_without_positive_runtime_counter": [
+              "RebasedLiteralChecksBothSignedDisplacementLimits",
+              "EncodesSignedByteAndPageAddressesAtBothLimits",
+              "RecognizesOnlyImmutableLocalLiteralRebases",
+              "DistinguishesReturnedLiteralSlotsFromOtherRoots",
+              "AdHocRequirementsRefusePublicationWithoutMutation"
+            ]
+          }
+        },
+        "passed": 222,
+        "failed": 0,
+        "skipped": 0
+      }
+    },
+    "zero_counter_interpretation": {
+      "explicit_two_modifier": "Each virtual M1 built and checked 128 original or published explicit IA/IB signing images across 32 async cases. Its instruction probe precluded native delivery in those cases.",
+      "entry_landing_pad": "The entry-point landing pad fixture checks LSDA coordinates and deliberately defines no executable cleanup body at the function entry. The adjacent typed and backward LPStart fixtures execute their cleanup bodies.",
+      "five_image_checks": "Four checks exercise signed displacement bounds and literal-address classification. The fifth requires the publisher to reject a dylib with signing requirements and to leave the original bytes intact."
+    }
+  }
+}

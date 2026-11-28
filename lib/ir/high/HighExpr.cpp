@@ -15,6 +15,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/IntrinsicTermination.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCVMX.h"
 #include "neverd/ir/intrinsics/X86/X86Interrupts.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -63,7 +64,11 @@ ExprPtr HighExpr::makeVar(MedVar V, TypeRef Ty) {
   auto E = std::make_shared<HighExpr>();
   E->Kind = ExprKind::Var;
   E->Var = V;
-  E->Type = Ty ? Ty : NdType::makeInt(V.Size);
+  if (!Ty && V.Size == ppc::VectorBytes && isPowerPC(V.TheArch) &&
+      (V.Kind == MedVar::Reg || V.Kind == MedVar::Param) &&
+      getTargetRegInfo(V.TheArch).isVectorReg(V.RegOff))
+    Ty = ppc::byteVectorType();
+  E->Type = Ty ? std::move(Ty) : NdType::makeInt(V.Size);
   return E;
 }
 

@@ -4,6 +4,22 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>فحص أصناف JVM وملفات JAR…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>فحص تعليمات Java البايتية والتمثيل الوسيط المزوّد بالأنواع والطرق المعاد بناؤها</translation>
+    </message>
+    <message>
+        <source>Memory Safety Scan...</source>
+        <translation>فحص سلامة الذاكرة...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>تحقّق من أعمار الكائنات والتهيئة والحدود وسلاسل التنسيق</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>تبديل مساحة عمل عائمة تضم التفكيك والشيفرة الزائفة والمخرجات</translation>
     </message>
@@ -1342,6 +1358,22 @@
     <message>
         <source>Find conditional strings computed by functions</source>
         <translation>البحث عن سلاسل نصية مشروطة تحسبها الدوال</translation>
+    </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>استعادة مصدر Lua…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>استعادة مصدر Lua وفحص النماذج الأولية للدوال</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>فحص شيفرة Python ومكوّنات الحزمة</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>استعادة شيفرة Python المصدرية…</translation>
     </message>
 </context>
 <context>
@@ -11331,6 +11363,375 @@ Your previous graph is still available.</source>
     <message>
         <source>Loading %1…</source>
         <translation>جارٍ تحميل %1…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>فحص سلامة الذاكرة</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>أدوات ال&amp;تحليل</translation>
+    </message>
+    <message>
+        <source>All checks</source>
+        <translation>كل الفحوص</translation>
+    </message>
+    <message>
+        <source>Lifetime and initialization</source>
+        <translation>عمر الكائنات والتهيئة</translation>
+    </message>
+    <message>
+        <source>Bounds and format strings</source>
+        <translation>الحدود وسلاسل التنسيق</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>النتائج</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>الحكم</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>الخاصية</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>العنوان</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>الدالة</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>أدوات التحليل</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>أدلة النتيجة</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>ا&amp;فحص</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>إلغاء الفحص</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>جارٍ إلغاء الفحص…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>جارٍ الفحص…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>أُلغي الفحص قبل أن يبدأ.</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>الحكم: %1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1: %2 (فُحص %3، وتُخطّي %4، ولم يُحسم %5)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>فحص أصناف JVM وملفات JAR</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>استعراض…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>الملف المراد تحليله</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>المدخلات الأساسية في JAR</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>تفعيل ميزات المعاينة</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>بيئة التشغيل</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>التبعيات المحلية…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>مسح</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>التبعيات</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>الصنف أو العضو</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>الطريقة</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>فحص المحتويات</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>تحليل التحديد</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>إلغاء</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>مصدر Java</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>التعليمات البايتية</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>التمثيل الوسيط المزوّد بالأنواع</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>الأدلة</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>تعيينات التعليمات البايتية</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>نسخ العرض</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>تصدير العرض…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>تصدير التقرير…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>فتح ملف JVM</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>عرض بيئة التشغيل المحددة</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>جميع الطرق</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>استعادة مصدر Lua</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>تصفّح…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>&amp;ملف الإدخال</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>اكتشاف من الملف</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>Luau الرسمي</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>Luau الرسمي 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>ملف الت&amp;عريف</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>استعادة</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>إلغاء</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>جارٍ بدء عملية التحليل…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>النموذج الأولي للدالة</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>المصدر</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>تعيينات الشيفرة البايتية</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>الأدلة</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>نسخ المصدر</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>تصدير المصدر…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>تصدير التقرير…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>فتح ملف Lua</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>جارٍ الإلغاء…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>تصدير إلى ملف جديد</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>مصدر Lua (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>توقفت عملية التحليل.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>جارٍ استعادة المصدر…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>لا تدعم هذه العملية استعادة مصدر Lua.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>جارٍ قراءة الملف…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>أُلغي</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>النموذج الأولي %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>السطر الأصلي %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>المكوّن</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>برامج بدء التشغيل</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>جارٍ تصدير المكوّن الأصلي…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>مجلد…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>دالة</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>الدالة %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>تم تصدير المكوّن الأصلي.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>فتح مجلد PyInstaller</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>فتح ملف Python</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>فتح في محلل الشيفرة الأصلية…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>استعادة شيفرة Python غير متاحة في هذه العملية.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>شيفرة Python المصدرية (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>استعادة شيفرة Python المصدرية</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>حفظ المكوّن الأصلي في ملف جديد</translation>
     </message>
 </context>
 </TS>

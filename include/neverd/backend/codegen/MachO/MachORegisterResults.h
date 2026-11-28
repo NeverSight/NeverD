@@ -24,6 +24,7 @@
 #include "llvm/Support/Error.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -59,8 +60,16 @@ bool canPublishMachOLanguageFrame(const BinaryImage &Image,
 bool canBindMachOLanguageTable(const BinaryImage &Image,
                                const ItaniumEHInfo &Table);
 
-/// An indexed access using the physical SP cannot use a reconstructed stack.
-bool needsMachONativeStackIndex(const MedFunc &Function);
+/// Physical SP addressing and simultaneous signing-PC/source-address uses need
+/// their machine register body before LLVM resolves an address-valued PHI.
+bool needsMachONativeRegisterBody(const MedFunc &Function,
+                                  const BinaryImage &Image, const LowFunc *CFG);
+
+/// Sorted FunctionStarts bound source storage when a published image has
+/// forwarding entries beyond the original Mach-O function starts.
+bool needsMachONativeRegisterBody(const MedFunc &Function,
+                                  const BinaryImage &Image, const LowFunc *CFG,
+                                  llvm::ArrayRef<va_t> FunctionStarts);
 
 /// Lower audited patch-mode entries that use Darwin variadic cursors, indexed
 /// SP accesses, ordinary indexed/writeback memory, scalar FP/NEON data
@@ -79,6 +88,46 @@ lowerMachORegisterResults(llvm::Module &Module, const BinaryImage &Image,
 
 enum class MachOAddressForm { Single, PagePair, Expanded };
 
+/// Direct entries selecting one copy of an authenticator. The first copy also
+/// serves the ordinary fallthrough edge.
+struct MachOSigningRoute {
+  va_t Signer;
+  llvm::SmallVector<va_t, 1> Branches;
+  /// Word offset of a distant route's authenticator from its installed signer.
+  unsigned IslandWord = 0;
+  /// Added words at the signer, including its shared fallthrough branch once.
+  unsigned IslandWords = 0;
+};
+
+/// An AUT or authenticated return which must consume the installed signing PC.
+struct MachOSigningConsumer {
+  va_t Instruction;
+  /// An ADR sets this GPR for the register form.
+  std::optional<unsigned> ModifierRegister;
+  /// Rematerialize the input value in its own register after a fallthrough
+  /// authentication when all Darwin scratch registers are live.
+  bool RestoreSource = false;
+  /// Each predecessor sets the register before its own numeric address.
+  bool PrepareAtSource = false;
+
+  /// Each additional route repeats the shared prefix and authenticates with
+  /// its own signing PC. Only a fallthrough AUT needs a branch to the join.
+  llvm::SmallVector<MachOSigningRoute, 0> Routes{};
+  bool Returns = false;
+  unsigned PrefixWords = 0;
+
+  unsigned routeWords() const { return PrefixWords + (Returns ? 1 : 2); }
+  unsigned routeEntry(unsigned Index) const {
+    return Index * routeWords() - PrefixWords;
+  }
+  unsigned insertedWords() const {
+    if (!Routes.empty())
+      return (Routes.size() - 1) * routeWords();
+    return ModifierRegister ? 1 + restoreWords() : 0;
+  }
+  unsigned restoreWords() const { return RestoreSource ? 2 : 0; }
+};
+
 /// A numeric source address produced by a PC-relative instruction or pair.
 /// Instruction and target use the input image's preferred addresses.
 struct MachOLiftedSourceAddress {
@@ -89,6 +138,27 @@ struct MachOLiftedSourceAddress {
   uint64_t AssemblyOffset = 0;
   /// Inserting a word here preserves the body's local PC-relative encodings.
   bool CanExpand = true;
+  std::optional<MachOSigningConsumer> Authentication;
+
+  va_t signingExpansionSite() const {
+    return Authentication->PrepareAtSource ? Instruction
+                                           : Authentication->Instruction;
+  }
+
+  template <typename Fn> void forEachSigningExpansion(Fn Visit) const {
+    if (!Authentication)
+      return;
+    if (const auto Words = Authentication->insertedWords())
+      Visit(signingExpansionSite(), Words);
+    for (const auto &Route : Authentication->Routes)
+      if (Route.IslandWords)
+        Visit(Route.Signer, Route.IslandWords);
+  }
+
+  bool expandsAuthentication() const {
+    return Authentication &&
+           (Authentication->insertedWords() || !Authentication->Routes.empty());
+  }
 };
 
 /// Check each register body and its symbolic call operands against the image

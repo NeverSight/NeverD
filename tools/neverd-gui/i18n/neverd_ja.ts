@@ -4,6 +4,22 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>JVM クラスと JAR を調べる…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Java バイトコード、型付き中間表現、復元したメソッドを表示</translation>
+    </message>
+    <message>
+        <source>Memory Safety Scan...</source>
+        <translation>メモリ安全性スキャン...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>オブジェクトの寿命、初期化、境界、書式文字列を検査します</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>逆アセンブリ、疑似コード、出力を含むフローティング作業領域を切り替える</translation>
     </message>
@@ -1342,6 +1358,22 @@
     <message>
         <source>Find conditional strings computed by functions</source>
         <translation>関数によって計算される条件付き文字列を検索</translation>
+    </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Lua ソースを復元…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Lua ファイルを復元して関数プロトタイプを調べる</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Python コードとパッケージの構成要素を調べる</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Python ソースを復元…</translation>
     </message>
 </context>
 <context>
@@ -11151,6 +11183,375 @@ Your previous graph is still available.</source>
     <message>
         <source>Loading %1…</source>
         <translation>%1 を読み込み中…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>メモリ安全性スキャン</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>解析器(&amp;A)</translation>
+    </message>
+    <message>
+        <source>All checks</source>
+        <translation>すべての検査</translation>
+    </message>
+    <message>
+        <source>Lifetime and initialization</source>
+        <translation>オブジェクトの寿命と初期化</translation>
+    </message>
+    <message>
+        <source>Bounds and format strings</source>
+        <translation>境界と書式文字列</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>検出結果</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>判定</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>検査項目</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>アドレス</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>関数</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>解析器</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>検出の根拠</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>スキャン(&amp;S)</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>スキャンをキャンセル</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>スキャンをキャンセルしています…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>スキャン中…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>開始前にスキャンをキャンセルしました。</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>判定：%1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1：%2（検査 %3 件、スキップ %4 件、判定不能 %5 件）</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>JVM クラスと JAR を調べる</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>参照…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>解析対象</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>JAR の基本エントリ</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>プレビューを有効にする</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>ランタイム</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>ローカルの依存ファイル…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>クリア</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>依存ファイル</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>クラスまたはメンバー</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>メソッド</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>一覧を取得</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>選択項目を解析</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>キャンセル</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Java ソース</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>バイトコード</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>型付き中間表現</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>根拠</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>バイトコードの対応</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>ビューをコピー</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>ビューをエクスポート…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>レポートをエクスポート…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>JVM ファイルを開く</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>選択したランタイムのビュー</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>すべてのメソッド</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Lua ソースを復元</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>参照…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>入力ファイル(&amp;A)</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>ファイルから判定</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>公式 Luau</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>公式 Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>プロファイル(&amp;P)</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>復元</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>キャンセル</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>解析ワーカーを起動中…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>関数プロトタイプ</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>ソース</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>バイトコード対応表</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>根拠</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>ソースをコピー</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>ソースを書き出す…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>レポートを書き出す…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Lua ファイルを開く</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>キャンセル中…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>新規ファイルに書き出す</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua ソース (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>解析ワーカーが停止しました。</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>ソースを復元中…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>このワーカーは Lua の復元に対応していません。</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>ファイルを読み込み中…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>キャンセル済み</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>関数プロトタイプ %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>元の行 %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>構成要素</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>エントリースクリプト</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>ネイティブ構成要素をエクスポート中…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>フォルダー…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>関数</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>関数 %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>ネイティブ構成要素をエクスポートしました。</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>PyInstaller フォルダーを開く</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Python ファイルを開く</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>ネイティブ解析で開く…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>このワーカーでは Python ソースを復元できません。</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python ソース (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Python ソースを復元</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>ネイティブ構成要素を新しいファイルに保存</translation>
     </message>
 </context>
 </TS>

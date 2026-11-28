@@ -123,17 +123,16 @@ for flip in report.flips:
 
 L’offset del registro è un offset in byte nel file di registri NeverD, non un puntatore nativo o un numero di registro. Il report è sempre non esaustivo; UNSAT, i limiti del solver e i rifiuti di proiezione o replay restano risultati tipizzati, non eccezioni.
 
-### Audit e hunt di sicurezza della memoria
+### Analisi della sicurezza della memoria
 
-`session.audit()` e `session.hunt()` restituiscono report JSON analizzati (lo stesso schema del CLI). Richiedono una sessione nativa sollevata:
+`session.scan()` esegue entrambe le analisi e restituisce i risultati e la copertura in un unico rapporto. [Guida in inglese](../memory-safety-scan.md).
 
 ```python
-audit = session.audit()
-hunt = session.hunt(max_paths=64, max_steps=1 << 16)
-print(audit.get("ok"), hunt.get("findings"))
+report = session.scan(max_paths=64, max_steps=1 << 16)
+print(report["verdict"], report["analyzers"])
 ```
 
-Le sessioni EVM e SBF rifiutano queste chiamate.
+Per gli input EVM e SBF, gli analizzatori selezionati restituiscono lo stato `unsupported`.
 
 Le sei varianti di evento immutabili sono `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE` e `PATCH_APPLIED`. Le stringhe del payload vengono copiate durante il callback; i campi non pertinenti alla variante sono `None`.
 

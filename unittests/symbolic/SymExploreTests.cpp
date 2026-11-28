@@ -15,6 +15,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/symbolic/SymConcrete.h"
 #include "neverd/symbolic/SymExplore.h"
 
@@ -757,30 +758,33 @@ TEST(SymExplore, PredicatedUnresolvedBranchIsReportedOnlyOnItsExecutingPath) {
 }
 
 TEST(SymExplore, PredicatedReturnDoesNotEraseItsSkipPath) {
-  SymContext Ctx;
-  FunctionBuilder B;
-  B.predicatedInstruction(
-      {op(NdOp::COND_BR, NdVar{},
-          {FunctionBuilder::addressOf(1), NdVar::reg(kFlag, 1)}),
-       op(NdOp::RETURN, NdVar{}, {})},
-      {1}, LowInstructionControl::ConditionalReturn,
-      LowInstructionControlFlag::Branch |
-          LowInstructionControlFlag::Conditional |
-          LowInstructionControlFlag::Return |
-          LowInstructionControlFlag::InstructionGuard);
-  B.block({op(NdOp::COPY, NdVar::reg(kRbx, 8), {NdVar::cst(7, 8)}),
-           op(NdOp::RETURN, NdVar{}, {})},
-          {});
+  for (InstructionMode Mode :
+       {InstructionMode::ARM, InstructionMode::Default}) {
+    SCOPED_TRACE(getInstructionModeName(Mode));
+    SymContext Ctx;
+    FunctionBuilder B;
+    B.instruction({op(NdOp::COND_BR, NdVar{},
+                      {FunctionBuilder::addressOf(1), NdVar::reg(kFlag, 1)}),
+                   op(NdOp::RETURN, NdVar{}, {})},
+                  {1}, Mode, LowInstructionControl::ConditionalReturn,
+                  LowInstructionControlFlag::Branch |
+                      LowInstructionControlFlag::Conditional |
+                      LowInstructionControlFlag::Return |
+                      LowInstructionControlFlag::InstructionGuard);
+    B.block({op(NdOp::COPY, NdVar::reg(kRbx, 8), {NdVar::cst(7, 8)}),
+             op(NdOp::RETURN, NdVar{}, {})},
+            {});
 
-  std::vector<SymPath> Paths = explorePaths(Ctx, B.function());
-  ASSERT_EQ(Paths.size(), 2u);
-  EXPECT_EQ(Paths[0].Blocks, (std::vector<int>{0, 1}));
-  EXPECT_EQ(Paths[1].Blocks, (std::vector<int>{0}));
-  EXPECT_EQ(Paths[0].Outcome, PathOutcome::Returned);
-  EXPECT_EQ(Paths[1].Outcome, PathOutcome::Returned);
-  SymRef Continued = Paths[0].State.read(SymSpace::Register, kRbx, 8);
-  ASSERT_TRUE(Ctx.isConst(Continued));
-  EXPECT_EQ(Ctx.constValue(Continued).getZExtValue(), 7u);
+    std::vector<SymPath> Paths = explorePaths(Ctx, B.function());
+    ASSERT_EQ(Paths.size(), 2u);
+    EXPECT_EQ(Paths[0].Blocks, (std::vector<int>{0, 1}));
+    EXPECT_EQ(Paths[1].Blocks, (std::vector<int>{0}));
+    EXPECT_EQ(Paths[0].Outcome, PathOutcome::Returned);
+    EXPECT_EQ(Paths[1].Outcome, PathOutcome::Returned);
+    SymRef Continued = Paths[0].State.read(SymSpace::Register, kRbx, 8);
+    ASSERT_TRUE(Ctx.isConst(Continued));
+    EXPECT_EQ(Ctx.constValue(Continued).getZExtValue(), 7u);
+  }
 }
 
 TEST(SymExplore, MalformedInstructionGuardMetadataFailsClosed) {
@@ -801,6 +805,53 @@ TEST(SymExplore, MalformedInstructionGuardMetadataFailsClosed) {
   EXPECT_EQ(Exploration.Paths.front().Outcome,
             PathOutcome::InvalidControlTarget);
   EXPECT_FALSE(Exploration.Complete);
+}
+
+TEST(SymExplore, N32StaticWordGuardRequiresAnActualSignExtension) {
+  for (Arch A : {Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    for (uint64_t Word : {UINT64_C(0x7fffffff), UINT64_C(0xffffffff80000000),
+                          UINT64_C(0x80000000), UINT64_C(0x100000000)}) {
+      SymContext Ctx;
+      FunctionBuilder B;
+      B.block({op(NdOp::INTRINSIC, {},
+                  {NdVar::scalar(uint64_t(Intrinsic::MIPSRequireWord),
+                                 sizeof(Intrinsic)),
+                   NdVar::scalar(Word, 8)}),
+               op(NdOp::RETURN, {}, {})},
+              {});
+      ExploreOptions Opts;
+      Opts.WordCheckTarget = A;
+      auto Walk = explorePathsDetailed(Ctx, B.function(), Opts);
+      ASSERT_TRUE(Walk.Complete);
+      EXPECT_EQ(Walk.UnmodelledOps, 0u);
+      ASSERT_EQ(Walk.Paths.size(), 1u);
+      const bool Fits =
+          Word == UINT64_C(0x7fffffff) || Word == UINT64_C(0xffffffff80000000);
+      EXPECT_EQ(Walk.Paths[0].Outcome,
+                Fits ? PathOutcome::Returned : PathOutcome::Infeasible);
+    }
+  }
+}
+
+TEST(SymExplore, AlignmentPreconditionConstrainsOnlyEnabledAccesses) {
+  for (unsigned Address : {0x1000U, 0x1002U})
+    for (int Enabled : {-1, 0, 1}) {
+      SymContext Ctx;
+      FunctionBuilder B;
+      auto Guard = op(NdOp::INTRINSIC, {},
+                      {NdVar::scalar(uint64_t(Intrinsic::RequireAligned), 2),
+                       NdVar::scalar(Address, 8), NdVar::scalar(4, 8)});
+      if (Enabled >= 0)
+        Guard.addInput(NdVar::scalar(Enabled, 1));
+      B.block({Guard, op(NdOp::RETURN, {}, {})}, {});
+      auto Walk = explorePathsDetailed(Ctx, B.function());
+      EXPECT_TRUE(Walk.Complete);
+      EXPECT_EQ(Walk.UnmodelledOps, 0U);
+      ASSERT_EQ(Walk.Paths.size(), 1U);
+      EXPECT_EQ(Walk.Paths.front().Outcome, Address % 4 && Enabled != 0
+                                                ? PathOutcome::Infeasible
+                                                : PathOutcome::Returned);
+    }
 }
 
 TEST(SymExplore, PredicatedMemoryEffectsSkipExecuteAndForkWhenUnknown) {

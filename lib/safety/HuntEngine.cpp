@@ -2421,6 +2421,8 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
       stampSite(Out, In, F, Site);
       Out.TheVerdict = Verdict::Unknown;
       Out.TheConfidence = Confidence::Low;
+      Out.SharedCheck =
+          CatalogCheck{CatalogRequirement::CallEffects, Site.ArgIndex};
       Out.Detail = "exact external-call semantics are unavailable";
       return Out;
     }
@@ -2432,7 +2434,19 @@ std::optional<Finding> neverd::safety::huntSink(const AnalysisInput &In,
     stampSite(Out, In, F, Site);
     Out.TheVerdict = Verdict::Unknown;
     Out.TheConfidence = Confidence::Low;
+    Out.SharedCheck =
+        CatalogCheck{CatalogRequirement::DebugSignature, Site.ArgIndex};
     Out.Detail = "debug function signature conflicts with sink summary";
+    return Out;
+  }
+
+  if (In.Img && hasRISCVDoubleABI(In.Img->Arch) &&
+      (E->Kind == SinkKind::Copy || E->Kind == SinkKind::Format)) {
+    Finding Out;
+    stampSite(Out, In, F, Site);
+    Out.TheVerdict = Verdict::Unknown;
+    Out.TheConfidence = Confidence::Low;
+    Out.Detail = "dynamic call-site analysis is unavailable for this ABI";
     return Out;
   }
 

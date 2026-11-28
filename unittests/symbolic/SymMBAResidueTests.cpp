@@ -13,6 +13,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/solver/SymSynthVerifier.h"
+#include "neverd/solver/Z3Solver.h"
 #include "neverd/symbolic/SymParse.h"
 
 #include <algorithm>
@@ -744,8 +745,19 @@ TEST(SymMBAResidue, ProvesAMixedSubsetWithEvenAndNegativeCoefficients) {
     const auto Output =
         detail::foldProductResidues(Ctx, Input, Budget, Storage);
     ASSERT_LT(Ctx.readabilityCost(Output), Ctx.readabilityCost(Input));
-    solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
-    EXPECT_EQ(Verify(Ctx, Input, Output), SynthVerification::Equivalent);
+    // The scale exposes six bits of the product. Splitting on three bits of X
+    // covers every input while leaving all other bits and Y unrestricted.
+    const auto Prefix = Ctx.mkExtract(X, 0, 3);
+    solver::Z3SolverOptions Options;
+    Options.TimeoutMs = 5000;
+    for (unsigned I = 0; I < 8; ++I) {
+      SCOPED_TRACE(I);
+      solver::Z3Solver Verifier(Ctx, Options);
+      ASSERT_TRUE(Verifier.assertEqual(Prefix, Ctx.mkConst(3, I)));
+      ASSERT_TRUE(Verifier.assertDistinct(Input, Output));
+      EXPECT_EQ(Verifier.check(), solver::SatResult::Unsat)
+          << Verifier.reasonUnknown();
+    }
   }
 }
 

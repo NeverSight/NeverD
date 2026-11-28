@@ -430,6 +430,9 @@ TEST(CSourceEvidence, HighCallExpressionRequiresSurvivingIdentityAndKind) {
 }
 
 // A marked render must spell what the ordinary one does, or the map is refused.
+// The pair tests the call's result through the variable that holds it, as the
+// pipeline binds a call whose value two comparisons read: a call keeps every
+// evaluation, so only that variable may be read twice.
 TEST(CSourceAnchors, SignedZeroPairSpellsTheSameWhenMarked) {
   HighFunc Function;
   Function.Name = "mapped_pair";
@@ -437,6 +440,21 @@ TEST(CSourceAnchors, SignedZeroPairSpellsTheSameWhenMarked) {
   Function.ReturnType = NdType::makeInt(4);
   auto Call = HighExpr::makeCall("resolver", 0x2000, {});
   Call->Type = NdType::makeInt(4, true);
+  MedVar Result;
+  Result.Kind = MedVar::Temp;
+  Result.Id = 1;
+  Result.Size = 4;
+  Result.TheArch = Arch::X64;
+  const auto Value = [&] {
+    auto Read = HighExpr::makeVar(Result);
+    Read->Type = NdType::makeInt(4, true);
+    return Read;
+  };
+  HighStmt Bind;
+  Bind.Kind = StmtKind::Assign;
+  Bind.Addr = 0x1010;
+  Bind.Dst = Value();
+  Bind.Val = Call;
   const auto Zero = HighExpr::makeConst(0, 4);
   HighStmt Taken;
   Taken.Kind = StmtKind::Return;
@@ -444,17 +462,17 @@ TEST(CSourceAnchors, SignedZeroPairSpellsTheSameWhenMarked) {
   Taken.RetVal = HighExpr::makeConst(1, 4);
   HighStmt If;
   If.Kind = StmtKind::If;
-  If.Addr = 0x1010;
+  If.Addr = 0x1015;
   If.Cond = HighExpr::makeUnary(
       NdOp::BOOL_NOT,
       HighExpr::makeBinop(NdOp::BOOL_OR,
-                          HighExpr::makeBinop(NdOp::INT_EQUAL, Call, Zero),
-                          HighExpr::makeBinop(NdOp::INT_SLESS, Call, Zero)));
+                          HighExpr::makeBinop(NdOp::INT_EQUAL, Value(), Zero),
+                          HighExpr::makeBinop(NdOp::INT_SLESS, Value(), Zero)));
   If.Body = {Taken};
   HighStmt Otherwise = Taken;
   Otherwise.Addr = 0x1030;
   Otherwise.RetVal = HighExpr::makeConst(0, 4);
-  Function.Body = {If, Otherwise};
+  Function.Body = {Bind, If, Otherwise};
   const HighSourceMap Sources = {
       {Function.Entry, {0x1010, 3}, Call, HighSourceKind::CallExpression, {}}};
   // Library evidence is what makes the emitter render with markers at all.
@@ -465,6 +483,14 @@ TEST(CSourceAnchors, SignedZeroPairSpellsTheSameWhenMarked) {
   ASSERT_TRUE(HighCEmitter().emit({Function}, OrdinaryOS, Options));
   OrdinaryOS.flush();
   EXPECT_NE(Ordinary.find("> 0"), std::string::npos) << Ordinary;
+  // One call in the body, however the pair is spelled.
+  const size_t Body = Ordinary.find("mapped_pair(");
+  ASSERT_NE(Body, std::string::npos) << Ordinary;
+  size_t Calls = 0;
+  for (size_t At = Ordinary.find("resolver(", Body); At != std::string::npos;
+       At = Ordinary.find("resolver(", At + 1))
+    ++Calls;
+  EXPECT_EQ(Calls, 1u) << Ordinary;
   CSourceMap Map;
   Map.HighSources = &Sources;
   Map.Recognitions = &Recognitions;

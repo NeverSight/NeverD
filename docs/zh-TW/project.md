@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: b9cda6cb01918cadfe48b4bc6544a4dc7baeb2e8ecd51cece677de52b5708065 -->
+<!-- i18n-source: 65a3c241a8b8275f8f2afcf61c262f54c2db5a0fd1e46824c63a903708fc981b -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ CLI、整合方與 AI 智慧體透過 **純 C API** 使用同一個引擎 **`lib
 
 | 目標 | 已驗證的 ELF 組態 |
 |---|---|
-| RISC-V | 小端序 RV32I/ILP32 和 RV64I/LP64。依 ELF 標記選用 M、A、整數 C，或個別的 Zmmul、Zaamo、Zalrsc 和 Zca 擴充。 |
-| PowerPC | 大端序及小端序的 PPC32 System V 和 PPC64 ELFv1/ELFv2。PPC32 支援透過 secure PLT 和傳統 BSS-PLT 進行跨模組呼叫。兩種 PPC64 ABI 均支援跨模組 PLT 呼叫及 TOC 切換。ELFv1 使用函式描述元，ELFv2 支援全域進入點與本地進入點。已驗證的純量子集涵蓋帶號及無號除法、寫入 CR0 的結果，以及對 XER 溢位旗標的影響。 |
+| RISC-V | 小端序 RV32（ILP32、ILP32D） 和 RV64（LP64、LP64D）。依 ELF 標記選用 M、A、整數 C，或個別的 Zmmul、Zaamo、Zalrsc 和 Zca 擴充。ELF ISA 屬性也可啟用 Zba 1.0、Zbb 1.0、Zbs 1.0 與 Zicond 1.0。Zicntr 2.0 支援 `rdcycle`，RV32 也支援 `rdcycleh`。 |
+| PowerPC | 大端序及小端序的 PPC32 System V 和 PPC64 ELFv1/ELFv2。PPC32 支援透過 secure PLT 和傳統 BSS-PLT 進行跨模組呼叫。兩種 PPC64 ABI 均支援跨模組 PLT 呼叫及 TOC 切換。ELFv1 使用函式描述元，ELFv2 支援全域進入點與本地進入點。已驗證帶號及無號除法、傳回乘積高位字組的乘法、回報溢位的乘法，以及這些指令對 CR0 和 XER 的影響。PPC64 也支援 POWER10 帶前綴的整數加法、載入與儲存指令。 VMX 的 `vaddubm` 對 16 對位元組分別做模 256 加法。 |
 
 這些架構設定的原生程式碼重寫仍待實作。 [RISC-V 與 PowerPC 支援範圍（英文）](../riscv-powerpc.md)
 
@@ -180,8 +180,7 @@ cmake --build build
 ./build/bin/neverd funcs binary
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
+./build/bin/neverd scan binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -305,6 +304,9 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 統計 | 對每個已載入函式產生預設 C；檢查後即釋放該函式本體 |
 | `decompile -llvm` | `.c` | 經 LLVM IR + 最佳化器 |
 | `decompile --devirtualize` | `.c` + 選用 JSON | 實驗性 x64 直譯器還原；需要 `--func`；[契約與範例](interpreter-recovery.md) |
+| `java` | Java / JVM IR / 位元組碼 / JSON | [class 檔與多版本 JAR](../jvm-recovery.md) |
+| `python` | `.py` / JSON / 原生元件 | [CPython 與 PyInstaller 產物還原](../python-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Lua、LuaJIT 與 Luau 原始碼還原](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 實驗性: [Android](android.md), [iOS](ios.md) |
 | `patch` | 二進位 | 重寫機器碼 |
 
@@ -339,8 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 發現的函式 |
 | `disasm` | 反組譯（`--func` 名稱或十六進位） |
 | `sym-explore` | 有界原生 LowIR 路徑探索（`--func`；JSON 輸出） |
-| `audit` | 堆積物件生命週期缺陷及未初始化的區域堆疊讀取（JSON） |
-| `hunt` | 危險複製越界與符號見證；存在完整方案時附加 `process-input-v1` 重播證據（JSON schema v1） |
+| `scan` | [檢查物件生命週期、初始化、存取邊界與格式字串，輸出 JSON](../memory-safety-scan.md) |
 | `hex` | 依位址十六進位傾印 |
 | `cfg` / `callgraph` | CFG / 呼叫圖（JSON；可選 DOT/SVG） |
 | `xrefs` | 交叉參照 |

@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, Sequence, TypeVar, cast
 
 from .abi import (
+    CancelProbeCallback,
     EventType,
     UNWIND_FRAME_QUERY,
     VirtualAddress,
@@ -37,6 +38,7 @@ from .abi import (
     NeverDSynthesizeOptions,
     NeverDSynthesizeResult,
     NeverDSafetyOptions,
+    NeverDScanOptions,
     NeverDSymbolicExploreOptions,
     NeverDTranslateObjectRequestV1,
     NeverDTranslateObjectResultV1,
@@ -1360,9 +1362,10 @@ class Session:
         )
         return options
 
-    def audit(
+    def scan(
         self,
         *,
+        analyzer: str = "both",
         max_paths: int = 0,
         max_steps: int = 0,
         max_loop: int = 0,
@@ -1372,9 +1375,10 @@ class Session:
         max_call_depth: int = 0,
         max_summary_iterations: int = 0,
     ) -> Mapping[str, object]:
-        """Audit heap-object lifetimes and uninitialized local stack reads,
-        and return the parsed JSON report."""
-
+        """Run a static memory-safety scan and return its per-analyzer coverage."""
+        selections = {"both": 0, "audit": 1, "hunt": 2}
+        if analyzer not in selections:
+            raise ValueError("analyzer must be both, audit, or hunt")
         options = self._safety_options(
             max_paths=max_paths,
             max_steps=max_steps,
@@ -1385,63 +1389,33 @@ class Session:
             max_call_depth=max_call_depth,
             max_summary_iterations=max_summary_iterations,
         )
-        report = self._json(
-            "neverd_session_audit_json", "safety audit", ctypes.byref(options)
+        scan = NeverDScanOptions(
+            struct_size=ctypes.sizeof(NeverDScanOptions),
+            analysis=ctypes.pointer(options),
+            analyzers=selections[analyzer],
         )
-        if not isinstance(report, Mapping) or report.get("ok") is not True:
-            message = (
-                report.get("error")
-                if isinstance(report, Mapping)
-                else "invalid safety audit report"
-            )
-            raise NeverDError(str(message or self.last_error))
+        report = self._json(
+            "neverd_session_scan_json", "memory-safety scan", ctypes.byref(scan)
+        )
+        if (
+            not isinstance(report, Mapping)
+            or report.get("schema") != "neverd.memory-safety-scan"
+            or report.get("schema_version") != 1
+        ):
+            raise NeverDError("invalid memory-safety scan report")
         return report
 
-    def hunt(
-        self,
-        *,
-        max_paths: int = 0,
-        max_steps: int = 0,
-        max_loop: int = 0,
-        solver_conflicts: int = 0,
-        sinks: str | None = None,
-        sources: str | None = None,
-        max_call_depth: int = 0,
-        max_summary_iterations: int = 0,
-    ) -> Mapping[str, object]:
-        """Hunt dangerous-copy overflows and return the parsed JSON report.
-
-        Each finding carries a verdict (SAFE / UNSAFE / UNKNOWN), a confidence,
-        and — for a proven overflow — a solver model plus candidate witness
-        values. ``replayable`` is derived from complete ``inputs`` in the
-        ``replay`` object for the ``process-input-v1`` adapter. Initially those
-        plans cover exact literal environment values and the first supported
-        ``read(0)``-family standard-input consumption; argv, file, network,
-        custom, and ambiguous inputs remain non-replayable with
-        ``replay.reason``. These evidence
-        fields are additive to report schema version 1. Unknown or partially
-        applicable call effects remain UNKNOWN."""
-
-        options = self._safety_options(
-            max_paths=max_paths,
-            max_steps=max_steps,
-            max_loop=max_loop,
-            solver_conflicts=solver_conflicts,
-            sinks=sinks,
-            sources=sources,
-            max_call_depth=max_call_depth,
-            max_summary_iterations=max_summary_iterations,
-        )
+    def scan_data_pointers(self) -> Mapping[str, object]:
+        """Count code references and initialized data pointers in the data section."""
         report = self._json(
-            "neverd_session_hunt_json", "overflow hunt", ctypes.byref(options)
+            "neverd_session_data_ptr_scan_json", "data-pointer scan", CancelProbeCallback(), None
         )
-        if not isinstance(report, Mapping) or report.get("ok") is not True:
-            message = (
-                report.get("error")
-                if isinstance(report, Mapping)
-                else "invalid overflow hunt report"
-            )
-            raise NeverDError(str(message or self.last_error))
+        if (
+            not isinstance(report, Mapping)
+            or report.get("schema") != "neverd.data-ptr-scan"
+            or report.get("schema_version") != 1
+        ):
+            raise NeverDError("invalid data-pointer scan report")
         return report
 
     def hex_dump(self, address: int, size: int) -> str:

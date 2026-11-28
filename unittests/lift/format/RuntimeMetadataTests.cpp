@@ -383,7 +383,9 @@ TEST(RuntimeMetadata, NativeDylibOrdinalsExcludeLazyAndKeepDuplicates) {
       bindRuntimeDylibOrdinal(Img, Ordinal);
       ASSERT_EQ(Img.DyldBindSlots.size(), 1U);
       EXPECT_EQ(Img.DyldBindSlots.at(0x3020).Module, Expected[Ordinal - 1]);
-      EXPECT_EQ(Img.DyldBindSlots.at(0x3020).WeakImport, Ordinal == 2);
+      // The slot keeps its symbol's own strength; a weak load command stays
+      // on the dylib reference (MachODylibReferences[1].Weak above).
+      EXPECT_FALSE(Img.DyldBindSlots.at(0x3020).WeakImport);
       // Recollecting does not append a second native ordinal table.
       macho_loader::parseNeededLibraries(*Obj, Img);
       EXPECT_EQ(Img.MachODylibReferences.size(), 4U);
@@ -440,7 +442,8 @@ TEST(RuntimeMetadata, NativeDylibOrdinalsPreserveInvalidNamePlaceholders) {
     bindRuntimeDylibOrdinal(Unknown, 1);
     ASSERT_EQ(Unknown.DyldBindSlots.size(), 1U);
     EXPECT_TRUE(Unknown.DyldBindSlots.at(0x3020).Module.empty());
-    EXPECT_TRUE(Unknown.DyldBindSlots.at(0x3020).WeakImport);
+    // A strong symbol of the weakly loaded dylib stays strong.
+    EXPECT_FALSE(Unknown.DyldBindSlots.at(0x3020).WeakImport);
     bindRuntimeDylibOrdinal(Img, 2);
     ASSERT_EQ(Img.DyldBindSlots.size(), 1U);
     EXPECT_EQ(Img.DyldBindSlots.at(0x3020).Module, "second");

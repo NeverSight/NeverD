@@ -228,6 +228,10 @@ struct CompiledImage {
   llvm::endianness ByteOrder = llvm::endianness::little;
   std::vector<CompiledSection> Sections;       ///< Exact logical placements.
   std::map<std::string, uint64_t> SymbolAddrs; ///< Defined symbol → final VA.
+  /// Binding strengths of native Mach-O references, by dyld spelling.
+  /// A reference to a retained weak definition requires its coalesced value.
+  /// Other producers leave the binding strength to the source image.
+  std::map<std::string, bool> MachOImportWeakness;
   /// Provenance-only owner identities, including private compiler symbols.
   std::map<std::string, uint64_t> FunctionOwnerAddrs;
   /// Exact compiler-authenticated CFI fragment ownership.

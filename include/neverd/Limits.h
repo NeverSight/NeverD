@@ -114,6 +114,22 @@ constexpr uint32_t kMaxJumpTableStackEvidenceWork = 16384;
 /// the next power-of-two boundary that completes the supported case.
 constexpr uint32_t kMaxJumpTableGuardAliasEvidenceWork = 16384;
 
+/// Share of the remaining candidate account, as a divisor, that one guard
+/// proof's predicated-alias query batch may spend.  The batch only adds index
+/// alternatives, so an unfinished batch is abandoned and the guard proof keeps
+/// the rest.  Uncapped, the batch in pcre2's pattern converter spent 524 Mi
+/// of the 536 Mi account and left the guard itself incomplete; a 32nd of the
+/// whole account is 16 Mi.
+constexpr uint32_t kJumpTableGuardAliasQueryAccountDivisor = 32;
+
+/// Share of the remaining candidate account, as a divisor, that a precise
+/// guard proof's session over every controlling condition may spend once the
+/// compare that names the index is structural.  The other conditions only
+/// add constraints; a session that cannot finish within the share leaves the
+/// compare's own queries to be asked alone.  On one pcre2 parse_regex
+/// dispatch that session spent about 490 Mi and still did not finish.
+constexpr uint32_t kJumpTableGuardSideSessionAccountDivisor = 8;
+
 /// Local allowance for constructing and replaying one precise guard expression
 /// batch.  An ARM32 auto-vectorized reduction followed by an eight-way switch
 /// uses about 13.3 KiB after exact syntax, query, and replay accounting;
@@ -139,9 +155,25 @@ constexpr uint32_t kMaxJumpTableOrdinaryControllingGuards =
 /// batch.  Every visit also debits the candidate-wide aggregate account.
 constexpr uint32_t kMaxJumpTableBoundSymbolEvidenceWork = 65536;
 
+/// Exclusive envelope for an ordinary finite-coordinate query (a mask or
+/// physical group domain) and for a read-only scalar envelope.
+constexpr uint32_t kMaxJumpTableFeasibleSetValues = 64;
+
+/// Exclusive envelope for a joined predecessor domain.  Compare literals only
+/// propose it and each feasible coordinate is read from a solver model, so a
+/// wider envelope costs one query per member, not per proposed value.  It
+/// stays below a byte lane's 256 values: a byte read on an unguarded path can
+/// be 255, which is then a counterexample, never a domain proved by the lane's
+/// width alone.
+constexpr uint32_t kMaxJumpTableJoinedDomainValues = 255;
+static_assert(kMaxJumpTableJoinedDomainValues >=
+                  kMaxJumpTableFeasibleSetValues &&
+              kMaxJumpTableJoinedDomainValues < 256);
+
 /// Local symbolization allowance for an exact finite-coordinate query.  Such
 /// a query may symbolize the expanded candidate graph before enumerating at
-/// most 64 coordinates.  The largest supported 64-way expanded selector uses
+/// most 64 coordinates (128 for a joined predecessor domain, whose members
+/// cost a few units each).  The largest supported 64-way expanded selector uses
 /// about 68 Ki work.  A selector read from a loop-carried value expands every
 /// definition the loop gives it: a 16-way table on the high word of a 64-bit
 /// accumulator that every case updates (OptStress336 dense16) uses about
@@ -263,6 +295,27 @@ constexpr uint32_t kMaxJumpTableGuardExpressionDepth = 64;
 /// structure field as `cmp dword [rcx], 6; ja default` and loads the index
 /// with `mov eax, [rcx]` in the next block.
 constexpr uint32_t kMaxJumpTableReloadSearchBlocks = 4;
+
+/// Blocks a jump-table guard looks straight back through, each its
+/// successor's only predecessor, for the compare that set the status flags
+/// its condition reads.  GCC threads `cmp $7, %edx; jle L` into
+/// `L: ...; ja default`, reusing the compare's flags in the next block.
+constexpr uint32_t kMaxJumpTableGuardFlagSearchBlocks = 4;
+
+/// Blocks a jump left without a proved target looks straight back through,
+/// each its successor's only predecessor, for the read of a table of its
+/// function's own code it jumps through (`lea table(%rip), %rcx` hoisted into
+/// an earlier block).
+constexpr uint32_t kMaxOwnLabelTableReadBlocks = 4;
+
+/// Rounds of dispatching such jumps by value in one function, each decoding
+/// the code their labels reach, which can hold another one: a Rust `match`
+/// after a `match`, or a loop unrolled around one.
+constexpr uint32_t kMaxOwnLabelTableRounds = 256;
+
+/// Instructions one linear decode of a function may take to tell whether
+/// the labels a table of its own code names start instructions.
+constexpr uint32_t kMaxOwnLabelTableSweepInstructions = 1u << 16;
 
 /// CFG value reconstruction for target/address roles, masks and exact guard
 /// occurrences can cross many predecessors in an expanded dispatch graph.

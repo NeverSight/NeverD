@@ -18,7 +18,8 @@
 namespace neverd {
 struct IntegerControl {
   NdOp Opcode = NdOp::NOP;
-  // A conditional return has one static successor, its not-taken edge.
+  // Direct destination, or the fallthrough of a conditional indirect branch
+  // or return. Indirect calls have no static destination.
   va_t Target = InvalidVA;
 
   bool hasReturnFallthrough() const {
@@ -26,8 +27,9 @@ struct IntegerControl {
   }
 
   bool terminates() const {
-    return (Opcode == NdOp::RETURN && Target == InvalidVA) ||
-           Opcode == NdOp::BRANCH || Opcode == NdOp::INDIR_BR;
+    return Opcode == NdOp::BRANCH ||
+           ((Opcode == NdOp::RETURN || Opcode == NdOp::INDIR_BR) &&
+            Target == InvalidVA);
   }
 };
 } // namespace neverd

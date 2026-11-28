@@ -14,7 +14,11 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedReturnArguments.h"
 
+#include "llvm/ADT/STLExtras.h"
+
+#include <algorithm>
 #include <map>
 #include <set>
 #include <tuple>
@@ -35,11 +39,44 @@ bool isEntryIdentity(const MedOp &Op) {
 }
 
 class PairReturnEvidence {
+  const MedFunc &Func;
   const TargetRegInfo &TRI;
   const int EntryBlock;
+  const bool ShiftReturnsInputOnZero;
   std::map<int, const MedBlock *> Blocks;
   std::map<ValueKey, std::pair<const MedOp *, int>> Definitions;
   std::map<ValueKey, std::pair<const PhiNode *, int>> Phis;
+
+  bool isIncomingWord(const MedVar &V, uint64_t Reg) const {
+    if (V.Kind != MedVar::Reg || V.RegOff != Reg || V.Size != TRI.PointerSize)
+      return false;
+    const auto It = Definitions.find(key(V));
+    return It == Definitions.end()
+               ? V.SSAVer == 0 && !Phis.count(key(V))
+               : It->second.second == EntryBlock &&
+                     isIncomingRegisterCopy(*It->second.first);
+  }
+
+  bool testsZeroCount(const MedOp &Branch, bool Taken) const {
+    auto Definition = [&](const MedVar &V) -> const MedOp * {
+      const auto It = Definitions.find(key(V));
+      return It == Definitions.end() ? nullptr : It->second.first;
+    };
+    const MedOp *Cmp = Definition(Branch.Inputs[1]);
+    if (Cmp && Cmp->Opcode == NdOp::BOOL_NOT && Cmp->NumInputs == 1) {
+      Taken = !Taken;
+      Cmp = Definition(Cmp->Inputs[0]);
+    }
+    if (!Cmp || Cmp->NumInputs != 2 ||
+        Cmp->Opcode != (Taken ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL))
+      return false;
+    const MedVar *Count = &Cmp->Inputs[0], *Zero = &Cmp->Inputs[1];
+    if (Count->isConst())
+      std::swap(Count, Zero);
+    return Zero->isConst() && Zero->ConstVal == 0 &&
+           Zero->Size == Count->Size &&
+           isIncomingWord(*Count, TRI.IntParamRegs[2]);
+  }
 
   bool dominatesEdge(int Definition, int Predecessor) const {
     std::vector<int> Pending{Predecessor};
@@ -64,7 +101,15 @@ class PairReturnEvidence {
     return ReachedDefinition;
   }
 
-  bool phiHasDefinedInputs(const PhiNode &Phi, int BlockId) const {
+  bool phiHasDefinedInputs(const PhiNode &Phi, int BlockId,
+                           bool MayForwardInput) const {
+    const PhiNode *FirstWord = nullptr;
+    if (MayForwardInput)
+      for (const PhiNode &P : Blocks.at(BlockId)->Phis)
+        if (P.Output.Kind == MedVar::Reg &&
+            P.Output.RegOff == TRI.IntReturnReg &&
+            P.Output.Size == TRI.PointerSize && !P.ExceptionalEntry)
+          FirstWord = &P;
     std::vector<std::pair<MedVar, int>> Pending{{Phi.Output, BlockId}};
     std::set<ValueKey> Seen;
     bool HasDefinition = false;
@@ -84,8 +129,21 @@ class PairReturnEvidence {
           return false;
         if (!Seen.insert(key(Value)).second)
           continue;
-        for (const auto &[Pred, Input] : InputPhi->Args)
+        for (const auto &[Pred, Input] : InputPhi->Args) {
+          if (FirstWord && InputPhi == &Phi &&
+              isIncomingWord(Input, TRI.IntReturnReg2) &&
+              llvm::any_of(FirstWord->Args, [&](const auto &Arg) {
+                return Arg.first == Pred &&
+                       isIncomingWord(Arg.second, TRI.IntReturnReg);
+              })) {
+            const auto It = Blocks.find(Pred);
+            if (It != Blocks.end() &&
+                forwardsInputOnZero(*It->second, It->second->Ops.size(),
+                                    Blocks.at(Owner)))
+              continue;
+          }
           Pending.push_back({Input, Pred});
+        }
         continue;
       }
       const auto It = Definitions.find(key(Value));
@@ -103,9 +161,14 @@ class PairReturnEvidence {
   }
 
 public:
-  PairReturnEvidence(const MedFunc &Func, const TargetRegInfo &TRI)
-      : TRI(TRI),
-        EntryBlock(Func.Blocks.empty() ? -1 : Func.Blocks.front().Id) {
+  PairReturnEvidence(const MedFunc &Func, const TargetRegInfo &TRI,
+                     bool ShiftReturnsInputOnZero)
+      : Func(Func), TRI(TRI),
+        EntryBlock(Func.Blocks.empty() ? -1 : Func.Blocks.front().Id),
+        ShiftReturnsInputOnZero(ShiftReturnsInputOnZero &&
+                                TRI.IntParamRegs.size() >= 3 &&
+                                TRI.IntParamRegs[0] == TRI.IntReturnReg &&
+                                TRI.IntParamRegs[1] == TRI.IntReturnReg2) {
     for (const MedBlock &Block : Func.Blocks) {
       Blocks.emplace(Block.Id, &Block);
       for (const MedOp &Op : Block.Ops)
@@ -114,6 +177,45 @@ public:
       for (const PhiNode &Phi : Block.Phis)
         Phis.emplace(key(Phi.Output), std::pair{&Phi, Block.Id});
     }
+  }
+
+  // RV32 branches to a shared return. PPC32 can place a conditional return
+  // in the block itself. Both must test the incoming count and preserve both
+  // argument words along the returning edge.
+  bool forwardsInputOnZero(const MedBlock &Block, size_t End,
+                           const MedBlock *Next = nullptr) const {
+    if (!ShiftReturnsInputOnZero)
+      return false;
+    while (End && Block.Ops[End - 1].Opcode != NdOp::COND_BR) {
+      if (Next)
+        return false;
+      --End;
+    }
+    if (!End)
+      return false;
+    const MedOp &Branch = Block.Ops[End - 1];
+    if (Branch.NumInputs != 2 || !Branch.Inputs[0].isConst())
+      return false;
+    const MedBlock *Taken = nullptr;
+    for (int Id : Block.Succs) {
+      const auto It = Blocks.find(Id);
+      if (It != Blocks.end() && It->second != &Block &&
+          It->second->StartAddr == Branch.Inputs[0].ConstVal) {
+        if (Taken)
+          return false;
+        Taken = It->second;
+      }
+    }
+    if (!Taken ||
+        (Next && (Block.Succs.size() != 2 ||
+                  std::find(Block.Succs.begin(), Block.Succs.end(), Next->Id) ==
+                      Block.Succs.end())) ||
+        !testsZeroCount(Branch, Next == Taken))
+      return false;
+    return registerUntouchedFromEntry(Func, Block, TRI.IntReturnReg,
+                                      TRI.PointerSize, TRI.TheArch) &&
+           registerUntouchedFromEntry(Func, Block, TRI.IntReturnReg2,
+                                      TRI.PointerSize, TRI.TheArch);
   }
 
   bool highWordReaches(const MedBlock &ReturnBlock, size_t ReturnIndex) const {
@@ -155,7 +257,15 @@ public:
         if (Phi.Output.Kind == MedVar::Reg &&
             Phi.Output.RegOff == TRI.IntReturnReg2 &&
             Phi.Output.Size >= TRI.PointerSize)
-          return phiHasDefinedInputs(Phi, Block->Id);
+          return phiHasDefinedInputs(
+              Phi, Block->Id,
+              ShiftReturnsInputOnZero && Block == &ReturnBlock &&
+                  std::none_of(Block->Ops.begin(), Block->Ops.begin() + End,
+                               [&](const MedOp &Op) {
+                                 return Op.Output.Kind == MedVar::Reg &&
+                                        Op.Output.RegOff == TRI.IntReturnReg &&
+                                        Op.Output.Size;
+                               }));
       if (Block->Preds.size() != 1 || !Block->ExceptionalPreds.empty())
         return false;
       const auto Pred = Blocks.find(Block->Preds.front());
@@ -172,10 +282,11 @@ public:
 
 bool returnsRegisterPairI64(
     const MedFunc &Func, const TargetRegInfo &TRI,
-    llvm::function_ref<bool(const MedOp &)> TailReturnsPair) {
+    llvm::function_ref<bool(const MedOp &)> TailReturnsPair,
+    bool ShiftReturnsInputOnZero) {
   if (TRI.PointerSize != 4 || !TRI.IntReturnReg2)
     return false;
-  PairReturnEvidence Evidence(Func, TRI);
+  PairReturnEvidence Evidence(Func, TRI, ShiftReturnsInputOnZero);
   bool SawReturn = false;
   for (const MedBlock &Block : Func.Blocks)
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
@@ -183,7 +294,8 @@ bool returnsRegisterPairI64(
       if (Return.Opcode != NdOp::RETURN)
         continue;
       SawReturn = true;
-      if (Evidence.highWordReaches(Block, I))
+      if (Evidence.highWordReaches(Block, I) ||
+          Evidence.forwardsInputOnZero(Block, I))
         continue;
       if (!I)
         return false;

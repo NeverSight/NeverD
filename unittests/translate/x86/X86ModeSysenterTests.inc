@@ -278,6 +278,8 @@ TEST_F(X86ModeFastSystemTest,
 
 #if defined(__linux__) && defined(__x86_64__)
 TEST_F(X86ModeFastSystemTest, OriginalTransfersMatchKvmAcrossModes) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (auto M : Modes)
     for (auto T : {Enter, Exit, ExitQ, IgnoredREX}) {
       if ((T == ExitQ || T == IgnoredREX) && M != Mode::Long64)

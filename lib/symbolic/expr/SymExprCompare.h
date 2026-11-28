@@ -21,9 +21,14 @@ struct CancelledOperands {
 
 /// Remove identical complete operands from two sums or XORs, without interning.
 /// The remaining terms are owned copies, safe across later builder calls.
-/// Equality shares both group laws; subtraction uses only addition.
-std::optional<CancelledOperands>
-cancelCommonOperands(const SymContext &Ctx, SymRef A, SymRef B, SymOp Op);
+/// Equality shares both group laws; subtraction uses only addition. With
+/// \p WordsOnly a literal both sides carry stays on both: `k + e == k` keeps
+/// the form `k + e == c` has, so a selector compared with each of its values
+/// remains one target.
+std::optional<CancelledOperands> cancelCommonOperands(const SymContext &Ctx,
+                                                      SymRef A, SymRef B,
+                                                      SymOp Op,
+                                                      bool WordsOnly = false);
 
 /// Decode equality with a literal when an OR packs disjoint zero-extended
 /// predicates into individual bits. Unsupported or overlapping lanes stay.

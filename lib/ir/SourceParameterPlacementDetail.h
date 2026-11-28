@@ -22,6 +22,10 @@
 
 namespace neverd::source_placement {
 
+std::optional<SourceParameterPlacement>
+placeRISCVDoubleABI(const TargetRegInfo &TRI, const TypeRef &ReturnType,
+                    llvm::ArrayRef<TypeRef> Types, unsigned FixedCount);
+
 /// An integer, enumeration, Boolean or pointer: what an integer register
 /// holds.
 bool isIntegerScalar(const TypeRef &Type);
@@ -33,7 +37,8 @@ bool isRecord(const TypeRef &Type);
 /// The scalars of \p Type in offset order, through its records and arrays;
 /// none when a part of it has no described layout (a record without a
 /// layout or scalar leaves, a vector, a function).
-std::optional<std::vector<NdScalarLeaf>> scalarLeaves(const TypeRef &Type);
+std::optional<std::vector<NdScalarLeaf>>
+scalarLeaves(const TypeRef &Type, bool *ContainsUnion = nullptr);
 
 SourceParameterPiece registerPiece(SourceABICarrierKind Kind, uint64_t Register,
                                    uint16_t Offset, uint16_t Bytes,

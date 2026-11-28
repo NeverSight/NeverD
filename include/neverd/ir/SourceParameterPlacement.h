@@ -69,9 +69,10 @@ aapcs64FloatingAggregate(const TypeRef &Type);
 /// The placement of the parameters \p ParamTypes, returning \p ReturnType, in
 /// the ordinary convention of code for \p A in a \p F image; none when
 /// NeverD has no rules for that convention. Variadic placement currently
-/// supports Windows ARM64 and MIPS scalar arguments. EntryMode distinguishes
-/// the o32 MIPS16 body from its classic hard-float entry stub; callers pass the
-/// actual target mode, never the image-wide compressed-ISA flag.
+/// supports Windows ARM64, MIPS scalar arguments and the RISC-V double-float
+/// ABI. EntryMode distinguishes the o32 MIPS16 body from its classic hard-float
+/// entry stub; callers pass the actual target mode, never the image-wide
+/// compressed-ISA flag.
 std::optional<SourceParameterPlacement>
 placeSourceParameters(Arch A, BinaryFormat F, const TypeRef &ReturnType,
                       llvm::ArrayRef<TypeRef> ParamTypes, bool Variadic = false,

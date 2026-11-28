@@ -43,6 +43,8 @@ inline constexpr std::size_t kMaxCompletedProductTerms = 128;
 
 inline constexpr std::size_t kMinDelayedCommonAtoms = 4;
 inline constexpr unsigned kMinDelayedPolynomialOperands = 2;
+// A repeated polynomial starts saving full convolutions at four copies.
+inline constexpr std::size_t kMinArithmeticPowerCopies = 4;
 
 inline constexpr std::size_t kMaxPolynomialCofactorTerms = 128;
 inline constexpr std::size_t kMaxPolynomialCofactorEdges = 4096;
@@ -91,6 +93,9 @@ inline constexpr unsigned kMinResidueShiftedFactors = 2;
 /// Reuse broad affine emissions while leaving small Boolean sums to the walker.
 inline constexpr unsigned kMinResidueReadingTerms = 4;
 inline constexpr std::size_t kMaxResidueProductFactors = 512;
+/// Keep at least one eighth of the remaining work for the normal source walk
+/// when comparing a packed product with its expanded arithmetic form.
+inline constexpr size_t kProductReadingReserveDivisor = 8;
 inline constexpr std::size_t kMaxResidueBaseTerms = 16;
 inline constexpr std::size_t kMaxResidueProductSummands = 128;
 inline constexpr unsigned kMaxAffineResidueDepth = 8;

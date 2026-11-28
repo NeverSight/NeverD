@@ -24,15 +24,10 @@
 
 namespace neverd {
 
-std::optional<std::vector<uint64_t>> finiteScalarExpression(
-    llvm::ArrayRef<LowOp> Operations, const NdVar &Value, va_t QueryInstruction,
-    size_t &RemainingWork,
-    llvm::function_ref<std::optional<uint64_t>(const LowOp &, uint64_t)>
-        ReadImage) {
-  symbolic::SymContext Ctx;
-  const auto Expression = symbolicScalarExpression(
-      Ctx, Operations, Value, QueryInstruction, RemainingWork, ReadImage);
-  if (!Expression)
+std::optional<std::vector<uint64_t>>
+finiteScalarExpression(symbolic::SymContext &Ctx, symbolic::SymRef Expression,
+                       size_t &RemainingWork) {
+  if (!Expression || !RemainingWork)
     return {};
   symbolic::SymKnownBits Known(Ctx);
   using Values = std::vector<uint64_t>;

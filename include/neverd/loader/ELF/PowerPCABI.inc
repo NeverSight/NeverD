@@ -20,6 +20,10 @@ inline constexpr unsigned VLE = 0x10000000;        // PF_PPC_VLE and SHF_PPC_VLE
 inline constexpr unsigned DynamicOPD = 0x70000001; // DT_PPC64_OPD
 inline constexpr unsigned DynamicOPDSize = 0x70000002; // DT_PPC64_OPDSZ
 inline constexpr unsigned InstructionAlignment = 4;
+// The minimal ELF64 traceback table has a zero marker and eight zero header
+// bytes. Some producers include it in the function symbol's size.
+inline constexpr unsigned EmptyTracebackTableSize = 12;
+inline constexpr uint32_t ReturnToLinkRegister = 0x4e800020; // blr
 inline constexpr char ELFv1Name[] = "elfv1";
 inline constexpr char ELFv2Name[] = "elfv2";
 inline constexpr unsigned SymbolVisibilityMask = 0x3; // ELF64_ST_VISIBILITY
@@ -83,13 +87,8 @@ inline constexpr uint32_t ReadLRToR11 = 0x7d6802a6;
 inline constexpr uint32_t RestoreLRFromR12 = 0x7d8803a6;
 inline constexpr uint32_t AddisR12R11 = 0x3d8b0000;
 inline constexpr uint32_t AddiR12R12 = 0x398c0000;
-inline constexpr uint32_t PCRelativePrefixMask = 0xfffc0000;
-inline constexpr uint32_t PrefixHighImmediate = ~PCRelativePrefixMask;
-inline constexpr uint32_t PCRelativeLoadPrefix = 0x04100000;
-inline constexpr uint32_t PCRelativeAddPrefix = 0x06100000;
 inline constexpr uint32_t PLDR12Suffix = 0xe5800000;
 inline constexpr uint32_t PAddiR12Suffix = 0x39800000;
-inline constexpr unsigned PrefixedDisplacementBits = 34;
 inline constexpr uint32_t AddisR11R2 = 0x3d620000;
 inline constexpr uint32_t AddiR11R11 = 0x396b0000;
 inline constexpr uint32_t AddisR2R2 = 0x3c420000;

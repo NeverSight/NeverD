@@ -10,6 +10,7 @@
 #include "MachOLiftedObject.h"
 #include "MachOPublishedData.h"
 #include "MachOSourceDependencies.h"
+#include "MachOStrictLayout.h"
 #include "MachOTLSRuntime.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
@@ -28,6 +29,7 @@
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
+#include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/loader/MachO/MachOPlatform.h"
 #include "neverd/loader/MachO/MachORelocations.h"
 #include "neverd/object/MachOLayout.h"
@@ -66,13 +68,23 @@ llvm::Error fail(const llvm::Twine &Message) {
                                  kObjectErrorPrefix + Message);
 }
 std::string canonical(llvm::StringRef Name) {
-  return (Name.starts_with("_") ? Name.drop_front() : Name).str();
+  Name.consume_front(macho_arm64e_abi::kSymbolPrefix);
+  return Name.str();
 }
-struct Symbol {
+struct NativeSymbol {
   std::string Name;
+  llvm::StringRef LinkerName; // Borrows the input object's string table.
   uint32_t Section = 0;
   uint64_t Offset = 0, Size = 0;
   bool Function = false, Thumb = false, External = false;
+  // Bare assembly labels in arm64e text need an exact unwind start.
+  bool UnwindCandidate = false;
+
+  // A requested definition must prove its unwind range during relocation.
+  bool requireFunction() {
+    Function = Function || UnwindCandidate;
+    return Function;
+  }
 };
 struct Relocation {
   size_t Section;
@@ -89,7 +101,7 @@ struct NativeMachO {
   CompiledImage Image;
   std::map<uint32_t, size_t> Sections;
   std::map<uint32_t, uint64_t> OldSectionVAs;
-  std::map<uint32_t, Symbol> Symbols;
+  std::map<uint32_t, NativeSymbol> Symbols;
   std::map<std::string, uint32_t> Names;
   std::vector<Relocation> Relocations;
   std::vector<std::pair<size_t, MachODataInCodeRange>> Embedded;
@@ -146,6 +158,33 @@ struct NativeMachO {
   std::map<unsigned, AuthenticatedCallStub> AuthenticatedCallStubs;
   // Section index to the sole public weak definition that owns its storage.
   std::map<size_t, unsigned> WeakData;
+
+  // C symbols are indexed first. A bare assembly symbol can keep its old
+  // shorthand unless a distinct C symbol already owns that source name.
+  std::string sourceName(llvm::StringRef LinkerName) const {
+    llvm::StringRef Name = LinkerName;
+    const bool Prefixed = Name.consume_front(macho_arm64e_abi::kSymbolPrefix);
+    if (Name.starts_with(macho_arm64e_abi::kVerbatimPrefix) ||
+        (Prefixed && Name.empty()))
+      return (macho_arm64e_abi::kVerbatimPrefix + LinkerName).str();
+    std::string Key = Name.str();
+    if (!Prefixed) {
+      const auto I = Names.find(Key);
+      if (I != Names.end() && Symbols.at(I->second).LinkerName != LinkerName)
+        return (macho_arm64e_abi::kVerbatimPrefix + LinkerName).str();
+    }
+    return Key;
+  }
+
+  auto findRequestedSymbol(const std::string &Name, bool Arm64e) const {
+    llvm::StringRef Raw = Name;
+    if (!Arm64e || !Raw.consume_front(macho_arm64e_abi::kVerbatimPrefix))
+      return Names.find(Name);
+    auto I = Names.find(sourceName(Raw));
+    if (I != Names.end() && Symbols.at(I->second).LinkerName != Raw)
+      return Names.end();
+    return I;
+  }
 };
 
 // New data mappings and dyld runtime sections require segment commands.
@@ -180,45 +219,109 @@ uint64_t installationCommandBytes(const NativeMachO &Object,
     return SegmentBytes * Segments + sizeof(section_64) * Sections +
            sizeof(linkedit_data_command) * (1 + unsigned(NewDICE));
   }
-  if (!NewDICE && Original.isArm64e() &&
-      Original.findSegmentByName(kDefaultNdTextSegment)) {
+  if (!NewDICE && Original.isArm64e()) {
     const auto *Linkedit =
         Original.findSegmentByName(section_names::macho::LinkeditSeg);
     if (Linkedit && Linkedit->VA) {
       const auto *Tail = Original.getSegmentFor(Linkedit->VA - 1);
-      if (!Tail || !Tail->isExecutable())
-        return SegmentBytes + sizeof(linkedit_data_command);
+      if (!Tail || !Tail->isExecutable()) {
+        uint64_t Padding = SegmentBytes + sizeof(linkedit_data_command);
+        if (Original.findSegmentByName(kDefaultNdTextSegment))
+          return Padding;
+        // A data segment before __LINKEDIT prevents extending the original
+        // text mapping. Reserve the part of the first RX command and signing
+        // command that the installer cannot obtain from disposable commands.
+        forEachMachOLoadCommand(
+            Original.Raw.data(), Original.Raw.size(),
+            [&](const uint8_t *Command, uint32_t ID, uint32_t Size, bool) {
+              if (shouldDropLoadCommand(ID) ||
+                  macho_patch_detail::canReclaimToolCommand(Command, ID, Size))
+                Padding -= std::min<uint64_t>(Padding, Size);
+            });
+        return Padding;
+      }
     }
   }
   return NewDICE ? SegmentBytes + sizeof(linkedit_data_command) * 2 : 0;
 }
 
+unsigned compactRecordSize(const NativeMachO &Object) {
+  return Object.Image.PointerWidth * kCompactPointers + kCompactFixedBytes;
+}
+
 // Count both possible sources. A frame described by both tables can reserve
 // two entries. Final installation validates the relocated encoding and LSDA.
 MachOUnwindFunctionCounts unwindFunctionCounts(const NativeMachO &Object) {
+  uint64_t Functions = Object.OldFDEs.size() + Object.Thunks.size();
   uint64_t LSDAs = llvm::count_if(
       Object.OldFDEs, [](const auto &Frame) { return Frame.LSDA.has_value(); });
   if (Object.CompactSection) {
     const auto &Data =
         Object.Image.Sections[*Object.CompactSection].ExternalBytes;
     const auto Ptr = Object.Image.PointerWidth;
-    const auto Stride = Ptr * kCompactPointers + kCompactFixedBytes;
+    const auto Stride = compactRecordSize(Object);
+    Functions += Data.size() / Stride;
     for (size_t Offset = 0; Offset + Stride <= Data.size(); Offset += Stride) {
       const auto Encoding =
           readLE<uint32_t>(Data.data() + Offset + Ptr + sizeof(uint32_t));
       LSDAs += bool(Encoding & macho_unwind::kHasLSDA);
     }
   }
-  return {Object.Symbols.size() +
+  return {Functions +
               unsigned(Object.Descriptors.has_value() ||
                        !Object.ThreadInitializers.empty()) +
               Object.AuthenticatedCallStubs.size(),
           LSDAs};
 }
 
-// A linked arm64e input can have only compact records while the replacement
-// compiler emits an indexed DWARF function. Reserve its real FDE registry
-// before any section addresses or instruction displacements are finalized.
+struct NativeCodeOffset {
+  uint32_t Section;
+  uint64_t Offset;
+};
+
+// Darwin may encode a temporary label as the nearest atom plus a signed
+// addend. Keep it in the referenced code section in either address space.
+std::optional<NativeCodeOffset>
+localCodePointer(const NativeMachO &Object, const Relocation &R, uint64_t Raw) {
+  if (R.Width != arm64e::kPointerBytes || R.PCRel || R.Scattered ||
+      R.SubtractSymbol || R.SubtractVA || R.InstructionAddend ||
+      (R.Type != ARM64_RELOC_UNSIGNED &&
+       R.Type != ARM64_RELOC_AUTHENTICATED_POINTER))
+    return std::nullopt;
+  uint32_t Section = R.SymbolIndex;
+  uint64_t Offset = Raw;
+  if (R.External) {
+    const auto Sym = Object.Symbols.find(R.SymbolIndex);
+    if (Sym == Object.Symbols.end() || !Sym->second.Section)
+      return std::nullopt;
+    Section = Sym->second.Section;
+    int64_t Addend = static_cast<int64_t>(Raw);
+    if (R.Type == ARM64_RELOC_AUTHENTICATED_POINTER) {
+      const auto Word = arm64e::decodeObjectPointerWord(Raw);
+      if (!Word || Word->Key != kDefaultFunctionPointerKey || Word->Diversity ||
+          Word->AddressDiversity)
+        return std::nullopt;
+      Addend = Word->Addend;
+    }
+    int64_t Relative;
+    if (llvm::AddOverflow(int64_t(Sym->second.Offset), Addend, Relative) ||
+        Relative < 0)
+      return std::nullopt;
+    Offset = Relative;
+  } else {
+    if (R.Type != ARM64_RELOC_UNSIGNED || !Object.Sections.contains(Section) ||
+        Raw < Object.OldSectionVAs.at(Section))
+      return std::nullopt;
+    Offset -= Object.OldSectionVAs.at(Section);
+  }
+  const auto &Code = Object.Image.Sections[Object.Sections.at(Section)];
+  if (Code.Kind != Kind::Code || Offset >= Code.Size)
+    return std::nullopt;
+  return NativeCodeOffset{Section, Offset};
+}
+
+// A compact-only image may need an FDE registry for its new code. Decide
+// before finalizing section addresses and instruction displacements.
 uint64_t requiredNativeEHBytes(const NativeMachO &Object,
                                const std::vector<uint8_t> &Binary) {
   if (!Object.EH)
@@ -226,19 +329,46 @@ uint64_t requiredNativeEHBytes(const NativeMachO &Object,
   const auto Size = Object.Image.Sections[*Object.EH].Size;
   if (!Object.Thunks.empty() || findMachOEHFrameRegion(Binary))
     return Size;
-  if (Object.Image.TargetArch != Arch::AArch64 || !Object.CompactSection)
+  if (Object.Image.TargetArch != Arch::AArch64)
     return 0;
+  const bool Arm64e = llvm::Triple(Object.Image.TargetTriple).isArm64e();
+  if (!Object.CompactSection)
+    return Arm64e && !Object.OldFDEs.empty() ? Size : 0;
   const auto &Data =
       Object.Image.Sections[*Object.CompactSection].ExternalBytes;
   const auto Width = Object.Image.PointerWidth;
-  const auto Stride = kCompactPointers * Width + kCompactFixedBytes;
+  const auto Stride = compactRecordSize(Object);
   for (size_t Off = 0; Off + Stride <= Data.size(); Off += Stride) {
     auto Encoding =
         readLE<uint32_t>(Data.data() + Off + Width + sizeof(uint32_t));
     if ((Encoding & macho_unwind::kModeMask) == macho_unwind::kARM64ModeDwarf)
       return Size;
   }
-  return 0;
+  if (!Arm64e || Object.OldFDEs.empty())
+    return 0;
+
+  // An assembly object may contribute compact rows for only some functions.
+  // Elide redundant FDEs only if those rows cover every producer frame.
+  llvm::DenseMap<va_t, va_t> Missing;
+  for (const auto &FDE : Object.OldFDEs)
+    Missing.try_emplace(FDE.BeginVA, FDE.EndVA);
+  for (const auto &R : Object.Relocations) {
+    if (R.Section != *Object.CompactSection || R.Offset % Stride ||
+        R.Type != ARM64_RELOC_UNSIGNED ||
+        !rangeInBounds(R.Offset, Stride, Data.size()))
+      continue;
+    const auto Target =
+        localCodePointer(Object, R, readLE<uint64_t>(Data.data() + R.Offset));
+    if (!Target)
+      continue;
+    const va_t Begin =
+        Object.OldSectionVAs.at(Target->Section) + Target->Offset;
+    const auto FDE = Missing.find(Begin);
+    const auto Length = readLE<uint32_t>(Data.data() + R.Offset + Width);
+    if (FDE != Missing.end() && FDE->second - Begin == Length)
+      Missing.erase(FDE);
+  }
+  return Missing.empty() ? 0 : Size;
 }
 
 bool isTLVLoad(unsigned Type) {
@@ -254,38 +384,54 @@ bool isGOTLoad(unsigned Type) {
 bool isCompactPersonality(const NativeMachO &Object, const Relocation &R) {
   const unsigned Ptr = Object.Image.PointerWidth;
   return Object.CompactSection == R.Section &&
-         R.Offset % (Ptr * kCompactPointers + kCompactFixedBytes) ==
-             Ptr + kCompactFixedBytes;
+         R.Offset % compactRecordSize(Object) == Ptr + kCompactFixedBytes;
 }
+
+llvm::Error prepareAuthenticatedCallStubs(NativeMachO &Object,
+                                          std::set<unsigned> Functions);
 
 // The arm64e unwind personality ABI uses an IA/address-diversified GOT slot;
 // LSDA type information uses an ordinary data pointer. Keep these identities
 // distinct even when a symbol appears in both roles.
-llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
-                             llvm::ArrayRef<SourcePatchDependency> Dependencies,
-                             llvm::ArrayRef<SourcePatchBinding> Bindings = {}) {
+llvm::Error prepareArm64eGOT(
+    NativeMachO &Object, const BinaryImage &Original,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies,
+    const std::map<std::string, SourcePatchBinding> &Bindings = {}) {
   std::set<std::string> Declared;
   for (const auto &D : Dependencies)
     Declared.insert(D.Symbol);
   for (const auto &B : Bindings)
-    Declared.insert(B.Symbol);
+    Declared.insert(B.first);
   const auto UsesGOT = [&](const Relocation &R) {
     return isCompactPersonality(Object, R) ||
            R.Type == ARM64_RELOC_POINTER_TO_GOT || isGOTLoad(R.Type) ||
            isTLVLoad(R.Type);
   };
-  if (Object.WeakData.empty() && llvm::none_of(Object.Relocations, UsesGOT))
+  const auto IsImportBranch = [&](const Relocation &R) {
+    if (!R.External || R.Type != ARM64_RELOC_BRANCH26)
+      return false;
+    const auto I = Object.Symbols.find(R.SymbolIndex);
+    return I != Object.Symbols.end() && !I->second.Section &&
+           !Declared.contains(I->second.Name) &&
+           !Object.AuthenticatedCallStubs.contains(R.SymbolIndex);
+  };
+  if (Object.WeakData.empty() &&
+      llvm::none_of(Object.Relocations, [&](const auto &R) {
+        return UsesGOT(R) || IsImportBranch(R);
+      }))
     return llvm::Error::success();
   MachOChainedFixups Chains;
   auto State = readMachODependencyState(Original.Raw, &Chains);
   if (!State)
     return State.takeError();
-  const auto Providers = Chains.uniqueImportProviders();
+  const auto Providers =
+      Chains.uniqueImportProviders(Object.Image.MachOImportWeakness);
   const auto MatchesProvider = [&](const std::string &Name, const auto &B) {
     auto It = Providers.find(Name);
-    return It != Providers.end() && It->second && B.LibraryOrdinal &&
-           *It->second ==
-               MachOChainedFixups::Provider{*B.LibraryOrdinal, B.WeakImport};
+    return It != Providers.end() && B.LibraryOrdinal &&
+           It->second.Ordinal == B.LibraryOrdinal &&
+           It->second.bindingStrength(Name, Object.Image.MachOImportWeakness) ==
+               B.WeakImport;
   };
   std::map<std::string, va_t> Personalities, Ordinary;
   for (const auto &[Address, P] : Original.MachOAuthenticatedPointers)
@@ -293,7 +439,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
         P.Diversity == kPersonalityDiversity &&
         P.AddressDiversity == kPersonalityAddressDiversity &&
         MatchesProvider(P.Symbol, P))
-      Personalities.try_emplace(canonical(P.Symbol), Address);
+      Personalities.try_emplace(P.Symbol, Address);
   // A mutable data variable can have the same bind. Only reuse non-lazy
   // pointer storage that dyld seals after applying the ordinary binding.
   for (const auto &[Address, B] : Original.DyldBindSlots) {
@@ -309,25 +455,24 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
                  rangeInBounds(Address - S.VMAddr, arm64e::kPointerBytes,
                                S.FileSize);
         }))
-      Ordinary.try_emplace(canonical(B.Name), Address);
+      Ordinary.try_emplace(B.Name, Address);
   }
-  // A public weak fallback can be discarded only when all its users go
-  // through the original coalescing GOT. The original definition and dyld
-  // lookup scope then continue to choose the runtime address together.
+  // Keep the original weak data export as the fallback. Each new reference
+  // lets dyld select the coalesced definition, including a newly allocated GOT.
   for (const auto &[Section, Index] : Object.WeakData) {
     const auto &Symbol = Object.Symbols.at(Index);
-    const auto Slot = Ordinary.find(Symbol.Name);
-    if (Slot == Ordinary.end() || Declared.contains(Symbol.Name))
-      return fail(kWeakDataFallback);
-    const auto &Bind = Original.DyldBindSlots.at(Slot->second);
-    const auto Export = Chains.WeakDefinitions.find(Bind.Name);
-    if (Bind.LibraryOrdinal != BIND_SPECIAL_DYLIB_WEAK_LOOKUP ||
-        Bind.WeakImport || Export == Chains.WeakDefinitions.end() ||
+    const auto Name = Symbol.LinkerName.str();
+    const auto Export = Chains.WeakDefinitions.find(Name);
+    const auto Provider = Providers.find(Name);
+    if (Declared.contains(Symbol.Name) ||
+        Export == Chains.WeakDefinitions.end() ||
         !Original.getSectionFor(Export->second) ||
-        Original.isCodeAddress(Export->second))
+        Original.isCodeAddress(Export->second) || Provider == Providers.end() ||
+        !Provider->second.LocalWeakDefinition)
       return fail(kWeakDataFallback);
-    Object.GOT.emplace(std::pair{Index, false},
-                       NativeMachO::GOTSlot{std::nullopt, Slot->second});
+    if (const auto Slot = Ordinary.find(Name); Slot != Ordinary.end())
+      Object.GOT.emplace(std::pair{Index, false},
+                         NativeMachO::GOTSlot{std::nullopt, Slot->second});
     auto &Discarded = Object.Image.Sections[Section];
     Discarded.IsAllocated = Discarded.IsInImage = false;
   }
@@ -346,6 +491,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     return I == Object.WeakData.end() ? std::nullopt : std::optional(I->second);
   };
   llvm::DenseMap<uint64_t, uint8_t> PersonalityFields;
+  std::set<unsigned> BranchImports;
   for (const auto &F : Object.OldFDEs)
     if (F.Personality)
       PersonalityFields.try_emplace(F.Personality->Offset,
@@ -358,14 +504,24 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
         (Object.EH == R.Section && R.Type == ARM64_RELOC_POINTER_TO_GOT);
     if (!Object.WeakData.empty()) {
       const auto Target = WeakTarget(R.SymbolIndex, R.External);
+      const bool BindablePointer =
+          !R.PCRel && R.Width == arm64e::kPointerBytes &&
+          (R.Type == ARM64_RELOC_UNSIGNED ||
+           R.Type == ARM64_RELOC_AUTHENTICATED_POINTER);
       if ((R.SubtractSymbol && WeakTarget(*R.SubtractSymbol, true)) ||
-          (Target && (!UsesGOT(R) || !R.External || R.SymbolIndex != *Target ||
-                      R.SubtractSymbol || R.Scattered || Personality)))
+          (Target && ((!UsesGOT(R) && !BindablePointer) || !R.External ||
+                      R.SymbolIndex != *Target || R.SubtractSymbol ||
+                      R.Scattered || Personality)))
         return fail(kWeakDataReference);
     }
     if (Personality && Object.EH == R.Section &&
         PersonalityFields.lookup(R.Offset) != R.Width)
       return fail(kLanguagePointer);
+    if (IsImportBranch(R)) {
+      const auto &Symbol = Object.Symbols.at(R.SymbolIndex);
+      if (Providers.contains(Symbol.LinkerName.str()))
+        BranchImports.insert(R.SymbolIndex);
+    }
     if (!UsesGOT(R))
       continue;
     if (!R.External || R.Scattered || R.SubtractVA || R.SubtractSymbol ||
@@ -389,7 +545,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
         Object.TLV.emplace(R.SymbolIndex, NativeMachO::TLVReference{0, true});
         continue;
       }
-      const std::string Name = kTLVSymbolPrefix + Symbol.Name;
+      const auto Name = Symbol.LinkerName.str();
       const auto Export = Chains.ThreadLocalDefinitions.find(Name);
       if (Export != Chains.ThreadLocalDefinitions.end()) {
         const auto Address = Export->second;
@@ -412,7 +568,7 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
         Object.TLV.emplace(R.SymbolIndex,
                            NativeMachO::TLVReference{Address, true});
       } else {
-        const auto Slot = Ordinary.find(Symbol.Name);
+        const auto Slot = Ordinary.find(Name);
         if (Slot == Ordinary.end())
           return fail(kTLVDescriptor);
         const auto &B = Original.DyldBindSlots.at(Slot->second);
@@ -433,7 +589,8 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     if (!Symbol.Section && !Object.Image.SymbolAddrs.contains(Symbol.Name) &&
         !Declared.contains(Symbol.Name)) {
       const auto &Candidates = Personality ? Personalities : Ordinary;
-      if (auto It = Candidates.find(Symbol.Name); It != Candidates.end()) {
+      if (auto It = Candidates.find(Symbol.LinkerName.str());
+          It != Candidates.end()) {
         Object.GOT.emplace(Key, NativeMachO::GOTSlot{std::nullopt, It->second});
         continue;
       }
@@ -457,7 +614,23 @@ llvm::Error prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     Object.GOT.emplace(Key, NativeMachO::GOTSlot{Object.Image.Sections.size()});
     Object.Image.Sections.push_back(std::move(Slot));
   }
-  return llvm::Error::success();
+  if (BranchImports.empty())
+    return llvm::Error::success();
+  // A registered stub can serve a branch when every original import for
+  // that spelling has the requested provider and strength. Otherwise the
+  // branch needs its own callable, even if an ordinary GOT cell exists.
+  for (const auto &[VA, Index] : Original.ImportStubIndices) {
+    const auto *Stub = Original.findImportStubAt(VA);
+    if (!Stub)
+      continue;
+    const auto P = Providers.find(Stub->Name);
+    const auto N = Object.Image.MachOImportWeakness.find(Stub->Name);
+    if (P != Providers.end() && P->second.Ordinal &&
+        N != Object.Image.MachOImportWeakness.end() &&
+        P->second.WeakImport == N->second)
+      BranchImports.erase(Object.Names.at(Object.sourceName(Stub->Name)));
+  }
+  return prepareAuthenticatedCallStubs(Object, std::move(BranchImports));
 }
 
 bool matchesArm64eABI(const llvm::object::MachOObjectFile &Object,
@@ -817,16 +990,8 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
     if (!Name)
       return Name.takeError();
     const auto Index = M->getSymbolIndex(S.getRawDataRefImpl());
-    const uint8_t Type =
-        M->is64Bit() ? M->getSymbol64TableEntry(S.getRawDataRefImpl()).n_type
-                     : M->getSymbolTableEntry(S.getRawDataRefImpl()).n_type;
-    const uint16_t Desc =
-        M->is64Bit() ? M->getSymbol64TableEntry(S.getRawDataRefImpl()).n_desc
-                     : M->getSymbolTableEntry(S.getRawDataRefImpl()).n_desc;
-    const uint32_t Number = M->getSymbolSectionID(S) + 1;
-    const uint64_t Value =
-        M->is64Bit() ? M->getSymbol64TableEntry(S.getRawDataRefImpl()).n_value
-                     : M->getSymbolTableEntry(S.getRawDataRefImpl()).n_value;
+    const auto Entry = macho_loader::readObjectNList(*M, S.getRawDataRefImpl());
+    const auto &[Type, Number, Desc, Value] = Entry;
     if (Type & N_STAB)
       continue;
     if ((Type & N_TYPE) != N_SECT && (Type & N_TYPE) != N_UNDF)
@@ -836,12 +1001,27 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
     const bool PublicWeak = Original.isArm64e() && (Type & N_TYPE) == N_SECT &&
                             (Type & N_EXT) && !(Type & N_PEXT) &&
                             (Desc & (N_WEAK_DEF | N_WEAK_REF)) == N_WEAK_DEF;
-    if (((Desc & (N_WEAK_REF | N_WEAK_DEF)) && !PrivateWeak && !PublicWeak) ||
-        ((Type & N_TYPE) == N_UNDF && Value))
-      return fail("weak/common native definitions are unsupported");
-    Symbol Item{
-        canonical(*Name),  Number, 0, 0, false, bool(Desc & N_ARM_THUMB_DEF),
-        bool(Type & N_EXT)};
+    if ((Type & N_TYPE) == N_UNDF && Original.isArm64e()) {
+      const auto Weak = Entry.importWeakness();
+      // N_REF_TO_WEAK describes the definition. Only N_WEAK_REF allows
+      // this object reference to be absent when dyld resolves the symbol.
+      if (!Weak.has_value())
+        return fail(kUnsupportedNativeSymbol);
+      Image.MachOImportWeakness.emplace(Name->str(), *Weak);
+    } else if (((Desc & (N_WEAK_REF | N_WEAK_DEF)) && !PrivateWeak &&
+                !PublicWeak) ||
+               ((Type & N_TYPE) == N_UNDF && Value)) {
+      return fail(kUnsupportedNativeSymbol);
+    }
+    const bool Prefixed = Name->starts_with(macho_arm64e_abi::kSymbolPrefix);
+    NativeSymbol Item{{},
+                      *Name,
+                      Number,
+                      0,
+                      0,
+                      false,
+                      bool(Desc & N_ARM_THUMB_DEF),
+                      bool(Type & N_EXT)};
     if ((Type & N_TYPE) == N_SECT) {
       if (!Result.Sections.contains(Number))
         continue;
@@ -850,8 +1030,12 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
           Value - Result.OldSectionVAs.at(Number) >= Section.Size)
         return fail("symbol exceeds native section");
       Item.Offset = Value - Result.OldSectionVAs.at(Number);
-      Item.Function = Section.Kind == Kind::Code && Name->starts_with("_") &&
-                      machODataInCodeRanges(Data, Value, 1).empty();
+      if (Section.Kind == Kind::Code &&
+          (Prefixed || (Original.isArm64e() && !Name->empty())) &&
+          machODataInCodeRanges(Data, Value, 1).empty()) {
+        Item.Function = Prefixed;
+        Item.UnwindCandidate = !Prefixed;
+      }
       // Hidden compiler helpers (e.g. terminate landing pads) bind within this
       // object. Staging adds no exported weak definition or coalescing promise.
       if (PublicWeak) {
@@ -860,6 +1044,7 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
             Section.Kind != Kind::WritableData ||
             !Result.WeakData.emplace(Result.Sections.at(Number), Index).second)
           return fail(kWeakDataAtom);
+        Image.MachOImportWeakness.emplace(Name->str(), false);
       }
       if (Result.Descriptors == Result.Sections.at(Number) &&
           !(Type & N_PEXT) && (Type & N_EXT) && !PublicWeak) {
@@ -867,15 +1052,25 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
           return fail(kTLVStorage);
         Result.TLSExports.emplace(Name->str(), Item.Offset);
       }
-      if (PrivateWeak && !Item.Function)
+      if (PrivateWeak && !Item.requireFunction())
         return fail(kPrivateWeak);
     } else
       Item.Section = 0;
-    if (!Name->empty() && !Result.Names.emplace(Item.Name, Index).second)
-      return fail("duplicate native symbol");
-    Result.Symbols.emplace(Index, Item);
+    if (!Name->empty() && (!Original.isArm64e() || Prefixed)) {
+      Item.Name =
+          Original.isArm64e() ? Result.sourceName(*Name) : canonical(*Name);
+      if (!Result.Names.emplace(Item.Name, Index).second)
+        return fail(kDuplicateNativeSymbol);
+    }
+    Result.Symbols.emplace(Index, std::move(Item));
   }
-  for (const auto &[Index, S] : Result.Symbols) {
+  for (auto &[Index, S] : Result.Symbols) {
+    if (Original.isArm64e() && !S.LinkerName.empty() &&
+        !S.LinkerName.starts_with(macho_arm64e_abi::kSymbolPrefix)) {
+      S.Name = Result.sourceName(S.LinkerName);
+      if (!Result.Names.emplace(S.Name, Index).second)
+        return fail(kDuplicateNativeSymbol);
+    }
     if (!S.Section)
       continue;
     auto It = Result.WeakData.find(Result.Sections.at(S.Section));
@@ -1173,7 +1368,7 @@ static CompiledFixupReference signedFunctionImport(llvm::StringRef Name) {
   return Ref;
 }
 
-// A native B/BL to a newly declared function needs a local callable. Keep the
+// A native B/BL to an imported function needs a local callable. Keep the
 // slot in RELRO and describe the leaf stub to the system unwinder.
 llvm::Error prepareAuthenticatedCallStubs(NativeMachO &Object,
                                           std::set<unsigned> Functions) {
@@ -1214,12 +1409,22 @@ llvm::Error prepareAuthenticatedCallStubs(NativeMachO &Object,
   return llvm::Error::success();
 }
 
-llvm::Error
-prepareRuntimeDependencies(NativeMachO &Object, const BinaryImage &Original,
-                           std::vector<SourcePatchDependency> &Dependencies,
-                           llvm::ArrayRef<SourcePatchBinding> Bindings = {}) {
+llvm::Error prepareRuntimeDependencies(
+    NativeMachO &Object, const BinaryImage &Original,
+    std::vector<SourcePatchDependency> &Dependencies,
+    const std::map<std::string, SourcePatchBinding> &Bindings = {}) {
   std::set<unsigned> Functions;
   if (Original.isArm64e()) {
+    for (auto &Dependency : Dependencies) {
+      if (llvm::StringRef(Dependency.Symbol)
+              .starts_with(macho_arm64e_abi::kVerbatimPrefix)) {
+        const auto I = Object.findRequestedSymbol(Dependency.Symbol, true);
+        if (I != Object.Names.end())
+          Dependency.Symbol = I->first;
+      }
+      if (Bindings.contains(Dependency.Symbol))
+        return fail(kBindingDependencyConflict);
+    }
     const auto AdmitRuntime = [&](const SourcePatchDependency &Runtime) {
       const auto I = Object.Names.find(Runtime.Symbol);
       if (I == Object.Names.end() || Object.Symbols.at(I->second).Section ||
@@ -1227,17 +1432,14 @@ prepareRuntimeDependencies(NativeMachO &Object, const BinaryImage &Original,
                         [&](const auto &R) {
                           return R.External && R.SymbolIndex == I->second;
                         }) ||
-          llvm::any_of(
-              Bindings,
-              [&](const auto &B) { return B.Symbol == Runtime.Symbol; }) ||
+          Bindings.contains(Runtime.Symbol) ||
           llvm::any_of(Dependencies, [&](const auto &D) {
             return D.Symbol == Runtime.Symbol;
           }))
         return;
       // Keep the original dyld provider. A direct branch can still need a
       // callable when the original only stored the imported pointer.
-      if (Original.findImport((llvm::Twine('_') + Runtime.Symbol).str()) ||
-          Original.findImport(Runtime.Symbol)) {
+      if (Original.findImport(Object.Symbols.at(I->second).LinkerName)) {
         if (Runtime.Kind == SourcePatchDependencyKind::Function)
           Functions.insert(I->second);
       } else {
@@ -1730,13 +1932,17 @@ resolve(const NativeMachO &Object, unsigned Index, const BinaryImage &Original,
   if (auto B = Bindings.find(S.Name); B != Bindings.end())
     return B->second.OriginalVA;
   std::set<uint64_t> VAs;
+  const bool ExactSpelling = Original.isArm64e();
+  const llvm::StringRef LinkerName =
+      ExactSpelling ? S.LinkerName : llvm::StringRef(S.Name);
   for (const auto &S0 : Original.Symbols)
-    if (canonical(S0.Name) == S.Name && S0.IsFunc &&
-        Original.hasAuthenticatedFunctionEntryAt(S0.Addr))
+    if ((ExactSpelling ? S0.Name == LinkerName
+                       : canonical(S0.Name) == S.Name) &&
+        S0.IsFunc && Original.hasAuthenticatedFunctionEntryAt(S0.Addr))
       VAs.insert(S0.Addr);
   for (const auto &[VA, Import] : Original.ImportStubIndices)
     if (Import < Original.Imports.size() &&
-        Original.Imports[Import].Name == S.Name &&
+        Original.Imports[Import].Name == LinkerName &&
         Original.findImportStubAt(VA))
       VAs.insert(VA);
   if (VAs.size() != 1)
@@ -1852,6 +2058,7 @@ llvm::Error
 relocate(NativeMachO &Object, const BinaryImage &Original,
          const std::map<std::string, SourcePatchBinding> &Bindings) {
   const Arch A = Original.Arch;
+  llvm::SmallVector<va_t> InitializerTargets;
   std::map<std::pair<size_t, uint64_t>, unsigned> Written;
   for (const auto &R : Object.Relocations) {
     const auto &S = Object.Image.Sections[R.Section];
@@ -1880,47 +2087,24 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     const uint64_t Raw = R.Width == 8 ? readLE<uint64_t>(Out)
                                       : readLE<uint32_t>(Out),
                    P = S.VA + R.Offset;
+    const bool CompactStart = Original.isArm64e() &&
+                              Object.CompactSection == R.Section &&
+                              R.Offset % compactRecordSize(Object) == 0;
     const auto ThreadInit = llvm::find(Object.ThreadInitializers, R.Section);
-    if (Object.InitializerPointers == R.Section ||
+    if (CompactStart || Object.InitializerPointers == R.Section ||
         ThreadInit != Object.ThreadInitializers.end()) {
-      if (R.Width != arm64e::kPointerBytes || R.Offset % R.Width || R.PCRel ||
-          R.Scattered || R.SubtractSymbol || R.SubtractVA ||
-          (R.Type != ARM64_RELOC_UNSIGNED &&
-           R.Type != ARM64_RELOC_AUTHENTICATED_POINTER))
-        return fail(kInitializerStorage);
-      uint64_t Address;
-      if (R.External) {
-        auto Sym = Object.Symbols.find(R.SymbolIndex);
-        if (Sym == Object.Symbols.end() || !Sym->second.Section ||
-            !Sym->second.Function)
-          return fail(kInitializerStorage);
-        if (R.Type == ARM64_RELOC_AUTHENTICATED_POINTER) {
-          const auto Word = arm64e::decodeObjectPointerWord(Raw);
-          if (!Word || Word->Key != kDefaultFunctionPointerKey ||
-              Word->Addend || Word->Diversity || Word->AddressDiversity)
-            return fail(kInitializerStorage);
-        } else if (Raw) {
-          return fail(kInitializerStorage);
-        }
-        Address = Object.Image.SymbolAddrs.at(Sym->second.Name);
-      } else {
-        if (R.Type != ARM64_RELOC_UNSIGNED ||
-            !Object.Sections.contains(R.SymbolIndex))
-          return fail(kInitializerStorage);
-        const auto &Code =
-            Object.Image.Sections[Object.Sections.at(R.SymbolIndex)];
-        const auto Old = Object.OldSectionVAs.at(R.SymbolIndex);
-        if (Code.Kind != Kind::Code || Raw < Old || Raw - Old >= Code.Size ||
-            llvm::none_of(
-                Object.Symbols,
-                [&](const auto &P) {
-                  return P.second.Function &&
-                         P.second.Section == R.SymbolIndex &&
-                         P.second.Offset == Raw - Old;
-                }))
-          return fail(kInitializerStorage);
-        Address = Code.VA + Raw - Old;
+      const auto Target = localCodePointer(Object, R, Raw);
+      if (!Target || R.Offset % R.Width ||
+          (CompactStart && R.Type != ARM64_RELOC_UNSIGNED))
+        return fail(CompactStart ? kCompactLanguage : kInitializerStorage);
+      const auto &Code =
+          Object.Image.Sections[Object.Sections.at(Target->Section)];
+      const va_t Address = Code.VA + Target->Offset;
+      if (CompactStart) {
+        writeLE<uint64_t>(Out, Address);
+        continue;
       }
+      InitializerTargets.push_back(Address);
       if (ThreadInit != Object.ThreadInitializers.end()) {
         const auto &T = *Object.PerThread;
         auto At =
@@ -2015,7 +2199,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       Reference.IsResolved = true;
       Reference.PointerAuth = CompiledPointerAuthentication{
           Word->Key, Word->Diversity, Word->AddressDiversity};
-      if (Symbol->second.Section || Bindings.contains(Symbol->second.Name)) {
+      if (Object.Image.SymbolAddrs.contains(Reference.Symbol)) {
         auto Target = resolve(Object, R.SymbolIndex, Original, Bindings);
         if (!Target)
           return Target.takeError();
@@ -2034,14 +2218,16 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     const bool CompactPersonality = isCompactPersonality(Object, R);
     const bool PointerToGOT =
         A == Arch::AArch64 && R.Type == ARM64_RELOC_POINTER_TO_GOT;
-    if (Original.isArm64e() && (CompactPersonality || PointerToGOT)) {
+    const bool AbsoluteGOT = PointerToGOT && !R.PCRel;
+    if (Original.isArm64e() &&
+        (CompactPersonality || (PointerToGOT && !AbsoluteGOT))) {
       const bool Personality = CompactPersonality || Object.EH == R.Section;
       auto Slot = Object.GOT.find({R.SymbolIndex, Personality});
       if (Slot == Object.GOT.end() ||
           (CompactPersonality &&
            (R.Type != ARM64_RELOC_UNSIGNED ||
             R.Width != arm64e::kPointerBytes || R.PCRel || Raw)) ||
-          (PointerToGOT && (!R.PCRel || R.Width != sizeof(uint32_t))))
+          (PointerToGOT && R.Width != sizeof(uint32_t)))
         return fail(kGOTRelocation);
       if (CompactPersonality)
         writeLE<uint64_t>(Out, Slot->second.Address);
@@ -2056,8 +2242,9 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       }
       continue;
     }
-    if (Original.isArm64e() && R.Type == ARM64_RELOC_UNSIGNED &&
-        !R.SubtractSymbol && !R.SubtractVA && S.IsAllocated &&
+    if (Original.isArm64e() &&
+        (R.Type == ARM64_RELOC_UNSIGNED || AbsoluteGOT) && !R.SubtractSymbol &&
+        !R.SubtractVA && S.IsAllocated &&
         (S.IsInImage || isExternalMachORelro(Object.Image, S))) {
       if (R.PCRel || R.Scattered || R.Width != arm64e::kPointerBytes ||
           S.Kind != Kind::WritableData)
@@ -2067,13 +2254,19 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       Reference.Kind = R.Type;
       Reference.BitWidth = R.Width * CHAR_BIT;
       Reference.IsResolved = Reference.OrdinaryPointer = true;
-      if (R.External) {
+      if (AbsoluteGOT) {
+        const auto Slot = Object.GOT.find({R.SymbolIndex, false});
+        if (Raw || Slot == Object.GOT.end())
+          return fail(kGOTRelocation);
+        // This field rebases to the GOT cell. Only the cell binds the symbol.
+        Reference.ResolvedValue = Slot->second.Address;
+      } else if (R.External) {
         auto Symbol = Object.Symbols.find(R.SymbolIndex);
         if (Symbol == Object.Symbols.end() || Symbol->second.Name.empty())
           return fail(kOrdinarySymbol);
         Reference.Symbol = Symbol->second.Name;
         Reference.Addend = int64_t(Raw);
-        if (Symbol->second.Section || Bindings.contains(Symbol->second.Name)) {
+        if (Object.Image.SymbolAddrs.contains(Reference.Symbol)) {
           auto Target = resolve(Object, R.SymbolIndex, Original, Bindings);
           if (!Target)
             return Target.takeError();
@@ -2432,7 +2625,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     const auto &Data =
         Object.Image.Sections[*Object.CompactSection].ExternalBytes;
     const unsigned Ptr = Object.Image.PointerWidth,
-                   Stride = Ptr * kCompactPointers + kCompactFixedBytes;
+                   Stride = compactRecordSize(Object);
     if (Data.size() % Stride)
       return fail("truncated native compact records");
     for (size_t O = 0; O < Data.size(); O += Stride) {
@@ -2451,6 +2644,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
         return It != Written.end() && It->second == Ptr;
       };
       if (!Length || Begin > UINT64_MAX - Length ||
+          (Original.isArm64e() && !HasPointerWriter(O)) ||
           ((Personality || LSDA) && !Original.isArm64e()) ||
           (Personality && !HasPointerWriter(O + Ptr + 8)) ||
           (LSDA && !HasPointerWriter(O + 2 * Ptr + 8)) ||
@@ -2486,7 +2680,7 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     for (const auto &R : *Records) {
       auto [It, Added] = Extents.emplace(R.BeginVA, R.EndVA);
       if (!Added && It->second != R.EndVA)
-        return fail("native DWARF and compact extents disagree");
+        return fail(kInconsistentFrameExtents);
     }
     // Placement owns the index base for both registered and private frames.
     const va_t SectionVA = Object.EHSectionVA;
@@ -2526,24 +2720,30 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       }
     }
   }
-  std::map<uint64_t, Symbol *> Functions;
-  llvm::SmallVector<std::pair<Symbol *, Symbol *>> Aliases;
-  for (auto &[I, S] : Object.Symbols)
-    if (S.Function) {
-      const auto &Section =
-          Object.Image.Sections[Object.Sections.at(S.Section)];
-      const uint64_t Begin = Section.VA + S.Offset;
-      auto [Entry, Inserted] = Functions.emplace(Begin, &S);
-      if (!Inserted) {
-        // Clang gives its C++ TLS initializer and the per-variable init
-        // entry the same body. Both names must share its actual unwind range.
-        auto *Owner = Entry->second;
-        if (!Original.isArm64e() || Owner->Section != S.Section ||
-            Owner->Thumb != S.Thumb || !Extents.contains(Begin))
-          return fail(kFunctionAlias);
-        Aliases.emplace_back(&S, Owner);
-      }
+  std::map<uint64_t, NativeSymbol *> Functions;
+  llvm::SmallVector<std::pair<NativeSymbol *, NativeSymbol *>> Aliases;
+  for (auto &[I, S] : Object.Symbols) {
+    if (!S.Function && !S.UnwindCandidate)
+      continue;
+    const auto &Section = Object.Image.Sections[Object.Sections.at(S.Section)];
+    const uint64_t Begin = Section.VA + S.Offset;
+    if (S.UnwindCandidate && !Extents.contains(Begin)) {
+      if (S.Function)
+        return fail(kMissingUnwindStart);
+      continue;
     }
+    S.Function = true;
+    auto [Entry, Inserted] = Functions.emplace(Begin, &S);
+    if (!Inserted) {
+      // Clang gives its C++ TLS initializer and the per-variable init
+      // entry the same body. Both names must share its actual unwind range.
+      auto *Owner = Entry->second;
+      if (!Original.isArm64e() || Owner->Section != S.Section ||
+          Owner->Thumb != S.Thumb || !Extents.contains(Begin))
+        return fail(kFunctionAlias);
+      Aliases.emplace_back(&S, Owner);
+    }
+  }
   for (auto I = Functions.begin(); I != Functions.end(); ++I) {
     auto &S = *I->second;
     const auto &Section = Object.Image.Sections[Object.Sections.at(S.Section)];
@@ -2562,9 +2762,38 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
   }
   for (auto [Alias, Owner] : Aliases)
     Alias->Size = Owner->Size;
-  for (const auto &[Begin, End] : Extents)
-    if (!Functions.contains(Begin) || Functions.at(Begin)->Size != End - Begin)
-      return fail("native unwind has no exact function symbol");
+  // Source code sections are placed in object order. An assembler-local
+  // function has an unwind row but may have no nlist entry at its start.
+  auto Code = Object.Sections.begin();
+  for (const auto &[Begin, End] : Extents) {
+    if (Functions.contains(Begin))
+      continue;
+    if (!Original.isArm64e())
+      return fail(kUnownedNativeUnwind);
+    Code = std::find_if(Code, Object.Sections.end(), [&](const auto &Item) {
+      const auto &S = Object.Image.Sections[Item.second];
+      return S.Kind == Kind::Code && Begin < S.VA + S.Size;
+    });
+    if (Code == Object.Sections.end() || Begin >= End ||
+        Begin % aarch64::kInsnSize || End % aarch64::kInsnSize)
+      return fail(kAnonymousFrameRange);
+    const auto Index = Code->second;
+    const auto &S = Object.Image.Sections[Index];
+    if (Begin < S.VA || !rangeInBounds(Begin - S.VA, End - Begin, S.Size))
+      return fail(kAnonymousFrameRange);
+    const auto Offset = Begin - S.VA;
+    const auto Island =
+        llvm::partition_point(Object.Embedded, [&](const auto &I) {
+          return I.first < Index ||
+                 (I.first == Index && I.second.End <= Offset);
+        });
+    if (Island != Object.Embedded.end() && Island->first == Index &&
+        Island->second.Begin < Offset + aarch64::kInsnSize)
+      return fail(kAnonymousFrameRange);
+  }
+  for (va_t Address : InitializerTargets)
+    if (Address % aarch64::kInsnSize || !Extents.contains(Address))
+      return fail(kInitializerStorage);
   return llvm::Error::success();
 }
 
@@ -2778,7 +3007,7 @@ namespace {
 // Keep each site at its verified instruction offset. One-word sites may use a
 // dyld pointer cell. Page pairs carry both original register operands.
 struct LiftedAddressPlacement {
-  const Symbol *Owner;
+  const NativeSymbol *Owner;
   uint64_t Offset;
   uint32_t SourceWord;
   uint32_t Word;
@@ -2793,11 +3022,11 @@ struct LiftedAddressPlan {
   std::optional<size_t> PoolSection;
 };
 
-llvm::Expected<LiftedAddressPlan>
-prepareLiftedAddresses(NativeMachO &Object, const BinaryImage &Original,
-                       va_t Base, va_t Slide,
-                       llvm::ArrayRef<SourcePatchMapping> Mappings,
-                       llvm::ArrayRef<MachOLiftedSourceAddress> Addresses) {
+llvm::Expected<LiftedAddressPlan> prepareLiftedAddresses(
+    NativeMachO &Object, const BinaryImage &Original, va_t Base, va_t Slide,
+    llvm::ArrayRef<SourcePatchMapping> Mappings,
+    const llvm::DenseMap<va_t, const NativeSymbol *> &EntrySymbols,
+    llvm::ArrayRef<MachOLiftedSourceAddress> Addresses) {
   using namespace aarch64;
   LiftedAddressPlan Plan;
   if (Addresses.empty())
@@ -2819,21 +3048,44 @@ prepareLiftedAddresses(NativeMachO &Object, const BinaryImage &Original,
   Pool.Alignment = arm64e::kPointerBytes;
   Pool.ReadOnlyAfterFixups = true;
   std::map<va_t, uint64_t> Slots;
-  uint64_t AddedBytes = 0;
+  // A joined authenticator can follow several numeric producers. Account for
+  // insertions at the instruction that grows, independently of producer order.
+  llvm::SmallVector<std::pair<va_t, uint64_t>> Growth;
+  for (const auto &Site : Addresses) {
+    if (Site.Form == MachOAddressForm::Expanded)
+      Growth.emplace_back(Site.Instruction, kInsnSize);
+    Site.forEachSigningExpansion([&](va_t At, unsigned Words) {
+      Growth.emplace_back(At, uint64_t(Words) * kInsnSize);
+    });
+  }
+  llvm::sort(Growth);
+  uint64_t Size = 0;
+  for (auto &[Site, Bytes] : Growth)
+    Bytes = Size += Bytes;
+  const auto BeforeSite = [&](va_t PC) -> uint64_t {
+    auto It = llvm::lower_bound(
+        Growth, PC, [](const auto &G, va_t At) { return G.first < At; });
+    return It == Growth.begin() ? 0 : std::prev(It)->second;
+  };
   for (const auto &Fixup : Addresses) {
     while (Mappings.size() > 1 && Mappings[1].OriginalVA <= Fixup.Instruction) {
       Mappings = Mappings.drop_front();
-      AddedBytes = 0;
     }
     if (Mappings.empty() || Fixup.Instruction < Mappings.front().OriginalVA)
       return fail(kAddressSourceWord);
     const auto &Entry = Mappings.front();
-    const auto &Sym = Object.Symbols.at(Object.Names.at(Entry.Symbol));
-    const uint64_t Offset = Fixup.Instruction - Entry.OriginalVA + AddedBytes;
+    const auto &Sym = *EntrySymbols.at(Entry.OriginalVA);
+    const auto InstalledOffset = [&](va_t At) {
+      return At - Entry.OriginalVA + BeforeSite(At) -
+             BeforeSite(Entry.OriginalVA);
+    };
+    const uint64_t Offset =
+        InstalledOffset(Fixup.Instruction) +
+        (Fixup.Authentication && Fixup.Authentication->PrepareAtSource
+             ? kInsnSize
+             : 0);
     const bool Pair = Fixup.Form == MachOAddressForm::PagePair;
     const bool Expanded = Fixup.Form == MachOAddressForm::Expanded;
-    if (Expanded)
-      AddedBytes += kInsnSize;
     const auto *Before =
         Original.readVA(Fixup.Instruction, Pair ? 2 * kInsnSize : kInsnSize);
     if (!Before || Object.Sections.at(Sym.Section) != Plan.TextSection ||
@@ -2851,6 +3103,29 @@ prepareLiftedAddresses(NativeMachO &Object, const BinaryImage &Original,
     const va_t PC = Plan.TextVA + At;
     const va_t Target = Fixup.Target + Slide;
     const uint32_t Rd = Word & kRdMask;
+    if (Fixup.Authentication && Fixup.Authentication->RestoreSource) {
+      const auto &Auth = *Fixup.Authentication;
+      // The original register can be live on both sides of AUT. Its
+      // restoration begins after the local ADR and AUT, independent of
+      // the opcode or destination of the original address producer.
+      const auto Restore = InstalledOffset(Auth.Instruction) + 2 * kInsnSize;
+      if (!rangeInBounds(Restore, 2 * kInsnSize, Text->Size - Sym.Offset))
+        return fail(kAddressSourceWord);
+      const auto AtRestore = Sym.Offset + Restore;
+      const auto Reg = *Auth.ModifierRegister;
+      const auto Page = encodePCRelativeAddress(
+          AddressInstruction::ADRP, Reg, Plan.TextVA + AtRestore, Target);
+      const auto Add =
+          kAddImmediate64 | (Reg << kAddressBaseRegisterShift) | Reg;
+      const auto Imm = branch::A64AddImm12;
+      // Both signing instructions are in the image-relative compact-unwind
+      // range. Apply the same page reach check as an expanded address.
+      if (!Page)
+        return fail(kAddressPageReach);
+      const auto Low = uint32_t((Target & ~kPageMask) << Imm.Low);
+      Plan.Sites.push_back({&Sym, AtRestore, kADRP_Op | Reg, *Page, {}});
+      Plan.Sites.push_back({&Sym, AtRestore + kInsnSize, Add, Add | Low, {}});
+    }
     if (Pair || Expanded) {
       const auto Page =
           encodePCRelativeAddress(AddressInstruction::ADRP, Rd, PC, Target);
@@ -2978,24 +3253,20 @@ static llvm::Expected<PatchResult> installObject(
   auto Object = readObject(Bytes, Original, *Triple);
   if (!Object)
     return Object.takeError();
-  std::vector<SourcePatchDependency> RuntimeDependencies(Dependencies.begin(),
-                                                         Dependencies.end());
-  if (auto E = prepareRuntimeDependencies(
-          *Object, Original, RuntimeDependencies, RequestedBindings))
-    return E;
-  Dependencies = RuntimeDependencies;
-  std::set<std::string> Entries;
-  std::set<uint64_t> Addresses;
+  llvm::DenseSet<uint32_t> Entries;
+  llvm::DenseMap<va_t, const NativeSymbol *> EntrySymbols;
   llvm::DenseMap<va_t, const ExceptionFunction *> SigningFrames;
   for (const auto &M : Mappings) {
-    if (!Object->Names.contains(M.Symbol) || !Entries.insert(M.Symbol).second ||
-        !Addresses.insert(M.OriginalVA).second ||
+    const auto I = Object->findRequestedSymbol(M.Symbol, Original.isArm64e());
+    if (I == Object->Names.end() || !Entries.insert(I->second).second ||
         !Original.hasAuthenticatedFunctionEntryAt(M.OriginalVA) ||
         !sourceEntryCanHostTrampoline(Original, M.OriginalVA))
-      return fail("invalid native entry mapping");
-    const auto &S = Object->Symbols.at(Object->Names.at(M.Symbol));
-    if (!S.Function || !S.Section)
-      return fail("entry needs a native function definition");
+      return fail(kInvalidEntryMapping);
+    auto &S = Object->Symbols.at(I->second);
+    if (!EntrySymbols.try_emplace(M.OriginalVA, &S).second)
+      return fail(kInvalidEntryMapping);
+    if (!S.Section || !S.requireFunction())
+      return fail(kEntryDefinition);
     if (VerifyLiftedImage && !Object->OldFDEs.empty()) {
       const auto *Source =
           Original.ExceptionMetadata.findFunction(M.OriginalVA);
@@ -3010,13 +3281,19 @@ static llvm::Expected<PatchResult> installObject(
   scanImportThunks(References);
   std::map<std::string, SourcePatchBinding> Bindings;
   for (const auto &B : RequestedBindings) {
-    if (!Object->Names.contains(B.Symbol) ||
-        Object->Symbols.at(Object->Names.at(B.Symbol)).Section ||
-        !Bindings.emplace(B.Symbol, B).second)
-      return fail("binding needs a unique undefined native symbol");
+    const auto I = Object->findRequestedSymbol(B.Symbol, Original.isArm64e());
+    if (I == Object->Names.end() || Object->Symbols.at(I->second).Section ||
+        !Bindings.try_emplace(I->first, B).second)
+      return fail(kBindingDefinition);
     if (auto E = validateSourcePatchBinding(B, References, Mappings))
       return std::move(E);
   }
+  std::vector<SourcePatchDependency> RuntimeDependencies(Dependencies.begin(),
+                                                         Dependencies.end());
+  if (auto E = prepareRuntimeDependencies(*Object, Original,
+                                          RuntimeDependencies, Bindings))
+    return E;
+  Dependencies = RuntimeDependencies;
   MachOPatcher Patcher;
   Patcher.setInputKind(RewriteInputKind::ReplacementObject);
   auto LayoutBytes = Original.Raw;
@@ -3024,8 +3301,7 @@ static llvm::Expected<PatchResult> installObject(
     if (auto E = prepareImports(*Object, Preparation->Imports))
       return E;
   if (Original.isArm64e())
-    if (auto E = prepareArm64eGOT(*Object, Original, Dependencies,
-                                  RequestedBindings))
+    if (auto E = prepareArm64eGOT(*Object, Original, Dependencies, Bindings))
       return E;
   // If every FDE has a source PAuth_LR compact owner, verify it in private
   // storage. A compact-only image then needs no DWARF section or header slide.
@@ -3050,8 +3326,9 @@ static llvm::Expected<PatchResult> installObject(
   if (!Slide)
     return Slide.takeError();
   auto Base = Patcher.plannedExecSegmentVA(LayoutBytes, Original.Arch);
-  auto AddressPlan = prepareLiftedAddresses(*Object, Original, Base, *Slide,
-                                            Mappings, AddressesToRelocate);
+  auto AddressPlan =
+      prepareLiftedAddresses(*Object, Original, Base, *Slide, Mappings,
+                             EntrySymbols, AddressesToRelocate);
   if (!AddressPlan)
     return AddressPlan.takeError();
   if (AddressPlan->PoolSection) {
@@ -3066,8 +3343,9 @@ static llvm::Expected<PatchResult> installObject(
       if (!Slide)
         return Slide.takeError();
       Base = Patcher.plannedExecSegmentVA(LayoutBytes, Original.Arch);
-      AddressPlan = prepareLiftedAddresses(*Object, Original, Base, *Slide,
-                                           Mappings, AddressesToRelocate);
+      AddressPlan =
+          prepareLiftedAddresses(*Object, Original, Base, *Slide, Mappings,
+                                 EntrySymbols, AddressesToRelocate);
       if (!AddressPlan)
         return AddressPlan.takeError();
     }
@@ -3134,11 +3412,17 @@ static llvm::Expected<PatchResult> installObject(
   if (VerifyGenerated)
     if (auto E = VerifyGenerated(Object->Image, Object->Compact))
       return E;
-  if (DynCode)
+  if (DynCode) {
+    DynCodeObjectEntry Entry;
+    if (EntrySymbols.size() == 1) {
+      const auto &S = *EntrySymbols.begin()->second;
+      Entry = {S.Name, S.LinkerName};
+    }
     if (auto E =
             validateDynCodePatchImage(*DynCode, Bytes, Original, Object->Image,
-                                      Mappings, RequestedBindings))
-      return std::move(E);
+                                      Mappings, RequestedBindings, Entry))
+      return E;
+  }
   std::vector<MachOAuthenticatedFixup> Fixups;
   return publishSourcePatch(
       OriginalInput, Mappings, Output,
@@ -3186,10 +3470,10 @@ static llvm::Expected<PatchResult> installObject(
                 llvm::append_range(Fixups, Object->TemplateFixups);
               }
               for (const auto &M : Mappings) {
-                const auto &S = Object->Symbols.at(Object->Names.at(M.Symbol));
+                const auto &S = *EntrySymbols.at(M.OriginalVA);
                 const auto Mode = Original.instructionModeAt(M.OriginalVA);
                 const uint64_t EntryVA = M.OriginalVA + *Slide;
-                const uint64_t Owner = Object->Image.SymbolAddrs.at(M.Symbol);
+                const uint64_t Owner = Object->Image.SymbolAddrs.at(S.Name);
                 if (!Mode ||
                     (Original.Arch == Arch::ARM &&
                      (S.Thumb ? InstructionMode::Thumb
@@ -3203,7 +3487,7 @@ static llvm::Expected<PatchResult> installObject(
                   return Reject(
                       fail("native entry mode or branch is incompatible"));
                 Result.PatchedFunctions.push_back(
-                    {M.Symbol, M.OriginalVA, Owner, M.Symbol});
+                    {S.Name, M.OriginalVA, Owner, M.Symbol});
                 Result.PatchedOriginalEntries.push_back(M.OriginalVA);
               }
               llvm::sort(Result.PatchedOriginalEntries);

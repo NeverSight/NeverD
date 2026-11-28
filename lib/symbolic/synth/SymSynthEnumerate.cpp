@@ -51,6 +51,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -61,19 +62,48 @@ namespace neverd::symbolic::synth {
 
 namespace {
 
-/// The raw words of a behaviour, one after another.
-template <typename Word> uint64_t hashBehaviour(llvm::ArrayRef<Word> Words) {
-  // Contiguous blocks let the word hash process a bounded sample while
-  // including both measured corners and the random end of the column.
-  constexpr size_t Samples = limits::symbolic::kSynthBehaviourHashWords;
-  constexpr size_t Blocks = limits::symbolic::kSynthBehaviourHashBlocks;
-  static_assert(Samples % Blocks == 0);
-  constexpr size_t Length = Samples / Blocks;
-  std::array<Word, Samples> Sample;
-  if (Words.size() > Samples) {
-    for (size_t I = 0; I != Blocks; ++I)
-      std::copy_n(Words.data() + (Words.size() - Length) * I / (Blocks - 1),
-                  Length, Sample.data() + I * Length);
+constexpr size_t HashWords = limits::symbolic::kSynthBehaviourHashWords;
+constexpr size_t HashBlocks = limits::symbolic::kSynthBehaviourHashBlocks;
+static_assert(HashWords % HashBlocks == 0 && HashBlocks > 1);
+constexpr size_t HashBlockLength = HashWords / HashBlocks;
+
+size_t hashBlockStart(size_t Words, size_t Block) {
+  return (Words - HashBlockLength) * Block / (HashBlocks - 1);
+}
+
+// Store the sampled points first in a native-word column. All operators are
+// pointwise, so packing once at entry preserves the complete behaviour and
+// avoids gathering the same four blocks for every candidate in the search.
+llvm::SmallVector<size_t, 32> packedPointOrder(size_t Points,
+                                               size_t ValueWords) {
+  llvm::SmallVector<size_t, 32> Order;
+  if (ValueWords != 1 || Points <= HashWords)
+    return Order;
+  Order.reserve(Points);
+  size_t Next = 0;
+  for (size_t Block = 0; Block != HashBlocks; ++Block) {
+    const size_t Start = hashBlockStart(Points, Block);
+    for (size_t I = Start; I != Start + HashBlockLength; ++I)
+      Order.push_back(I);
+  }
+  for (size_t Block = 0; Block != HashBlocks; ++Block) {
+    const size_t Start = hashBlockStart(Points, Block);
+    for (; Next != Start; ++Next)
+      Order.push_back(Next);
+    Next += HashBlockLength;
+  }
+  return Order;
+}
+
+template <typename Word>
+uint64_t hashBehaviour(llvm::ArrayRef<Word> Words, bool Packed) {
+  std::array<Word, HashWords> Sample;
+  if (Packed)
+    Words = Words.take_front(HashWords);
+  else if (Words.size() > HashWords) {
+    for (size_t I = 0; I != HashBlocks; ++I)
+      std::copy_n(Words.data() + hashBlockStart(Words.size(), I),
+                  HashBlockLength, Sample.data() + I * HashBlockLength);
     Words = Sample;
   }
   // Reserve the sentinel keys of the behaviour index.
@@ -84,15 +114,23 @@ template <typename Word> uint64_t hashBehaviour(llvm::ArrayRef<Word> Words) {
 
 /// The behaviour array this thread keeps between searches.  Growing a new one
 /// for each search copies it repeatedly and faults in fresh pages.
-using RetainedColumns =
-    std::variant<std::vector<uint32_t>, std::vector<uint64_t>>;
+struct RetainedColumns {
+  std::variant<std::vector<uint32_t>, std::vector<uint64_t>> Words;
+  size_t WordsPerRow = 0, Rows = 0;
+};
 RetainedColumns &retainedBehaviours() {
   static thread_local RetainedColumns Words;
   return Words;
 }
 
 template <typename Word>
-void appendSignature(const Signature &Sig, std::vector<Word> &Words) {
+void appendSignature(const Signature &Sig, std::vector<Word> &Words,
+                     llvm::ArrayRef<size_t> Order) {
+  if (!Order.empty()) {
+    for (size_t I : Order)
+      Words.push_back(static_cast<Word>(Sig[I].getZExtValue()));
+    return;
+  }
   for (const llvm::APInt &Value : Sig) {
     if constexpr (sizeof(Word) < sizeof(uint64_t))
       Words.push_back(static_cast<Word>(Value.getZExtValue()));
@@ -114,18 +152,35 @@ template <typename Word> class TermBank {
   using Behaviour = llvm::ArrayRef<Word>;
 
 public:
-  TermBank(SymContext &Ctx, size_t BehaviourWords)
-      : Ctx(Ctx), BehaviourWords(BehaviourWords) {
+  TermBank(SymContext &Ctx, size_t BehaviourWords, bool Packed)
+      : Ctx(Ctx), BehaviourWords(BehaviourWords), Packed(Packed) {
     auto &Retained = retainedBehaviours();
-    if (auto *Words = std::get_if<std::vector<Word>>(&Retained))
+    if (auto *Words = std::get_if<std::vector<Word>>(&Retained.Words)) {
       Flat.swap(*Words);
+      if (Retained.WordsPerRow == BehaviourWords)
+        PriorRows = Retained.Rows;
+    }
   }
 
   ~TermBank() {
     constexpr size_t Limit = limits::symbolic::kSynthRetainedBehaviourWords *
                              sizeof(uint64_t) / sizeof(Word);
-    if (Flat.capacity() <= Limit)
-      retainedBehaviours() = std::move(Flat);
+    if (Flat.capacity() <= Limit) {
+      auto &Retained = retainedBehaviours();
+      Retained.Words = std::move(Flat);
+      Retained.WordsPerRow = BehaviourWords;
+      Retained.Rows = size();
+    }
+  }
+
+  // Reserve the index only after the leaf and fitting stages need enumeration.
+  // Completed rows from the same column layout bound the hint, and each new
+  // row still needs at least one unit of this search's remaining work.
+  void prepareEnumeration(size_t Work) {
+    const size_t Rows = std::min(PriorRows, Work);
+    ByHash.reserve(Rows);
+    Previous.reserve(Rows);
+    Pending.reserve(Rows);
   }
 
   TermBank(const TermBank &) = delete;
@@ -134,7 +189,7 @@ public:
   /// Record \p Node under \p Words at \p Cost, unless something already behaves
   /// that way.  True when it was recorded.
   bool insert(SymRef Node, Behaviour Words, size_t Cost) {
-    if (!remember(Words, hashBehaviour(Words)))
+    if (!remember(Words, hashBehaviour(Words, Packed)))
       return false;
     llvm::copy(Words, nextBehaviour().begin());
     addMaterialized(Node, Cost);
@@ -202,6 +257,7 @@ public:
                               : llvm::ArrayRef<size_t>(It->second);
   }
 
+  size_t size() const { return Nodes.size() + Pending.size(); }
   size_t numCosts() const { return Costs.size(); }
   size_t costAt(size_t I) const { return Costs[I]; }
 
@@ -221,7 +277,9 @@ private:
   SymContext &Ctx;
   std::vector<Recipe> Pending;
   size_t BehaviourWords;
+  bool Packed;
   std::vector<SymRef> Nodes;
+  size_t PriorRows = 0;
   std::vector<Word> Flat;
   /// Term indices by cost, in the order they were built, so that the search
   /// visits them the same way on every run.
@@ -245,7 +303,9 @@ SearchOutcome enumerateColumns(SymContext &Ctx, const SynthProblem &P,
 
   const size_t Points = P.Grid.size();
   const size_t ValueWords = llvm::APInt::getNumWords(P.Width);
-  TermBank<Word> Bank(Ctx, Points * ValueWords);
+  const auto Order = packedPointOrder(Points, ValueWords);
+  const bool Packed = !Order.empty();
+  TermBank<Word> Bank(Ctx, Points * ValueWords, Packed);
 
   // Charge a grid's worth of work per offer, including candidates whose
   // refutation is cached.  This preserves the work limit and search order
@@ -283,12 +343,27 @@ SearchOutcome enumerateColumns(SymContext &Ctx, const SynthProblem &P,
   const llvm::SmallVector<SymRef, 16> Terminals = terminalsOf(P);
   const std::vector<Signature> TerminalSigs = terminalSignatures(Ctx, P);
   std::vector<Word> Target, Measured;
-  appendSignature(P.Target, Target);
+  constexpr size_t Absent = std::numeric_limits<size_t>::max();
+  size_t Zero = Absent, One = Absent, Ones = Absent, TargetIndex = Absent;
+  appendSignature(P.Target, Target, Order);
   for (size_t I = 0; I < Terminals.size(); ++I) {
     Measured.clear();
-    appendSignature(TerminalSigs[I], Measured);
+    appendSignature(TerminalSigs[I], Measured, Order);
     const bool Matches = Behaviour(Measured) == Behaviour(Target);
-    Bank.insert(Terminals[I], Measured, 1);
+    const size_t Index = Bank.size();
+    if (Bank.insert(Terminals[I], Measured, 1)) {
+      if (Matches)
+        TargetIndex = Index;
+      if (Ctx.isConst(Terminals[I])) {
+        const auto K = Ctx.constValue(Terminals[I]);
+        if (K.isZero())
+          Zero = Index;
+        if (K.isOne())
+          One = Index;
+        if (K.isAllOnes())
+          Ones = Index;
+      }
+    }
     if (Matches && !offer(Terminals[I], 1))
       return Result;
   }
@@ -324,6 +399,8 @@ SearchOutcome enumerateColumns(SymContext &Ctx, const SynthProblem &P,
     Result.SawRefuted = Quadratic.SawRefuted;
   }
 
+  Bank.prepareEnumeration(Effort.remaining());
+
   // Literal terms alone, for the shifts: an amount that is itself computed
   // multiplies the branching factor of every shift by the whole pool, for a
   // shape that hardly occurs in what this engine is aimed at.  Read back out
@@ -331,50 +408,94 @@ SearchOutcome enumerateColumns(SymContext &Ctx, const SynthProblem &P,
   // behaved like an earlier one was never recorded and the two orderings would
   // then disagree.
   llvm::SmallVector<size_t, 8> LiteralTerms;
+  llvm::SmallVector<bool, 16> Overshift(Bank.size());
   for (size_t I : Bank.atCost(1))
-    if (Ctx.isConst(Bank.node(I)))
+    if (Ctx.isConst(Bank.node(I))) {
       LiteralTerms.push_back(I);
-
-  llvm::SmallVector<llvm::APInt, 2> Args;
-
-  // Read a candidate's behaviour off its operands'.  Nearly every search is at
-  // a machine width, where a column of words needs no per-point interpretation.
-  auto measure = [&](GramOp Op, llvm::ArrayRef<size_t> Operands,
-                     llvm::MutableArrayRef<Word> Out) {
-    if constexpr (std::is_same_v<Word, uint64_t>) {
-      if (ValueWords > 1) {
-        Args.resize(Operands.size());
-        for (size_t Pt = 0; Pt < Points; ++Pt) {
-          for (size_t K = 0; K < Operands.size(); ++K)
-            Args[K] = llvm::APInt(
-                P.Width,
-                Bank.behaviour(Operands[K]).slice(Pt * ValueWords, ValueWords));
-          const llvm::APInt Value = Sem.apply(Op, Args);
-          std::copy_n(Value.getRawData(), ValueWords,
-                      Out.data() + Pt * ValueWords);
-        }
-        return;
-      }
+      Overshift[I] = Ctx.constValue(Bank.node(I)).uge(P.Width);
     }
-    Sem.applyColumn(Op, Bank.behaviour(Operands[0]).data(),
-                    Operands.size() > 1 ? Bank.behaviour(Operands[1]).data()
-                                        : nullptr,
-                    Out.data(), Points);
+
+  // Source and destination are disjoint rows in the bank. A probe may read
+  // one complete point, including all of its words at arbitrary widths.
+  auto measure = [&](GramOp Op, llvm::ArrayRef<size_t> Operands,
+                     llvm::MutableArrayRef<Word> Out, size_t FirstPoint = 0) {
+    const size_t Offset = FirstPoint * ValueWords;
+    const Word *A = Bank.behaviour(Operands.front()).data() + Offset;
+    const Word *B = Operands.size() == 2
+                        ? Bank.behaviour(Operands.back()).data() + Offset
+                        : nullptr;
+    if constexpr (std::is_same_v<Word, uint64_t>) {
+      if (ValueWords > 1)
+        return Sem.applyWideColumn(Op, A, B, Out);
+    }
+    Sem.applyColumn(Op, A, B, Out.data(), Out.size());
   };
 
   // Consider one candidate: read its behaviour off its operands', and build it
   // only if that behaviour is worth having.  Returns false to say the caller
   // should stop, either because the budget is gone or because an answer was
   // accepted.
-  const uint64_t TargetHash = hashBehaviour(Behaviour(Target));
+  const uint64_t TargetHash = hashBehaviour(Behaviour(Target), Packed);
   auto consider = [&](GramOp Op, llvm::ArrayRef<size_t> Operands, size_t Cost) {
     if (!Effort.spend())
       return false;
 
+    // These operations reproduce a column already in the bank. The ordinary
+    // offer still runs if that column matched the target: another recipe can
+    // refute a sample collision or satisfy the verifier.
+    const size_t A = Operands.front(), B = Operands.back();
+    size_t Known = Absent;
+    switch (Op) {
+    case GramOp::Add:
+    case GramOp::Xor:
+      if (A == Zero || B == Zero)
+        Known = A == Zero ? B : A;
+      else if (Op == GramOp::Xor && A == B)
+        Known = Zero;
+      break;
+    case GramOp::Sub:
+      Known = B == Zero ? A : (A == B ? Zero : Absent);
+      break;
+    case GramOp::Mul:
+      if (A == Zero || B == Zero)
+        Known = Zero;
+      else if (A == One || B == One)
+        Known = A == One ? B : A;
+      break;
+    case GramOp::And:
+    case GramOp::Or: {
+      const size_t Identity = Op == GramOp::And ? Ones : Zero;
+      const size_t Absorber = Op == GramOp::And ? Zero : Ones;
+      if (A == B || B == Identity || A == Absorber)
+        Known = A;
+      else if (A == Identity || B == Absorber)
+        Known = B;
+      break;
+    }
+    case GramOp::Shl:
+    case GramOp::LShr:
+    case GramOp::AShr:
+      if (A == Zero || B == Zero || (Op == GramOp::AShr && A == Ones))
+        Known = A;
+      else if (Op != GramOp::AShr && B < Overshift.size() && Overshift[B])
+        Known = Zero;
+      break;
+    case GramOp::Neg:
+      if (A == Zero)
+        Known = A;
+      break;
+    case GramOp::Not:
+      Known = A == Zero ? Ones : (A == Ones ? Zero : Absent);
+      break;
+    }
+    if (Known != Absent)
+      return Known != TargetIndex ||
+             offer(Bank.materialize(Op, Operands), Cost);
+
     const auto Column = Bank.nextBehaviour();
     measure(Op, Operands, Column);
 
-    const uint64_t Hash = hashBehaviour(Behaviour(Column));
+    const uint64_t Hash = hashBehaviour(Behaviour(Column), Packed);
     const bool Matches =
         Hash == TargetHash && Behaviour(Column) == Behaviour(Target);
     const bool Fresh = Bank.remember(Column, Hash);
@@ -384,8 +505,10 @@ SearchOutcome enumerateColumns(SymContext &Ctx, const SynthProblem &P,
       return true;
     }
     const SymRef Node = Bank.materialize(Op, Operands);
-    if (Fresh)
+    if (Fresh) {
+      TargetIndex = Bank.size();
       Bank.addMaterialized(Node, Cost);
+    }
     return offer(Node, Cost);
   };
 
@@ -464,27 +587,75 @@ SearchOutcome enumerateColumns(SymContext &Ctx, const SynthProblem &P,
     const size_t Left = Effort.remaining();
     if (!Left)
       return Result;
-    if (ValueWords == 1 && isLastTier(Cost, Left)) {
+    if (isLastTier(Cost, Left)) {
       // A mismatch at one measured point rules out a match of the complete
       // grid. A surviving match replays this tier in the ordinary order,
       // preserving even the recipes and proof callbacks before that match.
       size_t Visited = 0;
       bool Match = false;
-      visitTier(Cost, [&](GramOp Op, llvm::ArrayRef<size_t> Operands, size_t) {
-        ++Visited;
-        const size_t Pt = Points - 1;
-        const auto *A = Bank.behaviour(Operands.front()).data() + Pt;
-        const auto *B = Operands.size() == 1
-                            ? nullptr
-                            : Bank.behaviour(Operands.back()).data() + Pt;
-        Word Value;
-        Sem.applyColumn(Op, A, B, &Value, 1);
-        if (Value == Target[Pt]) {
-          measure(Op, Operands, Measured);
-          Match = Behaviour(Measured) == Behaviour(Target);
-        }
-        return !Match && Visited < Left;
-      });
+      if (ValueWords > 1) {
+        const auto Expected = Behaviour(Target).take_back(ValueWords);
+        auto Probe = llvm::MutableArrayRef(Measured).take_back(ValueWords);
+        visitTier(Cost,
+                  [&](GramOp Op, llvm::ArrayRef<size_t> Operands, size_t) {
+                    ++Visited;
+                    measure(Op, Operands, Probe, Points - 1);
+                    if (Behaviour(Probe) == Expected) {
+                      measure(Op, Operands, Measured);
+                      Match = Behaviour(Measured) == Behaviour(Target);
+                    }
+                    return !Match && Visited != Left;
+                  });
+      } else {
+        llvm::SmallVector<Word, 16> Inputs, Results;
+        const size_t Pt = Packed ? HashWords - 1 : Points - 1;
+        visitGroups(Cost, [&](GramOp Op, llvm::ArrayRef<size_t> Lhs,
+                              llvm::ArrayRef<size_t> Rhs, bool Triangular) {
+          const bool Unary = isUnaryGramOp(Op);
+          const auto Indices = Unary ? Lhs : Rhs;
+          if (Lhs.empty() || Indices.empty())
+            return true;
+          // Read the probe point once per operand in this group. Evaluate a
+          // whole row against the fixed left operand with the same word
+          // semantics as a full signature. A work cutoff limits the row itself.
+          Inputs.clear();
+          for (size_t I : Indices.take_front(Left - Visited))
+            Inputs.push_back(Bank.behaviour(I)[Pt]);
+          Results.resize_for_overwrite(Inputs.size());
+          auto probeRow = [&](size_t A, size_t Start) {
+            const size_t Count =
+                std::min(Inputs.size() - Start, Left - Visited);
+            if (Unary)
+              Sem.applyColumn<Word>(Op, Inputs.data(), nullptr, Results.data(),
+                                    Count);
+            else {
+              const Word X = Bank.behaviour(A)[Pt];
+              Sem.applyColumn<Word, true>(Op, &X, Inputs.data() + Start,
+                                          Results.data(), Count);
+            }
+            Visited += Count;
+            for (size_t I = 0; I != Count; ++I) {
+              if (Results[I] != Target[Pt])
+                continue;
+              const size_t Other = Indices[Start + I];
+              const size_t Pair[] = {Unary ? Other : A, Other};
+              measure(Op, llvm::ArrayRef(Pair).take_front(Unary ? 1 : 2),
+                      Measured);
+              if (Behaviour(Measured) == Behaviour(Target)) {
+                Match = true;
+                return false;
+              }
+            }
+            return Visited != Left;
+          };
+          if (Unary)
+            return probeRow(0, 0);
+          for (size_t J = 0; J != Lhs.size(); ++J)
+            if (!probeRow(Lhs[J], Triangular ? J : 0))
+              return false;
+          return true;
+        });
+      }
       if (!Match) {
         Effort.spend(std::max<size_t>(Visited, 1));
         return Result;

@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../SymFunnel.h"
+#include "../SymWordProduct.h"
 #include "SymExprCompare.h"
 #include "SymExprMask.h"
 
@@ -353,8 +354,10 @@ static llvm::APInt productCoefficient(const SymContext &Ctx, unsigned Width,
   if (Shift)
     Product = Product.extractBits(Bits, Shift);
   for (const auto &[I, R] : llvm::enumerate(Constants)) {
-    if (I != ScaleIndex)
-      Product *= llvm::APInt(Bits, Ctx.constWords(R).take_front(Words));
+    if (I == ScaleIndex)
+      continue;
+    const llvm::APInt Factor(Bits, Ctx.constWords(R).take_front(Words));
+    Product = detail::multiplyWords(Factor, Product);
   }
   if (Shift)
     return Product.zext(Width).shl(Shift);

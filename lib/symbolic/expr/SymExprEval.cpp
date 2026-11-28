@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../SymFunnel.h"
+#include "../SymWordProduct.h"
 
 #include "neverd/symbolic/Limits.h"
 #include "neverd/symbolic/SymExpr.h"
@@ -240,6 +241,14 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
           Weighted = true;
         }
         if (preservesLowBits(St.Op) && Demand <= 64)
+          St.Width = Demand;
+        // A nonnative prefix can still be much shorter than its carrier.
+        // The maximum demand already accounts for every use of this value.
+        if (Demand > 64 && !St.Aux &&
+            (St.Op == SymOp::Add || St.Op == SymOp::SExt ||
+             St.Op == SymOp::ZExt) &&
+            llvm::APInt::getNumWords(Demand) <
+                llvm::APInt::getNumWords(St.Width))
           St.Width = Demand;
         if (Zeros && Demand > 64) {
           const unsigned FactorBits = Demand - std::min(Demand - 1, Zeros);
@@ -1051,26 +1060,9 @@ void evalNodeAPImpl(const SymContext &Ctx, SymRef R, size_t NumArgs,
     return;
   }
   case SymOp::Mul: {
-    // A small signed coefficient times a power of two needs only one
-    // word multiply. Restore its sign and shift in the original modulus.
-    if (W > 64 && NumArgs == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
-      const auto &Scale = Arg(0);
-      const unsigned Shift = Scale.countr_zero();
-      if (Shift < W && Scale.getSignificantBits() - Shift <= 64) {
-        const unsigned Bits = std::min(64u, W - Shift);
-        uint64_t Multiplier = Scale.extractBitsAsZExtValue(Bits, Shift);
-        const bool Negative = Scale.isNegative();
-        if (Negative)
-          Multiplier = -uint64_t(llvm::SignExtend64(Multiplier, Bits));
-        Result = Arg(1);
-        if (Multiplier != 1)
-          Result *= Multiplier;
-        if (Negative)
-          Result.negate();
-        Result <<= Shift;
-        return;
-      }
-    }
+    if (W > 64 && NumArgs == 2 && Ctx.isConst(Ctx.operand(R, 0)) &&
+        detail::multiplyByShortScale(Arg(0), Arg(1), Result))
+      return;
     Start(1);
     for (size_t I = 1; I < NumArgs && !Result.isZero(); ++I)
       Result *= Arg(I);
@@ -1375,7 +1367,10 @@ llvm::APInt SymEvalPlan::evalWith(
     for (const Step &St : OrdinarySteps)
       if (St.Width <= 64 && preservesLowBits(St.Op))
         ScratchAP[St.OutputSlot] = llvm::APInt(St.Width, 0);
-      else if ((St.Op == SymOp::Add && St.Aux) ||
+      else if ((St.Width < Ctx.width(St.Node) &&
+                (St.Op == SymOp::Mul || St.Op == SymOp::Add ||
+                 St.Op == SymOp::ZExt || St.Op == SymOp::SExt)) ||
+               (St.Op == SymOp::Add && St.Aux) ||
                (St.Op == SymOp::Mul && St.Aux && St.Aux <= 64))
         ScratchAP[St.OutputSlot] = llvm::APInt(Ctx.width(St.Node), 0);
   }
@@ -1469,12 +1464,19 @@ llvm::APInt SymEvalPlan::evalWith(
       continue;
     }
 
-    if (St.Op == SymOp::Mul && St.Width < Ctx.width(St.Node)) {
-      // Demand is the maximum across all consumers. The rest of the slot
-      // keeps its declared width for ordinary bitwise and arithmetic users.
-      auto Product = ScratchAP[A[0]].zextOrTrunc(St.Width);
-      Product *= ScratchAP[A[1]].zextOrTrunc(St.Width);
-      ScratchAP[I] = Product.zext(Ctx.width(St.Node));
+    if ((St.Op == SymOp::Mul || St.Op == SymOp::Add || St.Op == SymOp::ZExt ||
+         St.Op == SymOp::SExt) &&
+        St.Width < Ctx.width(St.Node)) {
+      // Only this prefix changes between assignments. Keep the declared
+      // width and the zero padding for ordinary users of the scratch slot.
+      auto V = St.Op == SymOp::SExt ? ScratchAP[A[0]].sextOrTrunc(St.Width)
+                                    : ScratchAP[A[0]].zextOrTrunc(St.Width);
+      if (St.Op == SymOp::Mul)
+        V *= ScratchAP[A[1]].zextOrTrunc(St.Width);
+      if (St.Op == SymOp::Add)
+        for (size_t K = 1; K < St.NumArgs; ++K)
+          V += ScratchAP[A[K]].zextOrTrunc(St.Width);
+      ScratchAP[I].insertBits(V, 0);
       continue;
     }
 

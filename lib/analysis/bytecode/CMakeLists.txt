@@ -5,3 +5,50 @@ add_neverd_component_library(NeverDBytecodeAnalysis
   LINK_COMPONENTS IR
   LLVM_COMPONENTS Support
 )
+
+add_neverd_component_library(NeverDLuaRecovery
+  lua/Chunk.cpp
+  lua/Decode.cpp
+  lua/JitInstructions.cpp
+  lua/LuaJit.cpp
+  lua/Luau.cpp
+  lua/LuauInstructions.cpp
+  lua/Puc.cpp
+  lua/PucInstructions.cpp
+  lua/Recovery.cpp
+  lua/Source.cpp
+  lua/StackChunk.cpp
+  lua/StackInstructions.cpp
+  LINK_COMPONENTS Digest
+  LLVM_COMPONENTS Support
+)
+
+add_neverd_component_library(NeverDPythonRecovery
+  python/Archive.cpp
+  python/Exceptions.cpp
+  python/Expressions.cpp
+  python/InstructionReport.cpp
+  python/Instructions.cpp
+  python/Instructions311.cpp
+  python/Marshal.cpp
+  python/Recovery.cpp
+  python/ReleaseInstructions.cpp
+  python/ReleaseSource.cpp
+  python/Source.cpp
+  python/Versions.cpp
+  LINK_COMPONENTS Digest
+  LLVM_COMPONENTS Object Support
+)
+target_link_libraries(NeverDPythonRecovery PRIVATE ZLIB::ZLIB)
+
+add_neverd_component_library(NeverDJVMRecovery
+  jvm/Attributes.cpp
+  jvm/Class.cpp
+  jvm/Flow.cpp
+  jvm/Instructions.cpp
+  jvm/Java.cpp
+  jvm/Method.cpp
+  jvm/Recovery.cpp
+  LINK_COMPONENTS Zip
+  LLVM_COMPONENTS Support
+)

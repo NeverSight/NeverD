@@ -10,10 +10,14 @@
 
 #include "neverd/Limits.h"
 #include "neverd/decode/InstructionRelocations.h"
+#include "neverd/ir/low/LowAlignmentGuard.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
+#include "neverd/lift/IntegerRegisters.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/loader/ExceptionEntryPoints.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -173,6 +177,21 @@ public:
   }
 
   void clear() { Values.clear(); }
+  void seedPPC64Entry(const BinaryImage &Img, va_t Function, va_t Address) {
+    using namespace ppc_elf;
+    const auto It = Img.PPC64EntryContexts.find(Function);
+    if (It == Img.PPC64EntryContexts.end() || !It->second.TOC)
+      return;
+    const auto &Ctx = It->second;
+    if (Address == Function && isPowerPC64ELFv2(Img.Arch) &&
+        Ctx.LocalEntryOffset)
+      Values.push_back(
+          {NdVar::reg(integerreg::gpr(GlobalEntryRegister), WordSize),
+           {Function, Role::Fragment, UINT64_MAX}});
+    else if (Address - Function == Ctx.LocalEntryOffset)
+      Values.push_back({NdVar::reg(integerreg::gpr(TOCRegister), WordSize),
+                        {*Ctx.TOC, Role::Fragment, UINT64_MAX}});
+  }
   void invalidate(const NdVar &Out) {
     llvm::erase_if(Values, [&](const Slot &S) {
       return S.Variable.Space == Out.Space &&
@@ -196,13 +215,13 @@ public:
         invalidate(Effect.Output);
       }
   }
-  void advance(llvm::ArrayRef<LowOp> Ops,
+  void advance(Arch Target, llvm::ArrayRef<LowOp> Ops,
                llvm::ArrayRef<LowUndefinedEffect> Undefined) {
     beginInstruction();
     size_t Completed = 0;
     forgetUndefined(Undefined, Completed);
     for (const LowOp &Op : Ops) {
-      advance(Op);
+      advance(Target, Op);
       forgetUndefined(Undefined, ++Completed);
     }
   }
@@ -230,7 +249,20 @@ public:
     return Changed;
   }
 
-  void advance(const LowOp &Op) {
+  void advance(Arch Target, const LowOp &Op) {
+    // On a proven passing precondition the lift leaves all values intact.
+    // In particular, MIPS checks the address immediately before the load.
+    if (Op.Opcode == NdOp::INTRINSIC && isMIPS(Target)) {
+      if (isDefaultAddressAlignmentGuard(Op))
+        if (auto Address = value(Op.Inputs[1]);
+            Address && !(Address->Value & (Op.Inputs[2].Offset - 1)))
+          return;
+      if (isMIPS64(Target) && mipsScalarLowShapeIsValid(Op, Target) &&
+          Op.Inputs[0].Offset == unsigned(Intrinsic::MIPSRequireWord))
+        if (auto Word = value(Op.Inputs[1]);
+            Word && llvm::isInt<32>(static_cast<int64_t>(Word->Value)))
+          return;
+    }
     if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
         Op.Opcode == NdOp::INTRINSIC) {
       clear();
@@ -457,11 +489,9 @@ InstructionFlow summarizeInstructionFlow(const BinaryImage &Img, Decoder &Dec,
   return Scratch.summarize(Img, Dec, DI, StackRegisters);
 }
 
-InstructionFlow
-InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
-                                  const DecodedInsn &DI,
-                                  const TargetRegInfo *StackRegisters,
-                                  LowInstructionUndefinedEffects *Undefined) {
+InstructionFlow InstructionFlowScratch::summarize(
+    const BinaryImage &Img, Decoder &Dec, const DecodedInsn &DI,
+    const TargetRegInfo *StackRegisters, LowUndefinedTransfer *Undefined) {
   InstructionFlow Flow;
   Ops.clear();
   // Each row is lifted independently of its neighbours.
@@ -502,9 +532,11 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
         llvm::erase_if(Ops,
                        [&](const LowOp &Op) { return Op.Addr != DI.Addr; });
       }
+    } else if (Undefined) {
+      Dec.liftWithUndefinedTransfer(DI, Ops, Relocations.Addresses,
+                                    Relocations.Scalars, *Undefined);
     } else {
-      Dec.liftToLow(DI, Ops, Relocations.Addresses, Relocations.Scalars,
-                    Undefined);
+      Dec.liftToLow(DI, Ops, Relocations.Addresses, Relocations.Scalars);
     }
   } catch (const UnliftedInstruction &) {
     // Nothing is known about what the instruction does, so it states no
@@ -600,7 +632,7 @@ summarizeLowFlow(const BinaryImage &Img, llvm::ArrayRef<LowOp> Ops, va_t Next,
     default:
       break;
     }
-    Values.advance(Op);
+    Values.advance(Img.Arch, Op);
     Values.forgetUndefined(Undefined, ++Completed);
     // An address the instruction puts in a register, as `mov eax, offset X`.
     if (Op.Output.isReg())
@@ -926,12 +958,31 @@ struct ReferenceImageIndex {
 };
 
 namespace {
+uint64_t referenceCodeSize(const BinaryImage &Img, const FuncInfo &F) {
+  using namespace ppc_elf;
+  constexpr unsigned Trailer = InstructionAlignment + EmptyTracebackTableSize;
+  if (!isPowerPC64(Img.Arch) || !Img.isELF() || F.Size < Trailer ||
+      F.Size > InvalidVA - F.Entry || F.Size % InstructionAlignment)
+    return F.Size;
+  const uint8_t *End = Img.readVA(F.Entry + F.Size - Trailer, Trailer);
+  if (End &&
+      readTargetEndian<uint32_t>(End, archLittleEndian(Img.Arch)) ==
+          ReturnToLinkRegister &&
+      llvm::all_of(
+          llvm::ArrayRef(End + InstructionAlignment, EmptyTracebackTableSize),
+          [](uint8_t Byte) { return Byte == 0; }))
+    return F.Size - EmptyTracebackTableSize;
+  return F.Size;
+}
+
 bool decodeFunctionReferences(
     const BinaryImage &Img, const FunctionPage &Page,
     const ReferenceImageIndex &ImageIndex,
     llvm::function_ref<void(size_t, va_t, llvm::StringRef,
                             const InstructionFlow &, unsigned, InstructionMode)>
-        Visit) {
+        Visit,
+    std::vector<FunctionDecodeStatus> *Coverage = nullptr,
+    bool IncludeInstructionText = true) {
   struct Instruction {
     va_t Address, Next, CodeReference;
     InstructionMode Mode;
@@ -950,7 +1001,7 @@ bool decodeFunctionReferences(
   std::vector<std::pair<va_t, uint64_t>> Extents;
   Extents.reserve(Page.Functions.size());
   for (const FuncInfo *F : Page.Functions)
-    Extents.emplace_back(F->Entry, F->Size);
+    Extents.emplace_back(F->Entry, referenceCodeSize(Img, *F));
   const auto &NoReturnTargets = ImageIndex.NoReturnTargets;
   const auto &Independent = ImageIndex.Independent;
   const auto &Exceptional = ImageIndex.Exceptional;
@@ -975,13 +1026,18 @@ bool decodeFunctionReferences(
       [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
           InstructionFlowScratch &Scratch) {
         auto &S = Sweeps[Index];
-        LowInstructionUndefinedEffects Undefined;
+        LowUndefinedTransfer Undefined;
         const bool X86 = Img.Arch == Arch::X86 || Img.Arch == Arch::X64;
         InstructionFlow Flow = Scratch.summarize(
             Img, Dec, DI, nullptr, X86 && !S.DirectOnly ? &Undefined : nullptr);
-        std::string Text = DI.Raw ? DI.Raw->mnemonic : "";
-        if (DI.Raw && *DI.Raw->op_str)
-          Text += std::string(" ") + DI.Raw->op_str;
+        std::string Text;
+        if (IncludeInstructionText && DI.Raw) {
+          Text = DI.Raw->mnemonic;
+          if (*DI.Raw->op_str) {
+            Text += ' ';
+            Text += DI.Raw->op_str;
+          }
+        }
         const auto Ops = Scratch.operations();
         // ARM IT state and mode-changing flow are not ordinary native edges.
         // An unlifted or unresolved transfer can enter any part of a body;
@@ -1008,10 +1064,10 @@ bool decodeFunctionReferences(
             {DI.Addr, DI.Addr + DI.Size, Dec.pcRelCodeRefTarget(DI),
              Dec.currentMode(), std::move(Text), std::move(Flow), S.Ops.size(),
              Ops.size(), std::move(Undefined.Effects), Fallthrough,
-             !X86 || Undefined.Coverage == LowUndefinedCoverage::Complete});
+             !X86 || Undefined.Complete});
         S.Ops.insert(S.Ops.end(), Ops.begin(), Ops.end());
       },
-      {}, nullptr, &NoReturnTargets,
+      {}, Coverage, &NoReturnTargets,
       [&](size_t Index, const FunctionDecodeStatus &Status) {
         auto &S = Sweeps[Index];
         if (S.DirectOnly || S.Instructions.empty())
@@ -1046,6 +1102,12 @@ bool decodeFunctionReferences(
             Leader[It->second] = Root[It->second] = true;
         };
         IndependentEntry(Extents[Index].first);
+        if (isPowerPC64ELFv2(Img.Arch)) {
+          const auto Context = Img.PPC64EntryContexts.find(Entry);
+          if (Context != Img.PPC64EntryContexts.end() &&
+              Context->second.LocalEntryOffset)
+            IndependentEntry(Entry + Context->second.LocalEntryOffset);
+        }
         for (size_t I = 0; I < Count; ++I) {
           const auto &N = S.Instructions[I];
           if (std::binary_search(Independent.begin(), Independent.end(),
@@ -1124,6 +1186,9 @@ bool decodeFunctionReferences(
         for (size_t B = 0; B < Blocks.size(); ++B)
           if (Root[Blocks[B].Begin] || !Blocks[B].Predecessors) {
             Blocks[B].Seen = true;
+            if (Root[Blocks[B].Begin] && isPowerPC64(Img.Arch))
+              Blocks[B].Incoming.seedPPC64Entry(
+                  Img, Entry, S.Instructions[Blocks[B].Begin].Address);
             Queue(B);
           }
         const auto Operations = [&](const Instruction &N) {
@@ -1137,11 +1202,15 @@ bool decodeFunctionReferences(
           Pending.pop_front();
           auto &Current = Blocks[B];
           Current.Queued = false;
+          // The publication pass reads Incoming. A terminal block has no
+          // successor that needs its outgoing register facts.
+          if (Current.Successors.empty())
+            continue;
           auto Values = Current.Incoming;
           for (size_t I = Current.Begin; I < Current.End; ++I) {
             const auto &N = S.Instructions[I];
             if (N.Transfer)
-              Values.advance(Operations(N), N.Undefined);
+              Values.advance(Img.Arch, Operations(N), N.Undefined);
             else
               Values.clear();
           }
@@ -1201,8 +1270,10 @@ bool decodeFunctionReferences(
     const Session &S, const FunctionPage &Page,
     llvm::function_ref<void(size_t, va_t, llvm::StringRef,
                             const InstructionFlow &, unsigned, InstructionMode)>
-        Visit) {
-  return decodeFunctionReferences(S.Img, Page, S.referenceImageIndex(), Visit);
+        Visit,
+    std::vector<FunctionDecodeStatus> *Status, bool IncludeInstructionText) {
+  return decodeFunctionReferences(S.Img, Page, S.referenceImageIndex(), Visit,
+                                  Status, IncludeInstructionText);
 }
 
 std::optional<DataAccessWidths>

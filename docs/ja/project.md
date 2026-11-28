@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: b9cda6cb01918cadfe48b4bc6544a4dc7baeb2e8ecd51cece677de52b5708065 -->
+<!-- i18n-source: 65a3c241a8b8275f8f2afcf61c262f54c2db5a0fd1e46824c63a903708fc981b -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 
 | ターゲット | 検証済みの ELF プロファイル |
 |---|---|
-| RISC-V | リトルエンディアンの RV32I/ILP32 と RV64I/LP64。ELF の情報に従って M、A、整数 C、または個別の Zmmul、Zaamo、Zalrsc、Zca 拡張を選択します。 |
-| PowerPC | ビッグエンディアンおよびリトルエンディアンの PPC32 System V と PPC64 ELFv1/ELFv2。PPC32 は secure PLT と従来の BSS-PLT を介したモジュール間呼び出しに対応しています。両方の PPC64 ABI で、PLT を介したモジュール間呼び出しと TOC の切り替えに対応しています。ELFv1 は関数記述子を使用し、ELFv2 はグローバルエントリとローカルエントリに対応しています。検証済みのスカラ命令には符号付き・符号なし除算と、その結果の CR0 への記録、XER のオーバーフロー状態への影響が含まれます。 |
+| RISC-V | リトルエンディアンの RV32（ILP32、ILP32D） と RV64（LP64、LP64D）。ELF の情報に従って M、A、整数 C、または個別の Zmmul、Zaamo、Zalrsc、Zca 拡張を選択します。ELF の ISA 属性に応じて Zba 1.0、Zbb 1.0、Zbs 1.0 と Zicond 1.0 も有効になります。Zicntr 2.0 では `rdcycle` を、RV32 では `rdcycleh` も使用できます。 |
+| PowerPC | ビッグエンディアンおよびリトルエンディアンの PPC32 System V と PPC64 ELFv1/ELFv2。PPC32 は secure PLT と従来の BSS-PLT を介したモジュール間呼び出しに対応しています。両方の PPC64 ABI で、PLT を介したモジュール間呼び出しと TOC の切り替えに対応しています。ELFv1 は関数記述子を使用し、ELFv2 はグローバルエントリとローカルエントリに対応しています。検証済みのスカラー命令には、符号付き・符号なし除算、積の上位ワードを返す乗算、オーバーフローを検出する乗算が含まれ、各命令が CR0 と XER に与える影響も検証しています。PPC64 では POWER10 のプレフィックス付き整数加算、ロード、ストア命令もサポートします。 VMX の `vaddubm` は 16 組のバイトをそれぞれ 256 を法として加算します。 |
 
 これらのプロファイルのネイティブコード書き換えは今後の課題です。 [RISC-V と PowerPC の対応範囲（英語）](../riscv-powerpc.md)
 
@@ -180,8 +180,7 @@ cmake --build build
 ./build/bin/neverd funcs binary
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
+./build/bin/neverd scan binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -305,6 +304,9 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 件数 | 読み込まれた各関数を既定の C 経路で処理し、確認後に関数本体を破棄 |
 | `decompile -llvm` | `.c` | LLVM IR + 最適化経由 |
 | `decompile --devirtualize` | `.c` + 任意の JSON | 実験的な x64 インタープリター復元。`--func` が必須。[契約と例](interpreter-recovery.md) |
+| `java` | Java / JVM IR / バイトコード / JSON | [クラスファイルとマルチリリース JAR](../jvm-recovery.md) |
+| `python` | `.py` / JSON / ネイティブ構成要素 | [CPython と PyInstaller の成果物の復元](../python-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Lua、LuaJIT、Luau のソース復元](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 実験的: [Android](android.md), [iOS](ios.md) |
 | `patch` | バイナリ | 機械語の書き換え |
 
@@ -339,8 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 検出された関数 |
 | `disasm` | 逆アセンブル（`--func` 名または hex） |
 | `sym-explore` | ネイティブ LowIR の有界パス探索（`--func`、JSON 出力） |
-| `audit` | ヒープの寿命に関する不具合と未初期化ローカルスタック読み取り（JSON） |
-| `hunt` | 危険なコピーの境界超過とシンボリックな証拠。完全な計画がある場合は `process-input-v1` 再生証拠を追加（JSON schema v1） |
+| `scan` | [オブジェクトの寿命、初期化、境界、書式文字列を検査（JSON）](../memory-safety-scan.md) |
 | `hex` | アドレスの hex dump |
 | `cfg` / `callgraph` | CFG / コールグラフ（JSON；DOT/SVG 任意） |
 | `xrefs` | クロスリファレンス |

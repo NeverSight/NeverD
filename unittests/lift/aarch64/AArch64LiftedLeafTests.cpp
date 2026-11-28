@@ -4,8 +4,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "AArch64DarwinFixtureDriver.h"
 #include "gtest/gtest.h"
 
+#include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
@@ -49,6 +51,7 @@
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/SHA256.h"
@@ -1055,11 +1058,25 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     auto Signature = macho_signature::inspect(Image->Raw);
     ASSERT_TRUE(bool(Signature)) << llvm::toString(Signature.takeError());
     EXPECT_FALSE(macho_signature::canTransactionallyAdHocResign(*Signature));
+    const bool Native = std::getenv(kExecute) != nullptr;
+    const auto Driver = (Root / kDriver).string();
+    if (Native) {
+      ASSERT_NO_FATAL_FAILURE(
+          test::buildDarwinFixtureDriver(Driver, CallerSource));
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
+    }
     EXPECT_FALSE(Patcher.patch(Input, Output, Module, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Output));
     auto Original = Reader->load(Input);
     ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
-    EXPECT_EQ(Original->Raw, Snapshot);
+    ASSERT_EQ(Original->Raw, Snapshot);
+    if (Native) {
+      auto Verified = macho_signing::verifyStrict(Input);
+      ASSERT_FALSE(bool(Verified)) << llvm::toString(std::move(Verified));
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
+      testing::Test::RecordProperty(kRequirementOriginalCalls,
+                                    kOriginalControlRuns);
+    }
     testing::Test::RecordProperty(kRejectedRequirements, 1);
     testing::Test::RecordProperty(kNativeImages, 0);
     return;
@@ -1627,6 +1644,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       ExecutionPaths.push_back(NextPath);
     }
     if (Embedded || LiteralWidths) {
+      unsigned MixedUnwindFrames = 0;
       for (const auto &[Generation, Path] : llvm::enumerate(ExecutionPaths)) {
         auto Loaded = Reader->load(Path);
         ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
@@ -1636,6 +1654,22 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
           continue;
         }
         ASSERT_EQ(Records.size(), ExpectedData.size() * (Generation + 1));
+        if (Preamble == kMixedOracle) {
+          ASSERT_FALSE(ExpectedData.empty());
+          const auto Begin = Records[Generation * ExpectedData.size()].Begin;
+          const auto *Frame = Loaded->ExceptionMetadata.findFunction(Begin);
+          ASSERT_NE(Frame, nullptr);
+          auto Rows = recoverDarwinAArch64Unwind(*Loaded, *Frame);
+          ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+          const auto Base = Frame->CodeRange.Begin;
+          EXPECT_FALSE(aarch64UnwindRowAt(*Rows, Begin - Base).Signing.State);
+          const auto &Resume =
+              aarch64UnwindRowAt(*Rows, Records.back().End - Base).Signing;
+          ASSERT_TRUE(Resume.State);
+          EXPECT_EQ(Resume.State->Kind,
+                    dwarf_eh::AArch64RASigningKind::Unsigned);
+          ++MixedUnwindFrames;
+        }
         for (const auto &[I, R] : llvm::enumerate(Records)) {
           const auto &Source = ExpectedData[I % ExpectedData.size()];
           if (const auto It = DefaultStartsByRecord.find(Source.Begin);
@@ -1662,6 +1696,8 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         if (Generation + 1 == ExecutionPaths.size())
           testing::Test::RecordProperty(kMixedRecords, int(Records.size()));
       }
+      if (Preamble == kMixedOracle)
+        testing::Test::RecordProperty(kMixedUnwindFrames, MixedUnwindFrames);
     }
     for (const auto &Path : ExecutionPaths) {
       if (Preamble == kSplitData || Preamble == kSplitSegments) {
@@ -2240,6 +2276,30 @@ TEST(AArch64LiftedImage, ADRPreservesSourceLiteralAndFunctionAddresses) {
                         LeafCheck::Relifted, kAddressFunctions);
 }
 
+#if defined(__APPLE__) && defined(__aarch64__)
+static void executeBoundaryAssembly(const std::string &Assembly,
+                                    llvm::StringRef Caller,
+                                    const char *Property, unsigned Cases) {
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kAssemblyName).string();
+  const auto Input = (Root / kOriginal).string();
+  const auto Driver = (Root / kDriver).string();
+  std::ofstream(Source) << Assembly;
+  ASSERT_EQ(
+      llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, kTarget,
+                                            kDylib, Source, kOut, Input}),
+      0);
+  auto Signature = macho_signing::verifyStrict(Input);
+  ASSERT_FALSE(bool(Signature)) << llvm::toString(std::move(Signature));
+  ASSERT_NO_FATAL_FAILURE(test::buildDarwinFixtureDriver(Driver, Caller));
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
+  ::testing::Test::RecordProperty(Property, Cases);
+}
+#endif
+
 TEST(AArch64LiftedImage, RebasedLiteralChecksBothSignedDisplacementLimits) {
   constexpr int64_t Scale = branch::A64InstructionBytes;
   constexpr int64_t Reach =
@@ -2261,6 +2321,19 @@ TEST(AArch64LiftedImage, RebasedLiteralChecksBothSignedDisplacementLimits) {
   const va_t High = InvalidVA - Scale + 1;
   EXPECT_FALSE(aarch64::encodePointerLiteralLoad(0, 0, High));
   EXPECT_FALSE(aarch64::encodePointerLiteralLoad(0, High, 0));
+#if defined(__APPLE__) && defined(__aarch64__)
+  if (std::getenv(kExecute)) {
+    const auto Forward =
+        aarch64::encodePointerLiteralLoad(0, PC, PC + Reach - Scale);
+    const auto Backward = aarch64::encodePointerLiteralLoad(0, PC, PC - Reach);
+    ASSERT_TRUE(Forward && Backward);
+    executeBoundaryAssembly(llvm::formatv(kLiteralBoundaryAssembly, *Forward,
+                                          *Backward, Reach - Scale, Reach)
+                                .str(),
+                            kLiteralBoundaryCaller, kLiteralBoundaryWords,
+                            kLiteralBoundaryCount);
+  }
+#endif
 }
 
 TEST(AArch64LiftedImage, EncodesSignedByteAndPageAddressesAtBothLimits) {
@@ -2293,6 +2366,26 @@ TEST(AArch64LiftedImage, EncodesSignedByteAndPageAddressesAtBothLimits) {
     EXPECT_FALSE(encodePCRelativeAddress(Kind, 0, 0, InvalidVA));
     EXPECT_FALSE(encodePCRelativeAddress(Kind, 0, InvalidVA, 0));
   }
+#if defined(__APPLE__) && defined(__aarch64__)
+  if (std::getenv(kExecute)) {
+    llvm::SmallVector<uint32_t> Words;
+    for (auto Kind : {AddressInstruction::ADR, AddressInstruction::ADRP}) {
+      const va_t Unit =
+          Kind == AddressInstruction::ADRP ? va_t{1} << kPageShift : 1;
+      const va_t Base = Reach * Unit;
+      for (va_t Target : {va_t{0}, (2 * Reach - 1) * Unit}) {
+        auto Word = encodePCRelativeAddress(Kind, 0, Base, Target);
+        ASSERT_TRUE(Word);
+        Words.push_back(*Word);
+      }
+    }
+    executeBoundaryAssembly(llvm::formatv(kAddressBoundaryAssembly, Words[0],
+                                          Words[1], Words[2], Words[3])
+                                .str(),
+                            kAddressBoundaryCaller, kAddressBoundaryWords,
+                            Words.size());
+  }
+#endif
 }
 
 TEST(AArch64LiftedImage, PreservesSourceAddressesBeyondADRReach) {
@@ -2652,6 +2745,25 @@ TEST(AArch64LiftedImage, KeepsOldFrameSaveInsideItsForwardingEntry) {
 #endif
 }
 
+#if defined(__APPLE__) && defined(__aarch64__)
+static llvm::Expected<PatchResult>
+publishLiteralFixture(const std::string &Input, const BinaryImage &Image,
+                      const std::string &Output) {
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.PatchMode = true;
+  Options.EmitDumpOutput = false;
+  auto Lifted = Pipeline().run(Image, Context, Options);
+  if (!Lifted.Success || !Lifted.LlvmModule)
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   Lifted.Error);
+  symbolizeImageAbsolutePointers(*Lifted.LlvmModule, Image);
+  MachOPatcher Patcher;
+  Patcher.setImageContext(&Image);
+  return Patcher.patch(Input, Output, *Lifted.LlvmModule, Image.Arch);
+}
+#endif
+
 TEST(AArch64LiftedImage, RecognizesOnlyImmutableLocalLiteralRebases) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Directory;
@@ -2663,7 +2775,7 @@ TEST(AArch64LiftedImage, RecognizesOnlyImmutableLocalLiteralRebases) {
   std::ofstream(Source) << kRebasedAddressCells;
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler,
                                       {kCompiler, kTargetFlag, kTarget, kDylib,
-                                       kDataLinker, Source, kOut, Input}),
+                                       kFixupChains, Source, kOut, Input}),
             0);
   auto Image = Loader::create(BinaryFormat::MachO)->load(Input);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
@@ -2685,6 +2797,38 @@ TEST(AArch64LiftedImage, RecognizesOnlyImmutableLocalLiteralRebases) {
     Check(Cells->Addr + I * Pointer, std::nullopt);
   EXPECT_TRUE(Image->MachOResolvedChainedPointerSlots.contains(Mutable->Addr));
   Check(Mutable->Addr, std::nullopt);
+  const bool Native = std::getenv(kExecute) != nullptr;
+  const auto Driver = (Root / kDriver).string();
+  const auto Output = (Root / kOutput).string();
+  if (Native) {
+    ASSERT_NO_FATAL_FAILURE(
+        test::buildDarwinFixtureDriver(Driver, kCellCaller));
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
+  }
+  auto Published = publishLiteralFixture(Input, *Image, Output);
+  ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
+  ASSERT_TRUE(Published->Success);
+  ASSERT_EQ(Published->PatchedFunctions.size(), 1u);
+  const auto &Owner = Published->PatchedFunctions.front();
+  ASSERT_EQ(Owner.OriginalVA, Entry->Addr);
+  auto Installed = Loader::create(BinaryFormat::MachO)->load(Output);
+  ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
+  const auto Bytes = Target - Entry->Addr + aarch64::kInsnSize;
+  const auto *Before = Image->readVA(Entry->Addr, Bytes);
+  const auto *After = Installed->readVA(Owner.OwnerVA, Bytes);
+  ASSERT_TRUE(Before && After);
+  EXPECT_EQ(llvm::ArrayRef(Before, Bytes), llvm::ArrayRef(After, Bytes));
+  const auto *Interior = Installed->readVA(
+      Target + Published->OriginalSectionSlide, aarch64::kInsnSize);
+  ASSERT_NE(Interior, nullptr);
+  EXPECT_EQ(readLE<uint32_t>(Interior),
+            readLE<uint32_t>(Before + aarch64::kInsnSize));
+  auto Verified = macho_signing::verifyStrict(Output);
+  ASSERT_FALSE(bool(Verified)) << llvm::toString(std::move(Verified));
+  if (Native) {
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
+    RecordProperty(kCellRuns, kOriginalAndPublished);
+  }
 #else
   GTEST_SKIP();
 #endif
@@ -2700,6 +2844,13 @@ TEST(AArch64LiftedImage, DistinguishesReturnedLiteralSlotsFromOtherRoots) {
   const auto Input = (Root / kOriginal).string();
   const auto Reader = Loader::create(BinaryFormat::MachO);
   constexpr auto Word = aarch64::kInsnSize;
+  const bool Native = std::getenv(kExecute) != nullptr;
+  const auto Driver = (Root / kDriver).string();
+  const auto Output = (Root / kOutput).string();
+  if (Native)
+    ASSERT_NO_FATAL_FAILURE(
+        test::buildDarwinFixtureDriver(Driver, kLiteralRootCaller));
+  unsigned Originals = 0, Publications = 0, Rejections = 0;
   for (bool SecondAlias : {false, true}) {
     SCOPED_TRACE(SecondAlias);
     {
@@ -2708,13 +2859,14 @@ TEST(AArch64LiftedImage, DistinguishesReturnedLiteralSlotsFromOtherRoots) {
         OS << kSecondTailAlias;
       OS << kReturnedLiteralTail;
     }
-    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler,
-                                        {kCompiler, kTargetFlag, kTarget,
-                                         kDylib, kOmitDataRecords, kFixupChains,
-                                         Source, kOut, Input}),
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                  kCompiler, {kCompiler, kTargetFlag, kTarget, kDylib,
+                              kUnmarkedFixupChains, Source, kOut, Input}),
               0);
     auto Linked = Reader->load(Input);
     ASSERT_TRUE(bool(Linked)) << llvm::toString(Linked.takeError());
+    ASSERT_TRUE(Linked->MachOHasChainedFixups);
+    ASSERT_TRUE(Linked->MachODataInCode.empty());
     const auto *Entry = Linked->findSymbol(kSumSymbol);
     const auto *Cells = Linked->findSymbol(kAddressCellsSymbol);
     ASSERT_TRUE(Entry && Cells);
@@ -2738,7 +2890,45 @@ TEST(AArch64LiftedImage, DistinguishesReturnedLiteralSlotsFromOtherRoots) {
     EXPECT_EQ(llvm::is_contained(Code.DecodeFailureAddresses, Tail),
               SecondAlias);
     EXPECT_EQ(Code.hasCompleteInstructionLift(), !SecondAlias);
+    // Run the exact linked slot and displacement inspected above. Darwin
+    // checks the new signature after materializing the cross-section load.
+    {
+      std::ofstream File(Input, std::ios::binary);
+      File.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+      ASSERT_TRUE(File.good());
+    }
+    auto Sign = macho_signing::adHocResign(Input, kRepeatIdentity);
+    ASSERT_FALSE(bool(Sign)) << llvm::toString(std::move(Sign));
+    const std::string Aliases = std::to_string(1u + SecondAlias);
+    if (Native) {
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input, Aliases}), 0);
+      ++Originals;
+    }
+    auto Signed = Reader->load(Input);
+    ASSERT_TRUE(bool(Signed)) << llvm::toString(Signed.takeError());
+    auto Published = publishLiteralFixture(Input, *Signed, Output);
+    ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
+    if (SecondAlias) {
+      ASSERT_FALSE(Published->Success);
+      EXPECT_TRUE(Published->PatchedOriginalEntries.empty());
+      ASSERT_FALSE(std::filesystem::exists(Output));
+      ++Rejections;
+      continue;
+    }
+    ASSERT_TRUE(Published->Success);
+    ASSERT_TRUE(llvm::is_contained(Published->PatchedOriginalEntries, PC));
+    auto Verified = macho_signing::verifyStrict(Output);
+    ASSERT_FALSE(bool(Verified)) << llvm::toString(std::move(Verified));
+    if (Native) {
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output, Aliases}),
+                0);
+      ++Publications;
+    }
+    ASSERT_TRUE(std::filesystem::remove(Output));
   }
+  RecordProperty(kLiteralRootOriginals, Originals);
+  RecordProperty(kLiteralRootPublications, Publications);
+  RecordProperty(kLiteralRootRejections, Rejections);
 #else
   GTEST_SKIP() << kUnavailable;
 #endif

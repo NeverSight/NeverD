@@ -1220,6 +1220,7 @@ private:
                           int64_t PreservedBegin,
                           const SpecializationReturningCall &Call,
                           const RecoveryCallTransition &Policy,
+                          llvm::ArrayRef<ReturningCallFrameOutput> Outputs,
                           FrameOrigins &Origins, FrameFacts &Frame);
   bool applyReturningResultObject(SymExec &Exec, SymState &State,
                                   SymRef FrameRoot,
@@ -1327,11 +1328,12 @@ bool Specializer::chargeCallWork(uint64_t Count) {
   return true;
 }
 
-bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
-                                     SymRef CallerStack, int64_t PreservedBegin,
-                                     const SpecializationReturningCall &Call,
-                                     const RecoveryCallTransition &Policy,
-                                     FrameOrigins &Origins, FrameFacts &Frame) {
+bool Specializer::applyReturningCall(
+    SymState &State, SymRef FrameRoot, SymRef CallerStack,
+    int64_t PreservedBegin, const SpecializationReturningCall &Call,
+    const RecoveryCallTransition &Policy,
+    llvm::ArrayRef<ReturningCallFrameOutput> Outputs, FrameOrigins &Origins,
+    FrameFacts &Frame) {
   const uint64_t Begin = static_cast<uint64_t>(PreservedBegin);
   const uint64_t Size =
       static_cast<uint64_t>(Options.EntryFrameBounds->End) - Begin;
@@ -1420,11 +1422,31 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
   Effect.MaxNodes = Options.MaxSymbolicNodes;
   applyReturningCallState(State, FrameRoot, CallerStack, PreservedBegin,
                           Options.EntryFrameBounds->End,
-                          Call.Original.Fallthrough.Address, Policy, Effect);
+                          Call.Original.Fallthrough.Address, Policy, Effect,
+                          Outputs);
   Result.EvaluatedOperations += Effect.WorkUsed;
   if (Effect.Status != SpecializationStatus::Complete)
     // A failed composition belongs only to this evaluator and is discarded.
     return fail(Effect.Status, Effect.Diagnostic);
+  for (const auto &Output : Outputs) {
+    for (uint16_t I = 0; I < Output.Bytes; ++I) {
+      const uint64_t Offset = Output.Offset + I;
+      NextOrigins.ExternalFrameBytes.erase(Offset);
+      for (auto It = NextFrame.AffineValues.begin();
+           It != NextFrame.AffineValues.end();) {
+        if (!chargeCallWork(1))
+          return false;
+        if (Offset - It->first < Policy.Stack.Size)
+          It = NextFrame.AffineValues.erase(It);
+        else
+          ++It;
+      }
+      if (NextFrame.EntryReturnSlotIntact && Options.EntryReturnSlot &&
+          Offset - static_cast<uint64_t>(Options.EntryReturnSlot->Offset) <
+              Options.EntryReturnSlot->Bytes)
+        NextFrame.EntryReturnSlotIntact = false;
+    }
+  }
   for (uint64_t Flag : Policy.FreshFlags)
     NextOrigins.UndefinedFlags.erase(Flag);
   setUnsafeOrigin(Policy.Stack, true, NextOrigins);
@@ -2423,6 +2445,10 @@ bool Specializer::projectEdge(SymState &State, SymRef Root,
     std::set<uint64_t> Slots;
     for (const auto &Domain : Incoming.FrameValueDomains)
       Slots.insert(Domain.first);
+    // A live physical return word is a bounded candidate, not an asserted
+    // target. Prove its full current domain before carrying it to a successor.
+    Slots.insert(Frame.NativeReturnSlots.begin(),
+                 Frame.NativeReturnSlots.end());
     const auto Hints =
         Refinement.FrameWordHints.find({Successor.Address, Successor.Mode});
     if (Hints != Refinement.FrameWordHints.end())
@@ -4253,8 +4279,38 @@ bool Specializer::evaluate(int Id) {
                              Policy.ReturnedObject->Size.Offset,
                              Policy.ReturnedObject->Size.Size)
                 : SymRef();
+        std::vector<ReturningCallFrameOutput> Outputs;
+        Outputs.reserve(Policy.FrameOutputs.size());
+        for (const auto &Output : Policy.FrameOutputs) {
+          if (!Output.Pointer.isReg() || Output.Pointer.Size != 8 ||
+              !Output.Bytes)
+            return fail(SpecializationStatus::InvalidInput,
+                        "invalid returning-call frame output location");
+          const SymRef Pointer =
+              State.read(SymSpace::Register, Output.Pointer.Offset, 8);
+          const auto Offset =
+              frameOffset(Ctx, Exec.pathPredicate(), Pointer, FrameRoot,
+                          FrameOffsetProof::Required);
+          if (Failed)
+            return false;
+          if (!Offset) {
+            discover(State, Pointer, FrameRoot, ControlDemand::Memory);
+            Refinement.PrecisionFailure = true;
+            return fail(SpecializationStatus::Unsupported,
+                        "returning-call frame output requires an exact "
+                        "entry-relative pointer");
+          }
+          const int64_t Begin = static_cast<int64_t>(*Offset);
+          const auto &Bounds = *Options.EntryFrameBounds;
+          if (Begin < Bounds.Begin || Begin >= Bounds.End ||
+              Output.Bytes > static_cast<uint64_t>(Bounds.End) - *Offset)
+            return fail(SpecializationStatus::InvalidInput,
+                        "returning-call frame output exceeds entry bounds");
+          Outputs.push_back({*Offset, Output.Bytes});
+        }
         if (!applyReturningCall(State, FrameRoot, CallerStack, PreservedBegin,
-                                *ReturningCall, Policy, Origins, Frame))
+                                *ReturningCall, Policy, Outputs, Origins,
+                                Frame))
           return false;
         if (!applyReturningResultObject(Exec, State, FrameRoot, ObjectRoots,
                                         *ReturningCall, Policy, ResultSize,
@@ -5560,18 +5616,71 @@ bool Specializer::evaluate(int Id) {
           OutputUnsafe = true;
         }
       } else {
+        bool TrackNativeReturnWithoutPreservation = false;
+        const bool MayTrackNativeReturn =
+            FrameRoot && Original.Opcode == NdOp::STORE &&
+            !Frame.NativeReturnSlots.empty();
+        const auto ConditionalAddress =
+            MayTrackNativeReturn && !StorePreservation &&
+                    Options.ProveStoreReturnSlotSeparation
+                ? Exec.memoryAddressValue(Evaluated)
+                : SymRef{};
+        if (MayTrackNativeReturn &&
+            (StorePreservation ||
+             (ConditionalAddress && Ctx.width(ConditionalAddress) == 64))) {
+          const auto ContainsSlot = [](int64_t Begin, int64_t End,
+                                       uint64_t Slot) {
+            const uint64_t Size =
+                static_cast<uint64_t>(End) - static_cast<uint64_t>(Begin);
+            return Size >= 8 && Slot - static_cast<uint64_t>(Begin) <= Size - 8;
+          };
+          for (uint64_t Slot : Frame.NativeReturnSlots) {
+            if (Result.EvaluatedOperations >= Options.MaxOperations)
+              return fail(SpecializationStatus::BudgetExceeded,
+                          "conditional native return-cell budget exhausted");
+            ++Result.EvaluatedOperations;
+            const int64_t Begin = static_cast<int64_t>(Slot);
+            if (Begin > std::numeric_limits<int64_t>::max() - 8 ||
+                !State.hasMaterializedRegionRange(FrameRoot, Slot, 8))
+              continue;
+            if (StorePreservation && StorePreservation->Base == FrameRoot &&
+                (ContainsSlot(StorePreservation->Begin, StorePreservation->End,
+                              Slot) ||
+                 llvm::any_of(ProvedStoreRanges, [&](const auto &Range) {
+                   return ContainsSlot(Range.Begin, Range.End, Slot);
+                 })))
+              continue;
+            TrackNativeReturnWithoutPreservation |= !StorePreservation;
+            if (llvm::any_of(ConditionalFrameStores, [&](const auto &Region) {
+                  return Region.Base == FrameRoot && Region.Begin == Begin &&
+                         Region.End == Begin + 8;
+                }))
+              continue;
+            // The physical return word is a current scalar cell. Retain both
+            // alias outcomes without treating its address as disjoint.
+            ConditionalFrameStores.push_back({FrameRoot, Begin, Begin + 8});
+          }
+        }
         if (StorePreservation)
           StorePreservation->MaxWork =
               Options.MaxOperations - Result.EvaluatedOperations;
         std::optional<SymConditionalStore> Conditional;
-        if (StorePreservation && !ConditionalFrameStores.empty()) {
+        if (!ConditionalFrameStores.empty() &&
+            (StorePreservation || TrackNativeReturnWithoutPreservation)) {
           Conditional.emplace();
           Conditional->MaxWork =
               Options.MaxOperations - Result.EvaluatedOperations;
-          Conditional->TrackedRegions = ConditionalFrameStores;
-          Flow = Exec.stepWithConditionalStore(
-              FoldedImmutableRead ? Residual : Evaluated, *Conditional,
-              *StorePreservation);
+          if (StorePreservation) {
+            Conditional->TrackedRegions = ConditionalFrameStores;
+            Flow = Exec.stepWithConditionalStore(
+                FoldedImmutableRead ? Residual : Evaluated, *Conditional,
+                *StorePreservation);
+          } else {
+            // Without a preservation contract, the symbolic owner updates
+            // every current memory byte and charges the complete work.
+            Flow = Exec.stepWithConditionalStore(
+                FoldedImmutableRead ? Residual : Evaluated, *Conditional);
+          }
           if (Conditional->Status == SymConditionalStoreStatus::BudgetExceeded)
             return fail(SpecializationStatus::BudgetExceeded,
                         "conditional frame store budget exhausted");

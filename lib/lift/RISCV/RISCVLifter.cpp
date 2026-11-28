@@ -18,6 +18,8 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVFloating.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
@@ -28,7 +30,7 @@ using llvm::SignExtend32;
 using llvm::SignExtend64;
 
 va_t atXLen(Arch A, va_t Value) {
-  return A == Arch::RISCV32 ? uint32_t(Value) : Value;
+  return isRISCV32(A) ? uint32_t(Value) : Value;
 }
 
 va_t auipcAddress(Arch A, uint32_t Word, va_t PC) {
@@ -44,7 +46,7 @@ std::optional<uint32_t> word(Arch A, RISCVProfile P, const cs_insn &I) {
     return llvm::support::endian::read32le(I.bytes);
   if (I.size == 2 && P.hasCompressed())
     return expandCompressed(llvm::support::endian::read16le(I.bytes),
-                            A == Arch::RISCV64);
+                            isRISCV64(A), P);
   return std::nullopt;
 }
 
@@ -80,7 +82,7 @@ IntegerControl branch(Arch A, uint32_t W, va_t PC) {
 struct State : IntegerLiftState {
   using IntegerLiftState::IntegerLiftState;
   NdVar read(unsigned Rs) { return Rs ? reg(Rs) : imm(0); }
-  void write(unsigned Rd, NdVar V, bool Signed = false) {
+  void write(unsigned Rd, const NdVar &V, bool Signed = false) {
     if (Rd)
       emit(NdOp::COPY, reg(Rd), {resize(V, Width, Signed)});
   }
@@ -109,9 +111,297 @@ NdVar mulDiv(State &S, unsigned F, NdVar A, NdVar B) {
   return S.select(Zero, Rem ? A : Ones, S.op(Op, A, Divisor));
 }
 
+bool basicBitManipulation(State &S, uint32_t W, bool Imm, bool Word,
+                          unsigned Rd, NdVar X, NdVar Y) {
+  const unsigned Unary = W & opcode::UnaryFormMask;
+  switch (Unary) {
+  case opcode::Ctz:
+  case opcode::CtzW:
+    S.write(Rd, S.countTrailingZeros(S.resize(X, Word ? 4 : S.Width)));
+    return true;
+  case opcode::Clz:
+  case opcode::ClzW:
+  case opcode::Cpop:
+  case opcode::CpopW:
+    S.write(Rd,
+            S.op(Unary == opcode::Clz || Unary == opcode::ClzW ? NdOp::LZCOUNT
+                                                               : NdOp::POPCOUNT,
+                 S.resize(X, Word ? 4 : S.Width)));
+    return true;
+  case opcode::SextB:
+  case opcode::SextH:
+    S.write(Rd, S.resize(X, Unary == opcode::SextB ? 1 : 2), true);
+    return true;
+  case opcode::ZextHRV32:
+  case opcode::ZextHRV64:
+    if ((Unary == opcode::ZextHRV64) != (S.Width == 8))
+      return false;
+    S.write(Rd, S.resize(X, 2));
+    return true;
+  case opcode::Rev8RV32:
+  case opcode::Rev8RV64:
+    if ((Unary == opcode::Rev8RV64) != (S.Width == 8))
+      return false;
+    S.write(Rd, S.byteSwap(X));
+    return true;
+  case opcode::OrcB: {
+    // Adding 0x7f to the low seven bits marks each nonzero byte in bit 7.
+    // No byte can carry into its neighbour. Broadcast each mark to its byte.
+    constexpr uint64_t ByteOnes = UINT64_MAX / UINT8_MAX;
+    NdVar LowBits = S.imm(ByteOnes * (UINT8_MAX >> 1));
+    NdVar Mark =
+        S.op(NdOp::INT_OR, X,
+             S.op(NdOp::INT_ADD, S.op(NdOp::INT_AND, X, LowBits), LowBits));
+    NdVar Flags = S.op(NdOp::INT_AND, S.op(NdOp::INT_RIGHT, Mark, S.imm(7)),
+                       S.imm(ByteOnes));
+    S.write(Rd, S.op(NdOp::INT_MULT, Flags, S.imm(UINT8_MAX)));
+    return true;
+  }
+  }
+
+  const unsigned Key =
+      W & (Imm && !Word && S.Width == 8 ? opcode::WideImmediateFormMask
+                                        : opcode::RegisterFormMask);
+  switch (Key) {
+  case opcode::AndN:
+  case opcode::OrN:
+  case opcode::Xnor:
+    S.write(Rd, S.op(Key == opcode::AndN  ? NdOp::INT_AND
+                     : Key == opcode::OrN ? NdOp::INT_OR
+                                          : NdOp::INT_XOR,
+                     X, S.op(NdOp::INT_NOT, Y)));
+    return true;
+  case opcode::Min:
+  case opcode::MinU:
+  case opcode::Max:
+  case opcode::MaxU: {
+    const bool Signed = Key == opcode::Min || Key == opcode::Max;
+    const bool Min = Key == opcode::Min || Key == opcode::MinU;
+    NdVar Less = S.op(Signed ? NdOp::INT_SLESS : NdOp::INT_LESS, X, Y, 1);
+    S.write(Rd, S.select(Less, Min ? X : Y, Min ? Y : X));
+    return true;
+  }
+  case opcode::Rol:
+  case opcode::RolW:
+  case opcode::Ror:
+  case opcode::RorW:
+  case opcode::Rori:
+  case opcode::RoriW: {
+    const unsigned Bytes = Word ? 4 : S.Width;
+    NdVar Count = Imm ? NdVar::scalar((W >> 20) & (Bytes * 8 - 1), Bytes)
+                      : S.resize(Y, Bytes);
+    S.write(Rd,
+            S.rotate(S.resize(X, Bytes), Count,
+                     Key != opcode::Rol && Key != opcode::RolW),
+            Word);
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
+bool bitManipulation(State &S, RISCVProfile P, uint32_t W, bool Imm, bool Word,
+                     unsigned Rd, NdVar X, NdVar Y) {
+  const unsigned IndexMask = S.Width * 8 - 1;
+  // RV64 encodes shamt[5] in bit 25. It is an opcode bit on RV32 and
+  // in register forms on both targets.
+  const unsigned Key = W & (Imm && S.Width == 8 ? opcode::WideImmediateFormMask
+                                                : opcode::RegisterFormMask);
+  const unsigned Shamt = (W >> 20) & IndexMask;
+  enum class BitOp { ShiftAdd, ShiftUW, Clear, Extract, Invert, Set };
+  BitOp Op;
+  unsigned Shift = 0;
+  switch (Key) {
+#define NEVERD_RISCV_SHIFT_ADD(Name, Encoding, Count)                          \
+  case Encoding:                                                               \
+    Op = BitOp::ShiftAdd;                                                      \
+    Shift = Count;                                                             \
+    break;
+#define NEVERD_RISCV_SHIFT_UW(Name, Encoding)                                  \
+  case Encoding:                                                               \
+    Op = BitOp::ShiftUW;                                                       \
+    Shift = Shamt;                                                             \
+    break;
+#define NEVERD_RISCV_SINGLE_BIT(Name, Funct, Kind)                             \
+  case Funct | opcode::Op:                                                     \
+  case Funct | opcode::OpImm:                                                  \
+    Op = BitOp::Kind;                                                          \
+    break;
+#include "RISCVBitManipulation.def"
+  default:
+    return false;
+  }
+
+  if (Op == BitOp::ShiftAdd || Op == BitOp::ShiftUW) {
+    if (!P.Zba)
+      return false;
+    if (Word)
+      X = S.resize(S.resize(X, 4), S.Width);
+    if (Shift)
+      X = S.op(NdOp::INT_LEFT, X, S.imm(Shift));
+    S.write(Rd, Op == BitOp::ShiftAdd ? S.op(NdOp::INT_ADD, X, Y) : X);
+    return true;
+  }
+  if (!P.Zbs)
+    return false;
+  NdVar N = Imm ? S.imm(Shamt) : S.op(NdOp::INT_AND, Y, S.imm(IndexMask));
+  if (Op == BitOp::Extract) {
+    S.write(Rd, S.op(NdOp::INT_AND, S.op(NdOp::INT_RIGHT, X, N), S.imm(1)));
+  } else {
+    NdVar Mask = S.op(NdOp::INT_LEFT, S.imm(1), N);
+    if (Op == BitOp::Clear)
+      Mask = S.op(NdOp::INT_XOR, Mask, S.imm(-1));
+    S.write(Rd, S.op(Op == BitOp::Clear ? NdOp::INT_AND
+                     : Op == BitOp::Set ? NdOp::INT_OR
+                                        : NdOp::INT_XOR,
+                     X, Mask));
+  }
+  return true;
+}
+
+// Floating loads, stores, moves and sign injection transfer the IEEE encoding
+// without changing rounding mode or exception flags. Preserve the payload bits.
+bool floating(State &S, RISCVProfile P, uint32_t W) {
+  const unsigned Op = W & 127, Rd = W >> 7 & 31, F = W >> 12 & 7;
+  const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
+  const unsigned FLen = P.DoubleFloat ? 8 : 4;
+  const auto Reg = [FLen](unsigned Index) {
+    return NdVar::reg(integerreg::riscv::fpr(Index), FLen);
+  };
+  const auto Write = [&](unsigned Dest, NdVar Value) {
+    if (Value.Size < FLen)
+      Value = S.op(NdOp::CONCAT, NdVar::scalar(UINT32_MAX, 4), Value, 8);
+    S.emit(NdOp::COPY, Reg(Dest), {Value});
+  };
+  if (Op == opcode::LoadFP || Op == opcode::StoreFP) {
+    if (!((F == 2 && P.SingleFloat) || (F == 3 && P.DoubleFloat)))
+      return false;
+    const bool Load = Op == opcode::LoadFP;
+    const unsigned Bytes = 1u << F;
+    const uint64_t Disp = SignExtend64<12>(Load ? W >> 20 : (F7 << 5) | Rd);
+    NdVar Address = S.read(R1);
+    if (Disp)
+      Address = S.op(NdOp::INT_ADD, Address, S.imm(Disp));
+    if (Load)
+      Write(Rd, S.load(Address, Bytes));
+    else
+      S.emit(NdOp::STORE, {}, {Address, S.resize(Reg(R2), Bytes)});
+    return true;
+  }
+  const unsigned Format = F7 & 3;
+  if (!(Format == 0 ? P.SingleFloat : Format == 1 && P.DoubleFloat))
+    return false;
+  const unsigned Bytes = Format ? 8 : 4;
+  const unsigned Function = F7 >> 2;
+  if (Op == opcode::OpFP && (Function == 28 || Function == 30) && !F && !R2 &&
+      Bytes <= S.Width) {
+    if (Function == 28) // FMV.X.W / FMV.X.D
+      S.write(Rd, S.resize(Reg(R1), Bytes), true);
+    else // FMV.W.X / FMV.D.X
+      Write(Rd, S.resize(S.read(R1), Bytes));
+    return true;
+  }
+  const auto Read = [&](unsigned Source, unsigned Precision) {
+    NdVar Bits = Reg(Source);
+    if (Precision == FLen)
+      return Bits;
+    // A narrow arithmetic operand with invalid NaN boxing is a canonical NaN.
+    NdVar Top = S.makeTemp(4);
+    S.emit(NdOp::SUBBYTES, Top, {Bits, NdVar::scalar(4, 4)});
+    return S.select(S.op(NdOp::INT_EQUAL, Top, NdVar::scalar(UINT32_MAX, 4), 1),
+                    S.resize(Bits, Precision), NdVar::scalar(0x7fc00000, 4));
+  };
+  if (Op != opcode::OpFP || Function != 4) {
+    const auto Selector = decodeFloating(W, S.Width, P);
+    if (!Selector)
+      return false;
+    const auto &Form = *floatingForm(*Selector, S.Width);
+    const unsigned Registers[] = {R1, R2, W >> 27};
+    const auto Operand = [&](unsigned I) {
+      const FPValue Type = Form.Inputs[I];
+      const unsigned Size = fpBytes(Type, S.Width);
+      return fpRegister(Type) ? Read(Registers[I], Size)
+                              : S.resize(S.read(Registers[I]), Size);
+    };
+    const auto Code = NdVar::scalar(*Selector, 2);
+    const auto Result = S.makeTemp(fpBytes(Form.Result, S.Width));
+    switch (Form.arity()) {
+    case 1:
+      S.emitIntrinsic(Intrinsic::RISCVFloating, Result, {Code, Operand(0)});
+      break;
+    case 2:
+      S.emitIntrinsic(Intrinsic::RISCVFloating, Result,
+                      {Code, Operand(0), Operand(1)});
+      break;
+    case 3:
+      S.emitIntrinsic(Intrinsic::RISCVFloating, Result,
+                      {Code, Operand(0), Operand(1), Operand(2)});
+      break;
+    }
+    if (fpRegister(Form.Result))
+      Write(Rd, Result);
+    else
+      S.write(Rd, Result, true);
+    return true;
+  }
+  if (F > 2)
+    return false;
+  NdVar Left = Read(R1, Bytes);
+  if (R1 == R2) {
+    if (F != 0)
+      Left = S.op(F == 1 ? NdOp::FLOAT_NEG : NdOp::FLOAT_ABS, Left);
+    Write(Rd, Left);
+    return true;
+  }
+  const NdVar SignMask = NdVar::scalar(uint64_t(1) << (Bytes * 8 - 1), Bytes);
+  NdVar Signs = Read(R2, Bytes);
+  if (F == 1)
+    Signs = S.op(NdOp::INT_NOT, Signs);
+  else if (F == 2)
+    Signs = S.op(NdOp::INT_XOR, Signs, Left);
+  const NdVar Magnitude =
+      S.op(NdOp::INT_AND, Left, S.op(NdOp::INT_NOT, SignMask));
+  Write(Rd,
+        S.op(NdOp::INT_OR, Magnitude, S.op(NdOp::INT_AND, Signs, SignMask)));
+  return true;
+}
+
+bool liftCycleRead(State &S, Arch A, uint32_t W, unsigned Rd) {
+  Intrinsic Id;
+  switch (W & opcode::ExceptRdMask) {
+#define NEVERD_RISCV_CYCLE(Name, Value, Word, High, Text)                      \
+  case Word:                                                                   \
+    Id = Intrinsic::Name;                                                      \
+    break;
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+  default:
+    return false;
+  }
+  if (!cycleRead(Id)->admits(A))
+    return false;
+  S.emitIntrinsic(Id, Rd ? S.reg(Rd) : S.makeTemp(S.Width), {});
+  return true;
+}
+
 bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
   const unsigned Op = W & 127, Rd = W >> 7 & 31, F = W >> 12 & 7;
   const unsigned R1 = W >> 15 & 31, R2 = W >> 20 & 31, F7 = W >> 25;
+  if (Op == opcode::LoadFP || Op == opcode::StoreFP || Op == opcode::OpFP ||
+      Op == 0x43 || Op == 0x47 || Op == 0x4b || Op == 0x4f)
+    return floating(S, P, W);
+  if (Op == opcode::System && P.SingleFloat && (W >> 20) >= 1 &&
+      (W >> 20) <= 3 && (F & 3)) {
+    const unsigned Action = R1 == 0 && (F & 3) != 1 ? 0 : F & 3;
+    const auto Code = NdVar::scalar(((W >> 20) << 2) | Action, 2);
+    const auto Out = Rd ? S.reg(Rd) : S.makeTemp(S.Width);
+    if (Action)
+      S.emitIntrinsic(Intrinsic::RISCVFPControl, Out,
+                      {Code, (F & 4) ? S.imm(R1) : S.read(R1)});
+    else
+      S.emitIntrinsic(Intrinsic::RISCVFPControl, Out, {Code});
+    return true;
+  }
   const uint64_t Immediate = SignExtend64<12>(W >> 20);
   NdVar X = S.read(R1);
   NdVar Y = S.read(R2);
@@ -196,9 +486,14 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
 
   const bool Imm = Op == opcode::OpImm || Op == opcode::OpImm32;
   const bool Word = Op == opcode::OpImm32 || Op == opcode::Op32;
-  if ((!Imm && Op != opcode::Op && Op != opcode::Op32) ||
-      (Word && S.Width != 8))
+  if (!Imm && Op != opcode::Op && Op != opcode::Op32)
+    return Op == opcode::System && P.Zicntr && liftCycleRead(S, A, W, Rd);
+  if (Word && S.Width != 8)
     return false;
+  if (F7 && P.Zbb && basicBitManipulation(S, W, Imm, Word, Rd, X, Y))
+    return true;
+  if (F7 && (P.Zba || P.Zbs) && bitManipulation(S, P, W, Imm, Word, Rd, X, Y))
+    return true;
   const unsigned Bytes = Word ? 4 : S.Width;
   X = S.resize(X, Bytes);
   Y = Imm ? S.resize(S.imm(Immediate), Bytes) : S.resize(Y, Bytes);
@@ -218,8 +513,16 @@ bool integer(State &S, Arch A, RISCVProfile P, uint32_t W) {
       Function &= ~1u;
     if (Function == 32 && (F == 5 || (F == 0 && !Imm)))
       Alternate = true;
-    else if (Function)
-      return false;
+    else if (Function) {
+      const unsigned Form = W & opcode::RegisterFormMask;
+      if (!P.Zicond || (Form != opcode::CzeroEqz && Form != opcode::CzeroNez))
+        return false;
+      NdVar Zero = S.imm(0);
+      NdOp Test =
+          Form == opcode::CzeroEqz ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL;
+      S.write(Rd, S.select(S.op(Test, Y, Zero, 1), Zero, X));
+      return true;
+    }
   }
   constexpr NdOp ALU[] = {NdOp::INT_ADD,  NdOp::INT_LEFT, NdOp::INT_SLESS,
                           NdOp::INT_LESS, NdOp::INT_XOR,  NdOp::INT_RIGHT,
@@ -257,7 +560,7 @@ IntegerControl control(Arch A, RISCVProfile P, const cs_insn &I) {
 }
 
 void lift(Arch A, RISCVProfile P, const cs_insn &I, std::vector<LowOp> &Ops) {
-  State S(I.address, I.size, Ops, A == Arch::RISCV64 ? 8 : 4);
+  State S(I.address, I.size, Ops, isRISCV64(A) ? 8 : 4);
   if (auto W = word(A, P, I); W && integer(S, A, P, *W)) {
     if (S.OpsStart == Ops.size())
       S.emit(NdOp::NOP, {}, {});

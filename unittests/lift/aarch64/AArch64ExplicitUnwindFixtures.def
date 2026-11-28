@@ -1,0 +1,736 @@
+//===- AArch64ExplicitUnwindFixtures.def - Darwin personality checks ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+ASYNC_FRAME_VALUE(unsigned, kPersonalityCallSites, 2)
+ASYNC_FRAME_TEXT(kPersonalityNative, "NEVERD_ARM64E_PERSONALITY_NATIVE")
+ASYNC_FRAME_TEXT(kPersonalityDriver, "personality-driver")
+ASYNC_FRAME_TEXT(kPersonalityInput, "personality-input")
+ASYNC_FRAME_TEXT(kPersonalityResult, "personality-result")
+ASYNC_FRAME_TEXT(kPersonalityLanguage, "objective-c++")
+ASYNC_FRAME_TEXT(kPersonalityImages, "darwin_personality_images")
+ASYNC_FRAME_TEXT(kPersonalityExceptions, "darwin_personality_exceptions")
+ASYNC_FRAME_TEXT(kPersonalityPhasePairs, "darwin_personality_phase_pairs")
+ASYNC_FRAME_TEXT(kRegisterSigningFlag, "-DNEVERD_REGISTER_SIGNING_PC")
+ASYNC_FRAME_TEXT(kRegisterSigningImages, "explicit_register_modifier_images")
+ASYNC_FRAME_TEXT(kPersonalityBody, R"mm(
+#include <Foundation/Foundation.h>
+#include <dlfcn.h>
+#include <libunwind.h>
+#include <ptrauth.h>
+#include <unwind.h>
+#include <cstdint>
+#include <fstream>
+#include <initializer_list>
+
+using Personality = _Unwind_Reason_Code(int, _Unwind_Action,
+                                       _Unwind_Exception_Class,
+                                       _Unwind_Exception *, _Unwind_Context *);
+extern "C" Personality __gxx_personality_v0;
+extern "C" Personality __objc_personality_v0;
+extern "C" void observe_throw();
+
+// This ordinary call frame observes the language runtime's own exception
+// during phase one. Its personality lets the real outer catch handle it.
+#if defined(__arm64e__)
+#define OBSERVE_ENTRY " .cfi_b_key_frame\n pacibsp\n"
+#define OBSERVE_RETURN " retab\n"
+#else
+#define OBSERVE_ENTRY ""
+#define OBSERVE_RETURN " ret\n"
+#endif
+asm(".text\n.p2align 2\n.globl _observe_throw\n_observe_throw:\n .cfi_startproc\n"
+    " .cfi_personality 155, _observe_phase\n"
+    OBSERVE_ENTRY
+    " stp x29,x30,[sp,#-16]!\n .cfi_def_cfa_offset 16\n"
+    " .cfi_offset x29,-16\n .cfi_offset x30,-8\n mov x29,sp\n"
+    " .cfi_def_cfa_register x29\n bl _raise_sample\n ldp x29,x30,[sp],#16\n"
+    OBSERVE_RETURN " .cfi_endproc\n");
+#undef OBSERVE_ENTRY
+#undef OBSERVE_RETURN
+
+struct Sample {};
+static NSObject *Object;
+static bool ObjectiveC, LocalCatch, ThrowObject;
+static uintptr_t Owner, LSDA, FirstReturn, LastReturn, LandingPad, ResumeReturn;
+static unsigned Samples, PhasePairs;
+
+extern "C" void raise_sample() {
+  if (ThrowObject)
+    @throw Object;
+  throw Sample{};
+}
+
+static bool checkDecision(int Version, _Unwind_Exception_Class Class,
+                          _Unwind_Exception *Exception, uintptr_t ReturnPC,
+                          bool Protected) {
+  unw_context_t Here;
+  unw_cursor_t Cursor;
+  if (unw_getcontext(&Here) || unw_init_local(&Cursor, &Here))
+    return false;
+  // Darwin's arm64e local cursor takes a return address authenticated for
+  // its own SP. Only inspect PCs from this fixture's verified call sites.
+#if defined(__arm64e__)
+  unw_word_t SP;
+  if (unw_get_reg(&Cursor, UNW_REG_SP, &SP))
+    return false;
+  const auto CursorPC = reinterpret_cast<unw_word_t>(
+      ptrauth_sign_unauthenticated(reinterpret_cast<void *>(ReturnPC),
+                                   ptrauth_key_return_address, SP));
+#else
+  const auto CursorPC = ReturnPC;
+#endif
+  if (unw_set_reg(&Cursor, UNW_REG_IP, CursorPC))
+    return false;
+  auto *Context = reinterpret_cast<_Unwind_Context *>(&Cursor);
+  const char *Name =
+      ObjectiveC ? "__objc_personality_v0" : "__gxx_personality_v0";
+  void *Symbol = dlsym(RTLD_DEFAULT, Name);
+  const auto ExpectedHandler = reinterpret_cast<uintptr_t>(
+      ptrauth_strip(Symbol, ptrauth_key_function_pointer));
+  unw_proc_info_t Info{};
+  if (!Symbol || unw_get_proc_info(&Cursor, &Info) || Info.start_ip != Owner ||
+      Info.end_ip < ReturnPC || Info.lsda != LSDA ||
+      Info.handler != ExpectedHandler ||
+      _Unwind_GetRegionStart(Context) != Owner)
+    return false;
+  // A Mach-O personality reference and a callable C function pointer have
+  // distinct relocation contracts. Call each runtime entry by its C name.
+  const auto Decide = [&](_Unwind_Action Phase) {
+    if (ObjectiveC)
+      return __objc_personality_v0(Version, Phase, Class, Exception, Context);
+    return __gxx_personality_v0(Version, Phase, Class, Exception, Context);
+  };
+  const bool Catches = Protected && LocalCatch && (!ObjectiveC || ThrowObject);
+  if (Decide(_UA_SEARCH_PHASE) !=
+      (Catches ? _URC_HANDLER_FOUND : _URC_CONTINUE_UNWIND))
+    return false;
+  const auto Action = static_cast<_Unwind_Action>(
+      _UA_CLEANUP_PHASE | (Catches ? _UA_HANDLER_FRAME : 0));
+  const bool Installs = Protected && (!LocalCatch || Catches);
+  if (Decide(Action) !=
+      (Installs ? _URC_INSTALL_CONTEXT : _URC_CONTINUE_UNWIND))
+    return false;
+  // Inspect the scratch cursor and discard it. The system drives the real
+  // exception through observe_throw's unchanged cursor to the normal catch.
+  if (_Unwind_GetIP(Context) != (Installs ? LandingPad : ReturnPC))
+    return false;
+  if (Installs && (_Unwind_GetGR(Context, 0) !=
+                       reinterpret_cast<uintptr_t>(Exception) ||
+                   _Unwind_GetGR(Context, 1) != unsigned(Catches)))
+    return false;
+  ++PhasePairs;
+  return true;
+}
+
+extern "C" _Unwind_Reason_Code
+observe_phase(int Version, _Unwind_Action Action, _Unwind_Exception_Class Class,
+              _Unwind_Exception *Exception, _Unwind_Context *) {
+  if (Action == _UA_SEARCH_PHASE &&
+      checkDecision(Version, Class, Exception, ResumeReturn, false) &&
+      checkDecision(Version, Class, Exception, FirstReturn, true) &&
+      (LastReturn == FirstReturn ||
+       checkDecision(Version, Class, Exception, LastReturn, true)))
+    ++Samples;
+  return _URC_CONTINUE_UNWIND;
+}
+
+int main(int Argc, char **Argv) {
+  if (Argc != 4)
+    return 1;
+  uintptr_t OwnerOffset, Begin, End, Pad, Resume;
+  intptr_t TableOffset;
+  std::ifstream Input(Argv[2]);
+  if (!(Input >> ObjectiveC >> LocalCatch >> OwnerOffset >> TableOffset >>
+        Begin >> End >> Pad >> Resume))
+    return 2;
+  void *Image = dlopen(Argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!Image)
+    return 3;
+  void *Entry = dlsym(Image, "signal_scope");
+  if (!Entry)
+    return 4;
+  Owner = reinterpret_cast<uintptr_t>(
+              ptrauth_strip(Entry, ptrauth_key_function_pointer)) + OwnerOffset;
+  LSDA = Owner + TableOffset;
+  FirstReturn = Owner + Begin + sizeof(uint32_t);
+  LastReturn = Owner + End;
+  LandingPad = Owner + Pad;
+  ResumeReturn = Owner + Resume + sizeof(uint32_t);
+  Dl_info Library{};
+  if (!dladdr(Entry, &Library))
+    return 4;
+  for (auto Address :
+       {Owner, FirstReturn, LastReturn, LandingPad, ResumeReturn, LSDA}) {
+    Dl_info Part{};
+    if (!dladdr(reinterpret_cast<const void *>(Address), &Part) ||
+        Part.dli_fbase != Library.dli_fbase)
+      return 4;
+  }
+  @autoreleasepool {
+    Object = [[NSObject new] autorelease];
+    try {
+      observe_throw();
+      return 5;
+    } catch (const Sample &) {}
+    if (ObjectiveC) {
+      ThrowObject = true;
+      @try {
+        observe_throw();
+        return 6;
+      } @catch (NSObject *Seen) {
+        if (Seen != Object)
+          return 7;
+      }
+    }
+  }
+  if (Samples != 1 + unsigned(ObjectiveC) ||
+      PhasePairs != Samples * (2 + unsigned(FirstReturn != LastReturn)) ||
+      dlclose(Image))
+    return 8;
+  std::ofstream Result(Argv[3]);
+  Result << Samples << ' ' << PhasePairs;
+  Result.close();
+  return Result ? 0 : 9;
+}
+)mm")
+
+ASYNC_FRAME_TEXT(kPublishedSigningUses, "published_signing_address_images")
+ASYNC_FRAME_TEXT(kSigningRows, "verified_signing_rows")
+ASYNC_FRAME_TEXT(kSigningAddressCopy, "-DNEVERD_RETURN_SIGNING_ADDRESS")
+ASYNC_FRAME_TEXT(kSigningAddressStore, "-DNEVERD_STORE_SIGNING_ADDRESS")
+ASYNC_FRAME_TEXT(kSigningPairStore, "-DNEVERD_STORE_SIGNING_PAIR")
+ASYNC_FRAME_TEXT(kSigningAddressReturn, "-DNEVERD_AUTHENTICATED_RETURN")
+ASYNC_FRAME_TEXT(kSigningAddressKeyB, "-DNEVERD_SIGN_WITH_B")
+ASYNC_FRAME_TEXT(kOtherModifierEntry, "-DNEVERD_OTHER_MODIFIER_ENTRY")
+ASYNC_FRAME_TEXT(kRepublishedSigningImage, "republished.dylib")
+ASYNC_FRAME_TEXT(kSigningAddressBoth, "-DNEVERD_RETURN_AND_STORE")
+ASYNC_FRAME_TEXT(kSigningBeforeAuth, "-DNEVERD_STORE_AND_COPY_BEFORE_AUTH")
+ASYNC_FRAME_TEXT(kSigningPagePair, "-DNEVERD_SIGNING_PAGE_PAIR")
+ASYNC_FRAME_TEXT(kSigningForwardReturn, "-DNEVERD_FORWARD_RETURN")
+ASYNC_FRAME_TEXT(kSigningReturnAliases, "-DNEVERD_SIGNING_RETURN_ALIASES")
+ASYNC_FRAME_TEXT(kSigningForwardStore, "-DNEVERD_FORWARD_STORE")
+ASYNC_FRAME_TEXT(kBothIPLive, "-DNEVERD_ORIGINAL_IP_PAIR_LIVE")
+ASYNC_FRAME_TEXT(kAllSigningScratchLive, "-DNEVERD_ALL_SIGNING_SCRATCH_LIVE")
+ASYNC_FRAME_TEXT(kLiveModifierCopy, "-DNEVERD_LIVE_MODIFIER_COPY")
+ASYNC_FRAME_TEXT(kLiveFallthrough, "-DNEVERD_LIVE_SIGNING_FALLTHROUGH")
+ASYNC_FRAME_TEXT(kLivePage, "-DNEVERD_LIVE_SIGNING_PAGE")
+ASYNC_FRAME_VALUE(unsigned, kSigningFrameSameValueRegister, 19)
+ASYNC_FRAME_TEXT(kSigningRefusals, "refused_signing_address_cases")
+ASYNC_FRAME_TEXT(kSigningModelFill, " .fill {0}, {1}, {2}\n")
+ASYNC_FRAME_TEXT(kSigningModelPage, " .balign {0}\n .space {1}\n")
+ASYNC_FRAME_TEXT(kSigningModelExport, "NEVERD_ARM64E_SIGNING_ADDRESS_FIXTURES")
+ASYNC_FRAME_TEXT(kSigningModelFile, "signing-address.S")
+ASYNC_FRAME_TEXT(kSigningModelPath, "signing_address_model_assembly")
+ASYNC_FRAME_TEXT(kSigningModelCases, "exported_signing_address_bodies")
+ASYNC_FRAME_TEXT(kSigningModelCall,
+                 " check_body {0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}\n")
+ASYNC_FRAME_TEXT(kSigningModelLabel, "Lbody{0}:\n")
+ASYNC_FRAME_TEXT(kSigningModelWord, " .long {0}\n")
+ASYNC_FRAME_TEXT(kSigningModelBegin, R"asm(
+.text
+.globl _main
+.p2align 2
+_main:
+ stp x29, x30, [sp, #-112]!
+ stp x19, x20, [sp, #16]
+ mov x29, sp
+ add x20, sp, #40
+.macro run_body
+ str xzr, [x20]
+ .if $4
+  .irp offset, 8, 16, 24, 32, 40, 48
+   str xzr, [x20, #\offset]
+  .endr
+ .endif
+ mov x0, x20
+ mov x1, #$1
+ .ifnb $5
+  .if $5
+   stp xzr, xzr, [x20, #8]
+   .irp n, 10, 11, 12, 13, 14, 15, 16, 17
+    mov x\n, #\n
+   .endr
+   add x2, x20, #56
+   str xzr, [x2, #8]
+   cmp xzr, xzr
+  .endif
+ .endif
+ bl Lbody$0
+ .ifnb $5
+  .if $5
+   b.ne Lfailed
+   cmp sp, x29
+   b.ne Lfailed
+   .if $6
+    ldr x9, [x2, #8]
+    cmp x9, #1
+    b.ne Lfailed
+    .irp offset, 8, 16
+     ldr x9, [x20, #\offset]
+     cmp x9, x19
+     b.ne Lfailed
+    .endr
+   .endif
+   ldr x9, [x2]
+   .if $3
+    eor x9, x9, x19
+    cmp x9, #15
+    b.ne Lfailed
+   .else
+    cbnz x9, Lfailed
+   .endif
+   .irp n, 10, 11, 12, 13, 14, 16, 17
+    cmp x\n, #\n
+    b.ne Lfailed
+   .endr
+   .if $3
+    cmp x15, x19
+   .else
+    cmp x15, #15
+   .endif
+   b.ne Lfailed
+  .endif
+ .endif
+ .if $2
+  cmp x0, x19
+ .else
+  cmp x0, x20
+ .endif
+ b.ne Lfailed
+ ldr x9, [x20]
+ .if $3
+  cmp x9, x19
+  b.ne Lfailed
+ .else
+  cbnz x9, Lfailed
+ .endif
+ .if $4
+  .irp offset, 8, 16, 24, 32, 40, 48
+   ldr x9, [x20, #\offset]
+   cmp x9, x19
+   b.ne Lfailed
+  .endr
+ .endif
+.endm
+.macro check_body
+ adr x19, Lbody$0
+ ldr x9, =$1
+ add x19, x19, x9
+ run_body $0, 0, $4, $5, $6
+ .if $7
+  mov x19, x20
+ .endif
+ run_body $0, 1, $2, $3, $6
+.endm
+)asm")
+ASYNC_FRAME_TEXT(kSigningModelEnd, R"asm(
+ mov w0, #0
+ b Ldone
+Lfailed:
+ mov w0, #1
+Ldone:
+ ldp x19, x20, [sp, #16]
+ ldp x29, x30, [sp], #112
+ ret
+ .ltorg
+)asm")
+ASYNC_FRAME_TEXT(kJoinCommon, "-DNEVERD_JOIN_COMMON")
+ASYNC_FRAME_TEXT(kJoinDistinct, "-DNEVERD_JOIN_DISTINCT")
+ASYNC_FRAME_TEXT(kJoinCopyPage, "-DNEVERD_JOIN_COPY_PAGE")
+ASYNC_FRAME_TEXT(kJoinLocal, "-DNEVERD_JOIN_LOCAL")
+ASYNC_FRAME_TEXT(kJoinReturn, "-DNEVERD_JOIN_RETURN")
+ASYNC_FRAME_TEXT(kJoinScratch, "-DNEVERD_JOIN_SCRATCH")
+ASYNC_FRAME_TEXT(kJoinPressureStore, "-DNEVERD_JOIN_PRESSURE_STORE")
+ASYNC_FRAME_TEXT(kJoinPressureReturn, "-DNEVERD_JOIN_PRESSURE_RETURN")
+ASYNC_FRAME_TEXT(kJoinPressurePrefix, "-DNEVERD_JOIN_PRESSURE_PREFIX")
+ASYNC_FRAME_TEXT(kJoinForwardStore, "-DNEVERD_JOIN_FORWARD_STORE")
+ASYNC_FRAME_TEXT(kJoinForwardReturn, "-DNEVERD_JOIN_FORWARD_RETURN")
+ASYNC_FRAME_TEXT(kJoinFarStore, "-DNEVERD_JOIN_FAR_STORE")
+ASYNC_FRAME_TEXT(kJoinFarReturn, "-DNEVERD_JOIN_FAR_RETURN")
+ASYNC_FRAME_TEXT(kJoinLimitStore, "-DNEVERD_JOIN_LIMIT_STORE")
+ASYNC_FRAME_TEXT(kJoinForwardConflict, "-DNEVERD_JOIN_FORWARD_CONFLICT")
+ASYNC_FRAME_TEXT(kJoinVerifiedIslands, "verified_distant_signing_islands")
+ASYNC_FRAME_TEXT(kJoinForwardScope, "-DNEVERD_JOIN_FORWARD_SCOPE")
+ASYNC_FRAME_TEXT(kJoinPressureConflict, "-DNEVERD_JOIN_PRESSURE_CONFLICT")
+ASYNC_FRAME_TEXT(kJoinPressureScope, "-DNEVERD_JOIN_PRESSURE_SCOPE")
+ASYNC_FRAME_TEXT(kJoinUnknown, "-DNEVERD_JOIN_UNKNOWN")
+ASYNC_FRAME_TEXT(kJoinCrossed, "-DNEVERD_JOIN_CROSSED")
+ASYNC_FRAME_TEXT(kJoinSwapped, "-DNEVERD_JOIN_SWAPPED")
+ASYNC_FRAME_TEXT(kJoinOverwrite, "-DNEVERD_JOIN_OVERWRITE")
+ASYNC_FRAME_TEXT(kJoinClobber, "-DNEVERD_JOIN_CLOBBER")
+ASYNC_FRAME_TEXT(kJoinWrongKey, "-DNEVERD_JOIN_WRONG_KEY")
+ASYNC_FRAME_TEXT(kJoinedModelExport, "NEVERD_ARM64E_JOINED_SIGNING_FIXTURES")
+ASYNC_FRAME_TEXT(kJoinedSnapshotCases, "resolved_interrupted_signing_pcs")
+ASYNC_FRAME_TEXT(kJoinModelCall, R"asm(
+ ldr x19, =Lbody{0}
+ ldr x9, ={1}
+ add x19, x19, x9
+ run_body {0}, 0, {3}, {4}, 0, {5}, {6}
+ ldr x19, =Lbody{0}
+ ldr x9, ={2}
+ add x19, x19, x9
+ run_body {0}, 1, {3}, {4}, 0, {5}, {6}
+)asm")
+ASYNC_FRAME_TEXT(kJoinedSigningBody, R"asm(
+ .text
+ .globl _signal_tick
+ .p2align 2
+_signal_tick:
+ .cfi_startproc
+ nop
+#ifdef NEVERD_JOIN_FORWARD_CONFLICT
+#define NEVERD_JOIN_CROSSED
+#endif
+#if defined(NEVERD_JOIN_FORWARD_SCOPE) || defined(NEVERD_JOIN_FORWARD_CONFLICT)
+#define NEVERD_JOIN_FORWARD_STORE
+#endif
+#if defined(NEVERD_JOIN_FORWARD_STORE) || defined(NEVERD_JOIN_FORWARD_RETURN)
+#define NEVERD_JOIN_FORWARD
+#endif
+#if defined(NEVERD_JOIN_FAR_STORE) || defined(NEVERD_JOIN_FAR_RETURN)
+#define NEVERD_JOIN_FAR
+#endif
+#if defined(NEVERD_JOIN_FORWARD_STORE) || defined(NEVERD_JOIN_FAR_STORE) || defined(NEVERD_JOIN_LIMIT_STORE)
+#define NEVERD_JOIN_PRESSURE_STORE
+#endif
+#if defined(NEVERD_JOIN_FORWARD_RETURN) || defined(NEVERD_JOIN_FAR_RETURN)
+#define NEVERD_JOIN_PRESSURE_RETURN
+#endif
+#ifdef NEVERD_JOIN_PRESSURE_CONFLICT
+#define NEVERD_JOIN_CROSSED
+#define NEVERD_JOIN_PRESSURE_STORE
+#endif
+#ifdef NEVERD_JOIN_PRESSURE_SCOPE
+#define NEVERD_JOIN_PRESSURE_PREFIX
+#endif
+#ifdef NEVERD_JOIN_PRESSURE_PREFIX
+#define NEVERD_JOIN_PRESSURE_STORE
+#endif
+#ifdef NEVERD_JOIN_PRESSURE_RETURN
+#define NEVERD_JOIN_RETURN
+#endif
+#if defined(NEVERD_JOIN_PRESSURE_RETURN) || defined(NEVERD_JOIN_PRESSURE_STORE)
+.macro live_inputs
+ mov x9, xzr
+ .irp reg, x10, x11, x12, x13, x14, x15, x16, x17
+  eor x9, x9, \reg
+ .endr
+ str x9, [x2]
+.endm
+#else
+.macro live_inputs
+.endm
+#endif
+#ifdef NEVERD_SIGN_WITH_B
+#define SIGN .inst 0xdac1a7fe
+#define OTHER_SIGN .inst 0xdac1a3fe
+#else
+#define SIGN .inst 0xdac1a3fe
+#define OTHER_SIGN .inst 0xdac1a7fe
+#endif
+ .macro consume_join
+Lauth:
+#ifdef NEVERD_JOIN_OVERWRITE
+ adr x15, Lfirst
+#endif
+#ifdef NEVERD_JOIN_FORWARD_SCOPE
+ .cfi_offset x19, -8
+#else
+ .cfi_same_value x19
+#endif
+ .cfi_escape 0x2e, 0
+#ifdef NEVERD_JOIN_PRESSURE_PREFIX
+ ldr x9, [x2, #8]
+#ifdef NEVERD_JOIN_PRESSURE_SCOPE
+ .cfi_restore x19
+#endif
+ add x9, x9, #1
+ str x9, [x2, #8]
+ str x15, [x0, #8]
+#endif
+#ifdef NEVERD_JOIN_RETURN
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xd65f0fe0
+#else
+ .inst 0xd65f0be0
+#endif
+#else
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xdac195fe
+#else
+ .inst 0xdac191fe
+#endif
+ .cfi_restore x19
+#if defined(NEVERD_JOIN_FORWARD_STORE) || defined(NEVERD_JOIN_FAR_STORE) || defined(NEVERD_JOIN_LIMIT_STORE)
+ live_inputs
+#endif
+#ifndef NEVERD_JOIN_LOCAL
+ str x15, [x0]
+ mov x0, x15
+#endif
+ ret
+#endif
+ .endm
+#ifdef NEVERD_JOIN_FORWARD
+ b Lchoose
+ consume_join
+Lchoose:
+#endif
+#ifdef NEVERD_JOIN_SCRATCH
+ .irp r, x10, x11, x12, x13, x14, x15, x16, x17
+  mov \r, xzr
+ .endr
+#endif
+#ifdef NEVERD_JOIN_COMMON
+Lfirst:
+ SIGN
+#endif
+ cbnz x1, Lright
+#ifndef NEVERD_JOIN_COMMON
+Lfirst:
+ SIGN
+#endif
+#ifdef NEVERD_JOIN_RETURN
+ adr x0, Lfirst
+#elif defined(NEVERD_JOIN_SWAPPED)
+ adr x15, Lsecond
+#else
+ adr x15, Lfirst
+#endif
+ live_inputs
+#ifdef NEVERD_JOIN_PRESSURE_PREFIX
+ adr x9, Lfirst
+ str x9, [x0, #16]
+#endif
+ b Lauth
+#ifdef NEVERD_JOIN_FAR
+ .rept 65536
+ nop
+ .endr
+#endif
+Lright:
+#ifndef NEVERD_JOIN_COMMON
+Lsecond:
+#ifdef NEVERD_JOIN_WRONG_KEY
+ OTHER_SIGN
+#else
+ SIGN
+#endif
+#else
+#define Lsecond Lfirst
+#endif
+#if defined(NEVERD_JOIN_UNKNOWN)
+ nop
+#elif defined(NEVERD_JOIN_CROSSED) || defined(NEVERD_JOIN_SWAPPED)
+ adr x15, Lfirst
+#elif defined(NEVERD_JOIN_COPY_PAGE)
+ adrp x10, Lsecond@PAGE
+ add x10, x10, Lsecond@PAGEOFF
+ mov x15, x10
+#elif defined(NEVERD_JOIN_RETURN)
+ adr x0, Lsecond
+#else
+ adr x15, Lsecond
+#endif
+#ifdef NEVERD_JOIN_CLOBBER
+ mov w15, w2
+#endif
+#ifdef NEVERD_JOIN_SCRATCH
+ mov x16, xzr
+#endif
+ live_inputs
+#ifdef NEVERD_JOIN_PRESSURE_PREFIX
+ adr x9, Lsecond
+ str x9, [x0, #16]
+#endif
+#ifdef NEVERD_JOIN_LIMIT_STORE
+ b Lauth
+ .rept (0x3fffc - (. - Lfirst)) / 4
+ nop
+ .endr
+#endif
+#ifdef NEVERD_JOIN_FORWARD
+ b Lauth
+#else
+ consume_join
+#endif
+ .cfi_endproc
+)asm")
+ASYNC_FRAME_TEXT(kSigningAddressBody, R"asm(
+ .text
+ .globl _signal_tick
+ .p2align 2
+_signal_tick:
+ .cfi_startproc
+#ifdef NEVERD_LIVE_SIGNING_FALLTHROUGH
+ .cfi_personality 155, ___gxx_personality_v0
+ .cfi_lsda 16, Lmodifier_lsda
+#endif
+#if defined(NEVERD_FORWARD_STORE) || defined(NEVERD_FORWARD_RETURN)
+ b Lsign
+Lmaterialize:
+#ifdef NEVERD_FORWARD_STORE
+ mov x16, x0
+#ifdef NEVERD_ALL_SIGNING_SCRATCH_LIVE
+ add x17, x0, #8
+ add x10, x0, #16
+ add x11, x0, #24
+ add x12, x0, #32
+ add x13, x0, #40
+ add x14, x0, #48
+#elif defined(NEVERD_ORIGINAL_IP_PAIR_LIVE)
+ mov x17, x0
+#endif
+#ifdef NEVERD_LIVE_SIGNING_PAGE
+ adrp x15, Lsign@PAGE
+ add x15, x15, Lsign@PAGEOFF
+#else
+ adr x15, Lsign
+#endif
+#ifdef NEVERD_LIVE_MODIFIER_COPY
+ str x15, [x16]
+ mov x0, x15
+#endif
+#if defined(NEVERD_ORIGINAL_IP_PAIR_LIVE) || defined(NEVERD_ALL_SIGNING_SCRATCH_LIVE)
+ .cfi_same_value x19
+ .cfi_escape 0x2e, 0
+#endif
+#if defined(NEVERD_LIVE_MODIFIER_COPY) && defined(NEVERD_SIGN_WITH_B)
+ .inst 0xdac1941e // autibsppc x0
+#elif defined(NEVERD_LIVE_MODIFIER_COPY)
+ .inst 0xdac1901e // autiasppc x0
+#elif defined(NEVERD_SIGN_WITH_B)
+ .inst 0xdac195fe // autibsppc x15
+#else
+ .inst 0xdac191fe // autiasppc x15
+#endif
+LcheckedAfter:
+#ifdef NEVERD_ALL_SIGNING_SCRATCH_LIVE
+ .cfi_restore x19
+#endif
+#ifdef NEVERD_LIVE_SIGNING_FALLTHROUGH
+ cbz x1, Lvalues
+ mov x1, #0
+ mov x15, x0
+ b LcheckedAfter
+Lvalues:
+#endif
+#ifdef NEVERD_LIVE_MODIFIER_COPY
+ str x0, [x16]
+#else
+ str x15, [x16]
+#endif
+#if defined(NEVERD_ORIGINAL_IP_PAIR_LIVE) || defined(NEVERD_ALL_SIGNING_SCRATCH_LIVE)
+ str x15, [x17]
+#endif
+#ifdef NEVERD_ALL_SIGNING_SCRATCH_LIVE
+ .irp reg, x10, x11, x12, x13, x14
+ str x15, [\reg]
+ .endr
+#endif
+ mov x0, x15
+ ret
+#else
+ adr x0, Lsign
+#ifdef NEVERD_SIGNING_RETURN_ALIASES
+ .irp reg, x16, x17, x10, x11, x12, x13, x14, x15
+ mov \reg, x0
+ .endr
+#endif
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xd65f0fe0 // retabsppc x0
+#else
+ .inst 0xd65f0be0 // retaasppc x0
+#endif
+#endif
+Lsign:
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xdac1a7fe // pacibsppc
+#else
+ .inst 0xdac1a3fe // paciasppc
+#endif
+ b Lmaterialize
+#else
+#ifdef NEVERD_SIGN_WITH_B
+ nop
+#endif
+Lsign:
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xdac1a7fe // pacibsppc
+#else
+ .inst 0xdac1a3fe // paciasppc
+#endif
+#ifdef NEVERD_AUTHENTICATED_RETURN
+ adr x0, Lsign
+#ifdef NEVERD_SIGN_WITH_B
+ .inst 0xd65f0fe0 // retabsppc x0
+#else
+ .inst 0xd65f0be0 // retaasppc x0
+#endif
+#else
+#ifdef NEVERD_OTHER_MODIFIER_ENTRY
+ cbnz x2, Lauth
+#endif
+#ifdef NEVERD_SIGNING_PAGE_PAIR
+ adrp x15, Lsign@PAGE
+ add x15, x15, Lsign@PAGEOFF
+#else
+ adr x15, Lsign
+#endif
+#ifdef NEVERD_STORE_AND_COPY_BEFORE_AUTH
+ str x15, [x0]
+ mov x0, x15
+#endif
+Lauth:
+#if defined(NEVERD_SIGN_WITH_B) && defined(NEVERD_STORE_AND_COPY_BEFORE_AUTH)
+ .inst 0xdac1941e // autibsppc x0
+#elif defined(NEVERD_STORE_AND_COPY_BEFORE_AUTH)
+ .inst 0xdac1901e // autiasppc x0
+#elif defined(NEVERD_SIGN_WITH_B)
+ .inst 0xdac195fe // autibsppc x15
+#else
+ .inst 0xdac191fe // autiasppc x15
+#endif
+ cbz x1, Lreturn
+#if defined(NEVERD_STORE_SIGNING_PAIR)
+ stp xzr, x15, [x0, #-8]
+#elif defined(NEVERD_STORE_SIGNING_ADDRESS) || defined(NEVERD_RETURN_AND_STORE)
+ str x15, [x0]
+#endif
+#if defined(NEVERD_RETURN_SIGNING_ADDRESS) || defined(NEVERD_RETURN_AND_STORE)
+ mov x0, x15
+#elif !defined(NEVERD_STORE_SIGNING_ADDRESS)
+ mov x15, xzr
+#endif
+Lreturn:
+ ret
+#endif
+#endif
+#ifdef NEVERD_LIVE_SIGNING_FALLTHROUGH
+Lterminate:
+ brk #0
+#endif
+ .cfi_endproc
+#ifdef NEVERD_LIVE_SIGNING_FALLTHROUGH
+ .section __TEXT,__gcc_except_tab
+Lmodifier_lsda:
+ .byte 255, 255, 1
+ .uleb128 LsitesEnd-LsitesBegin
+LsitesBegin:
+ .uleb128 Lmaterialize-_signal_tick
+ .uleb128 LcheckedAfter-Lmaterialize
+ .uleb128 LcheckedAfter-_signal_tick
+ .uleb128 0
+ .uleb128 LcheckedAfter-_signal_tick
+ .uleb128 Lvalues-LcheckedAfter
+ .uleb128 Lterminate-_signal_tick
+ .uleb128 0
+LsitesEnd:
+#endif
+#ifdef NEVERD_LIVE_SIGNING_PAGE
+ .zerofill __DATA,__bss,_signing_image_gap,0x200000,3
+#endif
+)asm")

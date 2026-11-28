@@ -9,7 +9,6 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "../BlobStore.h"
 #include "ZipInternal.h"
 
 #include "neverd/web/Error.h"
@@ -33,21 +32,25 @@ bool packageZipDeflateAvailable() {
 }
 
 void decodeZipMember(const Blob &Stored, uint16_t Method, uint64_t Size,
-                     uint32_t ExpectedCRC, BlobStore &Store, uint64_t &Steps) {
+                     uint32_t ExpectedCRC,
+                     llvm::function_ref<void(std::string_view)> Append,
+                     uint64_t &Steps, llvm::function_ref<bool()> Stop) {
   uint64_t Read = 0, Produced = 0;
   uint32_t CRC = 0;
   const auto Step = [&] {
+    if (Stop && Stop())
+      throw Error("cancelled");
     if (++Steps > 4 * MaxPackageArchiveBytes / BlobTransferBytes +
                       2 * MaxPackageArchiveMembers)
       throw Error("zip_work_budget_exceeded");
   };
-  const auto Append = [&](std::string_view Bytes) {
+  const auto Consume = [&](std::string_view Bytes) {
     if (Bytes.size() > Size - Produced)
       throw Error("zip_uncompressed_size_mismatch");
     Produced += Bytes.size();
     CRC = llvm::crc32(
         CRC, {reinterpret_cast<const uint8_t *>(Bytes.data()), Bytes.size()});
-    Store.append(Bytes);
+    Append(Bytes);
   };
   if (Method == 0) {
     if (Stored.size() != Size)
@@ -57,7 +60,7 @@ void decodeZipMember(const Blob &Stored, uint16_t Method, uint64_t Size,
       auto Bytes =
           Stored.read(Read, std::min(BlobTransferBytes, Stored.size() - Read));
       Read += Bytes.size();
-      Append(Bytes);
+      Consume(Bytes);
     }
   } else if (Method == 8) {
 #ifndef NEVERD_WEB_ZLIB
@@ -88,7 +91,7 @@ void decodeZipMember(const Blob &Stored, uint16_t Method, uint64_t Size,
       S.avail_out = uInt(Output.size());
       const int Status = inflate(&S, Z_NO_FLUSH);
       const auto Count = Output.size() - S.avail_out;
-      Append({Output.data(), Count});
+      Consume({Output.data(), Count});
       if (Status == Z_STREAM_END) {
         if (S.avail_in || Read != Stored.size())
           throw Error("zip_trailing_deflate_data");

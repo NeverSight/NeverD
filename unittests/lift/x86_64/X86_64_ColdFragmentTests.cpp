@@ -12,7 +12,9 @@
 ///
 /// The fixture, test_gcc_cold_fragment_x64.s, is GCC 15.2's output for a
 /// cleanup that destroys a local before _Unwind_Resume, linked with its
-/// symbols and stripped.
+/// symbols and stripped.  test_gcc_frameless_cold_x64.s is GCC's isolated
+/// trap part of a frameless function, whose FDE begins with the entry rule;
+/// test_entry_like_parts_x64.s holds entry-like parts that stay functions.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -158,6 +160,102 @@ TEST(X86_64ColdFragment, ANamedColdPartIsItsFunctionsCode) {
   EXPECT_TRUE(llvm::none_of(Img->getFunctionSymbols(), [&](const Symbol *Sym) {
     return Sym->Addr == Cold->Addr;
   }));
+}
+
+/// The address of \p Name in the linked fixture \p File, which keeps its
+/// symbols.
+std::optional<va_t> symbolStart(llvm::StringRef File, llvm::StringRef Name) {
+  const std::optional<BinaryImage> Named = loadFixture(File);
+  if (!Named)
+    return std::nullopt;
+  const Symbol *Sym = Named->findSymbol(Name);
+  if (!Sym)
+    return std::nullopt;
+  return Sym->Addr;
+}
+
+/// Whether \p Img binds the part at \p Start to the function at \p Parent.
+bool boundTo(const BinaryImage &Img, va_t Start, va_t Parent) {
+  const ExceptionFunction *Part =
+      Img.ExceptionMetadata.findFunctionEntry(Start);
+  const ExceptionFunction *Primary =
+      Img.ExceptionMetadata.findFunctionEntry(Parent);
+  return Part && Primary && Part->Kind == RuntimeFunctionKind::Fragment &&
+         Img.ContinuationCodeStarts.count(Start) &&
+         llvm::any_of(Primary->FragmentRanges,
+                      [&](const ExceptionAddressRange &Range) {
+                        return Range.Begin == Start;
+                      });
+}
+
+// A frameless function's isolated trap part begins with the entry rule, so
+// no frame shows it continuing the function.  Nothing names it a function
+// (its `.cold` name is GCC's name for a part), and the function's branches
+// enter it with the entry frame.
+TEST(X86_64ColdFragment, TheLoaderBindsAFramelessTrapPart) {
+  const std::optional<va_t> Cold =
+      symbolStart("test_gcc_frameless_cold_x64.so", "frameless_cold_mark.cold");
+  const std::optional<va_t> Mark =
+      symbolStart("test_gcc_frameless_cold_x64.so", "frameless_cold_mark");
+  if (!Cold || !Mark)
+    GTEST_SKIP() << "the fixture links with ld.lld";
+  for (const char *File : {"test_gcc_frameless_cold_x64.so",
+                           "test_gcc_frameless_cold_x64_stripped.so"}) {
+    SCOPED_TRACE(File);
+    const std::optional<BinaryImage> Img = loadFixture(File);
+    ASSERT_TRUE(Img);
+    EXPECT_TRUE(boundTo(*Img, *Cold, *Mark));
+  }
+}
+
+// Bound, the part is a case of the inlined switch: the table's unowned tags
+// enter it, so the dispatch is a switch whose isolated path traps, and the
+// part has no definition of its own.  As a function, the part was called,
+// and the dispatch that reaches it was emitted as a call through the table.
+TEST(X86_64ColdFragment, AFramelessTrapPartIsACaseOfItsSwitch) {
+  const std::optional<BinaryImage> Img =
+      loadFixture("test_gcc_frameless_cold_x64_stripped.so");
+  const std::optional<va_t> Cold =
+      symbolStart("test_gcc_frameless_cold_x64.so", "frameless_cold_mark.cold");
+  if (!Img || !Cold)
+    GTEST_SKIP() << "the fixture links with ld.lld";
+  const std::string Source = decompileAll(*Img);
+  const std::string Mark = definitionOf(Source, "frameless_cold_mark");
+  ASSERT_FALSE(Mark.empty()) << Source;
+  EXPECT_EQ(Mark.find("not proved"), std::string::npos) << Source;
+  EXPECT_NE(Mark.find("switch ("), std::string::npos) << Source;
+  EXPECT_EQ(Mark.find("(*)"), std::string::npos) << Source;
+  EXPECT_NE(Mark.find("__builtin_trap()"), std::string::npos) << Source;
+  EXPECT_TRUE(definitionOf(Source, "sub_" + llvm::utohexstr(*Cold)).empty())
+      << Source;
+}
+
+// An entry-like part that anything names as a function stays one: a direct
+// call, a return, a relocated pointer, or a name of its own.
+TEST(X86_64ColdFragment, EntryLikePartsSomethingNamesStayFunctions) {
+  const char *Named = "test_entry_like_parts_x64.so";
+  const std::optional<va_t> Parent = symbolStart(Named, "jumps_to_parts");
+  const std::optional<va_t> Bound = symbolStart(Named, "bound_trap");
+  const std::optional<va_t> Called = symbolStart(Named, "called_trap");
+  const std::optional<va_t> Returning = symbolStart(Named, "returning_part");
+  const std::optional<va_t> Pointed = symbolStart(Named, "pointed_trap");
+  const std::optional<BinaryImage> Stripped =
+      loadFixture("test_entry_like_parts_x64_stripped.so");
+  if (!Parent || !Bound || !Called || !Returning || !Pointed || !Stripped)
+    GTEST_SKIP() << "the fixture links with ld.lld";
+  EXPECT_TRUE(boundTo(*Stripped, *Bound, *Parent));
+  for (va_t Part : {*Called, *Returning, *Pointed}) {
+    SCOPED_TRACE(llvm::utohexstr(Part));
+    const ExceptionFunction *Function =
+        Stripped->ExceptionMetadata.findFunctionEntry(Part);
+    ASSERT_NE(Function, nullptr);
+    EXPECT_EQ(Function->Kind, RuntimeFunctionKind::Primary);
+    EXPECT_FALSE(Stripped->ContinuationCodeStarts.count(Part));
+  }
+  // With its symbols, bound_trap's own name keeps it a function as well.
+  const std::optional<BinaryImage> WithNames = loadFixture(Named);
+  ASSERT_TRUE(WithNames);
+  EXPECT_FALSE(WithNames->ContinuationCodeStarts.count(*Bound));
 }
 
 } // namespace

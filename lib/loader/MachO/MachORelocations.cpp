@@ -624,13 +624,12 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
       // A GOT reference applies its direct form against the GOT entry, which
       // holds the symbol's address.
       std::optional<va_t> GOTEntry;
-      if (!Info.IsScattered && Info.IsExternal)
-        if (auto It = Externs.GOTCells.find(Info.SymbolNumber);
-            It != Externs.GOTCells.end()) {
-          GOTEntry = It->second;
-          if (auto Direct = directTypeOfGOTReference(Img.Arch, Info.Type))
-            Info.Type = *Direct;
+      if (Info.IsExternal) {
+        if (auto Direct = directTypeOfGOTReference(Img.Arch, Info.Type)) {
+          GOTEntry = Externs.GOTCells.at(Info.SymbolNumber);
+          Info.Type = *Direct;
         }
+      }
       const uint64_t RAddr = Info.Address;
       const uint32_t RType = Info.Type;
       auto Resolved =
@@ -752,7 +751,6 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
         } else if (RType == ARM64_RELOC_AUTHENTICATED_POINTER) {
           if (Info.IsScattered || Info.IsPCRel ||
               Info.Length != arm64e::kObjectPointerLength || !Info.IsExternal ||
-              !Resolved ||
               !rangeInBounds(SegOff, arm64e::kPointerBytes,
                              ApplySeg->Data.size()))
             return relocationError(arm64e::kInvalidObjectPointer, SecAddr,
@@ -762,26 +760,38 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
           if (!Word)
             return relocationError(arm64e::kInvalidObjectPointerBits, SecAddr,
                                    RAddr);
-          const int64_t Addend = Word->Addend;
-          const auto Target = addSigned(S, Addend);
-          if (!Target || Img.MachOAuthenticatedPointers.count(P))
-            return relocationError(arm64e::kConflictingObjectPointer, SecAddr,
+          const auto Symbol = Reloc.getSymbol();
+          if (Symbol == Obj.symbol_end())
+            return relocationError(arm64e::kInvalidObjectPointer, SecAddr,
                                    RAddr);
+          auto Name = Symbol->getName();
+          if (!Name)
+            return Name.takeError();
           MachOAuthenticatedPointer Auth;
-          Auth.Target = *Target;
+          if (Resolved) {
+            const auto Target = addSigned(Resolved->Address, Word->Addend);
+            if (!Target)
+              return relocationError(arm64e::kConflictingObjectPointer, SecAddr,
+                                     RAddr);
+            Auth.Target = *Target;
+          } else {
+            const auto Entry =
+                readObjectNList(Obj, Symbol->getRawDataRefImpl());
+            if (Name->empty() || !Entry.importWeakness().value_or(false))
+              return relocationError(arm64e::kInvalidObjectPointer, SecAddr,
+                                     RAddr);
+            Auth.WeakImport = true;
+          }
+          Auth.Symbol = Name->str();
           Auth.EncodedValue = Raw;
-          Auth.Addend = Addend;
+          Auth.Addend = Word->Addend;
           Auth.Diversity = Word->Diversity;
           Auth.AddressDiversity = Word->AddressDiversity;
           Auth.Key = Word->Key;
-          if (const auto Symbol = Reloc.getSymbol();
-              Symbol != Obj.symbol_end()) {
-            auto Name = Symbol->getName();
-            if (!Name)
-              return Name.takeError();
-            Auth.Symbol = Name->str();
-          }
-          Img.MachOAuthenticatedPointers.emplace(P, std::move(Auth));
+          if (!Img.MachOAuthenticatedPointers.emplace(P, std::move(Auth))
+                   .second)
+            return relocationError(arm64e::kConflictingObjectPointer, SecAddr,
+                                   RAddr);
           // Keep the relocation recipe separate from ordinary pointer bits.
           // In particular it cannot establish an immutable raw-pointer load.
           Img.CodePtrRelocSlots.erase(P);

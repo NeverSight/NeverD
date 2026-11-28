@@ -250,8 +250,7 @@ TEST(SymSynth, PutsBackTheSubtermItCouldNotSeeInsideOf) {
 }
 
 TEST(SymSynth, WorksAtAWidthWiderThanAMachineWord) {
-  // Nothing in the search reads a word: values are APInt throughout, and a
-  // 128-bit expression is measured exactly like a 32-bit one.
+  // Both shifts must retain the high word of the input.
   constexpr uint32_t W128 = 128;
   SymContext Ctx;
   SymRef E = parsed(Ctx, "(x >> 4) + ((x >> 2) >> 2)", W128);
@@ -843,6 +842,17 @@ TEST(SymSynth, ColumnSemanticsAgreeWithNodes) {
     for (const GramOp Op : Ops) {
       SCOPED_TRACE(unsigned(Op));
       Sem.applyColumn(Op, A.data(), B.data(), Out.data(), A.size());
+      // Batched final-tier probes reuse one left point across a whole row.
+      // Check every shift boundary and sign against ordinary full columns.
+      if (!isUnaryGramOp(Op)) {
+        std::vector<uint64_t> Row(Values.size());
+        for (size_t I = 0; I != A.size(); I += Row.size()) {
+          Sem.applyColumn<uint64_t, true>(Op, &A[I], B.data() + I, Row.data(),
+                                          Row.size());
+          ASSERT_TRUE(
+              llvm::equal(Row, llvm::ArrayRef(Out).slice(I, Row.size())));
+        }
+      }
       if (Width <= 32) {
         const std::vector<uint32_t> Left(A.begin(), A.end()),
             Right(B.begin(), B.end());
@@ -850,6 +860,15 @@ TEST(SymSynth, ColumnSemanticsAgreeWithNodes) {
         Sem.applyColumn(Op, Left.data(), Right.data(), Narrow.data(),
                         Narrow.size());
         ASSERT_TRUE(llvm::equal(Narrow, Out));
+        if (!isUnaryGramOp(Op)) {
+          std::vector<uint32_t> Row(Values.size());
+          for (size_t I = 0; I != Left.size(); I += Row.size()) {
+            Sem.applyColumn<uint32_t, true>(Op, &Left[I], Right.data() + I,
+                                            Row.data(), Row.size());
+            ASSERT_TRUE(
+                llvm::equal(Row, llvm::ArrayRef(Narrow).slice(I, Row.size())));
+          }
+        }
       }
       for (size_t I = 0; I != A.size(); ++I) {
         const llvm::APInt Args[] = {llvm::APInt(Width, A[I]),
@@ -858,6 +877,57 @@ TEST(SymSynth, ColumnSemanticsAgreeWithNodes) {
             Op, llvm::ArrayRef<llvm::APInt>(Args, isUnaryGramOp(Op) ? 1 : 2));
         ASSERT_EQ(Out[I], Want.getZExtValue()) << "a=" << A[I] << " b=" << B[I];
       }
+    }
+  }
+}
+
+TEST(SymSynth, WideColumnSemanticsAgreeWithNodes) {
+  using namespace neverd::symbolic::synth;
+  std::mt19937_64 Rng(0x1e947d);
+  for (unsigned Width : {65u, 96u, 127u, 128u, 129u, 192u, 257u, 513u, 1025u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    OpSemantics Sem(Ctx, Width);
+    const unsigned Words = llvm::APInt::getNumWords(Width);
+    std::vector<llvm::APInt> Values = {llvm::APInt(Width, 0),
+                                       llvm::APInt(Width, 1),
+                                       llvm::APInt(Width, 63),
+                                       llvm::APInt(Width, 64),
+                                       llvm::APInt(Width, Width - 1),
+                                       llvm::APInt(Width, Width),
+                                       llvm::APInt(Width, Width + 1),
+                                       llvm::APInt::getSignMask(Width),
+                                       llvm::APInt::getAllOnes(Width),
+                                       llvm::APInt::getOneBitSet(Width, 64),
+                                       llvm::APInt::getLowBitsSet(Width, 64)};
+    for (unsigned I = 0; I < 4; ++I) {
+      std::vector<uint64_t> Raw(Words);
+      for (auto &Word : Raw)
+        Word = Rng();
+      Values.emplace_back(Width, Raw);
+    }
+    std::vector<uint64_t> A, B;
+    for (const auto &L : Values)
+      for (const auto &R : Values) {
+        A.insert(A.end(), L.getRawData(), L.getRawData() + Words);
+        B.insert(B.end(), R.getRawData(), R.getRawData() + Words);
+      }
+    std::vector<uint64_t> Out(A.size());
+    for (unsigned O = 0; O < kNumGramOps; ++O) {
+      const auto Op = GramOp(O);
+      SCOPED_TRACE(O);
+      Sem.applyWideColumn(Op, A.data(), isUnaryGramOp(Op) ? nullptr : B.data(),
+                          Out);
+      size_t Offset = 0;
+      for (const auto &L : Values)
+        for (const auto &R : Values) {
+          const llvm::APInt Args[] = {L, R};
+          const auto Want = Sem.apply(
+              Op, llvm::ArrayRef(Args).take_front(isUnaryGramOp(Op) ? 1 : 2));
+          ASSERT_EQ(llvm::ArrayRef(Out).slice(Offset, Words),
+                    llvm::ArrayRef(Want.getRawData(), Words));
+          Offset += Words;
+        }
     }
   }
 }

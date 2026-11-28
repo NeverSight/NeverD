@@ -86,14 +86,27 @@ TEST_F(PEFixedImageTest, EntryLoadedObjectBindsAChangingMemoryPointer) {
 }
 
 TEST_F(PEFixedImageTest, EntryLoadedObjectSurvivesAConditionalCall) {
-  // mov rax,[0x51000028]; mov rsi,rax; call rcx; jmp next;
-  // mov [rsi+0x68],rdx; ret
+  // The return exit keeps its native target, so only a frame value read after
+  // the store can need the pointer's relation. The saved word lies above the
+  // call's outgoing bytes, which the call keeps; the store keeps it only when
+  // the pointer loaded before the call still names its declared object past
+  // the call and the node boundary. Then the check folds and the undeclared
+  // INT3 stays unreachable.
   const std::vector<uint8_t> Code = {
-      0x48, 0xa1, 0x28, 0,    0,    0x51, 0,    0,    0,    0,    0x48,
-      0x89, 0xc6, 0xff, 0xd1, 0xeb, 0,    0x48, 0x89, 0x56, 0x68, 0xc3};
+      0x48, 0x89, 0x64, 0x24, 0x28,                   // mov [rsp+40],rsp
+      0x48, 0xa1, 0x28, 0,    0,    0x51, 0, 0, 0, 0, // mov rax,[0x51000028]
+      0x48, 0x89, 0xc6,                               // mov rsi,rax
+      0xff, 0xd1,                                     // call rcx
+      0xeb, 0,                                        // jmp next
+      0x48, 0x89, 0x56, 0x68,                         // mov [rsi+0x68],rdx
+      0x48, 0x8b, 0x5c, 0x24, 0x28,                   // mov rbx,[rsp+40]
+      0x48, 0x39, 0xe3,                               // cmp rbx,rsp
+      0x75, 0x01,                                     // jne trap
+      0xc3,                                           // ret
+      0xcc};                                          // trap
   auto Loaded = load(machineExitFixture(Code));
   ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
-  auto O = returningCallOptions(Base + 0x100d, Base + 0x1015);
+  auto O = returningCallOptions(Base + 0x1012, Base + 0x1024);
   O.EntryFrameBounds->ExcludedAddressRanges = {{0x51000000, 0x51000100}};
   O.EntryFrameLoadedObjects = {{0x51000028, 0, 0x80}};
   O.ProveStoreFrameSeparation = true;
@@ -101,6 +114,9 @@ TEST_F(PEFixedImageTest, EntryLoadedObjectSurvivesAConditionalCall) {
   const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
   ASSERT_TRUE(R.complete()) << R.Diagnostic;
   ASSERT_EQ(R.ReturningCalls.size(), 1U);
+  for (const auto &Block : R.Residual.Blocks)
+    for (const auto &Op : Block.Ops)
+      EXPECT_NE(Op.Opcode, NdOp::COND_BR);
   auto Missing = O;
   Missing.EntryFrameLoadedObjects.clear();
   const auto Refused =

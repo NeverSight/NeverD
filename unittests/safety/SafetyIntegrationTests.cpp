@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../lib/sdk/capi/SessionImpl.h"
+#include "ScanReportTestSupport.h"
 #include "gtest/gtest.h"
 
 #include "neverd/sdk/NeverDCAPI.h"
@@ -22,6 +23,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -86,10 +88,23 @@ std::vector<FixtureSpec> fixtureSpecs() {
   };
 }
 
-// Load one fixture and run one track; returns the parsed report or false.
-bool runTrack(const std::string &Path, bool Hunt, llvm::json::Value &Out,
-              const neverd_safety_options *RequestedOptions = nullptr,
-              std::string *Serialized = nullptr) {
+using neverd::test::scanAnalyzer;
+using neverd::test::scanFindings;
+
+const char *scanSession(neverd_session_t Sess, neverd_scan_analyzers Selection,
+                        const neverd_safety_options *Analysis = nullptr) {
+  neverd_scan_options Options{};
+  Options.struct_size = sizeof(Options);
+  Options.analysis = Analysis;
+  Options.analyzers = Selection;
+  return neverd_session_scan_json(Sess, &Options);
+}
+
+// Load one fixture and parse its unified scan report.
+bool scanFixture(const std::string &Path, neverd_scan_analyzers Analyzer,
+                 llvm::json::Value &Out,
+                 const neverd_safety_options *RequestedOptions = nullptr,
+                 std::string *Serialized = nullptr) {
   if (Path.empty())
     return false;
 
@@ -98,12 +113,7 @@ bool runTrack(const std::string &Path, bool Hunt, llvm::json::Value &Out,
     neverd_session_destroy(Sess);
     return false;
   }
-  neverd_safety_options Options{};
-  Options.struct_size = sizeof(Options);
-  const neverd_safety_options *EffectiveOptions =
-      RequestedOptions ? RequestedOptions : &Options;
-  const char *Json = Hunt ? neverd_session_hunt_json(Sess, EffectiveOptions)
-                          : neverd_session_audit_json(Sess, EffectiveOptions);
+  const char *Json = scanSession(Sess, Analyzer, RequestedOptions);
   bool Ok = false;
   if (Json) {
     if (Serialized)
@@ -143,28 +153,18 @@ bool hasFunctionNamed(neverd_session_t Sess, llvm::StringRef Name) {
 }
 
 bool hasClass(const llvm::json::Object &Root, llvm::StringRef Class) {
-  const llvm::json::Array *Findings = Root.getArray("findings");
-  if (!Findings)
-    return false;
-  for (const llvm::json::Value &V : *Findings)
-    if (const llvm::json::Object *O = V.getAsObject())
-      if (O->getString("class") == Class)
-        return true;
+  for (const auto *Finding : scanFindings(Root))
+    if (Finding->getString("class") == Class)
+      return true;
   return false;
 }
 
 const llvm::json::Object *findingNamed(const llvm::json::Object &Root,
                                        llvm::StringRef Function) {
-  const llvm::json::Array *Findings = Root.getArray("findings");
-  if (!Findings)
-    return nullptr;
-  for (const llvm::json::Value &V : *Findings) {
-    const llvm::json::Object *O = V.getAsObject();
-    if (!O)
-      continue;
-    if (auto Fn = O->getString("function"); Fn && namesMatch(*Fn, Function))
-      return O;
-  }
+  for (const auto *Finding : scanFindings(Root))
+    if (auto Fn = Finding->getString("function");
+        Fn && namesMatch(*Fn, Function))
+      return Finding;
   return nullptr;
 }
 
@@ -172,30 +172,20 @@ std::vector<const llvm::json::Object *>
 findingsAtCall(const llvm::json::Object &Root, llvm::StringRef Function,
                llvm::StringRef Callee) {
   std::vector<const llvm::json::Object *> Matches;
-  const llvm::json::Array *Findings = Root.getArray("findings");
-  if (!Findings)
-    return Matches;
-  for (const llvm::json::Value &V : *Findings) {
-    const llvm::json::Object *O = V.getAsObject();
-    if (!O)
-      continue;
-    const std::optional<llvm::StringRef> Fn = O->getString("function");
-    const std::optional<llvm::StringRef> Name = O->getString("name");
+  for (const auto *Finding : scanFindings(Root)) {
+    const auto Fn = Finding->getString("function");
+    const auto Name = Finding->getString("name");
     if (Fn && Name && namesMatch(*Fn, Function) && namesMatch(*Name, Callee))
-      Matches.push_back(O);
+      Matches.push_back(Finding);
   }
   return Matches;
 }
 
 const llvm::json::Object *findingWithNameSource(const llvm::json::Object &Root,
                                                 llvm::StringRef Source) {
-  const llvm::json::Array *Findings = Root.getArray("findings");
-  if (!Findings)
-    return nullptr;
-  for (const llvm::json::Value &V : *Findings)
-    if (const llvm::json::Object *O = V.getAsObject())
-      if (O->getString("name_source") == Source)
-        return O;
+  for (const auto *Finding : scanFindings(Root))
+    if (Finding->getString("name_source") == Source)
+      return Finding;
   return nullptr;
 }
 
@@ -239,25 +229,26 @@ class SafetyIntegration : public ::testing::TestWithParam<FixtureSpec> {};
 TEST_P(SafetyIntegration, HuntReportsTaintedOverflowWithImportIdentity) {
   llvm::json::Value V(nullptr);
   const FixtureSpec &Spec = GetParam();
-  ASSERT_TRUE(runTrack(Spec.Path, /*Hunt=*/true, V)) << Spec.Path;
+  ASSERT_TRUE(scanFixture(Spec.Path, NEVERD_SCAN_HUNT, V)) << Spec.Path;
   const llvm::json::Object *Root = V.getAsObject();
   ASSERT_NE(Root, nullptr);
   ASSERT_TRUE(Root->getBoolean("ok").value_or(false));
   expectFixtureIdentity(*Root, Spec);
 
-  EXPECT_EQ(Root->getInteger("scanned").value_or(-1), 6);
-  EXPECT_EQ(Root->getInteger("skipped").value_or(-1), 1);
-  EXPECT_EQ(Root->getInteger("unsafe").value_or(-1), 2);
-  EXPECT_EQ(Root->getInteger("safe").value_or(0) +
-                Root->getInteger("unknown").value_or(0),
-            4);
-
-  const llvm::json::Array *Findings = Root->getArray("findings");
-  ASSERT_NE(Findings, nullptr);
+  const auto *Hunt = scanAnalyzer(*Root, "hunt");
+  ASSERT_NE(Hunt, nullptr);
+  EXPECT_EQ(Hunt->getInteger("scanned"), 6);
+  EXPECT_EQ(Hunt->getInteger("skipped"), 1);
+  const auto Findings = scanFindings(*Root);
+  EXPECT_EQ(Findings.size(), 6u);
+  EXPECT_EQ(std::count_if(Findings.begin(), Findings.end(),
+                          [](const auto *F) {
+                            return F->getString("verdict") == "UNSAFE";
+                          }),
+            2);
   bool FoundUnsafeImport = false;
-  for (const llvm::json::Value &FV : *Findings) {
-    const llvm::json::Object *O = FV.getAsObject();
-    if (!O || O->getString("verdict") != "UNSAFE")
+  for (const auto *O : Findings) {
+    if (O->getString("verdict") != "UNSAFE")
       continue;
     if (O->getString("name_source") != "import")
       continue;
@@ -286,7 +277,7 @@ TEST_P(SafetyIntegration, HuntReportsTaintedOverflowWithImportIdentity) {
 TEST_P(SafetyIntegration, LiteralGetenvReplayIsExactAcrossTheFixtureMatrix) {
   llvm::json::Value V(nullptr);
   const FixtureSpec &Spec = GetParam();
-  ASSERT_TRUE(runTrack(Spec.Path, /*Hunt=*/true, V)) << Spec.Path;
+  ASSERT_TRUE(scanFixture(Spec.Path, NEVERD_SCAN_HUNT, V)) << Spec.Path;
   const llvm::json::Object *Root = V.getAsObject();
   ASSERT_NE(Root, nullptr);
 
@@ -336,7 +327,7 @@ TEST_P(SafetyIntegration,
        FirstReadFromStdinReplayIsExactAcrossTheFixtureMatrix) {
   llvm::json::Value V(nullptr);
   const FixtureSpec &Spec = GetParam();
-  ASSERT_TRUE(runTrack(Spec.Path, /*Hunt=*/true, V)) << Spec.Path;
+  ASSERT_TRUE(scanFixture(Spec.Path, NEVERD_SCAN_HUNT, V)) << Spec.Path;
   const llvm::json::Object *Root = V.getAsObject();
   ASSERT_NE(Root, nullptr);
 
@@ -403,29 +394,24 @@ TEST_P(SafetyIntegration,
 TEST_P(SafetyIntegration, AuditReportsHeapDefects) {
   llvm::json::Value V(nullptr);
   const FixtureSpec &Spec = GetParam();
-  ASSERT_TRUE(runTrack(Spec.Path, /*Hunt=*/false, V)) << Spec.Path;
+  ASSERT_TRUE(scanFixture(Spec.Path, NEVERD_SCAN_AUDIT, V)) << Spec.Path;
   const llvm::json::Object *Root = V.getAsObject();
   ASSERT_NE(Root, nullptr);
   ASSERT_TRUE(Root->getBoolean("ok").value_or(false));
   expectFixtureIdentity(*Root, Spec);
 
-  EXPECT_EQ(Root->getInteger("scanned").value_or(-1), 7);
-  // In-image ELF DWARF authenticates the void declarations on leaks_memory and
-  // guarded_free, so neither can publish ownership into main.  PDB Phase A
-  // publishes names only, while these particular reproducible Mach-O fixtures
-  // intentionally omit LC_UUID and therefore cannot authenticate their
-  // adjacent dSYM's type graph.  On those fixtures the live ABI return carrier
-  // is indistinguishable from an untyped wrapper that returns its allocation:
-  // preserve a May summary and report the two ignored results in main as
-  // UNKNOWN instead of folding that uncertainty to No.
-  const bool HasReturnDeclarations = Spec.Format == "ELF";
-  EXPECT_EQ(Root->getInteger("unsafe").value_or(-1),
-            HasReturnDeclarations ? 4 : 3);
-  EXPECT_EQ(Root->getInteger("unknown").value_or(-1),
-            HasReturnDeclarations ? 1 : 4);
-  const llvm::json::Array *Findings = Root->getArray("findings");
-  ASSERT_NE(Findings, nullptr);
-  ASSERT_EQ(Findings->size(), HasReturnDeclarations ? 5u : 7u);
+  const auto *Audit = scanAnalyzer(*Root, "audit");
+  ASSERT_NE(Audit, nullptr);
+  EXPECT_EQ(Audit->getInteger("scanned"), 7);
+  // Each fixture carries matching type information for both void functions.
+  const auto Findings = scanFindings(*Root);
+  EXPECT_EQ(std::count_if(Findings.begin(), Findings.end(),
+                          [](const auto *F) {
+                            return F->getString("verdict") == "UNSAFE";
+                          }),
+            4);
+  EXPECT_EQ(Audit->getInteger("unknown"), 1);
+  ASSERT_EQ(Findings.size(), 5u);
   struct ExpectedImportFinding {
     const char *Function;
     const char *Callee;
@@ -434,8 +420,7 @@ TEST_P(SafetyIntegration, AuditReportsHeapDefects) {
   };
   const std::vector<ExpectedImportFinding> ExpectedImports = {
       {"tainted_heap_overflow", "memcpy", "uninitialized_read", "UNKNOWN"},
-      {"leaks_memory", "malloc", "heap_leak",
-       HasReturnDeclarations ? "UNSAFE" : "UNKNOWN"},
+      {"leaks_memory", "malloc", "heap_leak", "UNSAFE"},
       {"leak_on_one_path", "malloc", "heap_leak", "UNSAFE"},
       {"double_frees", "free", "double_free", "UNSAFE"},
       {"uses_after_free", "free", "use_after_free", "UNSAFE"},
@@ -462,8 +447,7 @@ TEST_P(SafetyIntegration, AuditReportsHeapDefects) {
   const llvm::json::Object *LeaksMemory = findingNamed(*Root, "leaks_memory");
   ASSERT_NE(LeaksMemory, nullptr) << Spec.Path;
   EXPECT_EQ(LeaksMemory->getString("class"), "heap_leak");
-  EXPECT_EQ(LeaksMemory->getString("verdict"),
-            HasReturnDeclarations ? "UNSAFE" : "UNKNOWN");
+  EXPECT_EQ(LeaksMemory->getString("verdict"), "UNSAFE");
   EXPECT_TRUE(
       namesMatch(LeaksMemory->getString("name").value_or(""), "malloc"));
   EXPECT_EQ(LeaksMemory->getString("name_source"), "import");
@@ -474,37 +458,29 @@ TEST_P(SafetyIntegration, AuditReportsHeapDefects) {
 
   for (llvm::StringRef Callee :
        {llvm::StringRef("leaks_memory"), llvm::StringRef("guarded_free")}) {
-    const std::vector<const llvm::json::Object *> CallerFindings =
-        findingsAtCall(*Root, "main", Callee);
-    if (HasReturnDeclarations) {
-      EXPECT_TRUE(CallerFindings.empty()) << Callee.str();
-      continue;
-    }
-    ASSERT_EQ(CallerFindings.size(), 1u) << Callee.str();
-    const llvm::json::Object &CallerFinding = *CallerFindings.front();
-    EXPECT_EQ(CallerFinding.getString("class"), "heap_leak");
-    EXPECT_EQ(CallerFinding.getString("verdict"), "UNKNOWN");
-    EXPECT_EQ(CallerFinding.getString("name_source"),
-              Spec.Format == "PE" ? "pdb" : "export");
-    EXPECT_TRUE(CallerFinding.getString("detail").value_or("").contains(
-        "callee may return heap ownership"));
+    EXPECT_TRUE(findingsAtCall(*Root, "main", Callee).empty()) << Callee.str();
   }
 }
 
 TEST_P(SafetyIntegration, ExitVerdictTallyIsConsistent) {
   llvm::json::Value V(nullptr);
   const FixtureSpec &Spec = GetParam();
-  ASSERT_TRUE(runTrack(Spec.Path, /*Hunt=*/true, V)) << Spec.Path;
+  ASSERT_TRUE(scanFixture(Spec.Path, NEVERD_SCAN_HUNT, V)) << Spec.Path;
   const llvm::json::Object *Root = V.getAsObject();
   ASSERT_NE(Root, nullptr);
   ASSERT_TRUE(Root->getBoolean("ok").value_or(false));
   expectFixtureIdentity(*Root, Spec);
-  const llvm::json::Array *Findings = Root->getArray("findings");
-  ASSERT_NE(Findings, nullptr);
-  const int64_t Total = Root->getInteger("unsafe").value_or(0) +
-                        Root->getInteger("safe").value_or(0) +
-                        Root->getInteger("unknown").value_or(0);
-  EXPECT_EQ(Total, static_cast<int64_t>(Findings->size()));
+  const auto Findings = scanFindings(*Root);
+  const auto *Hunt = scanAnalyzer(*Root, "hunt");
+  ASSERT_NE(Hunt, nullptr);
+  EXPECT_EQ(Hunt->getInteger("observations"),
+            static_cast<int64_t>(Findings.size()));
+  EXPECT_EQ(Hunt->getString("verdict"), Root->getString("verdict"));
+  EXPECT_EQ(
+      Hunt->getInteger("unknown"),
+      std::count_if(Findings.begin(), Findings.end(), [](const auto *Finding) {
+        return Finding->getString("verdict") == "UNKNOWN";
+      }));
 }
 
 TEST_P(SafetyIntegration, InterproceduralBudgetsPreserveExactRootContext) {
@@ -516,7 +492,7 @@ TEST_P(SafetyIntegration, InterproceduralBudgetsPreserveExactRootContext) {
     Options.struct_size = sizeof(Options);
     Options.max_call_depth = MaxCallDepth;
     Options.max_summary_iterations = MaxSummaryIterations;
-    return runTrack(Spec.Path, /*Hunt=*/true, Out, &Options, Serialized);
+    return scanFixture(Spec.Path, NEVERD_SCAN_HUNT, Out, &Options, Serialized);
   };
 
   llvm::json::Value Default(nullptr);
@@ -524,8 +500,17 @@ TEST_P(SafetyIntegration, InterproceduralBudgetsPreserveExactRootContext) {
   ASSERT_TRUE(Hunt(0, 0, Default, &FirstSerialization)) << Spec.Path;
   const llvm::json::Object *DefaultRoot = Default.getAsObject();
   ASSERT_NE(DefaultRoot, nullptr);
-  EXPECT_EQ(DefaultRoot->getInteger("control_reachable"), 6);
-  EXPECT_EQ(DefaultRoot->getInteger("attacker_reachable"), 4);
+  unsigned Reachable = 0, Tainted = 0;
+  for (const auto *Finding : scanFindings(*DefaultRoot)) {
+    const auto *Reach = Finding->getObject("reachability");
+    ASSERT_NE(Reach, nullptr);
+    if (Reach->getString("status") == "REACHABLE") {
+      ++Reachable;
+      Tainted += Reach->getString("attacker_control") == "TAINTED";
+    }
+  }
+  EXPECT_EQ(Reachable, 6u);
+  EXPECT_EQ(Tainted, 4u);
   const llvm::json::Object *DefaultFinding =
       findingNamed(*DefaultRoot, "interproc_forward_inner");
   ASSERT_NE(DefaultFinding, nullptr);
@@ -631,21 +616,15 @@ TEST_P(SafetyIntegration, CompanionIdentityAndNoDebugPolicyAreEnforced) {
 
 TEST_P(SafetyIntegration, EveryFindingCarriesStatedIdentity) {
   const FixtureSpec &Spec = GetParam();
-  for (bool Hunt : {true, false}) {
+  for (auto Analyzer : {NEVERD_SCAN_HUNT, NEVERD_SCAN_AUDIT}) {
     llvm::json::Value V(nullptr);
-    ASSERT_TRUE(runTrack(Spec.Path, Hunt, V)) << Spec.Path;
+    ASSERT_TRUE(scanFixture(Spec.Path, Analyzer, V)) << Spec.Path;
     const llvm::json::Object *Root = V.getAsObject();
     ASSERT_NE(Root, nullptr);
-    const llvm::json::Array *Findings = Root->getArray("findings");
-    ASSERT_NE(Findings, nullptr);
-    ASSERT_FALSE(Findings->empty()) << Spec.Path;
+    const auto Findings = scanFindings(*Root);
+    ASSERT_FALSE(Findings.empty()) << Spec.Path;
 
-    unsigned MainLeaksMemory = 0;
-    unsigned MainGuardedFree = 0;
-
-    for (const llvm::json::Value &FV : *Findings) {
-      const llvm::json::Object *O = FV.getAsObject();
-      ASSERT_NE(O, nullptr);
+    for (const auto *O : Findings) {
       const std::string Where = Spec.Format + " " + Spec.Arch + " " +
                                 O->getString("name").value_or("?").str() +
                                 " @ " +
@@ -658,31 +637,9 @@ TEST_P(SafetyIntegration, EveryFindingCarriesStatedIdentity) {
 
       const std::optional<llvm::StringRef> Name = O->getString("name");
       ASSERT_TRUE(Name.has_value()) << Where;
-      const bool IsMainLeaksMemory = !Hunt && Spec.Format != "ELF" &&
-                                     namesMatch(*Fn, "main") &&
-                                     namesMatch(*Name, "leaks_memory");
-      const bool IsMainGuardedFree = !Hunt && Spec.Format != "ELF" &&
-                                     namesMatch(*Fn, "main") &&
-                                     namesMatch(*Name, "guarded_free");
-      const bool IsUntrustedReturnMay = IsMainLeaksMemory || IsMainGuardedFree;
-      MainLeaksMemory += IsMainLeaksMemory;
-      MainGuardedFree += IsMainGuardedFree;
-
-      if (IsUntrustedReturnMay) {
-        EXPECT_EQ(O->getString("class"), "heap_leak") << Where;
-        EXPECT_EQ(O->getString("verdict"), "UNKNOWN") << Where;
-        EXPECT_TRUE(O->getString("detail").value_or("").contains(
-            "callee may return heap ownership"))
-            << Where;
-        EXPECT_EQ(O->getString("name_source"),
-                  Spec.Format == "PE" ? "pdb" : "export")
-            << Where;
-      } else {
-        // Every direct runtime sink in the fixtures must still resolve through
-        // the IAT, PLT, or dyld bind table.  The only non-import findings are
-        // the two precisely enumerated May summaries above.
-        EXPECT_EQ(O->getString("name_source"), "import") << Where;
-      }
+      // Matched return declarations remove the two possible factory calls in
+      // main. Every remaining reported callee resolves through its import.
+      EXPECT_EQ(O->getString("name_source"), "import") << Where;
 
       // DWARF states the line a call sits on; a PDB carries names and
       // addresses only, so the report omits the key rather than inventing one.
@@ -697,10 +654,6 @@ TEST_P(SafetyIntegration, EveryFindingCarriesStatedIdentity) {
             << Where << " -> " << Loc->str();
       }
     }
-
-    const unsigned ExpectedMainMay = !Hunt && Spec.Format != "ELF" ? 1u : 0u;
-    EXPECT_EQ(MainLeaksMemory, ExpectedMainMay) << Spec.Path;
-    EXPECT_EQ(MainGuardedFree, ExpectedMainMay) << Spec.Path;
   }
 }
 
@@ -722,7 +675,8 @@ TEST_P(SafetyIntegration, MapOnlyIdentityAfterDecliningNativeDebug) {
 
   neverd_safety_options Options{};
   Options.struct_size = sizeof(Options);
-  const std::string Json = takeOwned(neverd_session_audit_json(Sess, &Options));
+  const std::string Json =
+      takeOwned(scanSession(Sess, NEVERD_SCAN_AUDIT, &Options));
   neverd_session_destroy(Sess);
 
   llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(Json);
@@ -734,8 +688,15 @@ TEST_P(SafetyIntegration, MapOnlyIdentityAfterDecliningNativeDebug) {
   // The heap defects are a property of the code, so dropping to a MAP must not
   // change which ones are found — only what the report can say about them.
   const bool HasCallerMay = Spec.Format != "ELF";
-  EXPECT_EQ(Root->getInteger("unsafe").value_or(-1), 3);
-  EXPECT_EQ(Root->getInteger("unknown").value_or(-1), HasCallerMay ? 4 : 2);
+  const auto Findings = scanFindings(*Root);
+  EXPECT_EQ(std::count_if(Findings.begin(), Findings.end(),
+                          [](const auto *F) {
+                            return F->getString("verdict") == "UNSAFE";
+                          }),
+            3);
+  const auto *Audit = scanAnalyzer(*Root, "audit");
+  ASSERT_NE(Audit, nullptr);
+  EXPECT_EQ(Audit->getInteger("unknown"), HasCallerMay ? 4 : 2);
   EXPECT_TRUE(hasClass(*Root, "heap_leak"));
   EXPECT_TRUE(hasClass(*Root, "double_free"));
   EXPECT_TRUE(hasClass(*Root, "use_after_free"));
@@ -748,9 +709,7 @@ TEST_P(SafetyIntegration, MapOnlyIdentityAfterDecliningNativeDebug) {
   EXPECT_EQ(LeaksMemory->getString("name_source"), "import");
   EXPECT_EQ(findingNamed(*Root, "guarded_free"), nullptr);
 
-  const llvm::json::Array *Findings = Root->getArray("findings");
-  ASSERT_NE(Findings, nullptr);
-  ASSERT_EQ(Findings->size(), HasCallerMay ? 7u : 5u);
+  ASSERT_EQ(Findings.size(), HasCallerMay ? 7u : 5u);
   struct ExpectedImportFinding {
     const char *Function;
     const char *Callee;
@@ -790,9 +749,7 @@ TEST_P(SafetyIntegration, MapOnlyIdentityAfterDecliningNativeDebug) {
     EXPECT_TRUE(CallerFinding.getString("detail").value_or("").contains(
         "callee may return heap ownership"));
   }
-  for (const llvm::json::Value &FV : *Findings) {
-    const llvm::json::Object *O = FV.getAsObject();
-    ASSERT_NE(O, nullptr);
+  for (const auto *O : Findings) {
     EXPECT_FALSE(O->getString("source").has_value())
         << O->getString("function").value_or("?").str();
   }
@@ -807,8 +764,9 @@ TEST(SafetyCAPI, LegacyOptionsPrefixAndNullOptionsRemainSupported) {
     size_t struct_size;
     unsigned max_paths;
   } Legacy{sizeof(LegacyOptions), 8};
-  const char *Hunt = neverd_session_hunt_json(
-      Sess, reinterpret_cast<const neverd_safety_options *>(&Legacy));
+  const char *Hunt =
+      scanSession(Sess, NEVERD_SCAN_HUNT,
+                  reinterpret_cast<const neverd_safety_options *>(&Legacy));
   ASSERT_NE(Hunt, nullptr);
   auto HuntJson = llvm::json::parse(Hunt);
   neverd_free_string(Hunt);
@@ -816,13 +774,69 @@ TEST(SafetyCAPI, LegacyOptionsPrefixAndNullOptionsRemainSupported) {
   ASSERT_NE(HuntJson->getAsObject(), nullptr);
   EXPECT_TRUE(HuntJson->getAsObject()->getBoolean("ok").value_or(false));
 
-  const char *Audit = neverd_session_audit_json(Sess, nullptr);
+  const char *Audit = scanSession(Sess, NEVERD_SCAN_AUDIT);
   ASSERT_NE(Audit, nullptr);
   auto AuditJson = llvm::json::parse(Audit);
   neverd_free_string(Audit);
   ASSERT_TRUE(static_cast<bool>(AuditJson));
   ASSERT_NE(AuditJson->getAsObject(), nullptr);
   EXPECT_TRUE(AuditJson->getAsObject()->getBoolean("ok").value_or(false));
+  neverd_session_destroy(Sess);
+}
+
+TEST(SafetyCAPI, ScanOptionsRespectSizeSelectionAndBorrowedCancellation) {
+  const FixtureSpec Spec = fixtureSpecs().front();
+  neverd_session_t Sess = neverd_session_create();
+  ASSERT_TRUE(neverd_session_load(Sess, Spec.Path.c_str()));
+  const std::string MissingCatalog = Spec.Path + "/missing-scan-catalog";
+  neverd_safety_options Analysis{};
+  Analysis.struct_size = sizeof(Analysis);
+  Analysis.sinks_path = MissingCatalog.c_str();
+  unsigned Calls = 0;
+  neverd_scan_options Options{};
+  Options.analysis = &Analysis;
+  Options.analyzers = NEVERD_SCAN_HUNT;
+  Options.context = &Calls;
+  Options.cancel = [](void *Context) {
+    ++*static_cast<unsigned *>(Context);
+    return 1;
+  };
+  const auto Expect = [](neverd_session_t Session,
+                         const neverd_scan_options *Opt, llvm::StringRef Audit,
+                         llvm::StringRef Hunt) {
+    auto Report =
+        llvm::json::parse(takeOwned(neverd_session_scan_json(Session, Opt)));
+    ASSERT_TRUE(static_cast<bool>(Report));
+    const auto *Root = Report->getAsObject();
+    ASSERT_NE(Root, nullptr);
+    EXPECT_EQ(Root->getString("schema"), "neverd.memory-safety-scan");
+    const auto *Analyzers = Root->getObject("analyzers");
+    ASSERT_NE(Analyzers, nullptr);
+    const auto *A = Analyzers->getObject("audit");
+    const auto *H = Analyzers->getObject("hunt");
+    ASSERT_NE(A, nullptr);
+    ASSERT_NE(H, nullptr);
+    EXPECT_EQ(A->getString("state"), Audit);
+    EXPECT_EQ(H->getString("state"), Hunt);
+    if (Hunt == "canceled" || Hunt == "failed") {
+      EXPECT_EQ(Root->getBoolean("ok"), false);
+      EXPECT_EQ(Root->getBoolean("coverage_complete"), false);
+      EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
+    }
+  };
+  // A prefix that ends before the selector uses both analyzers. The callback
+  // and its paired context are borrowed only when both fields are present.
+  Options.struct_size = offsetof(neverd_scan_options, analyzers);
+  Expect(Sess, &Options, "failed", "failed");
+  Options.struct_size = offsetof(neverd_scan_options, context);
+  Expect(Sess, &Options, "disabled", "failed");
+  EXPECT_EQ(Calls, 0u);
+  Options.struct_size = sizeof(Options);
+  Expect(Sess, &Options, "disabled", "canceled");
+  EXPECT_EQ(Calls, 1u);
+  Options.analyzers = 42;
+  Expect(Sess, &Options, "failed", "failed");
+  Expect(nullptr, nullptr, "failed", "failed");
   neverd_session_destroy(Sess);
 }
 
@@ -883,7 +897,7 @@ TEST(SafetyCAPI, InterproceduralBudgetFieldsHonorStructSizeBoundaries) {
 
   const auto Hunt = [&](neverd_safety_options Options) {
     const std::string Json =
-        takeOwned(neverd_session_hunt_json(Sess, &Options));
+        takeOwned(scanSession(Sess, NEVERD_SCAN_HUNT, &Options));
     llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(Json);
     EXPECT_TRUE(static_cast<bool>(Parsed));
     if (!Parsed) {
@@ -946,17 +960,18 @@ TEST(SafetyCAPI, InterproceduralBudgetFieldsHonorStructSizeBoundaries) {
 }
 
 TEST(SafetyCAPI, NullSessionReturnsAnOwnedErrorReport) {
-  for (auto Analyze : {neverd_session_hunt_json, neverd_session_audit_json}) {
-    const char *Raw = Analyze(nullptr, nullptr);
-    ASSERT_NE(Raw, nullptr);
-    auto Parsed = llvm::json::parse(Raw);
-    neverd_free_string(Raw);
-    ASSERT_TRUE(static_cast<bool>(Parsed));
-    const llvm::json::Object *Root = Parsed->getAsObject();
-    ASSERT_NE(Root, nullptr);
-    EXPECT_FALSE(Root->getBoolean("ok").value_or(true));
-    EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
-    EXPECT_TRUE(Root->getString("error").has_value());
+  auto Parsed =
+      llvm::json::parse(takeOwned(neverd_session_scan_json(nullptr, nullptr)));
+  ASSERT_TRUE(static_cast<bool>(Parsed));
+  const auto *Root = Parsed->getAsObject();
+  ASSERT_NE(Root, nullptr);
+  EXPECT_EQ(Root->getBoolean("ok"), false);
+  EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
+  for (auto Name : {"audit", "hunt"}) {
+    const auto *Summary = scanAnalyzer(*Root, Name);
+    ASSERT_NE(Summary, nullptr);
+    EXPECT_EQ(Summary->getString("state"), "failed");
+    EXPECT_EQ(Summary->getString("error"), "invalid session");
   }
 }
 
@@ -965,17 +980,8 @@ TEST(SafetyCAPI, NativeExceptionsNeverCrossTheCABI) {
   ASSERT_NE(Sess, nullptr);
   auto *Internal = neverd::sdk::toSession(Sess);
 
-  struct AnalyzeCase {
-    const char *(*Analyze)(neverd_session_t, const neverd_safety_options *);
-    llvm::StringRef Track;
-  } Cases[] = {
-      {neverd_session_audit_json, "audit"},
-      {neverd_session_hunt_json, "hunt"},
-  };
-
-  const auto ExpectInternalError = [&](const AnalyzeCase &Case,
-                                       llvm::StringRef ExpectedMessage) {
-    const char *Raw = Case.Analyze(Sess, nullptr);
+  const auto ExpectInternalError = [&](llvm::StringRef ExpectedMessage) {
+    const char *Raw = neverd_session_scan_json(Sess, nullptr);
     ASSERT_NE(Raw, nullptr);
     llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(Raw);
     neverd_free_string(Raw);
@@ -984,30 +990,32 @@ TEST(SafetyCAPI, NativeExceptionsNeverCrossTheCABI) {
     ASSERT_NE(Root, nullptr);
     EXPECT_EQ(Root->getInteger("schema_version"), 1);
     EXPECT_EQ(Root->getBoolean("ok"), false);
-    EXPECT_EQ(Root->getString("track"), Case.Track);
+    EXPECT_EQ(Root->getString("schema"), "neverd.memory-safety-scan");
     EXPECT_EQ(Root->getString("verdict"), "UNKNOWN");
-    const llvm::StringRef Error =
-        Root->getString("error").value_or(llvm::StringRef());
-    EXPECT_TRUE(Error.contains("internal_error"));
-    EXPECT_TRUE(Error.contains(ExpectedMessage));
+    for (auto Name : {"audit", "hunt"}) {
+      const auto *Summary = scanAnalyzer(*Root, Name);
+      ASSERT_NE(Summary, nullptr);
+      EXPECT_EQ(Summary->getString("state"), "failed");
+      auto Error = Summary->getString("error").value_or("");
+      EXPECT_TRUE(Error.contains("internal_error"));
+      EXPECT_TRUE(Error.contains(ExpectedMessage));
+    }
   };
 
-  for (const AnalyzeCase &Case : Cases) {
-    Internal->SafetyBeforeRunForTesting = [] {
-      throw std::runtime_error("injected standard safety exception");
-    };
-    ExpectInternalError(Case, "injected standard safety exception");
+  Internal->SafetyBeforeRunForTesting = [] {
+    throw std::runtime_error("injected standard safety exception");
+  };
+  ExpectInternalError("injected standard safety exception");
 
-    Internal->SafetyBeforeRunForTesting = [] { throw 7; };
-    ExpectInternalError(Case, "non-standard native exception");
+  Internal->SafetyBeforeRunForTesting = [] { throw 7; };
+  ExpectInternalError("non-standard native exception");
 
-    Internal->SafetyBeforeRunForTesting = [] { throw std::bad_alloc(); };
-    const char *AllocationFailure = Case.Analyze(Sess, nullptr);
-    EXPECT_EQ(AllocationFailure, nullptr);
-    neverd_free_string(AllocationFailure);
-    EXPECT_NE(takeOwned(neverd_last_error(Sess)).find("allocation failed"),
-              std::string::npos);
-  }
+  Internal->SafetyBeforeRunForTesting = [] { throw std::bad_alloc(); };
+  const char *AllocationFailure = neverd_session_scan_json(Sess, nullptr);
+  EXPECT_EQ(AllocationFailure, nullptr);
+  neverd_free_string(AllocationFailure);
+  EXPECT_NE(takeOwned(neverd_last_error(Sess)).find("allocation failed"),
+            std::string::npos);
 
   neverd_session_destroy(Sess);
 }
@@ -1043,7 +1051,8 @@ TEST(SafetyCAPI, SessionRenameDrivesSafetySinkIdentity) {
 
   neverd_safety_options Options{};
   Options.struct_size = sizeof(Options);
-  const std::string Json = takeOwned(neverd_session_hunt_json(Sess, &Options));
+  const std::string Json =
+      takeOwned(scanSession(Sess, NEVERD_SCAN_HUNT, &Options));
   neverd_session_destroy(Sess);
 
   llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(Json);
@@ -1112,7 +1121,8 @@ TEST(SafetyCAPI, MapOnlyStrippedImageDrivesSafetySinkIdentity) {
 
   neverd_safety_options Options{};
   Options.struct_size = sizeof(Options);
-  const std::string Json = takeOwned(neverd_session_hunt_json(Sess, &Options));
+  const std::string Json =
+      takeOwned(scanSession(Sess, NEVERD_SCAN_HUNT, &Options));
   neverd_session_destroy(Sess);
 
   llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(Json);
@@ -1164,7 +1174,8 @@ TEST(SafetyCAPI, SignatureCandidateCannotInventSafetySinkIdentity) {
 
   neverd_safety_options Options{};
   Options.struct_size = sizeof(Options);
-  const std::string Json = takeOwned(neverd_session_hunt_json(Sess, &Options));
+  const std::string Json =
+      takeOwned(scanSession(Sess, NEVERD_SCAN_HUNT, &Options));
   neverd_session_destroy(Sess);
 
   llvm::Expected<llvm::json::Value> Parsed = llvm::json::parse(Json);

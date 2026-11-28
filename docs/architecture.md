@@ -1584,6 +1584,17 @@ entries and unwind frame starts; a frame that begins later, a chained row or a
 cold fragment cannot supply an independent callable identity. Next-entry bounds
 use those primary identities as well. Explicitly selecting code for analysis
 retains its separate decode and admission checks.
+GCC's hot/cold partitioning gives a function's `.text.unlikely` part an FDE of
+its own. The DWARF loader binds the part to the one function whose direct
+branches enter it with the frame its rules describe there, when the part
+begins inside that frame. A frameless function's part has no frame to begin
+inside, so its FDE starts with the entry rule as a function's does. That part
+is bound only when it ends in `ud2`, the trap of a path GCC isolated such as a
+store through a pointer it proved null, and nothing names it as a function:
+no symbol other than a `.cold` name, no direct call, no RIP-relative address
+and no relocated code pointer. An entry-like region that returns is a function
+tail-called once and stays one. Lua's reallymarkobject enters its isolated part
+from a jump table, which could not take a function entry as a case.
 COFF `IMAGE_SCN_CNT_CODE` is instruction-storage evidence independently of
 page execute permission. Ownership, selected pipeline entries and SDK batch
 selection share that distinction without changing the image's page flags.
@@ -1894,6 +1905,35 @@ the signed addend and exact provider. Writable storage is required even when
 the final mapping is RELRO. An absolute constant (`N_ABS`) is not inferred to
 be a slid address.
 
+In a relocatable Mach-O, an authenticated pointer to an undefined weak
+external retains the symbol, signed addend and signing fields until link time.
+Its target and provider stay unresolved. A GOT relocation addresses the
+symbol's GOT entry. Direct relocations to the same symbol address the symbol
+itself, even when both forms occur in one object.
+
+When publishing a native arm64e object, the undefined symbol's `N_WEAK_REF`
+bit sets the binding strength of each new signed pointer, ordinary pointer
+and call stub. The original image or an explicit dylib declaration supplies
+the library ordinal. Different ordinals for one symbol require an explicit
+provider. The dylib load command and the symbol's weak-import bit are
+independent. When an optional dylib is absent, dyld writes zero for an
+optional symbol. A required eager binding prevents the image from loading.
+The loader retains symbol strength for classic, threaded and chained binds.
+The publisher compares that strength, the provider and the signing schema
+when reusing a GOT cell. Existing bindings retain their own strength.
+An absolute `.quad symbol@GOT` becomes a dyld rebase to that cell.
+The PC-relative `.long symbol@GOT-.` and the GOT page instructions address
+the same cell. A direct pointer carries its own addend and signing recipe.
+The native publisher distinguishes the Mach-O spellings `_foo` and `foo`
+throughout relocation, including when one is a definition in the object.
+When both exist, the source name `foo` selects the C symbol `_foo`. LLVM's
+verbatim spelling `\01foo` (a leading byte of value 1) selects the bare
+assembly symbol. Each import keeps its own provider, weak flag and GOT cell.
+[LLVM identifier spelling](https://llvm.org/docs/LangRef.html#identifiers)
+An original weak data export supplies the fallback for a separate replacement
+weak definition, even when the original had no GOT cell or import row for it.
+Direct and GOT references both use dyld's weak lookup ordinal.
+
 `installMachOObjectPatch` also connects this native object profile to the shared
 publication transaction. Before final signing, native arm64e publication
 migrates threaded inputs through the existing checked chained-fixup converter;
@@ -1923,9 +1963,10 @@ Native compact language records retain LSDA addresses and personality slots.
 The arm64e personality slot uses IA/address diversity with zero discriminator;
 RTTI slots remain ordinary pointers. Existing unambiguous personality slots
 can be reused, and explicit providers can allocate new slots. Native
-`ARM64_RELOC_POINTER_TO_GOT` uses the linker's addend-free PC-relative contract;
-GOT page/pageoff references use the same allocated slots. The shared chain
-installer handles both pointer kinds in modern and threaded images. Language
+`ARM64_RELOC_POINTER_TO_GOT` supports a signed PC-relative word or an absolute
+pointer-sized field in relocatable data. GOT page/pageoff references use the
+same allocated slots. The shared chain installer handles both pointer kinds
+in modern and threaded images. Language
 name resolution consumes canonical ordinary bindings and authenticated recipes
 even when a new slot has no indirect-symbol-table entry; it does not reclassify
 an authenticated slot as ordinary import storage.
@@ -2957,7 +2998,10 @@ Independent roots and exceptional entries stop the walk, and recovered
 indirect edges cannot supply their own proof. Only the traversed direct-edge
 control operations leave the symbolic sequence; instruction guards remain.
 Recovery revalidates the complete producer path after discovering new edges.
-Lost or incomplete proofs retain the original indirect transfer. The native function
+Lost or incomplete proofs retain the original indirect transfer, which the
+ordinary resolver reconsiders on the completed graph. A table it proves keeps
+its edges and its switch; only a withdrawn transfer it leaves without a proved
+target is unsafe for switch lowering. The native function
 disassembly API publishes these same instruction boundaries and targets; raw
 disassembly remains linear. The worker uses recovered bodies for function
 listings and replaces their linear reference-scan results, so skipped bytes do
@@ -3002,9 +3046,15 @@ relocation-proven pointers outside the code hold, which are roots of the
 function already. A jump that reads its table through an exact field takes only
 the labels of that table's run, which ends where another field of the code
 names an address. An edge is kept only where every callee-saved register the
-label's code reads before writing has been written on every path to the jump:
+label's code reads before writing has been written on every path to the jump
+(under the image's calling convention, so Win64 counts `%rsi` and `%rdi` too):
 a table has words its index never selects, and following one must not turn a
-register the caller keeps into an input of the function. Jumps are decided in
+register the caller keeps into an input of the function. A jump through a
+table of its own labels goes to one of them whenever control reaches it, so
+when every label reads such a register, the reads are the program's own
+(gimli's `FileEntry::clone` stores the `%r15` its prologue saved as an unused
+payload): that jump keeps its whole table, and the function's table jumps stop
+testing those registers. Jumps are decided in
 the order control reaches them and the result is checked once more as a whole.
 `LowFunc::ValueDispatches` holds the result beside the recovered tables,
 because it recovers none; MedIR lists it with them, marked
@@ -3015,9 +3065,55 @@ that names no kept label fails as loudly as before. The comparison needs every
 label as a number. HighC prints the image's words as numbers already. The LLVM
 mirror of a relocated slot that holds such a label keeps the label's original
 address as a plain integer for the same reason: LLVM defines no comparison of
-block addresses, and an optimizer may give two labels one. The proof-based
+block addresses, and an optimizer may give two labels one. A linked AArch64
+Mach-O executable reads its label slots after dyld has applied the image slide.
+When recompiling a function into that image, the emitter compares each loaded
+label's offset from the original function entry with the corresponding case
+offset. Both addresses move together. The proof-based
 recoveries run first and are unchanged; a dispatch by value claims no table
 storage, no index and no relocation suppression.
+
+A linked image holds no relocation for a relative table, so that list is empty
+for a jump through one, and nothing may bound the jump's index: Rust compiles a
+`match` on an enum's discriminant read from memory to `lea table(%rip), %rcx;
+movslq (%rcx,%rax,4), %rdx; add %rcx, %rdx; jmp *%rdx` with no compare, since
+the type allows no other value. After the scalar recoveries,
+`CFGBuilder::recoverOwnLabelTableBranches` reads such a jump's target back
+through the blocks that are each the only way into the next, starting with
+the constants every path into the first of them leaves in a register (a
+table address hoisted out of a loop; a call keeps only what the image's
+calling convention preserves, which under Win64 includes `%rsi` and `%rdi`):
+the table's address plus its 32-bit slot,
+read from a read-only, non-executable section.
+The labels are the table's leading slots, up to the first slot that names
+anything but code of the function, an instruction start of one linear decode
+of it, and no address inside an instruction recursive descent already decoded.
+The linear decode is kept only when every instruction recursive descent decoded
+in the function is one of its starts. Nothing proves how many slots the table
+has, so no index domain is claimed; a slot read past the table's end names
+code the machine would run for that index too, and only adds an edge. A jump
+whose index domain ran out of evidence still dispatches, since the dispatch
+claims no domain; one whose table evidence, or its function's marker evidence,
+ran out is left opaque. The labels are published as the jump's targets so that
+the code they reach is decoded, and a jump there through another such table (a
+`match` after a `match`, or a loop unrolled around one) dispatches the same
+way, round by round up to `kMaxOwnLabelTableRounds`; the linear decode is made
+once and checked again each round. After each round every dispatch is read
+again on the grown graph, and withdrawn for good if its table read changed:
+code its labels reach can enter its blocks another way, with another address
+in the register. The resolver's fixed point is not run
+again: that would retry proofs whose evidence ran out and drop the
+incompleteness they recorded. `dispatchUnprovedBranchesByValue` then keeps an
+edge only where the
+same callee-saved-register test admits it, and withdraws all of them if it
+cannot decide. The table's address is no address of the lifted program,
+so neither is the jump's value, but the slot is the same number in both: the
+dispatch's selector occurrence is the LOAD of the slot and its case keys are
+the labels' offsets from the table (`CFGBuilder::OwnLabelTableReads`). HighC
+and the LLVM emitter bind that occurrence through the switch selector plan,
+and the default arm still traps. No resolver stage sees such a dispatch, so it
+never counts as a published table, and losing its labels loses no validated
+one.
 
 A direct branch, or the end of a block, can reach an address where the image
 maps no code: data, bytes the file does not hold, the end of a section.
@@ -4111,7 +4207,7 @@ DBI cannot be newer than Info. GUID and effective age must still match the PE.
 `PDBSectionIdentity.h` shares the native section checks: only a trailing
 resource/relocation suffix permits layout changes, and names and permissions
 must still agree. The name hint keeps its indexed GSI bucket lookup and does
-not construct a full debug context. NB10 retains its separate reader.
+not construct a full debug context. NB10 retains its separate reader. For Windows x64 and ARM64, a native PDB can authenticate an individual `void` or pointer return from an ordinary CodeView procedure. The scan requires an exact entry and a single executable contribution covering the whole procedure. Folded contributions and untranslated OMAP addresses provide no return declaration.
 
 `PDBDebugContext::inspect` owns manual PE/PDB validation. A missing CodeView
 identity allows machine- and section-checked inspection without changing the
@@ -5091,7 +5187,12 @@ keeps the value query. An unfinished value query does not withdraw the
 local extend. An unfinished mask search does not turn a guard that already
 rejected the selector into an incomplete proof, and it does not withdraw a
 sibling that published in the same stage. A guard that is itself unfinished
-still fails closed. A register
+still fails closed. A mask that alone produces the index keeps its coordinates
+when the search for masks upstream of it cannot finish, as for a selector a
+cyclic switch computes from arrays its cases rewrite, but only when every
+coordinate names a slot of the table's own anchor-bounded relocation run: an
+upstream mask could only narrow them, and a shorter run keeps the dispatch
+unresolved. A register
 other than a direct copy of the compared register, a later clobber, a call,
 or a mask that drops a lane bit keeps its own proof. A direct copy of the
 compared register into the index, taken before the compare, is that lane
@@ -5102,7 +5203,12 @@ SP, only signs that pointer and does not publish a frame cell. A spill
 whose address never escapes remains that spill across an ordinary call,
 including a call a case reaches before branching back to the reload. A
 call that receives the frame address, or a later store of the spill, keeps
-its own proof. A later AND that
+its own proof. A reload of the memory a guard compared is that value when
+both loads carry the same full register and displacement and nothing between
+them writes that register or memory, as for `cmpb $5, (%rbx); ja` before
+`movzbl (%rbx), %eax` under a loop cursor whose own value has no closed
+form; another displacement or a rewritten register keeps its own proof.
+A later AND that
 repeats the compared lane's own mask from the same unmodified source is that
 lane, including a byte mask (`#0xff`) the full-lane check rejects. A later
 unsigned field `(src >> lsb) & mask` that repeats the compared field, with
@@ -8411,11 +8517,17 @@ For a scaled product that reads only the low lane of an extension or
 concatenation, the evaluation plan can read that lane directly. A shared
 use that observes more bits keeps the wider value. A binary product whose observed prefix costs fewer limb
 operations can multiply at that precision. The evaluator takes the widest
-demand across all uses before shortening either operand. A fixed shift or rotation
+demand across all uses before shortening either operand. At wide widths a
+signed literal with a short significand only multiplies its significant limbs.
+Smaller multi-limb products use the native bitvector multiplication. Constant
+folding, evaluation and polynomial normalization use the same word arithmetic to
+restore its sign and zero suffix. A fixed shift or rotation
 can supply a low word from its source when every observed bit precedes the
 first padding or wrapped bit.
 Repeated long factor calls share a parse result after their complete spelling
-and the applicable nesting depth have been checked.
+and the applicable nesting depth have been checked. Calls with the same short
+prefix keep separate complete spellings. A lookup stops at the longest spelling
+already parsed for that prefix.
 A scaled product can also contain several weighted fields per factor. If
 the outer scale leaves `p` bits and every weight is divisible by
 `2^ceil(p/2)`, products of two perturbations vanish. Recovery groups the
@@ -8437,13 +8549,33 @@ the width of the other factors. The product restores the discarded zero suffix
 once after multiplying their live bits.
 An even scalar shifts the live interval of each mask. Bits discarded above
 the observed width and holes below the shifted field cannot change a carry.
+For two nonuniform masks, the product reader intersects their possible set bits
+in the common observed window. An odd multiplier congruent to one there
+preserves holes. Other odd multipliers can carry from the first possible one
+into higher bits. If the second mask or the literal join erases all possible
+bits, only the scalar offset contributes. Offsets equal at the observed product
+precision share one modular power and cofactor. An affine factor whose offset
+and coefficient share a power of two can supply the external product scale.
+The quotient and any lower-weight factors retain their full modular value.
 When every live coefficient is the top bit, only the parity of the input
 fields contributes to the result.
 Equal projected fields accumulate their signed coefficients modulo
 the observed precision, including multiplicity. A mixed inner mask keeps its holes, and addition
 or subtraction takes place at the surviving field width so carries and borrows
-remain observable. A weight below the required shift keeps the entire factor,
-including its cross terms.
+remain observable. An unpaired factor below the required shift retains
+its cross terms. Identical additive factors one bit below this threshold
+can be paired. For a factor `c + 2^k h`, squaring raises the
+linear term by one bit. The surviving square reads only `h mod 2` because
+a square modulo four is its input parity. The pair contributes its squared
+offset once. An odd copy remains in the product at its original precision.
+When sampling a wide repeated product beside a rewritten additive tail,
+the verifier can evaluate each addend at the same assignment. This lets
+the product reuse its schedule for repeated factors.
+For a wide affine sum of two or three projected words with an odd offset
+and even slopes, distinct subset sums in their first nonzero limb certify
+that every Boolean corner has a different weight. The direct affine form
+then avoids building a separate minterm for each corner. Colliding subset
+sums retain the general search.
 Independent evaluation of a wide scaled product can combine repeated
 factors by binary exponentiation. When a sum of weighted words has a common
 power of two and its observed coefficients fit a signed 32-bit word, the
@@ -8457,8 +8589,9 @@ reads the arbitrary-width values from the same grid.
 Enumeration stores one 32-bit sample per point for widths through 32.
 Wider words retain all required limbs.
 For enumerated candidates, a bounded hash spans the measurement grid. A
-matching hash still requires equality of the complete measurement vectors
-before a candidate reaches independent validation.
+native-word column stores the sampled blocks together. Each operation reads
+the same point order. A matching hash still requires equality of the complete
+measurement vectors before a candidate reaches independent validation.
 When translating flagged LLVM arithmetic, the source width of a sign or zero
 extension bounds its result. Those bounds can justify a surrounding no-wrap
 sum or product while keeping every operand's definedness checks.
@@ -11412,7 +11545,22 @@ exact finite occurrence query on the complete current graph. The prior storage
 certificate supplies only the query ceiling. Unknown transfers or reentry,
 unbounded values and incomplete evidence cannot authorize coordinates; normal
 mask proofs retain their existing path and cost. Module-wide storage mutation
-checks still run before source publication.
+checks still run before source publication. A stable self replay that cannot
+prove the domain over its own published targets is replayed once more the way
+any published table is: from the entry, where the candidate-local fixed point
+grows its own targets and the published fallback refuses rather than certify
+them, without its published runtime range or retained provisional edges. That
+attempt spends a copy of the account and restores the branch's exploration
+request unless it proves the domain, so a failed attempt leaves the restricted
+failure unchanged. A relative singleton whose target role reads a borrowed edge
+overlay may publish only when its whole physical object is independently
+authenticated; its complete-CFG proof replays it in every later stage, and once
+the borrowed edge is published the replay no longer reads the overlay. While
+that edge stays provisional, the dispatch it comes from stays unresolved and
+nothing past it is reachable. Two state machines in one function need both:
+the second machine is entered only through the first machine's provisional
+edges, and the first machine's entry dispatch closes only after the second
+machine resolves.
 Structural modulo recipes retain x86's complete double-width dividend. The
 symbolic adapter admits 128-bit words only for these bounded structural queries;
 ordinary SAT and finite-set symbolization retain their word-width limit.
@@ -11526,8 +11674,127 @@ A writer that copies an extended narrower value hides the extension: MSVC's
 ECX guard's lane names an opaque RCX occurrence. When neither identity binds
 such a lane, both queries retry rooted at the narrower value the lane carries
 unchanged, found through whole-width copies and extensions in the guard's
-block. The resolver still proves both, the narrow-lane bound check keeps the
-domain below that value's sign bit, and a failed retry changes nothing.
+block. The resolver still proves both, and a failed retry changes nothing.
+A narrow bound past the sign bit, such as GCC's `cmpb $0xb8, %dl; ja` before
+`movzbl %dl, %esi` in sqlite3VdbeExec, stands only when every index leaf of
+the selected guards reaches the table index zero-extended: a structural leaf,
+or one whose identity also holds with sign extension excluded. That identity
+is the one that bound the leaf: its index query, the extended lane's query,
+or the lane source's. pcre2's set_start_bits compares the low lane of the
+register `movzbl` loaded and indexes with that register, a leaf only the
+extended lane binds. Those queries spend a copy of the account, so a lane
+they cannot prove fails as before; a sign-extended lane keeps the dispatch
+unresolved. A compared byte
+copied into the index's own lane before the compare (`mov %dl, %al`) is the
+index only when the index has that width or a later zero-extend covers the
+whole index: otherwise the index keeps its earlier upper bits, which no
+bound on the lane constrains.
+A guard can read status flags its own block never writes. GCC threads
+`cmp $7, %edx; jle L` into `L: ...; ja default`, as in libzstd's sequence
+decoder, so the `ja` reads the compare's flags. A flag is never the table
+index, so a leaf for it would drop the whole guard. While the condition reads
+such a flag, and the first block of the guard's syntax has exactly one
+predecessor that makes no call, the syntax is collected over that
+predecessor's operations followed by its own, for at most
+`kMaxJumpTableGuardFlagSearchBlocks` blocks. This only proposes syntax: every
+definition unfolded there keeps its all-path definition query, so a second
+path into the block refuses the guard, and an index written after the compare
+is no longer the compared value. A compare of a narrower low lane of the index
+register that the block never writes walks on the same way to the lane's
+definition, whose extension ties the lane to the index. sqlite's
+`sqlite3VdbeRecordCompareWithSkip` loads a byte with `movzbl`, bounds it with
+`cmp $9, %eax; ja`, and three blocks later with `cmp $6, %al; ja`, then
+indexes with `%rax`. Without that definition the lane was an unknown leaf, the
+dword guard admitted ten slots, and the dispatch stayed unresolved. The walk
+serves only a guard whose branch reaches the index's block, directly or by
+falling through blocks that only it enters and that leave the index register
+alone, and it keeps the blocks it walked only once the definition is in view.
+libzstd's sequence decoder also compares `%dl` after a shift, long before a
+dispatch that indexes with `%rdx`: that compare keeps the syntax it had,
+since unfolding it into the shift makes a condition the proof cannot use.
+The structural rule that a compared lane is the index looks for the lane's
+zero extension the same way: when the compare's block writes no byte of the
+register, it follows the blocks each entered only by falling through from
+the one before, and no call may run between the extension and the compare.
+It stops at a block also entered another way, as a function entry or a
+root of the proof such as a relocated label or a landing pad: that entry
+skips the extension, and no all-path query checks a structural leaf.
+Such a compare of the index lane also decides which view the proof keeps,
+since guards over different widths share no symbolic index: a full-width
+guard wins only when one of them is such a compare too, or no guard is.
+A routine of bash's command printer loads a field with
+`movl 0x18(%rbx), %eax`, tests `(%eax - 4) & ~4` on the full register and
+branches away on 4 and 8, and bounds `%eax` by twenty in the next block.
+Keeping that full-width test alone left two holes and no bound; the
+compare's view now bounds the dispatch, and dropping the test only enlarges
+the domain.
+The address-role proof takes a table load's scale from the role's own index
+occurrence first. An AArch64 extended-register operand widens the index into
+a temporary the same instruction scales. An x86 32-bit write widens it into
+the whole register (`movl 0x10(%rdi), %ecx` lifts as COPY ECX and INT_ZEXT
+RCX), and the table load's own instruction scales that register: the proof
+follows it forward through the rest of its block, up to the load, while
+nothing writes any byte of it, calls, or runs predicated. Only a role without
+such an occurrence asks every same-scale operation of the function whether
+it carries the index, and one query of that batch that cannot finish fails
+the role. liblzma's decoder lost its table that way once the table's targets
+brought a deep scaled value into the function.
+When the table load's own instruction forms its address and one operand of
+that add already is an authenticated index occurrence through the local copy
+chain, the address proof asks that order alone. The other order would ask
+whether the index is the table base, and answering that rebuilds the index's
+whole value: a lexer's loop-carried token, whose definitions merge every arm
+of the loop.
+The target-role proof first grows the table load's transforms over its
+lexical region, the code between the table address and the branch, and an
+operation there continues a chain only through an input whose nearest earlier
+write in the region is an occurrence already derived in that state. Like the
+region, this only narrows the search: every step is still a proved query, and
+a chain it misses falls back to the whole-graph pass. Unfiltered, the scaled
+address computation asked for the whole value of bash's loop-carried token,
+and its lexer spent 524 Mi on one dispatch.
+A guard proof's predicated-alias queries, which only add index alternatives
+for a select whose predicate the guard repeats, run on a share of the
+remaining candidate account (`kJumpTableGuardAliasQueryAccountDivisor`) and
+are charged what they spent. An unfinished batch abandons those alternatives
+and leaves the guard proof the rest; charged in full, pcre2's alias batches
+spent the account the guard itself needed.
+When the compare that names the index is a structural leaf, the session over
+every controlling condition runs on a share of the remaining candidate
+account (`kJumpTableGuardSideSessionAccountDivisor`): the other conditions
+only add constraints to a bound already in hand. A session that finishes is
+charged what it spent. Run on the whole account, such a session could leave
+the address and domain proofs too little, as in a lexer loop whose 64 arms
+each recompute the dispatched token. A session that cannot finish within its
+share answers none of its queries and costs the account nothing. That
+session can also run out of its own match allowance with the account to
+spare, and then answers none of its queries. Either way the compare's own
+queries are then asked alone, in a session of their own; the other
+conditions stay unanswered and only drop out of the proof.
+pcre2's pattern converter puts 22 controlling conditions and 179 queries in
+front of one dispatch.
+The compare is that structural leaf also when the index takes the compared
+lane only after the guard. GCC copies the compared register into the index
+register (`cmp $0x1c, %r11d; ja; mov %r11d, %eax`), or zero-extends the
+compared byte into its own register (`cmp $0x13, %sil; ja; movzbl %sil,
+%esi`, which lifts as an INT_ZEXT into a temporary, a COPY of it into ESI and
+ESI's own INT_ZEXT into RSI). Nothing may write the lane between the compare
+and that copy or extension, each extension must widen what the previous one
+left, and a temporary counts only within its own instruction. Without the
+identity pcre2's parse_regex asked one session over 556 controlling
+conditions for such a dispatch; the session spent 339 Mi of the candidate
+account and did not finish, and the guard proof 362 Mi in all.
+A byte compared in memory is that leaf too when the index reloads it
+(`cmpb $0xc, 0x2(%r11); ja; movzbl 0x2(%r11), %edx`): a load of the same
+width through the same register and displacement, reached into the index by
+zero-extensions and same-width copies, in a block only the guard's
+fallthrough enters. Nothing between the two loads may write memory or that
+register, and no call may run before the index is used. These are the
+conditions under which the value resolver's reload search also reads one
+value; the address carrier and the memory-write test are its own helpers.
+pcre2_dfa_match's dispatch of this shape spent the whole 487 Mi left in its
+candidate account on the guard session, and two tables the function had
+proved were then withdrawn because that dispatch stayed open.
 Exact guard-occurrence queries use the expanded CFG value-reconstruction depth
 limit. Guard syntax collection and materialization keep their separate, smaller
 expression limit. This lets a shallow guard cross a longer predecessor graph
@@ -11535,7 +11802,17 @@ without treating depth exhaustion as a completed proof or skipping replay.
 When separate predecessor arms guard one selector, scalar comparison literals
 can propose a finite envelope even though no single guard dominates the load.
 The joined-domain query must prove every incoming value and a dense prefix;
-the proposal supplies no table capacity or range authority. A dominating
+the proposal supplies no table capacity or range authority. That envelope may
+reach 255 values, where an ordinary finite set stops at one 64-bit word. Each
+arm's solver proves the envelope, then reads one feasible coordinate per call
+from a model and excludes it; members an earlier arm proved are excluded
+first. The calls therefore follow the members, not the proposed envelope, and
+an unrelated wide literal elsewhere in the function costs a few calls. bash
+enters a 97-case dispatch this way from a zero byte that skips its range
+guard, and pcre2's set_start_bits a 173-case dispatch whose two entry paths
+each compare the opcode with 0xac. The ceiling stays below a byte lane's 256
+values, so a byte read on an unguarded path can be 255, a counterexample
+rather than a domain proved by width. A dominating
 equality, or a dominating signed upper bound, that is not itself an unsigned
 dense prefix does not discard those predecessor ranges: the same query proves
 the prefix and keeps the dominating edge constraints. A dominating range that
@@ -12344,6 +12621,40 @@ identity or source ABI. Successful classification emits an explicit
 successorless `INDIR_BR`. An unresolved transfer without a usable switch
 remains an explicit failure path.
 
+An x86-64 candidate has no link register to restore: its caller's CALL left
+the return address on the stack, so `restoredX64IndirectTailFrames`
+(`X86/IndirectTailFrameX86.cpp`) requires every reaching path to leave RSP at
+its incoming value. The proof follows what each register and temporary
+derives from the incoming RSP: pushes, pops, constant adjustments, LEAVE and
+copies through RBP or a temporary carry an exact offset, and any other
+operation of a derived value, a partial or guarded write and a disagreeing
+join keep the derivation and lose the offset. A call keeps RSP and the
+registers both x86-64 conventions preserve. Landing pads and other roots
+enter at an unknown offset. An unknown or nonzero offset keeps the indirect
+branch. A value read from memory, an argument or a call's result derives
+from nothing here, so a jump whose RSP derives from nothing on every path
+resumes saved state on another stack, as `gogo<>`, longjmp and a fiber switch
+do, and stays a tail call, as does PLT0's jump through the DT_PLTGOT slot the
+dynamic linker fills with its lazy-binding resolver
+(`RuntimeCallablePointerSlotKind::ELFLazyResolver`), which receives the word
+PLT0 pushes. Before the condition, a jump inside its frame through a
+relative table the resolver could not bound became a call of its case labels
+in a stripped library, which no relocation names the table in: liblzma's
+encoder, libjq, gawk, sqlite3Parser and bash each had one. The proof also
+follows which registers and temporaries may hold an address of the function's
+own code, or a value read through or computed from a table of them: a value
+an instruction computes from constants alone that is such an address, or
+that starts read-only data whose first 32-bit offset from it, or whose first
+word, names the function's code, and anything derived from one. Only that
+computed value counts, since a RIP-relative operand starts from the next
+instruction's address, which lies in the function. A call keeps only the
+preserved registers' marks. A jump to such a value stays within the function
+whatever its frame, so a frameless function's unbounded relative table no
+longer becomes a call of its case labels. Writable memory is no such table,
+nor is a slot the loader fills, such as a Control Flow Guard dispatch slot: a
+GOT slot names its PLT stub until the dynamic linker binds it, and the stub's
+jump through it stays a tail call.
+
 The CLI parses commands in `tools/neverd`, creates a `neverd_session_t`, and
 calls the public API in `include/neverd/sdk/NeverDCAPI.h`. Engine state lives in
 `lib/sdk/SessionImpl.h`; `neverd_session_load` selects a loader and builds a
@@ -12564,6 +12875,9 @@ regions, and exact symbol/relocation evidence before reachable decoding. If
 reachable decoding runs, an asserted entry must decode in its stated mode.
 Contradictory or unsupported assertions fail the load. The mode of a different
 unreached function remains unknown until it has its own evidence or assertion.
+A whole unit leaves such a function out and names it with that option; an
+LLVM unit that admits no function fails naming the first, and the admission
+diagnostic gives the missing mode, not the decode failure it causes.
 
 `BinaryImage::readImmutableARMLiteral` is the shared authority for folding a
 fixed-width read from a `$d` island inside executable storage. Both HighIR and
@@ -13531,7 +13845,19 @@ those slots shows they are no arguments (an -O0 spill near the call), so they
 end with it.
 That count is the named parameters of a variadic callee and zero for a callee
 nothing describes. Below it the callee reads the register, and the unknown
-value stays. The named count of an AAPCS64, Windows ARM64 or AAPCS32 variadic
+value stays. On System V x86-64 a direct callee nothing describes also ends
+its integer and floating registers at one that every way into the call
+leaves holding either such a leftover or the value the register entered the
+function with where no parameter arrives, and some way the former: neither
+the function nor its caller set it for an argument, and a compiler sets each
+argument of a call on every way to it. A write on any way keeps the
+register, since one call instruction can serve calls of different arity
+(`printf("%d", x)` and `printf("hi")` cross-jumped), as does a parameter's
+incoming value, which the function may pass on. sqlite's `parse.o` called
+`sqlite3ErrorMsg(pParse, "too many terms in compound SELECT")` with two more
+unknown values from such joins, and `printf.o` passed `sqlite3_value_int64`,
+which takes one pointer, two.
+The named count of an AAPCS64, Windows ARM64 or AAPCS32 variadic
 routine comes from its register save area, which spills the argument registers
 from the first unnamed one to the last (`MedFunc::VariadicFirstRegister`).
 Windows ARM64 has no va_list record: va_start spills x(first) through x7 to
@@ -14962,7 +15288,7 @@ Builds with registration callees share no proof. A shape-checked integer
 DIV/IDIV precondition preserves x87 state on normal continuation. It remains in the emitted body and grants no
 permission to suppress divide faults; malformed guards and unknown state
 intrinsics still refuse the call summary.
-An x64 whole-image batch large enough to run in parallel first builds every
+An x64 whole-image batch of any size first builds every
 function without the fixup (`CFGBuilder::buildDeferringX87`). Such a build asks no
 callee's call graph, and it keeps its own for its callers: it is configured
 as their proofs configure a callee's graph build, one no-return level
@@ -14972,7 +15298,10 @@ checks an incomplete lift's answers. A second pass keeps each body the fixup
 would leave unchanged, by the checks a retained body passes
 (`deferredBuildStandsIn`), and builds the rest again with every graph they
 read already kept. Before, a graph not yet kept lifted the callee again, most
-often while the callee's own build was still running. A selected run keeps
+often while the callee's own build was still running; a batch too small to
+run in parallel, as an object file's often is, lifted each called function
+twice in one thread, once for its first caller's graph and once for itself.
+A selected run keeps
 one pass: its cache keeps the callee bodies its call summaries read, which
 the left-out callee graph builds supply.
 One LowIR analysis may share up to 128 immutable machine
@@ -18899,8 +19228,10 @@ representatives in discovery order before offering the candidate. An
 unsuccessful search can discard its recipes without interning those nodes.
 For machine words, the cost bound or the remaining work can make the current
 tier the last one reachable. The search screens those candidates at one grid
-point and checks survivors against the full grid. If any survivor matches, it
-replays the tier in discovery order for the independent checker and verifier.
+point in operand rows and checks survivors against the full grid. Neutral and
+absorbing operands reuse the represented column, with each offer charged.
+If any survivor matches, it replays the tier in discovery order for the
+independent checker and verifier.
 An unsuccessful final tier charges every visited candidate without storing
 signatures that no later tier can read.
 
@@ -19278,7 +19609,7 @@ for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
 
 ### Experimental RISC-V and PowerPC ELF analysis
 
-The ELF loader admits little-endian RV32I/ILP32 and RV64I/LP64, classic PPC32
+The ELF loader admits little-endian RISC-V ILP32, LP64, ILP32D and LP64D, classic PPC32
 System V, and PPC64 ELFv1 and ELFv2 in either byte order. On PPC32 the runtime
 jump table identifies the secure PLT's pointer slots or the classic BSS-PLT's
 executable entries. For a secure PIC stub, MedIR binds the call to a slot
@@ -19293,7 +19624,7 @@ reaching r2 and carries its saved value through the return edge. For ELFv2,
 reads the global prologue for its TOC and associates linkage stubs with
 eight-byte jump slots. MedIR checks the register required at the selected
 entry and tracks the native save and reload at 24(r1).
-RISC-V extension evidence belongs to the image. Decode,
+RISC-V extension evidence belongs to the image. The double-float ABI uses `fa0` through `fa7` for named floating arguments and `fa0`/`fa1` for results. Source placement also handles mixed scalar records and the integer convention for unnamed arguments. Decode,
 lift and function discovery share the physical instruction size and
 control-transfer semantics.
 Both families feed the existing LowIR, ABI recovery, HighC and LLVM backends.
@@ -20269,6 +20600,8 @@ The same owner also proves an Optional around a labeled tuple of two independent
 The shared frame analysis distinguishes a live opaque value from completely initialized bytes. Independently authenticated initialize/read/destroy effects carry one bounded type identity and extent; every reaching path and loop backedge must agree on live values, and destruction must precede frame release. Raw loads, untyped borrows, overlapping writes, duplicate initialization, missing destruction and uncertain aliases cannot consume this fact. May-written padding retains its previous possible frame-pointer taint; only definite stores can remove it. Existing initialized-byte, by-value-copy and saved-register proofs remain separate. Real Swift AnyHashable copy witnesses leave some destination padding untouched, as confirmed by original ARM64 helpers and unchanged generated C at O0/O2. This IR protocol does not identify those helpers or grant their frame effects or source-publication permission; a loader consumer still needs independent current machine, type, ABI and lifetime certificates.
 
 `SwiftOpaqueValueEffects` independently authenticates bounded AnyHashable copy, equality and destruction. Four compiler/SDK profiles prove a 40-byte typed temporary with copy, borrowed use, destruction and lifetime end; padding remains unspecified. The loader replays the current complete ARM64 caller and callee machine/LowIR/CFG, validates every helper instruction and physical ABI, and requires exact strong metadata/runtime imports in immutable ordinary GOT slots. Copy initializes a typed value, equality reads it, and destruction ends its lifetime; returned addresses retain only possible frame aliases. Dynamic value-witness dispatch and true `swiftcc i1` equality remain intact. The existing IR owner checks actual frame initialization, escape, aliases, every path and loop backedge. Native inference now consumes this same owner with current callee LowIR and complete audits. LowToMed records each original occurrence and transformations preserve its unique evaluation. Publication independently rebuilds the callee and entry ABIs from the current image, then compares complete canonical MedIR/HighIR and bound source bodies, including branches, collision-loop backedges, all arguments and every memory effect. Removing a receipt or supplying a defined scalar result cannot bypass the lifetime proof. The bounded first consumer accepts complete copy/equality/destroy call groups; unrelated calls require separate integration. It neither flattens loops nor treats padding as initialized.
+
+`SymSimplifyPass` measures a region only when its translated expression has at least `MinMeasuredNodes` nodes, but the expression builders can already apply an identity: `zext((t - x) | t)` with `t = x | y` builds as `zext(x | y)`. When the region itself qualified and some instruction in it built as one of its own operands, what construction made of the region is the candidate, under the usual instruction-count rule; derivation would find nothing left to change. Values the region computes twice share a node without such a fold and still reach synthesis, and a region too small to measure stays below the threshold.
 
 `SymSimplifyPass` also evaluates bounded integer slices whose inputs derive from one SSA value with at most two possible concrete values. Boolean values, single-bit masks and sign extraction establish complete domains without sampling. Every intermediate operation must be defined for both values, including overflow, exact shifts, disjoint OR, narrowing and sign annotations. The replacement retains the original anchor, counts only instructions that become dead, and must reduce LLVM instruction count. Unrelated inputs, incomplete domains, explicit undef/poison and exhausted work never authorize a rewrite. `MaxFiniteValueWork` bounds this derivational phase; zero disables it. The budget participates in translation cache identity, and the optimization recipe is pipeline schema 7. This does not infer memory privacy, loop invariants or a source ABI.
 
@@ -21831,6 +22164,8 @@ Interpreter specialization retains full-width guest addresses. At publication, i
 The version-3 conditional result-object profile adds a nullable RAX result whose nonzero value owns a nonwrapping object of the exact pre-call RDX size, disjoint from the declared entry frame. The size must be proved positive and unique at each occurrence; otherwise the transition refuses. Every invocation receives a fresh object identity, including repeated visits to one static site. Projection retains the exact size with that identity, separates contexts with different sizes, and discards stale pointer facts when the site is called again. A conditional edge may also retain nullness only after exhaustive proof, then binds it again at the successor. A structurally contained write to a proved nonnull result object uses that declared disjoint extent to preserve the frame; every other write keeps the ordinary alias proof. The declaration supplies no unchecked per-store exemption, initialized bytes, allocator identity or source/native certificate. This is an explicit conditional callee effect, not a conclusion from a concrete address or an import name.
 
 Version 4 extends that conditional result-object contract with sorted, disjoint absolute exclusions. For every normal return with a nonnull result, the entire exact result object must miss each declared range; a null result grants no object extent. The x64 owner validates and hashes the ranges, while the common evaluator assumes the declared relation at each fresh result and reestablishes it at successor nodes. A complete current absolute cell inside an excluded range survives a write only after the same write is proved contained in the current nonnull object. Other cells retain ordinary per-write alias checks and conservative invalidation. These ranges are caller-supplied preconditions about every invocation, not facts authenticated by a single observed address or an image section. Raw integrity binds them, but ordinary source and native proof consumers still reject the conditional call domain.
+
+Version 5 is a separate extension of the version-2 frame-span relation for explicit caller-frame outputs. Each declared full-width x64 argument pointer must be proved an exact entry-frame offset at every call occurrence, and its bounded byte span must fit the declared frame. Normal return gives every byte in those spans a fresh unconstrained value after the ordinary call forgetting; unchanged old values remain permitted. Overlapping saved-pointer facts and the opaque entry caller-word fact are retired; live native return locations remain live, with their changed contents subject to later target proof. The x64 owner validates and hashes the argument registers and extents, and raw validation binds them to each retained call marker. This is a caller-owned conditional effect for every invocation, not an inferred import prototype or a concrete observation. Incomplete pointer proof or an out-of-frame span refuses recovery. Source and native adapters still reject the raw call event.
 
 Within one specialization node, a proved nonnull result may be reused for later stores because path constraints only accumulate. The cache is keyed by the fresh object root; a later invocation at the same static call site receives a new root and cannot inherit the old proof. A must-nonnull fact projected across an edge is also valid for that node's current root.
 

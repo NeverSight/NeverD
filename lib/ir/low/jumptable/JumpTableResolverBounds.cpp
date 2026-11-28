@@ -785,6 +785,101 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
     *ExactFiniteRelativeClosureUnknown = false;
   if (AbsoluteSingletonProof)
     AbsoluteSingletonProof->reset();
+  // A stable self replay proves the domain over this dispatch's own published
+  // targets, so it never enters the candidate-local fixed point below.  A
+  // state machine whose next state is computed in its case bodies is proved
+  // only by that fixed point, and its replay fails while another machine it
+  // borrows an edge from is still provisional.  Keep a restricted replay that
+  // succeeds.  When it fails, replay the table the way any published table is
+  // replayed: from the entry, never reading its own targets (the published
+  // fallback below refuses rather than certify them), its published runtime
+  // range or retained provisional edges.  That attempt spends a copy of the
+  // account, and unless it proves the domain it also restores this branch's
+  // exploration request, its only other effect, so the caller handles the
+  // restricted failure exactly as before.
+  if (AllowFixedPointBootstrap && RequireProducerReachability &&
+      CandidateTargetsOverride && ReachableInstructions &&
+      AggregateEvidenceBudget) {
+    const uint32_t Restricted = inferBoundsFromMaskWithAbsoluteProof(
+        Rec, Info, AllowNonContiguous, IncompleteIndexDomain, UsedNonContiguous,
+        FeasibleCoordinates, KnownOneWitnesses, RequireProducerReachability,
+        CandidateTargetsOverride, ReachableInstructions,
+        /*AllowFixedPointBootstrap=*/false, AllowRawDenseShortcut,
+        AggregateEvidenceBudget, SemanticIndexDomainAmbiguous,
+        ExactConsumerGroup, CertifiedEdgeOverrides,
+        CertifiedSiblingRuntimeStorage, ExactFiniteRelativeSingletonTarget,
+        ExactFiniteRelativeClosureUnknown, RetainProvisionalRelativeEdges,
+        AllowInlineZeroCapacityBoundedReplay, InlineRelativeReadableCapacity,
+        OwnPublishedRuntimeStorage, AbsoluteSingletonProof);
+    if (Restricted != 0 && !(IncompleteIndexDomain && *IncompleteIndexDomain) &&
+        !(SemanticIndexDomainAmbiguous && *SemanticIndexDomainAmbiguous))
+      return Restricted;
+    size_t EntryBudget = *AggregateEvidenceBudget;
+    const auto Explored = CandidateFixedPointExplorationTargets.find(Rec.Addr);
+    const size_t SnapshotWork =
+        Explored == CandidateFixedPointExplorationTargets.end()
+            ? 1
+            : Explored->second.Targets.size() + 1;
+    if (SnapshotWork > EntryBudget)
+      return Restricted;
+    EntryBudget -= SnapshotWork;
+    std::optional<CandidateFixedPointExploration> SavedExploration;
+    if (Explored != CandidateFixedPointExplorationTargets.end())
+      SavedExploration = Explored->second;
+    const size_t SavedExplorationPeak =
+        MaxCandidateFixedPointExplorationTargetCountForTesting;
+    bool EntryIncomplete = false;
+    bool EntryAmbiguous = false;
+    bool EntryNonContiguous = false;
+    std::vector<uint32_t> EntryCoordinates;
+    std::vector<JumpTableMaskKnownOneWitness> EntryWitnesses;
+    std::optional<va_t> EntrySingleton;
+    bool EntryClosureUnknown = false;
+    std::optional<ExactFiniteAbsoluteSingletonProof> EntryAbsoluteSingleton;
+    const uint32_t Entry = inferBoundsFromMaskWithAbsoluteProof(
+        Rec, Info, AllowNonContiguous, &EntryIncomplete, &EntryNonContiguous,
+        FeasibleCoordinates ? &EntryCoordinates : nullptr,
+        KnownOneWitnesses ? &EntryWitnesses : nullptr,
+        RequireProducerReachability, /*CandidateTargetsOverride=*/nullptr,
+        /*ReachableInstructions=*/nullptr, /*AllowFixedPointBootstrap=*/true,
+        AllowRawDenseShortcut, &EntryBudget, &EntryAmbiguous,
+        ExactConsumerGroup, CertifiedEdgeOverrides,
+        CertifiedSiblingRuntimeStorage,
+        ExactFiniteRelativeSingletonTarget ? &EntrySingleton : nullptr,
+        ExactFiniteRelativeClosureUnknown ? &EntryClosureUnknown : nullptr,
+        /*RetainProvisionalRelativeEdges=*/false,
+        AllowInlineZeroCapacityBoundedReplay, InlineRelativeReadableCapacity,
+        /*OwnPublishedRuntimeStorage=*/nullptr,
+        AbsoluteSingletonProof ? &EntryAbsoluteSingleton : nullptr);
+    if (Entry == 0 || EntryIncomplete || EntryAmbiguous) {
+      if (SavedExploration)
+        CandidateFixedPointExplorationTargets.insert_or_assign(
+            Rec.Addr, std::move(*SavedExploration));
+      else
+        CandidateFixedPointExplorationTargets.erase(Rec.Addr);
+      MaxCandidateFixedPointExplorationTargetCountForTesting =
+          SavedExplorationPeak;
+      return Restricted;
+    }
+    *AggregateEvidenceBudget = EntryBudget;
+    if (IncompleteIndexDomain)
+      *IncompleteIndexDomain = false;
+    if (SemanticIndexDomainAmbiguous)
+      *SemanticIndexDomainAmbiguous = false;
+    if (UsedNonContiguous)
+      *UsedNonContiguous = EntryNonContiguous;
+    if (FeasibleCoordinates)
+      *FeasibleCoordinates = std::move(EntryCoordinates);
+    if (KnownOneWitnesses)
+      *KnownOneWitnesses = std::move(EntryWitnesses);
+    if (ExactFiniteRelativeSingletonTarget)
+      *ExactFiniteRelativeSingletonTarget = EntrySingleton;
+    if (ExactFiniteRelativeClosureUnknown)
+      *ExactFiniteRelativeClosureUnknown = EntryClosureUnknown;
+    if (AbsoluteSingletonProof)
+      *AbsoluteSingletonProof = EntryAbsoluteSingleton;
+    return Entry;
+  }
   size_t LocalWorkBudget = limits::kMaxJumpTableMaskCoreEvidenceWork;
   size_t OwnedEvidenceBudget =
       std::min<size_t>(limits::kMaxJumpTableMaskFixedPointEvidenceWork,
@@ -1028,7 +1123,7 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
       Queries.push_back(std::move(Feasible));
     }
     std::vector<bool> QueryComplete;
-    std::vector<uint64_t> FeasibleMasks;
+    std::vector<JumpTableFeasibleSet> FeasibleMasks;
     const std::vector<bool> Matches = QueryGraph->tableValuesMatchAtUses(
         Queries, nullptr, &QueryComplete, Rec.Addr, Targets, EvidenceBudget,
         /*LocalMatchEvidenceLimit=*/0, SharedTargetBranches, &FeasibleMasks,
@@ -1065,10 +1160,10 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
         continue;
       PresentBranches.insert(
           OccurrenceBranches ? (*OccurrenceBranches)[Occurrence] : Rec.Addr);
-      if (!Matches[Begin + 1] || FeasibleMasks[Begin + 1] == 0)
+      if (!Matches[Begin + 1] || FeasibleMasks[Begin + 1].none())
         return std::nullopt;
       for (uint32_t Coordinate = 0; Coordinate < QueryCapacity; ++Coordinate) {
-        if ((FeasibleMasks[Begin + 1] & (uint64_t{1} << Coordinate)) == 0)
+        if (!FeasibleMasks[Begin + 1].test(Coordinate))
           continue;
         Seen[Coordinate] = true;
       }
@@ -3728,6 +3823,11 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
   // exhausting the bounded proposal search.  This shortcut is valid only when
   // the mask's dynamic input does not itself depend on another mask occurrence:
   // nested masks must first pass through the domain-intersection closure below.
+  // An upstream mask can only narrow the coordinates this mask proves.  When
+  // the dependence search cannot finish, as for a selector computed from
+  // arrays the case bodies rewrite each iteration, every coordinate stays
+  // feasible; they are read only when each one names a slot of this table's own
+  // anchor-bounded relocation run, so no coordinate reaches past the table.
   bool DirectIndexAnalysisIncomplete = false;
   auto directIndexBound = [&]() -> std::optional<uint32_t> {
     if (IndexOccurrences.empty())
@@ -3812,15 +3912,16 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
         bool UpstreamMaskAnalysisComplete = false;
         const std::vector<bool> DependsOnUpstreamMask =
             matchAtUses(UpstreamMaskQueries, &UpstreamMaskAnalysisComplete);
-        if (!UpstreamMaskAnalysisComplete ||
-            DependsOnUpstreamMask.size() != UpstreamMaskQueries.size()) {
-          DirectIndexAnalysisIncomplete = true;
-          return std::nullopt;
-        }
         if (std::any_of(DependsOnUpstreamMask.begin(),
                         DependsOnUpstreamMask.end(),
                         [](bool Depends) { return Depends; }))
           continue;
+        if ((!UpstreamMaskAnalysisComplete ||
+             DependsOnUpstreamMask.size() != UpstreamMaskQueries.size()) &&
+            MaxCoordinate >= Info.ExactBoundedRelativeRelocationSlots) {
+          DirectIndexAnalysisIncomplete = true;
+          return std::nullopt;
+        }
         if (FeasibleCoordinates && !consumeWork(Coordinates.size())) {
           DirectIndexAnalysisIncomplete = true;
           return std::nullopt;
@@ -5671,7 +5772,7 @@ bool CFGBuilder::inferBoundsFromModulo(
                 BoundQueries.push_back(std::move(Query));
               }
               std::vector<bool> BoundComplete;
-              std::vector<uint64_t> BoundFeasibleMasks;
+              std::vector<JumpTableFeasibleSet> BoundFeasibleMasks;
               const std::vector<bool> BoundMatches = tableValuesMatchAtUses(
                   BoundQueries, nullptr, &BoundComplete, Rec.Addr, &NoTargets,
                   AggregateEvidenceBudget,
@@ -5695,11 +5796,13 @@ bool CFGBuilder::inferBoundsFromModulo(
                         {{BoundFeasibleMasks.size(), 2}}))
                   return false;
                 uint64_t FeasibleMask = 0;
-                for (uint64_t Mask : BoundFeasibleMasks) {
-                  if (Mask == 0 || (CandidateCapacity < 64 &&
-                                    (Mask >> CandidateCapacity) != 0))
+                for (const JumpTableFeasibleSet &Set : BoundFeasibleMasks) {
+                  const std::optional<uint64_t> Mask = Set.lowWord();
+                  if (!Mask || *Mask == 0 ||
+                      (CandidateCapacity < 64 &&
+                       (*Mask >> CandidateCapacity) != 0))
                     return false;
-                  FeasibleMask |= Mask;
+                  FeasibleMask |= *Mask;
                 }
                 const size_t InsertWork =
                     orderedEvidenceLookupWork(CandidateCapacity) + 3;

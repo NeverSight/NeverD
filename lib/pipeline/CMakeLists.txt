@@ -55,6 +55,7 @@ add_neverd_component_library(NeverDPipeline
   PipelineStructReturn.cpp
   PipelineStructReturnCallSites.cpp
   PipelineReturnContracts.cpp
+  PipelineDoubleWordShift.cpp
   PipelineDoubleWordSum.cpp
   PipelineWideIntReturn.cpp
   PipelineWideIntReturnEvidence.cpp
@@ -75,5 +76,7 @@ add_neverd_component_library(NeverDPipeline
   Digest
   EVM
   SBF
+  Solver
+  Symbolic
   WindowsEHMetadata
 )

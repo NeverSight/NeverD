@@ -22,6 +22,7 @@
 #include "neverd/lift/ARM/ARMLifter.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/PowerPC/PowerPCLifter.h"
+#include "neverd/lift/PowerPC/PowerPCPrefixed.h"
 #include "neverd/lift/RISCV/RISCVLifter.h"
 #include "neverd/lift/X86/X86Lifter.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -151,12 +152,14 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
     break;
   case Arch::RISCV32:
   case Arch::RISCV64:
+  case Arch::RISCV32D:
+  case Arch::RISCV64D:
     if (Mode != InstructionMode::Default)
       return false;
     CsArch = CS_ARCH_RISCV;
-    CsMode =
-        cs_mode((TheArch == Arch::RISCV64 ? CS_MODE_RISCV64 : CS_MODE_RISCV32) |
-                CS_MODE_RISCV_C | CS_MODE_RISCV_A);
+    CsMode = cs_mode((isRISCV64(TheArch) ? CS_MODE_RISCV64 : CS_MODE_RISCV32) |
+                     CS_MODE_RISCV_FD | CS_MODE_RISCV_C | CS_MODE_RISCV_A |
+                     CS_MODE_RISCV_ZBA | CS_MODE_RISCV_ZBB | CS_MODE_RISCV_ZBS);
     break;
   case Arch::PPC32:
   case Arch::PPC32LE:
@@ -389,7 +392,7 @@ Decoder::decodeOtherPhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
     const unsigned Alignment = RISCV.hasCompressed() ? 2 : 4;
     if ((Addr & (Alignment - 1)) || Len < 2 ||
         (!RISCV.hasCompressed() && (Bytes[0] & 3) != 3) ||
-        (TargetArch == Arch::RISCV32 && Addr > UINT32_MAX))
+        (isRISCV32(TargetArch) && Addr > UINT32_MAX))
       return false;
   } else if (isPowerPC(TargetArch) &&
              ((Addr & 3) || (!isPowerPC64(TargetArch) && Addr > UINT32_MAX))) {
@@ -402,6 +405,9 @@ Decoder::decodeOtherPhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   const bool Decoded =
       X86 && Text ? X86_disasmIterText(Handle, &Code, &Remaining, &PC, InsnBuf)
                   : cs_disasm_iter(Handle, &Code, &Remaining, &PC, InsnBuf);
+  if (Decoded && InsnBuf->size == ppc::prefix::InstructionBytes &&
+      isPowerPC(TargetArch))
+    return isPowerPC64(TargetArch) && ppc::prefix::fitsFetchBlock(Addr);
   return Decoded || (X86 && (decodePrefixedX86Fence(Bytes, Len, Addr) ||
                              decodeX86MpxFallback(Bytes, Len, Addr)));
 }
@@ -588,6 +594,20 @@ void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
   }
   if (UndefinedEffects && !X86)
     UndefinedEffects->OpCount = Ops.size() - OpsStart;
+}
+
+void Decoder::liftWithUndefinedTransfer(
+    const DecodedInsn &Insn, std::vector<LowOp> &Ops,
+    llvm::ArrayRef<RelocatedAddressOperand> Relocs,
+    llvm::ArrayRef<RelocatedScalarOperand> ScalarRelocs,
+    LowUndefinedTransfer &Transfer) {
+  if (X86 && !Insn.AArch64Occurrence) {
+    X86->liftWithUndefinedTransfer(Insn.Raw, Ops, Relocs, ScalarRelocs,
+                                   Transfer);
+    return;
+  }
+  Transfer = {};
+  liftToLow(Insn, Ops, Relocs, ScalarRelocs);
 }
 
 void Decoder::fixupDecodedInsn(cs_insn *I) const {

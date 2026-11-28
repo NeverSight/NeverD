@@ -3098,6 +3098,125 @@ SpecializationOptions wideOptions() {
   return O;
 }
 
+TEST(InterpreterSpecialization,
+     ConditionalStoreRetainsLiveNativeReturnWordOnBothAliasPaths) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    Provider P;
+    P.add(0x100, {op(NdOp::INT_SUB, reg(48), {reg(32), constant(16)}),
+                  op(NdOp::STORE, {}, {reg(48), reg(32)})});
+    P.add(0x101, {op(NdOp::CALL, reg(0), {constant(0x200)})});
+    P.Code.at(0x101).NativeStackControl =
+        SpecializationNativeStackControl::Call;
+    P.add(0x102, {op(NdOp::COPY, reg(0), {constant(17)})});
+    P.add(0x103, {ret()});
+    P.Code.at(0x103).NativeStackControl =
+        SpecializationNativeStackControl::Return;
+    const uint64_t ReturnByte = Order == llvm::endianness::little ? 0 : 7;
+    P.add(0x200,
+          {op(NdOp::INT_ADD, reg(48), {reg(32), constant(ReturnByte)}),
+           op(NdOp::SELECT, reg(40), {reg(8, 1), reg(48), constant(0x8000)}),
+           op(NdOp::STORE, {}, {reg(40), constant(3, 1)}),
+           op(NdOp::COPY, reg(0), {constant(0)})});
+    P.add(0x201, {ret()});
+    P.Code.at(0x201).NativeStackControl =
+        SpecializationNativeStackControl::Return;
+
+    auto O = separatedStoreOptions();
+    O.ByteOrder = Order;
+    O.EntryFrameBounds = SpecializationEntryFrameBounds{-32, 8};
+    O.EntryFrameBounds->ExcludedAddressRanges = {{0x8000, 0x8001}};
+    O.ProveStoreFrameSeparation = true;
+    const auto R = specializeInterpreter(P, {0x100}, O);
+    ASSERT_TRUE(R.complete()) << R.Diagnostic;
+    for (uint64_t Root : {0x1008u, 0x2008u})
+      for (bool Alias : {false, true}) {
+        SCOPED_TRACE(static_cast<int>(Order));
+        SCOPED_TRACE(Root);
+        SCOPED_TRACE(Alias);
+        WideByteOracle Actual(Order);
+        Actual.word(reg(8, 1), Alias);
+        Actual.word(reg(32), Root);
+        for (unsigned I = 0; I != 8; ++I)
+          Actual.Memory[Root + I] = 0xa0 + I;
+        Actual.Memory[0x8000] = 0x55;
+        ASSERT_TRUE(Actual.run(R.Residual)) << Actual.Diagnostic;
+        EXPECT_EQ(Actual.number(reg(0)), Alias ? 0u : 17u);
+        EXPECT_EQ(Actual.number(reg(32)), Root);
+        EXPECT_EQ(Actual.Memory.at(Root - 8 + ReturnByte), Alias ? 3u : 2u);
+        EXPECT_EQ(Actual.Memory.at(0x8000), Alias ? 0x55u : 3u);
+        for (unsigned I = 0; I != 8; ++I) {
+          const unsigned Shift =
+              8 * (Order == llvm::endianness::little ? I : 7 - I);
+          EXPECT_EQ(Actual.Memory.at(Root - 16 + I),
+                    static_cast<uint8_t>(Root >> Shift));
+          EXPECT_EQ(Actual.Memory.at(Root + I), 0xa0 + I);
+        }
+      }
+  }
+}
+
+TEST(InterpreterSpecialization,
+     ConditionalStoreTracksNativeReturnWithoutOtherFramePreservation) {
+  for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
+    SCOPED_TRACE(static_cast<int>(Order));
+    Provider P;
+    P.add(0x100, {op(NdOp::CALL, reg(0), {constant(0x200)})});
+    P.Code.at(0x100).NativeStackControl =
+        SpecializationNativeStackControl::Call;
+    P.add(0x101, {op(NdOp::COPY, reg(0), {constant(17)})});
+    P.add(0x102, {ret()});
+    P.Code.at(0x102).NativeStackControl =
+        SpecializationNativeStackControl::Return;
+    P.add(0x103, {op(NdOp::COPY, reg(0), {constant(29)}), jump(0x102)});
+
+    const uint64_t ReturnByte = Order == llvm::endianness::little ? 0 : 7;
+    // An absolute address can overlap the return word for some entry SP,
+    // even with stack alignment. Use a distinct stack-relative byte to make
+    // this a genuine two-outcome test without an entry frame exclusion.
+    P.add(0x200,
+          {op(NdOp::INT_ADD, reg(48), {reg(32), constant(ReturnByte)}),
+           op(NdOp::INT_SUB, reg(56), {reg(32), constant(16)}),
+           op(NdOp::SELECT, reg(40), {reg(8, 1), reg(48), reg(56)}),
+           op(NdOp::STORE, {}, {reg(40), constant(3, 1)})});
+    P.add(0x201, {ret()});
+    P.Code.at(0x201).NativeStackControl =
+        SpecializationNativeStackControl::Return;
+
+    auto O = separatedStoreOptions();
+    O.ByteOrder = Order;
+    ASSERT_FALSE(O.EntryFrameBounds);
+    ASSERT_FALSE(O.ProveStoreFrameSeparation);
+    const auto R = specializeInterpreter(P, {0x100}, O);
+    ASSERT_TRUE(R.complete()) << R.Diagnostic;
+    for (uint64_t Root : {0x1008u, 0x2008u})
+      for (bool Alias : {false, true}) {
+        SCOPED_TRACE(Root);
+        SCOPED_TRACE(Alias);
+        WideByteOracle Actual(Order);
+        Actual.word(reg(8, 1), Alias);
+        Actual.word(reg(32), Root);
+        for (unsigned I = 0; I != 8; ++I)
+          Actual.Memory[Root + I] = 0xa0 + I;
+        Actual.Memory[Root - 24] = 0x55;
+        ASSERT_TRUE(Actual.run(R.Residual)) << Actual.Diagnostic;
+        EXPECT_EQ(Actual.number(reg(0)), Alias ? 29u : 17u);
+        EXPECT_EQ(Actual.number(reg(32)), Root);
+        EXPECT_EQ(Actual.Memory.at(Root - 8 + ReturnByte), Alias ? 3u : 1u);
+        EXPECT_EQ(Actual.Memory.at(Root - 24), Alias ? 0x55u : 3u);
+      }
+
+    if (Order == llvm::endianness::big) {
+      // SP=0x8008 is a legal aligned entry state. An absolute 0x8000
+      // write can replace the most significant byte of the return address.
+      P.Code.at(0x200).Ops[2].Inputs[2] = constant(0x8000);
+      const auto Overlap = specializeInterpreter(P, {0x100}, O);
+      EXPECT_FALSE(Overlap.complete());
+      EXPECT_NE(Overlap.Diagnostic.find("0x300000000000101"), std::string::npos)
+          << Overlap.Diagnostic;
+    }
+  }
+}
+
 TEST(InterpreterSpecialization, WideTransportPreservesEveryByte) {
   for (auto Order : {llvm::endianness::little, llvm::endianness::big}) {
     const auto A = reg(x86reg::XMM0, 16), B = reg(x86reg::XMM1, 16);
@@ -5377,6 +5496,69 @@ TEST(InterpreterSpecialization, ProducerHintProvesFiniteFrameWordAtJoin) {
   Middle.erase(Middle.begin());
 
   P.Code.at(0x120).Ops[0].Inputs[1] = reg(16);
+  const auto Unbounded = specializeInterpreter(P, {0x100}, O);
+  EXPECT_FALSE(Unbounded.complete());
+  EXPECT_TRUE(Unbounded.Residual.Blocks.empty());
+}
+
+TEST(InterpreterSpecialization,
+     LiveNativeReturnWordCarriesFiniteDomainAcrossTransfers) {
+  Provider P;
+  P.add(0x100, {op(NdOp::CALL, reg(0), {constant(0x200)})});
+  P.Code.at(0x100).NativeStackControl = SpecializationNativeStackControl::Call;
+  P.add(0x101, {op(NdOp::COPY, reg(0), {constant(11)}), jump(0x104)});
+  P.add(0x103, {op(NdOp::COPY, reg(0), {constant(22)}), jump(0x104)});
+  P.add(0x104, {ret()});
+  P.Code.at(0x104).NativeStackControl =
+      SpecializationNativeStackControl::Return;
+  P.add(
+      0x200,
+      {op(NdOp::SELECT, reg(48), {reg(8, 1), constant(0x101), constant(0x103)}),
+       op(NdOp::STORE, {}, {reg(32), reg(48)}),
+       op(NdOp::INT_AND, reg(64), {reg(24), constant(1)}),
+       op(NdOp::COND_BR, {}, {constant(0x210), reg(64)})},
+      0x211);
+  P.add(0x210, {jump(0x218)});
+  P.add(0x211, {jump(0x218)});
+  P.add(0x218, {jump(0x220)});
+  P.add(0x220, {ret()});
+  P.Code.at(0x220).NativeStackControl =
+      SpecializationNativeStackControl::Return;
+
+  auto O = ordinaryReturnOptions();
+  O.DiscoverControlState = false;
+  const auto R = specializeInterpreter(P, {0x100}, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  for (uint64_t Root : {0x1008u, 0x2008u})
+    for (uint64_t Selector : {0u, 1u})
+      for (uint64_t Branch : {0u, 1u}) {
+        SCOPED_TRACE(Root);
+        SCOPED_TRACE(Selector);
+        SCOPED_TRACE(Branch);
+        WideByteOracle Actual(llvm::endianness::little);
+        Actual.word(reg(8, 1), Selector);
+        Actual.word(reg(24), Branch);
+        Actual.word(reg(32), Root);
+        for (unsigned I = 0; I != 8; ++I)
+          Actual.Memory[Root + I] = 0xa0 + I;
+        ASSERT_TRUE(Actual.run(R.Residual)) << Actual.Diagnostic;
+        EXPECT_EQ(Actual.number(reg(0)), Selector ? 11u : 22u);
+        EXPECT_EQ(Actual.number(reg(32)), Root);
+        const uint64_t Target = Selector ? 0x101 : 0x103;
+        for (unsigned I = 0; I != 8; ++I) {
+          EXPECT_EQ(Actual.Memory.at(Root - 8 + I),
+                    static_cast<uint8_t>(Target >> (8 * I)));
+          EXPECT_EQ(Actual.Memory.at(Root + I), 0xa0 + I);
+        }
+      }
+
+  auto Narrow = O;
+  Narrow.MaxControlTuples = 1;
+  const auto NarrowResult = specializeInterpreter(P, {0x100}, Narrow);
+  EXPECT_FALSE(NarrowResult.complete());
+  EXPECT_TRUE(NarrowResult.Residual.Blocks.empty());
+
+  P.Code.at(0x200).Ops[0].Inputs[2] = reg(16);
   const auto Unbounded = specializeInterpreter(P, {0x100}, O);
   EXPECT_FALSE(Unbounded.complete());
   EXPECT_TRUE(Unbounded.Residual.Blocks.empty());

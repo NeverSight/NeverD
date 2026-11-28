@@ -2,7 +2,9 @@
 
 [← Documentation Index](README.md)
 
-# Memory-Safety Audit & Hunt
+# Memory-safety scan
+
+Run both tracks with `neverd scan <binary>`. Choose one with `--analyzer=audit` or `--analyzer=hunt`. [Unified scan guide](memory-safety-scan.md).
 
 NeverD analyses a loaded binary for two families of memory-safety defect and
 reports them as structured JSON. Both run on the format-neutral lifted IR, so
@@ -11,8 +13,8 @@ never gated behind one format's scanner or import table.
 
 | Track | Command | Reports |
 |-------|---------|---------|
-| **Audit** | `neverd audit <binary>` | Heap-object lifetime defects and uninitialized local stack reads |
-| **Hunt** | `neverd hunt <binary>` | Copy/formatting overflows and uncontrolled format strings |
+| **Audit** | `neverd scan <binary> --analyzer=audit` | Heap-object lifetime defects and uninitialized local stack reads |
+| **Hunt** | `neverd scan <binary> --analyzer=hunt` | Copy/formatting overflows and uncontrolled format strings |
 
 The engine reuses NeverD's in-house symbolic execution and bitvector solver for
 witnesses and reachability; there is no external solver, VM, or container
@@ -119,7 +121,7 @@ closed-world result remains UNKNOWN.
 Extend or override the catalog with a specification file:
 
 ```bash
-neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
+neverd scan --sinks extra_sinks.json --sources extra_sources.json app
 ```
 
 ```json
@@ -299,13 +301,6 @@ width, variadic-only slot, incomplete slice, depth boundary, or exhausted
 summary budget; any flow not already proved stays `UNKNOWN`, while facts proved
 before a later budget boundary remain valid.
 
-The report-level counters count findings, not functions or distinct paths.
-`control_reachable` counts findings with `status=REACHABLE`;
-`attacker_reachable` is the subset that also has
-`attacker_control=TAINTED`. `reachability_unknown` and `unreachable` count the
-other two control statuses. These counters are separate from `safe`, `unsafe`,
-and `unknown`, which tally verdicts.
-
 ---
 
 <!-- i18n-section: budgets -->
@@ -321,8 +316,7 @@ limit plus one round, respectively. Budget exhaustion fails closed as described
 above. Exhausting `max_call_depth` can leave a not-yet-reached function's
 `status=UNKNOWN`; exhausting `max_summary_iterations` does not erase a
 structural witness, so `status=REACHABLE` can coexist with
-`attacker_control=UNKNOWN` and `budget_hit=true`. Both commands print JSON and
-honour `-o`. The exit code is `0` for SAFE, `2` for UNSAFE, and `1` for UNKNOWN
+`attacker_control=UNKNOWN` and `budget_hit=true`. `neverd scan` prints JSON and accepts `-o`. The exit code is `0` for SAFE, `2` for UNSAFE, and `1` for UNKNOWN
 or an error.
 
 The same two limits are exposed at every public entry point; zero selects the
@@ -330,19 +324,16 @@ engine default:
 
 | Surface | Control-depth option | Attacker-summary option |
 |---------|----------------------|-------------------------|
-| CLI (`audit` and `hunt`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| CLI (`scan`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
 | C (`neverd_safety_options`) | `max_call_depth` | `max_summary_iterations` |
-| Python (`Session.audit()` / `Session.hunt()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+| Python (`Session.scan()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
 
 For C callers, zero-initialize `neverd_safety_options`, set `struct_size` to
 `sizeof(neverd_safety_options)`, and then set either appended field as needed;
 older structure sizes retain the defaults. Python validates both values as
 unsigned 32-bit integers before calling the C API.
 
-The same analyses are available through the C API
-(`neverd_session_audit_json` / `neverd_session_hunt_json` with a versioned
-`neverd_safety_options`) and the Python SDK (`Session.audit()` /
-`Session.hunt()`).
+Call `neverd_session_scan_json` in C or `Session.scan()` in Python. Pass C budget overrides through `neverd_scan_options.analysis`.
 
 <!-- i18n-section: finding-schema -->
 

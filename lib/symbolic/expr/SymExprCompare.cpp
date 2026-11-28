@@ -278,8 +278,10 @@ SymRef observedWord(const SymContext &Ctx, SymRef R) {
 
 } // namespace
 
-std::optional<CancelledOperands>
-cancelCommonOperands(const SymContext &Ctx, SymRef A, SymRef B, SymOp Op) {
+std::optional<CancelledOperands> cancelCommonOperands(const SymContext &Ctx,
+                                                      SymRef A, SymRef B,
+                                                      SymOp Op,
+                                                      bool WordsOnly) {
   if (Ctx.op(A) != Op && Ctx.op(B) != Op)
     return std::nullopt;
   llvm::SmallVector<SymRef, 8> Left, Right;
@@ -297,13 +299,16 @@ cancelCommonOperands(const SymContext &Ctx, SymRef A, SymRef B, SymOp Op) {
   size_t L = 0, R = 0;
   bool Cancelled = false;
   while (L != Left.size() && R != Right.size()) {
-    if (Left[L] == Right[R]) {
+    if (Left[L] == Right[R] && !(WordsOnly && Ctx.isConst(Left[L]))) {
       ++L;
       ++R;
       Cancelled = true;
     } else if (Left[L] < Right[R]) {
       Result.Left.push_back(Left[L++]);
+    } else if (Right[R] < Left[L]) {
+      Result.Right.push_back(Right[R++]);
     } else {
+      Result.Left.push_back(Left[L++]);
       Result.Right.push_back(Right[R++]);
     }
   }

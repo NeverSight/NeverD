@@ -123,17 +123,16 @@ for flip in report.flips:
 
 Der Register-Offset ist ein Byte-Offset in NeverDs Registerdatei, kein nativer Zeiger oder eine Registernummer. Der Bericht ist stets nicht vollständig; UNSAT, Solver-Grenzen sowie Projektions- oder Replay-Ablehnungen bleiben typisierte Flip-Ergebnisse statt Ausnahmen.
 
-### Speicher-Audit und Hunt
+### Speichersicherheitsprüfung
 
-`session.audit()` und `session.hunt()` liefern geparste JSON-Berichte (dasselbe Schema wie die CLI). Sie brauchen eine geliftete native Session:
+`session.scan()` führt beide Analysen aus und liefert Befunde und Abdeckung in einem Bericht. [Leitfaden zum gemeinsamen Scan (Englisch)](../memory-safety-scan.md).
 
 ```python
-audit = session.audit()
-hunt = session.hunt(max_paths=64, max_steps=1 << 16)
-print(audit.get("ok"), hunt.get("findings"))
+report = session.scan(max_paths=64, max_steps=1 << 16)
+print(report["verdict"], report["analyzers"])
 ```
 
-EVM- und SBF-Sessions weisen diese Aufrufe zurück.
+Bei EVM- und SBF-Eingaben melden die ausgewählten Analysen `unsupported`.
 
 Die sechs unveränderlichen Event-Varianten heißen `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE` und `PATCH_APPLIED`. Payload-Zeichenketten werden während des Callbacks kopiert; für die jeweilige Variante irrelevante Felder sind `None`.
 

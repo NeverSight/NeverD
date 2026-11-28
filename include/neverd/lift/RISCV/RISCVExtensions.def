@@ -9,6 +9,7 @@
 /// NEVERD_RISCV_EXTENSION(Member, Name, Major, MaxMinor, Emit) binds a
 /// normalized ELF attribute to its accepted versions and LLVM feature.
 /// Emit is evaluated against the profile P to omit redundant subextensions.
+/// Append new members to preserve existing RISCVProfile aggregate initializers.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -23,7 +24,19 @@ NEVERD_RISCV_EXTENSION(Compressed, "c", 2, 0, P.Compressed)
 NEVERD_RISCV_EXTENSION(Zmmul, "zmmul", 1, 0, P.Zmmul && !P.Multiply)
 NEVERD_RISCV_EXTENSION(Zaamo, "zaamo", 1, 0, P.Zaamo && !P.Atomic)
 NEVERD_RISCV_EXTENSION(Zalrsc, "zalrsc", 1, 0, P.Zalrsc && !P.Atomic)
+NEVERD_RISCV_EXTENSION(Zba, "zba", 1, 0, P.Zba)
+NEVERD_RISCV_EXTENSION(Zbs, "zbs", 1, 0, P.Zbs)
 NEVERD_RISCV_EXTENSION(Zca, "zca", 1, 0, P.Zca && !P.Compressed)
+
+NEVERD_RISCV_EXTENSION(Zbb, "zbb", 1, 0, P.Zbb)
+NEVERD_RISCV_EXTENSION(Zicond, "zicond", 1, 0, P.Zicond)
+
+NEVERD_RISCV_EXTENSION(SingleFloat, "f", 2, 2, P.SingleFloat)
+NEVERD_RISCV_EXTENSION(DoubleFloat, "d", 2, 2, P.DoubleFloat)
+NEVERD_RISCV_EXTENSION(Zcf, "zcf", 1, 0, P.Zcf && !P.Compressed)
+NEVERD_RISCV_EXTENSION(Zcd, "zcd", 1, 0, P.Zcd && !P.Compressed)
+
+NEVERD_RISCV_EXTENSION(Zicntr, "zicntr", 2, 0, P.Zicntr)
 
 #undef NEVERD_RISCV_BASE
 #undef NEVERD_RISCV_EXTENSION

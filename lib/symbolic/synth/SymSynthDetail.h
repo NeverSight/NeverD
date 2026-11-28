@@ -106,9 +106,8 @@ SymRef buildGramOp(SymContext &Ctx, GramOp Op, llvm::ArrayRef<SymRef> Args);
 /// the semantics here instead would give the engine a second opinion about
 /// what `ashr` means, and the two would drift.
 ///
-/// \c applyColumn is the one exception, and a differential test holds it to
-/// \c apply for every operator and width.  The search measures every candidate
-/// at every grid point, which through a node would be most of its running time.
+/// Bulk column evaluation operates on the stored words directly. Differential
+/// tests compare both column layouts with \c apply for every grammar operator.
 class OpSemantics {
 public:
   OpSemantics(SymContext &Ctx, uint32_t Width);
@@ -118,9 +117,14 @@ public:
 
   /// \c apply across \p Count operand pairs, at a width of at most 64 bits with
   /// every value in the low bits of its word.  A unary operator ignores \p B.
-  template <typename Word>
+  template <typename Word, bool BroadcastLeft = false>
   void applyColumn(GramOp Op, const Word *A, const Word *B, Word *Out,
                    size_t Count) const;
+
+  /// Point-major canonical APInt words at a width greater than 64. The output
+  /// spans complete values and does not alias either input.
+  void applyWideColumn(GramOp Op, const uint64_t *A, const uint64_t *B,
+                       llvm::MutableArrayRef<uint64_t> Out) const;
 
 private:
   const SymContext &Ctx;

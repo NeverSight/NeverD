@@ -213,7 +213,10 @@ TEST_F(X64PagedDebugRegisterTest, OriginalRegistersPrefixesAndFaultPriority) {
                       &Shadow, &Polls, Producer::peek, Producer::accepted, &P);
             ASSERT_TRUE(Context.lastError().empty()) << Context.lastError();
             EXPECT_EQ(Budget, 0u);
-            EXPECT_EQ(Debug.DR6, CPU.DebugRegisters->dr6);
+            // Status bits the host implements and the model keeps reserved.
+            const uint64_t Unmodeled = neverd::test::clearableDR6StatusBits();
+            EXPECT_EQ(Debug.DR6 & ~Unmodeled,
+                      CPU.DebugRegisters->dr6 & ~Unmodeled);
             EXPECT_EQ(Debug.DR7, CPU.DebugRegisters->dr7);
             for (unsigned Slot = 0; Slot != 4; ++Slot)
               EXPECT_EQ(Debug.DR[Slot], CPU.DebugRegisters->db[Slot]);

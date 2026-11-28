@@ -33,14 +33,16 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace neverd {
 namespace ppc {
-struct Division;
+struct FixedPoint;
 }
 
 /// Effective scalar CPA checks at the instruction's exception level. Arm
@@ -95,6 +97,15 @@ public:
   void reset();
 
   void setRegister(uint64_t RegOff, uint64_t Value);
+
+  /// Seed a concrete hart's floating environment for scalar F/D execution.
+  void setRISCVFCSR(uint8_t Value) { RISCVFCSR = Value; }
+  std::optional<uint8_t> getRISCVFCSR() const { return RISCVFCSR; }
+  /// Sample the guest's 64-bit cycle counter once per CSR read. An absent
+  /// sample means the counter is unavailable at the current privilege level.
+  void setRISCVCycleReader(std::function<std::optional<uint64_t>()> Read) {
+    RISCVCycleReader = std::move(Read);
+  }
   /// Return the low 64 bits only when every bit in that view is known.
   /// Slice a smaller defined view through SUBBYTES before observing it.
   std::optional<uint64_t> getRegister(uint64_t RegOff) const;
@@ -313,8 +324,8 @@ private:
   // Single-hart RISC-V/PowerPC reservation. Entry has no proven monitor state.
   bool IntegerReservationKnown = false;
   std::optional<std::pair<uint64_t, uint16_t>> IntegerReservation;
-  bool executePowerPCDivision(const LowOp &Op, const ppc::Division &D,
-                              llvm::ArrayRef<LowOp> Following);
+  bool executePowerPCFixedPoint(const LowOp &Op, const ppc::FixedPoint &D,
+                                llvm::ArrayRef<LowOp> Following);
   bool executeIntegerMemory(const LowOp &Op, Intrinsic Id);
   void forgetReservations();
   std::optional<uint32_t> MIPSReservationGranule;
@@ -339,6 +350,8 @@ private:
   bool X87ContextKnown = false;
   uint8_t X87PayloadKnown = 0;
   std::vector<uint64_t> CallPreservedRegs;
+  std::function<std::optional<uint64_t>()> RISCVCycleReader;
+  std::optional<uint8_t> RISCVFCSR;
 
   uint64_t readOperand(const NdVar &Operand) const;
   bool executeMIPSScalar(const LowOp &Op);
@@ -397,6 +410,7 @@ private:
   bool executeBool(const LowOp &Op);
   bool executeMisc(const LowOp &Op);
   bool executeIntrinsic(const LowOp &Op);
+  bool executeRISCVFloating(const LowOp &Op);
   bool executeX86Crypto(const LowOp &Op);
   bool executeX86FourSource(const LowOp &Op);
   bool executeX86FPArith(const LowOp &Op, bool AlternateAddSubtract = false);

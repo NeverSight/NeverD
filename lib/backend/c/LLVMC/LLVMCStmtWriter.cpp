@@ -56,7 +56,9 @@
 #include "neverd/backend/MIPS/MIPSMSASource.h"
 #include "neverd/backend/MIPS/MIPSScalarFPSource.h"
 #include "neverd/backend/MachineInstructionText.h"
-#include "neverd/backend/PowerPC/PowerPCDivisionSource.h"
+#include "neverd/backend/PowerPC/PowerPCFixedPointSource.h"
+#include "neverd/backend/RISCV/RISCVCycleSource.h"
+#include "neverd/backend/RISCV/RISCVFloatingSource.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/NativeVectorCall.h"
@@ -5061,36 +5063,103 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   auto *IA = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
   if (!IA)
     return false;
-  if (auto *MD = Call.getMetadata(ppc::DivisionMarker)) {
+  if (isRISCV(Opts.TheArch)) {
+    if (const auto *Tag = Call.getMetadata("neverd.riscv.fp")) {
+      const auto Number = [&](unsigned I) -> const llvm::ConstantInt * {
+        return I < Tag->getNumOperands()
+                   ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(
+                         Tag->getOperand(I))
+                   : nullptr;
+      };
+      if (Tag->getNumOperands() != 2 || !Number(0) || !Number(1) ||
+          !Number(0)->getType()->isIntegerTy(32) ||
+          !Number(1)->getType()->isIntegerTy(32))
+        throw std::invalid_argument("invalid RISC-V FP assembly tag");
+      const unsigned XLen = getTargetRegInfo(Opts.TheArch).PointerSize;
+      const auto Id = static_cast<Intrinsic>(Number(0)->getZExtValue());
+      const auto Selector = Number(1)->getZExtValue();
+      auto Asm = riscv::fpAssembly(Id, Selector, XLen, '$');
+      auto Matches = [&](llvm::Type *T, riscv::FPValue V) {
+        if (V == riscv::FPValue::S)
+          return T->isFloatTy();
+        if (V == riscv::FPValue::D)
+          return T->isDoubleTy();
+        return T->isIntegerTy(8 * riscv::fpBytes(V, XLen));
+      };
+      if (!Asm || !IA->hasSideEffects() || IA->getAsmString() != Asm->Text ||
+          IA->getConstraintString() != Asm->Constraints ||
+          Call.arg_size() != Asm->Count ||
+          !Matches(Call.getType(), Asm->Result))
+        throw std::invalid_argument("invalid RISC-V FP assembly");
+      std::vector<std::string> Args;
+      for (unsigned I = 0; I < Asm->Count; ++I) {
+        auto *Arg = Call.getArgOperand(I);
+        if (!Matches(Arg->getType(), Asm->Inputs[I]))
+          throw std::invalid_argument("invalid RISC-V FP operand");
+        Args.push_back(valueStr(Arg));
+      }
+      emitIndent(Indent);
+      if (!Call.use_empty())
+        OS << Name << " = ";
+      OS << riscv::fpSource(*riscv::fpAssembly(Id, Selector, XLen, '%'), Args,
+                            XLen)
+         << ";\n";
+      return true;
+    }
+    const riscv::CycleRead *Read = nullptr;
+#define NEVERD_RISCV_CYCLE(Id, Value, Word, High, Text)                        \
+  if (IA->getAsmString() == Text " $0")                                        \
+    Read = riscv::cycleRead(Intrinsic::Id);
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.def"
+    if (Read) {
+      if (!Read->admits(Opts.TheArch) || !IA->hasSideEffects() ||
+          IA->getConstraintString() != "=r" || !Call.arg_empty() ||
+          !Call.getType()->isIntegerTy(
+              getTargetRegInfo(Opts.TheArch).PointerSize * 8))
+        throw std::invalid_argument("invalid RISC-V cycle read assembly");
+      emitIndent(Indent);
+      if (!Call.use_empty())
+        OS << Name << " = ";
+      OS << riscv::cycleSource(*Read) << ";\n";
+      return true;
+    }
+  }
+  auto *Divide = Call.getMetadata(ppc::DivisionMarker);
+  auto *Product = Call.getMetadata(ppc::HighProductMarker);
+  if (auto *MD = Divide ? Divide : Product) {
     const auto *Id =
         MD->getNumOperands() == 1
             ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(0))
             : nullptr;
     const auto D =
         Id && Id->getBitWidth() == 16
-            ? ppc::division(static_cast<Intrinsic>(Id->getZExtValue()))
+            ? ppc::fixedPoint(static_cast<Intrinsic>(Id->getZExtValue()))
             : std::nullopt;
     const unsigned Bits = getTargetRegInfo(Opts.TheArch).PointerSize * 8;
-    if (!D || !D->admits(Opts.TheArch) || Call.arg_size() != 2 ||
+    if (!D || (Divide && Product) ||
+        (D->Kind == ppc::FixedPointKind::Divide) != (Divide != nullptr) ||
+        !D->admits(Opts.TheArch) || Call.arg_size() != 2 ||
         !Call.getArgOperand(0)->getType()->isIntegerTy(Bits) ||
         Call.getArgOperand(1)->getType() != Call.getArgOperand(0)->getType() ||
         !IA->hasSideEffects() ||
-        IA->getAsmString() != ppc::divisionAssembly(*D, '$') ||
-        IA->getConstraintString() != ppc::divisionConstraints(*D))
-      throw std::invalid_argument("invalid PowerPC divide assembly");
+        IA->getAsmString() != ppc::fixedPointAssembly(*D, '$') ||
+        IA->getConstraintString() != ppc::fixedPointConstraints(*D))
+      throw std::invalid_argument(
+          "invalid PowerPC fixed-point operation assembly");
     const auto *Pair = llvm::dyn_cast<llvm::StructType>(Call.getType());
     if (D->Record ? !Pair || Pair->getNumElements() != 2 ||
                         !Pair->getElementType(0)->isIntegerTy(Bits) ||
                         !Pair->getElementType(1)->isIntegerTy(Bits)
                   : !Call.getType()->isIntegerTy(Bits))
-      throw std::invalid_argument("invalid PowerPC divide result");
+      throw std::invalid_argument(
+          "invalid PowerPC fixed-point operation result");
     emitIndent(Indent);
     if (!Call.use_empty())
       OS << Name << (D->Record ? ".field_0 = " : " = ");
-    OS << ppc::divisionSource(*D, valueStr(Call.getArgOperand(0)),
-                              valueStr(Call.getArgOperand(1)),
-                              D->Record && !Call.use_empty() ? Name + ".field_1"
-                                                             : "")
+    OS << ppc::fixedPointSource(
+              *D, valueStr(Call.getArgOperand(0)),
+              valueStr(Call.getArgOperand(1)),
+              D->Record && !Call.use_empty() ? Name + ".field_1" : "")
        << ";\n";
     return true;
   }

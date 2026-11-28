@@ -27,6 +27,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <tuple>
 #include <type_traits>
@@ -808,6 +809,19 @@ void buildOffsetPowers(const SymContext &Ctx,
   }
 }
 
+// The leading scale has Width-Precision low zeros. Read its live limbs
+// directly so observing a few bits does not copy a multi-megabit literal.
+llvm::APInt productScaleUnit(const SymContext &Ctx, SymRef Scale,
+                             unsigned Start, unsigned Bits) {
+  constexpr unsigned WordBits = llvm::APInt::APINT_BITS_PER_WORD;
+  const unsigned Low = Start % WordBits;
+  const auto Digits = Ctx.constWords(Scale).slice(
+      Start / WordBits, llvm::APInt::getNumWords(Bits + Low));
+  if (!Low)
+    return llvm::APInt(Bits, Digits);
+  return llvm::APInt(Bits + Low, Digits).extractBits(Bits, Low);
+}
+
 // If two perturbations cannot survive the outer scale, the coefficient of
 // each word is its weight times all the other offsets. Prefix and suffix
 // products avoid division, including when an offset is even or zero.
@@ -924,8 +938,7 @@ SymRef buildLinearProduct(SymContext &Ctx, llvm::ArrayRef<Factor> Rows,
   };
   llvm::SmallVector<Coefficient, 16> Prefix;
   llvm::APInt Product(Precision, 1);
-  const auto Unit =
-      Ctx.constValue(Outer).extractBits(Precision, Width - Precision);
+  const auto Unit = productScaleUnit(Ctx, Outer, Width - Precision, Precision);
   if (Powers) {
     buildOffsetPowers(Ctx, Powers->Groups, Precision, Bits, Unit, Product);
   } else {
@@ -1388,7 +1401,8 @@ size_t equalFactorRun(llvm::ArrayRef<SymRef> Remaining, WorkBudget &Budget) {
 std::optional<int> uniformJoinSlope(const SymContext &Ctx, SymOp Op,
                                     const llvm::APInt &Literal, unsigned Zeros,
                                     WeightedFieldStage Outer,
-                                    WeightedFieldStage Inner) {
+                                    WeightedFieldStage Inner,
+                                    WorkBudget &Budget) {
   const unsigned Precision = Literal.getBitWidth();
   auto scaleZeros = [&](SymRef Scale, unsigned Available) {
     if (!Scale || !Available)
@@ -1420,19 +1434,63 @@ std::optional<int> uniformJoinSlope(const SymContext &Ctx, SymOp Op,
   // Trace the observable interval back through each even multiplier. Its
   // trailing zeros lift the bottom edge and discard the same number of top
   // bits. A hole outside this interval cannot affect the result or its carries.
-  bool Partial = false;
-  for (const auto [Ref, High] :
-       {std::pair{Outer.Mask, Precision - OuterShift},
-        std::pair{Inner.Mask, Precision - OuterShift - InnerShift}}) {
+  // Keep mixed masks in the same coordinates after removing both shifts.
+  std::optional<llvm::APInt> InnerMask, OuterMask;
+  auto readMask = [&](SymRef Ref, unsigned High,
+                      std::optional<llvm::APInt> &Window) {
     if (!Ref)
-      continue;
+      return true;
     const llvm::APInt Mask(
         High, Ctx.constWords(Ref).take_front(llvm::APInt::getNumWords(High)));
     if (Mask.getActiveBits() <= High - Live)
+      return false;
+    if (Mask.countl_one() < Live)
+      Window.emplace(Mask.extractBits(Live, High - Live));
+    return true;
+  };
+  if (!readMask(Outer.Mask, Precision - OuterShift, OuterMask) ||
+      !readMask(Inner.Mask, Precision - OuterShift - InnerShift, InnerMask))
+    return 0;
+  if (!InnerMask && !OuterMask)
+    return Direction;
+  const bool AbsorbingJoin =
+      !Direction && (Op == SymOp::Or || Op == SymOp::And);
+  if ((!InnerMask || !OuterMask) && !AbsorbingJoin)
+    return std::nullopt;
+
+  // An odd multiplier congruent to one on the remaining bits preserves
+  // sparse support. Other odd multipliers can carry into any higher hole.
+  auto spread = [&](llvm::APInt &Possible, SymRef Scale, unsigned Shift) {
+    if (!Scale)
+      return true;
+    const auto Work = llvm::APInt::getNumWords(Shift + Live);
+    if (!Budget.canConsume(Work))
+      return false;
+    Budget.consume(Work);
+    const unsigned Low = Possible.countr_zero(), Bits = Live - Low;
+    const unsigned End = Shift + Bits;
+    const llvm::APInt K(
+        End, Ctx.constWords(Scale).take_front(llvm::APInt::getNumWords(End)));
+    if (K.getActiveBits() > Shift + 1)
+      Possible.setBitsFrom(Low);
+    return true;
+  };
+  auto Possible =
+      InnerMask ? std::move(*InnerMask) : llvm::APInt::getAllOnes(Live);
+  if (InnerMask && !spread(Possible, Inner.Scale, InnerShift))
+    return std::nullopt;
+  if (OuterMask) {
+    Possible &= *OuterMask;
+    if (Possible.isZero())
       return 0;
-    Partial |= Mask.countl_one() < Live;
   }
-  return Partial ? std::nullopt : Direction;
+  if (AbsorbingJoin && spread(Possible, Outer.Scale, OuterShift)) {
+    const auto High = Literal.extractBits(Live, Precision - Live);
+    if (Op == SymOp::Or ? Possible.isSubsetOf(High)
+                        : !Possible.intersects(High))
+      return 0;
+  }
+  return std::nullopt;
 }
 
 // The factor is c OP (2^Shift * h). Its low Shift bits are the
@@ -1518,12 +1576,9 @@ bool hasJoinedLowField(const SymContext &Ctx, SymRef Perturbation,
          (Ctx.op(Field) == SymOp::Xor || Ctx.op(Field) == SymOp::Or);
 }
 
-bool hasDistributedFactors(const SymContext &Ctx, SymRef Root) {
-  const auto Operands = Ctx.operands(Root);
-  if (!Ctx.isConst(Operands.front()) ||
-      (Ctx.constWords(Operands.front()).front() & 1))
-    return false;
-  const auto Factors = Operands.drop_front();
+namespace {
+bool hasDistributedFields(const SymContext &Ctx,
+                          llvm::ArrayRef<SymRef> Factors) {
   auto HasSum = [&](SymRef F) {
     const auto Terms = readWeightedFactor(Ctx, F).Terms;
     if (Terms.size() < 2)
@@ -1540,15 +1595,973 @@ bool hasDistributedFactors(const SymContext &Ctx, SymRef Root) {
          HasSum(Factors[Factors.size() / 2]);
 }
 
+// A backend may distribute the product scale into one affine factor:
+// (2^s*c + 2^s*k*x) * F = 2^s * (c + k*x) * F in the original ring.
+// Reuse the ordinary projected-product proof after extracting that common
+// power. Keep the input when the projected proof cannot shorten it.
+SymRef extractFactorScale(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                          size_t &Storage) {
+  auto Ops = Ctx.operands(Root);
+  const bool Scaled = Ctx.isConst(Ops.front());
+  const auto Factors = Ops.drop_front(Scaled);
+  if (!Budget.canConsume(Factors.size()))
+    return {};
+  Budget.consume(Factors.size());
+  const unsigned Width = Ctx.width(Root);
+  const size_t Words = llvm::APInt::getNumWords(Width);
+  unsigned Shift = 0;
+  size_t Index = 0;
+  for (auto [I, F] : llvm::enumerate(Factors)) {
+    if (Ctx.op(F) != SymOp::Add || Ctx.numOperands(F) != 2)
+      continue;
+    const auto C = Ctx.operand(F, 0), D = Ctx.operand(F, 1);
+    if (!Ctx.isConst(C) || (Ctx.constWords(C).front() & 1) ||
+        !scaledWord(Ctx, D))
+      continue;
+    const auto A = Ctx.constWords(C), K = Ctx.constWords(Ctx.operand(D, 0));
+    if (!Budget.consume(2 * Words))
+      return {};
+    const auto S = std::min(llvm::APInt::tcLSB(A.data(), Words),
+                            llvm::APInt::tcLSB(K.data(), Words));
+    if (S > Shift) {
+      Shift = S;
+      Index = I;
+    }
+  }
+  if (!Shift)
+    return {};
+  const size_t Bytes = 4 * Factors.size() * sizeof(SymRef) +
+                       6 * (sizeof(SymNode) + Words * sizeof(uint64_t));
+  const size_t Work =
+      8 * Words + Factors.size() * (2 + std::bit_width(Factors.size()));
+  if (Bytes > Storage || !Budget.consume(Work))
+    return {};
+  Storage -= Bytes;
+  const auto F = Factors[Index], D = Ctx.operand(F, 1), X = Ctx.operand(D, 1);
+  auto Offset = Ctx.constValue(Ctx.operand(F, 0)).ashr(Shift);
+  auto K = Ctx.constValue(Ctx.operand(D, 0)).ashr(Shift);
+  auto Scale = Scaled ? Ctx.constValue(Ops.front()).shl(Shift)
+                      : llvm::APInt::getOneBitSet(Width, Shift);
+  llvm::SmallVector<SymRef, 16> Rebuilt(Factors);
+  Rebuilt[Index] = Ctx.mkAdd(Ctx.mkConst(Offset), Ctx.mkMul(Ctx.mkConst(K), X));
+  Rebuilt.push_back(Ctx.mkConst(Scale));
+  return Ctx.mkMul(Rebuilt);
+}
+// Pair (c + 2^k*h) with an identical factor, where k is one bit below
+// the square-zero threshold. The pair is c^2 + 2^(k+1) times
+// (c*h + 2^(k-1)*h^2). Only one or two bits of h^2 survive, and
+// a square modulo four is exactly the parity of its operand.
+bool appendPairedFields(SymContext &Ctx, SymRef F, unsigned PairCount,
+                        unsigned Precision, unsigned Shift, WorkBudget &Budget,
+                        size_t &Storage, llvm::SmallVectorImpl<Factor> &Rows,
+                        llvm::SmallVectorImpl<unsigned> &Counts,
+                        llvm::SmallVectorImpl<uint64_t> &Weights) {
+  const unsigned Bits = Precision - Shift, K = Shift - 1;
+  const size_t Words = llvm::APInt::getNumWords(Precision);
+  const auto Args = Ctx.operands(F);
+  // Only an odd number of pairs at even precision needs the two bit
+  // selectors and cross term. Otherwise each input contributes one row.
+  const size_t Slots =
+      Args.size() - 1 + (!(Precision & 1) && (PairCount & 1) ? 3 : 0);
+  const size_t Bytes =
+      2 * (sizeof(Factor) + sizeof(unsigned) + 4 * sizeof(SymRef) +
+           3 * sizeof(SymNode) + 3 * Words * sizeof(uint64_t));
+  const size_t Work = 16 + 8 * Words + Words * Words;
+  if (Slots > Storage / Bytes || Slots > Budget.available() / Work)
+    return false;
+  Storage -= Slots * Bytes;
+  Budget.consume(Slots * Work);
+
+  const llvm::APInt C(Precision,
+                      Ctx.constWords(Args.front()).take_front(Words));
+  // Interning the squared offset or a projected field may move the operand
+  // pool.
+  const llvm::SmallVector<SymRef, 8> Terms(Args.drop_front());
+  const auto Offset = Ctx.mkConst(C * C);
+  llvm::APInt Scale = C.trunc(Bits) * PairCount;
+  const auto Square = llvm::APInt(Bits, PairCount, /*isSigned=*/false,
+                                  /*implicitTrunc=*/true)
+                          .shl(K - 1);
+  const bool LinearParity = Square.isZero() || Square.isSignMask();
+  if (LinearParity)
+    Scale += Square;
+  // With two live square bits, expand a parity of at most two coordinates:
+  // x&1 = x - 2*bit1(x) (mod 4), and a^b = a+b-2*(a&b).
+  // The top-bit corrections then combine across factors in the shared emitter.
+  const bool ExpandParity =
+      !LinearParity && llvm::count_if(Terms, [&](SymRef T) {
+                         const auto W = Ctx.constWords(Ctx.operand(T, 0));
+                         return (W[K / llvm::APInt::APINT_BITS_PER_WORD] >>
+                                 (K % llvm::APInt::APINT_BITS_PER_WORD)) &
+                                1;
+                       }) <= 2;
+
+  unsigned Multiplicity = PairCount;
+  auto append = [&](SymRef Field, const llvm::APInt &Coefficient) {
+    Rows.push_back({F, Field, {}, Offset, Shift, 0, 0, false});
+    Counts.push_back(Multiplicity);
+    Multiplicity = 0;
+    const auto Weight = Coefficient.zext(Precision).shl(Shift);
+    Weights.append(Weight.getRawData(), Weight.getRawData() + Words);
+  };
+  llvm::SmallVector<SymRef, 8> Parity;
+  for (const auto Term : Terms) {
+    const auto Literal = Ctx.operand(Term, 0), Word = Ctx.operand(Term, 1);
+    const auto Low = lowOperand(Ctx, Word);
+    const auto Field =
+        Low && Ctx.width(Low) == Bits ? Low : Ctx.mkExtract(Word, 0, Bits);
+    const llvm::APInt Full(Precision,
+                           Ctx.constWords(Literal).take_front(Words));
+    const auto Coefficient = Full.extractBits(Bits, K);
+    auto Linear = Coefficient * Scale;
+    if (!LinearParity && Coefficient[0]) {
+      if (ExpandParity) {
+        Linear += Square;
+        append(Ctx.mkZExt(Ctx.mkExtract(Field, 1, 1), Bits), Square.shl(1));
+        Parity.push_back(Field);
+      } else {
+        Parity.push_back(Ctx.mkExtract(Field, 0, 1));
+      }
+    }
+    append(Field, Linear);
+  }
+  if (ExpandParity && Parity.size() == 2)
+    append(Ctx.mkAnd(Parity[0], Parity[1]), Square.shl(1));
+  else if (!ExpandParity && !Parity.empty())
+    append(Ctx.mkZExt(Ctx.mkXor(Parity), Bits), Square);
+  return true;
+}
+
+struct QuadraticRun {
+  SymRef F;
+  unsigned Copies, Content;
+};
+
+// Choose which coordinate owns a mixed term. Orienting an edge toward a
+// frequently repeated field lets one multiplication serve several terms.
+struct FieldRow {
+  struct Term {
+    unsigned Other;
+    SymRef Weight;
+  };
+  SymRef Slope;
+  llvm::SmallVector<Term, 4> Terms;
+};
+
+SymRef emitFieldRows(SymContext &Ctx, llvm::ArrayRef<SymRef> Fields,
+                     llvm::ArrayRef<FieldRow> Rows, SymRef Constant,
+                     WorkBudget &Budget, size_t &Storage,
+                     bool NativeArithmetic) {
+  const unsigned N = Fields.size(), Width = Ctx.width(Constant);
+  if (llvm::all_of(Rows, [](const FieldRow &R) { return R.Terms.empty(); })) {
+    llvm::SmallVector<SymRef, 8> Sum{Constant};
+    for (unsigned I = 0; I < N; ++I)
+      Sum.push_back(Ctx.mkMul(Fields[I], Rows[I].Slope));
+    return Ctx.mkAdd(Sum);
+  }
+  llvm::SmallVector<unsigned, 8> Natural, Active, Degree, Fixed;
+  size_t MixedEdges = 0, Edges = 0;
+  const auto Top = Ctx.mkConst(llvm::APInt::getSignMask(Width));
+  bool TopWeights = false, TopSquares = false, TwoBitSquares = false;
+  for (const auto &[I, Row] : llvm::enumerate(Rows)) {
+    Natural.push_back(I);
+    Fixed.push_back(!Ctx.isConstZero(Row.Slope));
+    Degree.push_back(unsigned(Row.Terms.size()) + Fixed.back());
+    if (Degree.back())
+      Active.push_back(I);
+    Edges += Row.Terms.size();
+    for (auto [J, W] : Row.Terms) {
+      Fixed.back() += I == J;
+      MixedEdges += I < J;
+      TopWeights |= I != J && W == Top;
+      TopSquares |= I == J && W == Top;
+      TwoBitSquares |=
+          I == J && Width > 1 && Ctx.constValue(W).countr_zero() == Width - 2;
+    }
+  }
+  struct Reading {
+    SymRef Product, High;
+  };
+  enum RowForm : unsigned {
+    LinearTopSquare = 1,
+    TopBitPartners = 2,
+    TwoBitSquare = 4,
+  };
+  using RowKey = std::pair<uint64_t, unsigned>;
+  llvm::SmallVector<llvm::SmallDenseMap<RowKey, Reading, 4>, 8> Readings(N);
+  // The order fixes ownership of each cross term. Its parity and square
+  // spellings use the same subset of partners, including on cache hits.
+  struct OwnedRow {
+    uint64_t Mask = 0;
+    unsigned Count = 0, Forms = 0;
+  };
+  llvm::SmallVector<OwnedRow, 8> Owned(N);
+  llvm::SmallVector<unsigned, 8> Position(N);
+  auto orient = [&](llvm::ArrayRef<unsigned> Order) {
+    for (auto [Rank, I] : llvm::enumerate(Order))
+      Position[I] = Rank;
+    for (unsigned I : Order) {
+      auto &Selection = Owned[I];
+      Selection = {};
+      for (auto [T, Term] : llvm::enumerate(Rows[I].Terms)) {
+        if (Position[Term.Other] < Position[I])
+          continue;
+        ++Selection.Count;
+        if (T < 64)
+          Selection.Mask |= uint64_t{1} << T;
+        if (Term.Weight == Top)
+          Selection.Forms |= Term.Other == I ? LinearTopSquare : TopBitPartners;
+        else if (Term.Other == I && Width > 1 &&
+                 Ctx.constValue(Term.Weight).countr_zero() == Width - 2)
+          Selection.Forms |= TwoBitSquare;
+      }
+    }
+  };
+  auto spell = [&](llvm::ArrayRef<unsigned> Order, unsigned Enabled,
+                   bool First) -> SymRef {
+    llvm::SmallVector<SymRef, 16> Sum{Constant}, HighBits;
+    for (unsigned I : Order) {
+      const auto &Row = Rows[I];
+      const bool FitsMask = Row.Terms.size() <= 64;
+      const auto [Mask, Count, Supported] = Owned[I];
+      const unsigned Forms = Enabled & Supported;
+      const RowKey Key{Mask, Forms};
+      auto &Cache = Readings[I];
+      if (FitsMask)
+        if (auto It = Cache.find(Key); It != Cache.end()) {
+          Sum.push_back(It->second.Product);
+          if (It->second.High)
+            HighBits.push_back(It->second.High);
+          continue;
+        }
+      const size_t Steps = 1 + Count;
+      const size_t Bytes =
+          Steps * (sizeof(SymNode) + 4 * sizeof(SymRef) +
+                   llvm::APInt::getNumWords(Width) * sizeof(uint64_t));
+      if (!First) {
+        if (Bytes > Storage || !Budget.canConsume(3 * Steps))
+          return {};
+        Budget.consume(3 * Steps);
+        Storage -= Bytes;
+      }
+      llvm::SmallVector<SymRef, 8> Slope{Row.Slope}, Partners, High;
+      llvm::SmallDenseMap<uint32_t, llvm::SmallVector<SymRef, 4>, 4> Groups;
+      for (auto [J, W] : Row.Terms) {
+        if (Position[J] < Position[I])
+          continue;
+        // Modulo two a square is its operand, and products of low bits
+        // are ANDs. Modulo four x*x = x - 2*bit1(x).
+        if (W == Top && I == J && (Forms & LinearTopSquare)) {
+          Slope.front() = Ctx.mkAdd(Slope.front(), W);
+        } else if (W == Top && I != J && (Forms & TopBitPartners)) {
+          Partners.push_back(Fields[J]);
+        } else if ((Forms & TwoBitSquare) && I == J &&
+                   Ctx.constValue(W).countr_zero() == Width - 2) {
+          Slope.front() = Ctx.mkAdd(Slope.front(), W);
+          High.push_back(Ctx.mkZExt(Ctx.mkExtract(Fields[I], 1, 1), Width));
+        } else {
+          Groups[W.index()].push_back(Fields[J]);
+        }
+      }
+      if (!Partners.empty())
+        High.push_back(Ctx.mkAnd(Fields[I], Ctx.mkXor(Partners)));
+      for (const auto &[Weight, Terms] : Groups) {
+        const auto W = SymRef(Weight);
+        const auto Opposite = Ctx.mkNeg(W);
+        const auto It = Groups.find(Opposite.index());
+        if (Opposite != W && It != Groups.end()) {
+          if (Ctx.constValue(W).isNegative())
+            continue;
+          Slope.push_back(
+              Ctx.mkMul(W, Ctx.mkSub(Ctx.mkAdd(Terms), Ctx.mkAdd(It->second))));
+        } else {
+          Slope.push_back(Ctx.mkMul(W, Ctx.mkAdd(Terms)));
+        }
+      }
+      const Reading Value{Ctx.mkMul(Fields[I], Ctx.mkAdd(Slope)),
+                          High.empty() ? SymRef{} : Ctx.mkXor(High)};
+      Sum.push_back(Value.Product);
+      if (Value.High)
+        HighBits.push_back(Value.High);
+      constexpr size_t EntryBytes = 4 * (sizeof(RowKey) + sizeof(Reading));
+      if (FitsMask && Storage >= EntryBytes) {
+        Cache.try_emplace(Key, Value);
+        Storage -= EntryBytes;
+      }
+    }
+    if (!HighBits.empty())
+      Sum.push_back(Ctx.mkMul(Top, Ctx.mkXor(HighBits)));
+    return Ctx.mkAdd(Sum);
+  };
+
+  orient(Natural);
+  auto Best = spell(Natural, 0, true);
+  const size_t Visits = 1 + Active.size() + Edges;
+  auto orientAlternative = [&](llvm::ArrayRef<unsigned> Order) {
+    if (!Budget.canConsume(Order.size() + Edges))
+      return false;
+    Budget.consume(Order.size() + Edges);
+    orient(Order);
+    return true;
+  };
+  auto compare = [&](llvm::ArrayRef<unsigned> Order, unsigned Enabled) {
+    if (!Budget.canConsume(1 + Order.size()))
+      return;
+    Budget.consume(1 + Order.size());
+    const auto Candidate = spell(Order, Enabled, false);
+    if (Candidate && readingScore(Ctx, Candidate) < readingScore(Ctx, Best))
+      Best = Candidate;
+  };
+  constexpr unsigned Parity = LinearTopSquare | TopBitPartners;
+  if (TopSquares)
+    compare(Natural, LinearTopSquare);
+  if (TopWeights)
+    compare(Natural, Parity);
+  if (TwoBitSquares)
+    compare(Natural, Parity | TwoBitSquare);
+  // In a mixed product the outer coordinate appears once for the whole
+  // slope; each inner coordinate is printed at every use. Try putting the
+  // most expensive source fields outside before considering vertex degree.
+  if (!MixedEdges)
+    return Best;
+  llvm::SmallVector<size_t, 8> Cost;
+  for (SymRef X : Fields)
+    Cost.push_back(llvm::SaturatingAdd(readingCost(Ctx, X), size_t{1}));
+  auto ByCost = Active;
+  llvm::stable_sort(ByCost,
+                    [&](unsigned A, unsigned B) { return Cost[A] > Cost[B]; });
+  if (ByCost != Active && orientAlternative(ByCost)) {
+    compare(ByCost, LinearTopSquare);
+    if (TopWeights)
+      compare(ByCost, Parity);
+  }
+  // Small native products also get an independent arithmetic expansion.
+  // Do not repeat the same pivot search over simple leaf slices first.
+  if (NativeArithmetic)
+    return Best;
+  bool TriedUnforced = false;
+  for (unsigned First : Active) {
+    if (Degree[First] < 2)
+      continue;
+    // Only the relative order of endpoints of mixed terms changes the
+    // polynomial. A diagonal or linear row has no effect on the next pivot.
+    const bool Forced = Degree[First] != Fixed[First];
+    if (!Forced && TriedUnforced)
+      continue;
+    TriedUnforced |= !Forced;
+    if (!Budget.canConsume(Active.size() + Visits))
+      break;
+    Budget.consume(Active.size());
+    llvm::SmallVector<unsigned, 8> Left(Degree), Free(Active), Order;
+    auto priority = [&](unsigned I) {
+      return std::pair{
+          Left[I] > Fixed[I],
+          llvm::SaturatingMultiply(size_t(Left[I] ? Left[I] - 1 : 0), Cost[I])};
+    };
+    size_t Remaining = MixedEdges;
+    while (Remaining) {
+      if (!Budget.canConsume(Free.size()))
+        return Best;
+      Budget.consume(Free.size());
+      const auto Next =
+          Forced && Order.empty()
+              ? llvm::find(Free, First)
+              : std::max_element(
+                    Free.begin(), Free.end(), [&](unsigned A, unsigned B) {
+                      const auto PA = priority(A), PB = priority(B);
+                      return PA != PB ? PA < PB : A > B;
+                    });
+      const unsigned I = *Next;
+      Remaining -= Left[I] - Fixed[I];
+      Order.push_back(I);
+      *Next = Free.back();
+      Free.pop_back();
+      if (!Remaining)
+        break;
+      if (!Budget.canConsume(Rows[I].Terms.size()))
+        return Best;
+      Budget.consume(Rows[I].Terms.size());
+      for (const auto &Term : Rows[I].Terms)
+        if (Term.Other != I && Left[Term.Other])
+          --Left[Term.Other];
+    }
+    llvm::sort(Free);
+    Order.append(Free);
+    // Reordering zero-degree rows cannot change the printed expression.
+    // Both base orders have already been tried with the same diagonal forms.
+    if (Order == Active || (Order == ByCost && !TwoBitSquares))
+      continue;
+    if (!orientAlternative(Order))
+      break;
+    if (Order != ByCost) {
+      compare(Order, LinearTopSquare);
+      if (TopWeights)
+        compare(Order, Parity);
+    }
+    if (TwoBitSquares)
+      compare(Order, Parity | TwoBitSquare);
+  }
+  return Best;
+}
+
+// Coefficients live modulo 2^L, with L=P-K. The enclosing scalar
+// contributes the first K low zeros of each perturbation.
+struct QuadraticFieldPolynomial {
+  SymContext &Ctx;
+  unsigned K, P, L;
+  bool Quadratic;
+  llvm::APInt Offset;
+  unsigned Accepted = 0;
+  using Key = std::pair<unsigned, unsigned>;
+  llvm::SmallDenseMap<uint32_t, unsigned, 8> Index;
+  llvm::SmallVector<SymRef, 8> Fields, Remainder, NativeRemainder;
+  llvm::SmallVector<llvm::APInt, 8> Linear;
+  llvm::SmallVector<bool, 8> HasMoment;
+  llvm::SmallDenseMap<Key, llvm::APInt, 16> Moments;
+  llvm::SmallDenseMap<unsigned, unsigned, 8> SignBits;
+
+  QuadraticFieldPolynomial(SymContext &Ctx, unsigned K, unsigned P,
+                           llvm::APInt Unit)
+      : Ctx(Ctx), K(K), P(P), L(K < P ? P - K : 0), Quadratic(2ULL * K < P),
+        Offset(std::move(Unit)) {}
+
+  SymRef build(llvm::ArrayRef<QuadraticRun> Runs, unsigned Precision,
+               unsigned Width, unsigned D, std::optional<unsigned> Previous,
+               WorkBudget &Budget, size_t &Storage);
+
+  void add(SymRef F, unsigned Count, unsigned Rest, unsigned Content,
+           unsigned Precision, const llvm::APInt &C, bool Remove) {
+    const size_t Words = llvm::APInt::getNumWords(Precision);
+    const auto Inverse = C.trunc(L).multiplicativeInverse();
+    // Merge coordinates before accumulating the second moment. Different
+    // extensions can refer to the same word within a single factor.
+    llvm::SmallDenseMap<unsigned, llvm::APInt, 8> Row;
+    auto add = [&](SymRef Field, const llvm::APInt &Weight) {
+      const auto [It, New] = Index.try_emplace(Field.index(), Fields.size());
+      if (New) {
+        Fields.push_back(Field);
+        Linear.emplace_back(L, 0);
+        HasMoment.push_back(false);
+      }
+      Row.try_emplace(It->second, L, 0).first->second += Weight;
+      return It->second;
+    };
+    const llvm::SmallVector<SymRef, 8> Inputs(Ctx.operands(F).drop_front());
+    llvm::SmallVector<SymRef, 8> Direct;
+    if (Rest)
+      Direct.push_back(Ctx.mkConst(C));
+    for (auto T : Inputs) {
+      const auto X = Ctx.operand(T, 1), Low = lowOperand(Ctx, X);
+      const llvm::APInt W(Precision,
+                          Ctx.constWords(Ctx.operand(T, 0)).take_front(Words));
+      if (Rest) {
+        // All remaining arithmetic observes just P bits. Keep a signed
+        // source field intact inside an unpaired affine word.
+        const auto Narrow =
+            Low && Ctx.width(Low) >= P        ? Ctx.mkExtract(Low, 0, P)
+            : Low && Ctx.op(X) == SymOp::ZExt ? Ctx.mkZExt(Low, P)
+            : Low && Ctx.op(X) == SymOp::SExt ? Ctx.mkSExt(Low, P)
+                                              : Ctx.mkExtract(X, 0, P);
+        Direct.push_back(
+            Ctx.mkMul(Ctx.mkConst(W.extractBits(P, Content)), Narrow));
+      }
+      const auto A = W.extractBits(L, Content + K) * Inverse;
+      if (A.isZero())
+        continue;
+      if (Low && Ctx.width(Low) < L &&
+          (Ctx.op(X) == SymOp::SExt || Ctx.op(X) == SymOp::ZExt)) {
+        const unsigned I = add(Ctx.mkZExt(Low, L), A);
+        const unsigned Size = Ctx.width(Low);
+        const auto Signed = -A.shl(Size);
+        if (Ctx.op(X) == SymOp::SExt && !Signed.isZero()) {
+          const unsigned Sign =
+              add(Ctx.mkZExt(Ctx.mkExtract(Low, Size - 1, 1), L), Signed);
+          if (I != Sign && 2ULL * K + Size >= P)
+            SignBits.try_emplace(I, Sign);
+        }
+      } else {
+        add(Ctx.mkExtract(Low && Ctx.width(Low) >= L ? Low : X, 0, L), A);
+      }
+    }
+    llvm::SmallVector<SymRef, 8> Short;
+    if (Rest)
+      Short.push_back(Ctx.mkConst(C.extractBits(L, K)));
+    // Every second moment is multiplied by 2^(K-1); its high bits are
+    // unobservable. In particular a sign correction above this prefix
+    // changes the linear term without adding a quadratic coordinate.
+    const unsigned MomentBits = Quadratic ? L - K + 1 : 0;
+    llvm::SmallVector<std::pair<unsigned, llvm::APInt>, 8> Coefficients;
+    for (const auto &[I, A] : Row) {
+      auto B = A * Count;
+      if (Remove)
+        B.negate();
+      Linear[I] += B;
+      if (Rest)
+        Short.push_back(Ctx.mkMul(Ctx.mkConst(A * C.trunc(L)), Fields[I]));
+      if (MomentBits && A.countr_zero() < MomentBits) {
+        HasMoment[I] = true;
+        Coefficients.emplace_back(I, A.trunc(MomentBits));
+      }
+    }
+    for (auto It = Coefficients.begin(); It != Coefficients.end(); ++It) {
+      const auto &[I, A] = *It;
+      auto B = A * Count;
+      if (Remove)
+        B.negate();
+      for (auto Jt = It; Jt != Coefficients.end(); ++Jt) {
+        const auto &[J, V] = *Jt;
+        const Key Pair{std::min(I, J), std::max(I, J)};
+        Moments.try_emplace(Pair, MomentBits, 0).first->second += B * V;
+      }
+    }
+    if (Rest) {
+      const auto Packed =
+          Ctx.mkConcat(Ctx.mkAdd(Short), Ctx.mkConst(C.trunc(K)));
+      const auto Word = Ctx.mkAdd(Direct);
+      Remainder.append(Rest, readingScore(Ctx, Word) < readingScore(Ctx, Packed)
+                                 ? Word
+                                 : Packed);
+      // A native factor can absorb the external shift without a wide
+      // arithmetic reanalysis of its original signed and unsigned views.
+      if (Ctx.width(F) <= llvm::APInt::APINT_BITS_PER_WORD)
+        NativeRemainder.append(
+            Rest,
+            Content ? Ctx.mkLShr(F, Ctx.mkConst(Ctx.width(F), Content)) : F);
+    }
+  }
+
+  SymRef emit(unsigned D, unsigned Width, WorkBudget &Budget, size_t &Storage) {
+    const unsigned Pad = std::min(D, L - 1), Live = L - Pad;
+    const auto Scale = Offset.trunc(Live);
+    const unsigned Bits = Quadratic ? L - K + 1 : 0;
+    llvm::SmallVector<llvm::APInt, 8> Slopes(Linear);
+    llvm::SmallVector<SymRef, 8> Projected(Fields);
+    // A sign bit can be folded back into a signed coordinate if it cancels
+    // in the linear sum and is above the last observable quadratic bit.
+    for (const auto &[I, Sign] : SignBits) {
+      const auto Low = Ctx.operand(Fields[I], 0);
+      const auto Carry = Slopes[I].shl(Ctx.width(Low));
+      if (!Carry.isZero() && -Carry == Slopes[Sign]) {
+        Slopes[Sign].clearAllBits();
+        Projected[I] = Ctx.mkSExt(Low, L);
+      }
+    }
+    auto projected = [&](SymRef X) {
+      if (Live == L)
+        return X;
+      const auto Low = lowOperand(Ctx, X);
+      if (Low && Ctx.width(Low) >= Live)
+        return Ctx.mkExtract(Low, 0, Live);
+      if (Low && Ctx.op(X) == SymOp::ZExt)
+        return Ctx.mkZExt(Low, Live);
+      if (Low && Ctx.op(X) == SymOp::SExt)
+        return Ctx.mkSExt(Low, Live);
+      return Ctx.mkExtract(X, 0, Live);
+    };
+    for (auto &X : Projected)
+      X = projected(X);
+    const auto Constant = Ctx.mkConst(Offset.extractBits(Live, K + Pad));
+    llvm::SmallVector<FieldRow, 8> Rows(Fields.size());
+    llvm::SmallVector<unsigned, 8> Active;
+    for (unsigned I = 0; I < Fields.size(); ++I) {
+      Rows[I].Slope = Ctx.mkConst(Scale * Slopes[I].extractBits(Live, Pad));
+      if (HasMoment[I] && Bits > D)
+        Active.push_back(I);
+    }
+    // Each complete run has multiplicity divisible by 2^D. Both the
+    // linear sums and the second moments have those D low zeros, so take
+    // them out before multiplying in the surviving coefficient ring.
+    if (!Active.empty()) {
+      const unsigned Kept = Bits - D;
+      const auto Unit = Scale.trunc(Kept);
+      for (auto [Pos, I] : llvm::enumerate(Active)) {
+        const auto A = Linear[I].extractBits(Kept, D);
+        for (unsigned J : llvm::ArrayRef(Active).drop_front(Pos)) {
+          auto W = A * Linear[J].trunc(Kept);
+          if (auto M = Moments.find({I, J}); M != Moments.end())
+            W -= M->second.extractBits(Kept, D);
+          if (W.isZero())
+            continue;
+          const auto Coefficient =
+              (W * Unit).zext(Live).shl(K - 1 + unsigned(I != J));
+          if (Coefficient.isZero())
+            continue;
+          const auto Weight = Ctx.mkConst(Coefficient);
+          Rows[I].Terms.push_back({J, Weight});
+          if (I != J)
+            Rows[J].Terms.push_back({I, Weight});
+        }
+      }
+    }
+    const bool NativeArithmetic =
+        Width <= llvm::APInt::APINT_BITS_PER_WORD &&
+        Accepted + Remainder.size() + 1 <= limits::kMaxResidueProductFactors;
+    auto High = emitFieldRows(Ctx, Projected, Rows, Constant, Budget, Storage,
+                              NativeArithmetic);
+    const auto Value = Ctx.mkConcat(High, Ctx.mkConst(Offset.trunc(K + Pad)));
+    auto restoreWidth = [&](SymRef V) {
+      return Width == P ? V : Ctx.mkConcat(V, Ctx.mkConst(Width - P, 0));
+    };
+    llvm::SmallVector<SymRef, 8> Factors(Remainder);
+    Factors.push_back(Value);
+    const auto Narrow = restoreWidth(Ctx.mkMul(Factors));
+    if (NativeRemainder.empty())
+      return Narrow;
+    Factors.assign(NativeRemainder.begin(), NativeRemainder.end());
+    Factors.push_back(restoreWidth(Value));
+    const auto Native = Ctx.mkMul(Factors);
+    return readingScore(Ctx, Native) < readingScore(Ctx, Narrow) ? Native
+                                                                 : Narrow;
+  }
+};
+
+// Each coordinate supplies one linear coefficient and, while squares are
+// visible, one upper triangle of quadratic coefficients.
+uint64_t fieldCells(uint64_t Linear, uint64_t Quadratic) {
+  return llvm::SaturatingAdd(
+      Linear, llvm::SaturatingMultiply(Quadratic, Quadratic + 1) / 2);
+}
+
+SymRef QuadraticFieldPolynomial::build(llvm::ArrayRef<QuadraticRun> Runs,
+                                       unsigned Precision, unsigned Width,
+                                       unsigned D,
+                                       std::optional<unsigned> Previous,
+                                       WorkBudget &Budget, size_t &Storage) {
+  const size_t Words = llvm::APInt::getNumWords(Precision);
+  const size_t MulWork = 2 + Words * Words;
+  const size_t CellBytes = 2 * (sizeof(llvm::APInt) + Words * sizeof(uint64_t) +
+                                sizeof(SymNode) + 5 * sizeof(SymRef));
+  for (const auto &[F, N, Content] : Runs) {
+    const unsigned Rest = N & ((1u << D) - 1);
+    const unsigned Extra =
+        Previous ? Rest - (N & ((1u << *Previous) - 1)) : Rest;
+    if (Previous && !Extra)
+      continue;
+    // A larger block moves only its incomplete copies out of the polynomial.
+    // Their offsets are odd after removing content, so their exact inverse
+    // restores the block scale in the same power-of-two ring.
+    const unsigned Count = Previous ? Extra : N - Rest;
+    const auto Args = Ctx.operands(F);
+    size_t Terms = Args.size() - 1;
+    size_t MomentTerms = Quadratic ? Terms : 0;
+    if (L)
+      for (const auto T : Args.drop_front()) {
+        const auto X = Ctx.operand(T, 1);
+        if (Ctx.op(X) == SymOp::SExt && Ctx.width(Ctx.operand(X, 0)) < L) {
+          ++Terms;
+          if (Quadratic && Ctx.width(Ctx.operand(X, 0)) < L - K + 1)
+            ++MomentTerms;
+        }
+      }
+    const auto Cells = fieldCells(Terms, MomentTerms);
+    if (Cells > Storage / CellBytes ||
+        2 * Cells + 2 * std::bit_width(N) + std::bit_width(L) + 2 >
+            Budget.available() / MulWork)
+      return {};
+    Storage -= Cells * CellBytes;
+    Budget.consume((2 * Cells + 2 * std::bit_width(N) + std::bit_width(L) + 2) *
+                   MulWork);
+    const llvm::APInt Raw(Precision,
+                          Ctx.constWords(Args.front()).take_front(Words));
+    const auto C = Raw.extractBits(P, Content);
+    Offset *=
+        llvm::APIntOps::pow(Previous ? C.multiplicativeInverse() : C, Count);
+    if (!L)
+      continue;
+    if (Previous)
+      Accepted -= Count;
+    else
+      Accepted += Count;
+    const size_t RestBytes =
+        (Width <= llvm::APInt::APINT_BITS_PER_WORD ? 4 : 2) * sizeof(SymRef);
+    if (Extra > Storage / RestBytes || !Budget.canConsume(Extra))
+      return {};
+    Budget.consume(Extra);
+    Storage -= Extra * RestBytes;
+    if (Extra) {
+      const size_t ExtraTerms = Terms + 1;
+      if (ExtraTerms > Storage / CellBytes ||
+          !Budget.canConsume(ExtraTerms * (Words + 2)))
+        return {};
+      Budget.consume(ExtraTerms * (Words + 2));
+      Storage -= ExtraTerms * CellBytes;
+    }
+    add(F, Count, Extra, Content, Precision, C, Previous.has_value());
+  }
+  if (!L)
+    return Ctx.mkConst(Offset.zext(Width).shl(Width - P));
+  if (Accepted < limits::kMinResidueProductFactors)
+    return {};
+  const unsigned Live = L - std::min(D, L - 1);
+  const unsigned Bits = Quadratic ? L - K + 1 : 0;
+  const size_t Active = Bits > D ? llvm::count(HasMoment, true) : 0;
+  const size_t Pairs = fieldCells(0, Active);
+  const size_t Cells = Fields.size() + Pairs;
+  const size_t LiveWords = llvm::APInt::getNumWords(Live);
+  const size_t SlopeWork = 8 * (2 + LiveWords * LiveWords);
+  const size_t PairWords = Bits > D ? llvm::APInt::getNumWords(Bits - D) : 0;
+  // Only the final shift of a quadratic coefficient spans the live field.
+  const size_t PairWork =
+      8 * (2 + PairWords * PairWords) + LiveWords - PairWords;
+  if (Cells > Storage / CellBytes ||
+      Fields.size() > Budget.available() / SlopeWork)
+    return {};
+  const size_t SlopesWork = Fields.size() * SlopeWork;
+  if (Pairs > (Budget.available() - SlopesWork) / PairWork)
+    return {};
+  Storage -= Cells * CellBytes;
+  Budget.consume(SlopesWork + Pairs * PairWork);
+  return emit(D, Width, Budget, Storage);
+}
+
+// Adding 2^(P-D) to an odd base leaves its 2^D-th power unchanged
+// modulo 2^P. A block can therefore retain every higher degree by indexing
+// just its unknown base bits. Charge the whole table before constructing it.
+SymRef buildResiduePowerBlocks(SymContext &Ctx,
+                               llvm::ArrayRef<QuadraticRun> Runs, SymRef Outer,
+                               unsigned Precision, unsigned P, unsigned K,
+                               WorkBudget &Budget, size_t &Storage) {
+  const unsigned Half = P - P / 2;
+  if (Half <= K || Half - K >= std::numeric_limits<unsigned>::digits)
+    return {};
+  const unsigned Mask = (1u << (Half - K)) - 1;
+  const unsigned Width = Ctx.width(Outer);
+  const size_t Words = llvm::APInt::getNumWords(Precision);
+  llvm::SmallVector<SymRef, 16> Parts{
+      Ctx.mkConst(productScaleUnit(Ctx, Outer, Width - Precision, P))};
+  unsigned Accepted = 0;
+  for (const auto &[F, N, Content] : Runs) {
+    const unsigned Rest = N & Mask, Count = N - Rest;
+    if (Rest + size_t{1} > Storage / (2 * sizeof(SymRef)) ||
+        !Budget.consume(Rest + size_t{1}))
+      return {};
+    Storage -= (Rest + size_t{1}) * 2 * sizeof(SymRef);
+    if (Rest)
+      Parts.append(Rest, Ctx.mkExtract(F, Content, P));
+    if (!Count)
+      continue;
+    Accepted += Count;
+    const unsigned Fixed =
+        std::min(P - K, unsigned(std::countr_zero(Count))) + K;
+    const unsigned Bits = P - Fixed;
+    if (Bits > limits::kMaxAffineResidueTableBits)
+      return {};
+    const unsigned Entries = 1u << Bits,
+                   Stride = std::bit_ceil(std::max(1u, Bits));
+    if (Entries > uint64_t(Count) * Ctx.numOperands(F))
+      return {};
+    const size_t TableWords = llvm::APInt::getNumWords(Entries * Stride);
+    const size_t PowerWork =
+        (2 + Words * Words) * (2 * std::bit_width(Count) + 1);
+    const size_t Bytes = 4 * TableWords * sizeof(uint64_t) +
+                         10 * (sizeof(SymNode) + Words * sizeof(uint64_t));
+    if (Bytes > Storage || Entries + size_t{1} > Budget.available() / PowerWork)
+      return {};
+    Storage -= Bytes;
+    Budget.consume((Entries + size_t{1}) * PowerWork);
+    const llvm::APInt Raw(Precision,
+                          Ctx.constWords(Ctx.operand(F, 0)).take_front(Words));
+    const auto C = Raw.extractBits(P, Content);
+    const auto Offset = llvm::APIntOps::pow(C, Count);
+    if (!Bits) {
+      Parts.push_back(Ctx.mkConst(Offset));
+      continue;
+    }
+    llvm::APInt Table(Entries * Stride, 0);
+    bool Constant = true;
+    const auto Low = C.trunc(K).zext(P);
+    for (unsigned J = 0; J < Entries; ++J) {
+      const auto Base = Low | llvm::APInt(P, J).shl(K);
+      const auto V = llvm::APIntOps::pow(Base, Count);
+      Constant &= V == Offset;
+      Table.insertBits(V.extractBits(Bits, Fixed), J * Stride);
+    }
+    if (Constant) {
+      Parts.push_back(Ctx.mkConst(Offset));
+      continue;
+    }
+    const auto Index = Ctx.mkExtract(F, Content + K, Bits);
+    const auto Position = Ctx.mkMul(Ctx.mkZExt(Index, Table.getBitWidth()),
+                                    Ctx.mkConst(Table.getBitWidth(), Stride));
+    const auto High =
+        Ctx.mkExtract(Ctx.mkLShr(Ctx.mkConst(Table), Position), 0, Bits);
+    Parts.push_back(Ctx.mkConcat(High, Ctx.mkConst(Offset.trunc(Fixed))));
+  }
+  if (Accepted < limits::kMinResidueProductFactors)
+    return {};
+  const auto Product = Ctx.mkMul(Parts);
+  return Width == P ? Product
+                    : Ctx.mkConcat(Product, Ctx.mkConst(Width - P, 0));
+}
+
+// Compute a complete second-degree product in its observed ring. Factoring a
+// common power of two out of each row makes its offset a unit. For the
+// normalized factors 1+2^K*h, the linear sum is S = sum(n*h), and twice
+// the quadratic term is S^2 - sum(n*h^2). Moving the division by two into
+// the outer shift keeps this identity exact even in a power-of-two ring.
+SymRef foldQuadraticFields(SymContext &Ctx, SymRef Root, unsigned Precision,
+                           WorkBudget &Budget, size_t &Storage,
+                           bool FoldRunsSeparately = false) {
+  const auto FirstFactor = Ctx.operand(Root, 0);
+  const bool Scaled = Ctx.isConst(FirstFactor);
+  const auto Outer = Scaled ? FirstFactor : Ctx.mkConst(Ctx.width(Root), 1);
+  auto Factors = Ctx.operands(Root).drop_front(Scaled);
+  const bool LongRuns = hasLongFactorRun(Factors);
+  if (!LongRuns && !Budget.consume(Factors.size()))
+    return {};
+  const size_t Words = llvm::APInt::getNumWords(Precision);
+  const unsigned Width = Ctx.width(Root);
+  unsigned Removed = 0, K = Precision;
+  llvm::SmallVector<QuadraticRun, 16> Runs;
+  while (!Factors.empty()) {
+    const auto F = Factors.front();
+    const unsigned N = LongRuns
+                           ? equalFactorRun(Factors, Budget)
+                           : llvm::find_if(Factors.drop_front(), [&](SymRef V) {
+                               return V != F;
+                             }) - Factors.begin();
+    if (!N || Ctx.op(F) != SymOp::Add)
+      return {};
+    Factors = Factors.drop_front(N);
+    const auto Args = Ctx.operands(F);
+    if (!Ctx.isConst(Args.front()) ||
+        Args.size() > Budget.available() / (Words + 2))
+      return {};
+    Budget.consume(Args.size() * (Words + 2));
+    unsigned Zeros = Precision;
+    for (auto Term : Args.drop_front()) {
+      if (!scaledWord(Ctx, Term))
+        return {};
+      Zeros = std::min(
+          Zeros, llvm::APInt::tcLSB(Ctx.constWords(Ctx.operand(Term, 0)).data(),
+                                    Words));
+    }
+    const unsigned OffsetZeros = std::min(
+        Precision,
+        llvm::APInt::tcLSB(Ctx.constWords(Args.front()).data(), Words));
+    const unsigned Content = std::min(OffsetZeros, Zeros);
+    const uint64_t RemovedHere = uint64_t(N) * Content;
+    if (RemovedHere >= Precision - Removed)
+      return Ctx.mkConst(Width, 0);
+    if (OffsetZeros >= Zeros)
+      return {};
+    Removed += RemovedHere;
+    K = std::min(K, Zeros - Content);
+    if (Storage < 2 * sizeof(QuadraticRun))
+      return {};
+    Storage -= 2 * sizeof(QuadraticRun);
+    Runs.push_back({F, N, Content});
+  }
+  const size_t First = Ctx.numNodes();
+  const unsigned P = Precision - Removed;
+  if (FoldRunsSeparately) {
+    // Each normalized factor is C + 2^K*h. When degree three vanishes,
+    // reduce each repeated factor at the observed width. Multiplying those
+    // smaller powers retains every cross term between distinct runs.
+    if (3ULL * K < P)
+      return {};
+    llvm::SmallVector<SymRef, 16> Parts{
+        Ctx.mkConst(productScaleUnit(Ctx, Outer, Width - Precision, P))};
+    for (const auto &Run : Runs) {
+      if (Run.Copies < limits::kMinResidueProductFactors) {
+        if (!Budget.consume(Run.Copies))
+          return {};
+        Parts.append(Run.Copies, Ctx.mkExtract(Run.F, Run.Content, P));
+        continue;
+      }
+      QuadraticFieldPolynomial Row(Ctx, K, P, llvm::APInt(P, 1));
+      const auto Power = Row.build(llvm::ArrayRef(Run), Precision, P, /*D=*/0,
+                                   std::nullopt, Budget, Storage);
+      if (!Power)
+        return {};
+      Parts.push_back(Power);
+    }
+    auto V = Ctx.mkMul(Parts);
+    if (P != Width)
+      V = Ctx.mkConcat(V, Ctx.mkConst(Width - P, 0));
+    if (!(readingScore(Ctx, V) < readingScore(Ctx, Root)))
+      return {};
+    Budget.ArithmeticProductReading = V;
+    recordResidueReading(Ctx, First, Budget, Storage);
+    return V;
+  }
+  // v2(choose(n,j)) >= v2(n)-v2(j). Above degree two, the least
+  // j*K-v2(j) occurs at j=3 or 4. Keep the incomplete block as an
+  // ordinary multiplier when those higher terms are still observable.
+  const unsigned Minimum =
+      3ULL * K >= P ? 0
+                    : unsigned(std::max<int64_t>(int64_t(P) - 3LL * K,
+                                                 int64_t(P) + 2 - 4LL * K));
+  if (Minimum >= std::numeric_limits<unsigned>::digits)
+    return {};
+  // If every complete block is already divisible by a larger power, its
+  // remaining factors are identical. Project the shared polynomial once at
+  // the strongest guaranteed width.
+  const unsigned Half = P - P / 2;
+  unsigned Initial = Minimum;
+  if (K < Half && Half - K > Minimum &&
+      Half - K < std::numeric_limits<unsigned>::digits) {
+    unsigned Complete = 0;
+    for (const auto &Run : Runs)
+      Complete |= Run.Copies & ~((1u << Minimum) - 1);
+    if (Complete)
+      Initial = std::min(Half - K, unsigned(std::countr_zero(Complete)));
+  }
+  QuadraticFieldPolynomial Polynomial(
+      Ctx, K, P, productScaleUnit(Ctx, Outer, Width - Precision, P));
+  auto Best = Polynomial.build(Runs, Precision, Width, Initial, std::nullopt,
+                               Budget, Storage);
+  const bool CompletePolynomial = bool(Best);
+  SymRef PackedPower;
+  // Large incomplete blocks can be shorter as exact powers than as a
+  // quadratic polynomial multiplied by many remaining copies.
+  if (Minimum && (!Best || Minimum + K > P - P / 2)) {
+    PackedPower = buildResiduePowerBlocks(Ctx, Runs, Outer, Precision, P, K,
+                                          Budget, Storage);
+    if (PackedPower &&
+        (!Best || readingScore(Ctx, PackedPower) < readingScore(Ctx, Best)))
+      Best = PackedPower;
+  }
+  if (!Best)
+    return {};
+  if (K < Half && Half - K > Initial &&
+      Half - K < std::numeric_limits<unsigned>::digits) {
+    const unsigned Mask = (1u << (Half - K)) - 1;
+    unsigned Rest = 0;
+    for (const auto &G : Runs)
+      Rest += G.Copies & Mask;
+    if (Rest && Budget.canConsume(Rest)) {
+      SymRef Factored;
+      if (CompletePolynomial) {
+        Factored = Polynomial.build(Runs, Precision, Width, Half - K, Initial,
+                                    Budget, Storage);
+      } else {
+        // A partially collected first polynomial cannot seed a later block.
+        QuadraticFieldPolynomial Fresh(
+            Ctx, K, P, productScaleUnit(Ctx, Outer, Width - Precision, P));
+        Factored = Fresh.build(Runs, Precision, Width, Half - K, std::nullopt,
+                               Budget, Storage);
+      }
+      if (Factored && readingScore(Ctx, Factored) < readingScore(Ctx, Best))
+        Best = Factored;
+    }
+  }
+  if (!(readingScore(Ctx, Best) < readingScore(Ctx, Root)))
+    return {};
+  if (Best != PackedPower)
+    Budget.ArithmeticProductReading = Best;
+  recordResidueReading(Ctx, First, Budget, Storage);
+  return Best;
+}
+
 // In the observed ring, perturbations divisible by 2^ceil(Precision/2)
 // annihilate one another. A factor can contribute several field coefficients
 // but its scalar offset contributes to the product exactly once.
-SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
-                              size_t &Storage, bool *EmittedReading) {
+SymRef foldScaledDistributedProduct(SymContext &Ctx, SymRef Root,
+                                    WorkBudget &Budget, size_t &Storage,
+                                    bool *EmittedReading) {
   const auto Scale = Ctx.operand(Root, 0);
-  if (!hasDistributedFactors(Ctx, Root))
-    return Root;
-  const auto Factors = Ctx.operands(Root).drop_front();
+  auto Factors = Ctx.operands(Root).drop_front();
   const auto Digits = Ctx.constWords(Scale);
   if (!Budget.consume(Digits.size()))
     return Root;
@@ -1561,12 +2574,7 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
 
   // Several short runs fit one contiguous scan. Switch to charged searches
   // only when a sampled run is longer than a binary search of the product.
-  const size_t Probe = std::bit_width(Factors.size()),
-               Middle = Factors.size() / 2;
-  const bool LongRuns =
-      Probe < Middle && (Factors.front() == Factors[Probe] ||
-                         Factors[Middle] == Factors[Middle + Probe] ||
-                         Factors.back() == Factors[Factors.size() - 1 - Probe]);
+  const bool LongRuns = hasLongFactorRun(Factors);
   if (!LongRuns && !Budget.consume(Factors.size()))
     return Root;
 
@@ -1587,6 +2595,8 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   llvm::SmallVector<uint64_t, 32> Weights;
   llvm::SmallVector<SymRef, 16> Parts;
   llvm::SmallVector<std::pair<SymRef, unsigned>, 4> Overlaps;
+  llvm::SmallVector<std::pair<SymRef, unsigned>, 4> Pairs;
+  bool TriedQuadratic = false;
   Storage -= 2 * Factors.size() * sizeof(SymRef);
   for (size_t I = 0; I != Factors.size();) {
     const auto F = Factors[I];
@@ -1609,6 +2619,9 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     if (Terms.size() > Budget.available() / (4 + 2 * Words))
       return Root;
     Budget.consume(Terms.size() * (4 + 2 * Words));
+    const bool CanPair =
+        Copies > 1 && Shift > 1 && Ctx.op(F) == SymOp::Add && !Outer.Mask;
+    const unsigned Required = Shift - unsigned(CanPair);
     unsigned Zeros = Precision;
     for (const auto D : Terms) {
       if (!scaledWord(Ctx, D)) {
@@ -1618,10 +2631,30 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       Zeros = std::min(
           Zeros,
           llvm::APInt::tcLSB(Ctx.constWords(Ctx.operand(D, 0)).data(), Words));
-      if (Zeros < Shift)
+      if (Zeros < Required)
         break;
     }
     if (Zeros < Shift) {
+      const bool SharedBlock = Shift - Zeros < std::bit_width(Copies);
+      const bool QuadraticPower = 3ULL * Zeros >= Precision &&
+                                  Copies >= limits::kMinResidueProductFactors;
+      if (!TriedQuadratic && CanPair && Zeros && Zeros < Required &&
+          (SharedBlock || QuadraticPower)) {
+        TriedQuadratic = true;
+        if (auto Q = foldQuadraticFields(Ctx, Root, Precision, Budget, Storage,
+                                         /*FoldRunsSeparately=*/!SharedBlock)) {
+          if (EmittedReading)
+            *EmittedReading = true;
+          return Q;
+        }
+        Factors = Ctx.operands(Root).drop_front();
+      }
+      if (Zeros == Required) {
+        Pairs.emplace_back(F, Copies / 2);
+        if (Copies & 1)
+          Parts.push_back(F);
+        continue;
+      }
       if (LongRuns && !Budget.consume(Copies))
         return Root;
       Parts.append(Copies, F);
@@ -1641,7 +2674,7 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       const llvm::APInt Literal(Precision,
                                 Ctx.constWords(Offset).take_front(Words));
       if (const auto Slope =
-              uniformJoinSlope(Ctx, Op, Literal, Zeros, Outer, Inner)) {
+              uniformJoinSlope(Ctx, Op, Literal, Zeros, Outer, Inner, Budget)) {
         Direction = *Slope;
       } else {
         const size_t Nodes = Terms.size() + 2 + (Op == SymOp::And) +
@@ -1736,7 +2769,25 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   // Project general carriers after the operand walk: interning an extract
   // can relocate the original operand pool. Narrow fields already name
   // their exact value, including fields shared by different extensions.
+  // Offsets with different discarded prefixes have the same power and the
+  // same leave-one-out cofactor. Intern the observed residue once per input
+  // literal before grouping the powers, including zero and even residues.
+  llvm::SmallDenseMap<uint32_t, SymRef, 16> Offsets;
   for (auto &Row : Rows) {
+    if (!Budget.consume())
+      return Root;
+    auto It = Offsets.find(Row.Offset.index());
+    if (It == Offsets.end()) {
+      const size_t Bytes = 4 * sizeof(std::pair<uint32_t, SymRef>) +
+                           sizeof(SymNode) + Words * sizeof(uint64_t);
+      if (Bytes > Storage || !Budget.consume(2 + Words))
+        return Root;
+      Storage -= Bytes;
+      const llvm::APInt Value(Precision,
+                              Ctx.constWords(Row.Offset).take_front(Words));
+      It = Offsets.try_emplace(Row.Offset.index(), Ctx.mkConst(Value)).first;
+    }
+    Row.Offset = It->second;
     if (Ctx.width(Row.Word) != Bits) {
       if (!Budget.consume(Words + 1))
         return Root;
@@ -1756,6 +2807,10 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                             .shl(Shift);
     Weights.append(Weight.getRawData(), Weight.getRawData() + Words);
   }
+  for (const auto &[F, Copies] : Pairs)
+    if (!appendPairedFields(Ctx, F, Copies, Precision, Shift, Budget, Storage,
+                            Rows, Counts, Weights))
+      return Root;
   const auto Sum = buildProjectedLinearProduct(
       Ctx, Rows, Scale, Precision, Shift, Budget, Storage, Counts, Weights);
   if (!Sum)
@@ -1764,10 +2819,72 @@ SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   const auto Candidate = Ctx.mkMul(Parts);
   if (!(readingScore(Ctx, Candidate) < readingScore(Ctx, Root)))
     return Root;
-  recordResidueReading(Ctx, FirstGenerated, Budget, Storage);
-  if (EmittedReading)
-    *EmittedReading = true;
+  // The complete small-word search can still distribute a scalar into an odd
+  // copy or absorb a sign-bit parity after restoring the original fields.
+  if (Pairs.empty() || Width > limits::kMaxAffineResidueTableBits) {
+    recordResidueReading(Ctx, FirstGenerated, Budget, Storage);
+    if (EmittedReading)
+      *EmittedReading = true;
+  }
   return Candidate;
+}
+
+} // namespace
+
+bool hasDistributedFactors(const SymContext &Ctx, SymRef Root) {
+  const auto Ops = Ctx.operands(Root);
+  const bool Scaled = Ctx.isConst(Ops.front());
+  const auto Factors = Ops.drop_front(Scaled);
+  if (Scaled && !(Ctx.constWords(Ops.front()).front() & 1))
+    return hasDistributedFields(Ctx, Factors);
+  // A literal spread over an affine factor still needs the minimum number
+  // of accepted factors. At that boundary a single residual prevents a
+  // reading. Extracting the scale can only change an additive literal row,
+  // which the factor reader already recognizes.
+  if (Factors.size() < limits::kMinResidueProductFactors ||
+      !hasDistributedFields(Ctx, Factors))
+    return false;
+  return Factors.size() > limits::kMinResidueProductFactors ||
+         llvm::all_of(Factors, [&](SymRef F) {
+           return bool(readWeightedFactor(Ctx, F).Offset);
+         });
+}
+
+SymRef foldDistributedProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                              size_t &Storage, bool *EmittedReading) {
+  if (!hasDistributedFactors(Ctx, Root))
+    return Root;
+  const auto First = Ctx.operand(Root, 0);
+  if (Ctx.isConst(First) && !(Ctx.constWords(First).front() & 1))
+    return foldScaledDistributedProduct(Ctx, Root, Budget, Storage,
+                                        EmittedReading);
+  const auto Scaled = extractFactorScale(Ctx, Root, Budget, Storage);
+  if (!Scaled || Ctx.op(Scaled) != SymOp::Mul) {
+    // Repeated odd affine factors also fix low bits when the leading scale
+    // is a unit. The quadratic proof then observes the full native word.
+    const auto Factors = Ctx.operands(Root).drop_front(Ctx.isConst(First));
+    if (Ctx.width(Root) <= llvm::APInt::APINT_BITS_PER_WORD &&
+        hasLongFactorRun(Factors))
+      if (auto Q = foldQuadraticFields(Ctx, Root, Ctx.width(Root), Budget,
+                                       Storage)) {
+        if (EmittedReading)
+          *EmittedReading = true;
+        return Q;
+      }
+    return Root;
+  }
+  const auto Scale = Ctx.operand(Scaled, 0);
+  if (!Ctx.isConst(Scale) || (Ctx.constWords(Scale).front() & 1))
+    return Root;
+  bool Emitted = false;
+  const auto Result =
+      foldScaledDistributedProduct(Ctx, Scaled, Budget, Storage, &Emitted);
+  if (Result == Scaled ||
+      !(readingScore(Ctx, Result) < readingScore(Ctx, Root)))
+    return Root;
+  if (EmittedReading)
+    *EmittedReading = Emitted;
+  return Result;
 }
 
 SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,

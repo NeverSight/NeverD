@@ -292,6 +292,8 @@ TEST_F(X86ModeInterruptTest,
 
 TEST_F(X86ModeInterruptTest,
        DirectCompatibilityFarCallUsesFlatStackAndOperandWidthForLongCode) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   constexpr uint32_t Top = 0x1f005, Base = 0x1000;
   for (const unsigned Width : {2u, 4u})
     for (const bool Stack32 : {false, true}) {
@@ -350,6 +352,8 @@ TEST_F(X86ModeInterruptTest,
 
 TEST_F(X86ModeInterruptTest,
        ProtectedRealAndProtectedRoundTripWithRetainedCache) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   start(Mode::Protected32);
   auto &R = Machine.Core.Core.Core.Core.Core.Core;
   R.GPR[0] = Controls.CR0 & ~uint64_t(1);

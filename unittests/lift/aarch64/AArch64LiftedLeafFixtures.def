@@ -912,6 +912,7 @@ A64_LEAF_TEXT(kDataLinker, "-Wl,-ld_classic,-data_in_code_info")
 A64_LEAF_TEXT(kPrefixControl, "prefix-control")
 A64_LEAF_TEXT(kMixedEntry, "-Wl,-e,_leaf_sum")
 A64_LEAF_TEXT(kPrefixRecords, "embedded_records_after_header_growth")
+A64_LEAF_TEXT(kMixedUnwindFrames, "verified_mixed_unwind_frames")
 A64_LEAF_TEXT(kMixedRecords, "published_data_in_code_records")
 A64_LEAF_TEXT(kMixedLeaves, R"asm(
 .text
@@ -971,8 +972,10 @@ A64_LEAF_TEXT(kMutableCellSymbol, "_mutable_cell")
 A64_LEAF_VALUE(unsigned, kReadOnlyCellCount, 4)
 A64_LEAF_TEXT(kSecondTailAlias, "#define NEVERD_TEST_SECOND_TAIL_ALIAS 1\n")
 A64_LEAF_TEXT(kFixupChains, "-Wl,-fixup_chains")
+A64_LEAF_TEXT(kUnmarkedFixupChains, "-Wl,-fixup_chains,-no_data_in_code_info")
 A64_LEAF_TEXT(kReturnedLiteralTail, R"asm(
 .text
+.p2align 2
 .globl _leaf_sum
 _leaf_sum:
 .cfi_startproc
@@ -2953,6 +2956,8 @@ int main(int argc, char **argv) {
   return trace_value() != expected;
 }
 )cpp")
+
+#include "AArch64PublicationBoundaryFixtures.def"
 
 #undef A64_LEAF_VALUE
 #undef A64_LEAF_TEXT

@@ -13,6 +13,7 @@
 #include "../../HostCompiler.h"
 #include "HighCHostExecution.h"
 
+#include <cctype>
 #include <fstream>
 #include <iterator>
 #include <regex>
@@ -313,7 +314,7 @@ numeric_sink:
     }
     const auto Compiled =
         exec(NEVERD_TEST_CLANG, {"-target", "x86_64-linux-gnu", "-c",
-                               Assembly.string(), "-o", Object.string()});
+                                 Assembly.string(), "-o", Object.string()});
     ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
     const auto Decompiled = decompileToHighC(Object);
     ASSERT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
@@ -332,7 +333,7 @@ int main(void) {
 )C";
     const auto Built =
         exec(NEVERD_TEST_CLANG, {"-std=gnu11", "-O2", "-fno-strict-aliasing",
-                               Source.string(), "-o", Program.string()});
+                                 Source.string(), "-o", Program.string()});
     ASSERT_EQ(Built.exitCode, 0) << Built.err << C;
     EXPECT_EQ(exec(Program.string(), {}).exitCode, 0) << C;
   }
@@ -1383,4 +1384,68 @@ tally:
   EXPECT_NE(C.find("outside()"), std::string::npos) << C;
   EXPECT_EQ(C.find("outside(arg"), std::string::npos) << C;
   EXPECT_NE(C.find("memset(arg0, arg1, arg2)"), std::string::npos) << C;
+}
+
+// GCC calls ext_real, which nothing describes, after a branch that may call
+// ext_other: RSI and the vector registers hold what kr_mixed entered with,
+// where no parameter arrives, on one way into the call and what ext_other
+// left on the other.  Neither the function nor its caller set them for an
+// argument, so in both C routes each call passes RDI alone and the C prints
+// no unknown value.
+TEST_F(X86_64_CallAbi, AnUndescribedCalleeTakesNoRegisterNothingSetForIt) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const auto Object = tmpFile("unprototyped_call_args.o");
+  const auto Assembled =
+      exec(NEVERD_TEST_CLANG,
+           {"-target", "x86_64-linux-gnu", "-c",
+            (fs::path(TEST_SOURCE_DIR) / "x86_64/test_unprototyped_call_args.s")
+                .string(),
+            "-o", Object.string()});
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+  for (const bool LLVMRoute : {false, true}) {
+    SCOPED_TRACE(LLVMRoute ? "LLVM C" : "HighC");
+    const auto Decompiled =
+        LLVMRoute ? decompileToC(Object) : decompileToHighC(Object);
+    ASSERT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
+    std::ifstream Input(
+        tmpFile(LLVMRoute ? "decompiled.c" : "decompiled_high.c"));
+    const std::string C((std::istreambuf_iterator<char>(Input)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_EQ(C.find("no recovered semantics"), std::string::npos) << C;
+    EXPECT_EQ(C.find("no recovered machine state"), std::string::npos) << C;
+    // The argument list of each call in a function body: the text between
+    // `ext_real(` and the parenthesis that closes it.  The declaration, at
+    // file scope, is no call.
+    size_t Calls = 0;
+    int BodyDepth = 0;
+    size_t Scanned = 0;
+    for (size_t At = C.find("ext_real("); At != std::string::npos;
+         At = C.find("ext_real(", At + 1)) {
+      for (; Scanned < At; ++Scanned)
+        BodyDepth += C[Scanned] == '{' ? 1 : C[Scanned] == '}' ? -1 : 0;
+      if (BodyDepth <= 0 ||
+          (At > 0 && (std::isalnum(static_cast<unsigned char>(C[At - 1])) ||
+                      C[At - 1] == '_')))
+        continue;
+      size_t Close = At + std::string("ext_real").size();
+      int Depth = 0;
+      bool TopLevelComma = false;
+      for (; Close < C.size(); ++Close) {
+        if (C[Close] == '(')
+          ++Depth;
+        else if (C[Close] == ')' && --Depth == 0)
+          break;
+        else if (C[Close] == ',' && Depth == 1)
+          TopLevelComma = true;
+      }
+      const std::string Arguments =
+          C.substr(At + std::string("ext_real(").size(),
+                   Close - At - std::string("ext_real(").size());
+      ++Calls;
+      EXPECT_FALSE(Arguments.empty()) << C;
+      EXPECT_FALSE(TopLevelComma) << Arguments << "\n" << C;
+    }
+    EXPECT_EQ(Calls, 2u) << C;
+  }
 }

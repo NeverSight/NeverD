@@ -188,6 +188,10 @@ CALL/RET distinguish actual outcomes from PC inequality. Both generated C
 routes run through Clang/NeverC at O0/O2. Separate software cases cover BTF
 clearing, deferred/failed entry, v1 refusal and raw-TF REP group inputs. The
 local KVM masks DEBUGCTL.BTF; accepted MSR writes do not qualify execution.
+A hypervisor may not virtualize BTF either, and then ptrace block steps stop
+after every instruction (seen on Xeon 6975P-C CI runners). The oracle probes
+`nop; jmp` first; such a host keeps the single-step comparisons and reports
+the branch half skipped.
 Repeat on both SDKs and P/E cores, retaining the precise oracle limitations.
 
 `X64PagedDebugTest.*` in `NeverDX64PagedExecutionTests` qualifies the opt-in
@@ -208,6 +212,11 @@ paged-execution and continuation source/export regressions. See the
 Native tests disable debugger interception and compare all RAM and represented
 state, including DR6/DR7. The shared Intel host gate bounds those native
 comparisons; software admission tests retain their ordinary host coverage.
+The legacy control, machine-status, halt, stack, system-selector and VM86
+rows, fast system calls, mode transitions and INIT/SIPI startup take the same
+gate: AMD runners differ there in SYSENTER, segment caches and CR3 checks.
+Each paging comparison bounds `KVM_RUN` at 20 s, so a guest that misses its
+stop fails with its RIP and CR2 instead of hanging the suite.
 They cover all enable pairs, RF/TF, coincident causes,
 MOV/POP SS, original linear addresses, fetch/operand/PVI faults and failed
 debug entry. x64 adds eligible/masked IRQ/NMI and IRET/RETF targets, including
@@ -373,7 +382,10 @@ explicit TF/ICEBP binding. The native matrix disables KVM guest debugging,
 executes original instruction sequences and halts in real exception handlers.
 It compares DR6/DR7, full GPR/segment state, flags, CR2, inhibition and all RAM
 under legacy/PAE paging, independent code/stack/gate widths, CPL0/3, RF and
-sticky DR6 inputs. Disabled breakpoint comparators deliberately match the
+sticky DR6 inputs. A host with bus-lock detection or RTM lets MOV DR6 clear
+DR6 bit 11 or 16, which the model keeps reserved; `X86NativeDebugStatus.h`
+finds those bits in a throwaway VM, and native DR6 comparisons leave out
+exactly them. Disabled breakpoint comparators deliberately match the
 instruction addresses. Cases include POPF/IRET TF transitions, MOV/POP SS and
 LSS, REP progress, near/far control, SYSENTER/SYSEXIT, faults, software entries
 and failed #DB gate/frame/target entry. Original handlers count #DB events,
@@ -826,7 +838,7 @@ source and MPX context/encoding targets.
 
 `InterpreterMachineRegionSourceTest.EntryObjects*` executes all four region state interfaces through HighC and LLVMC at O0/O2 with ASan/UBSan. Complete state, guest writes and query tapes cover optional alignment, object aliases, equal roots with disjoint relative ranges, one-byte overlaps and rejected inputs before any effects. An independent 128-bit arithmetic oracle covers signed displacement extremes, address wraparound and UINT64_MAX endpoints. Exact/short source budgets and changed authenticated declarations remain checked; ordinary source consumers still refuse the raw domain.
 
-`PEFixedImageTest.EntryLoadedObjectBindsAChangingMemoryPointer` checks a complete entry memory pointer field through raw symbolic specialization, a concrete original-instruction replay, missing-relation refusal and malformed source domains. `EntryLoadedObjectSurvivesAConditionalCall` checks the preserved pointer across a declared returning call, while `EntryLoadedObjectForgetsOverwrittenPointerField` checks that a guest write cannot resurrect its initial relation. Run `NeverDInterpreterSpecializationTests` and `NeverDInterpreterMachineStateTests` when changing the loaded-object relation or its source guard. These tests qualify the declared initial pointer domain, not an observed address or an actual driver's loader contract.
+`PEFixedImageTest.EntryLoadedObjectBindsAChangingMemoryPointer` checks a complete entry memory pointer field through raw symbolic specialization, a concrete original-instruction replay, missing-relation refusal and malformed source domains. `EntryLoadedObjectSurvivesAConditionalCall` checks the preserved pointer across a declared returning call and a node boundary: its return exit needs no frame proof, so a stack word saved above the call's outgoing bytes and checked after the pointer's store makes the relation necessary, while `EntryLoadedObjectForgetsOverwrittenPointerField` checks that a guest write cannot resurrect its initial relation. Run `NeverDInterpreterSpecializationTests` and `NeverDInterpreterMachineStateTests` when changing the loaded-object relation or its source guard. These tests qualify the declared initial pointer domain, not an observed address or an actual driver's loader contract.
 
 `HighSwiftEmitter.StackScalarBindingsDoNotInventPhysicalStackWrites` runs x64/ARM64 Mach-O integer, floating and mixed stack carriers through the source pipeline. `IncomingHomeSource.StackInitializationRequiresAbsenceOfAllObservers` keeps entry storage for memory reads, calls, escaping stack addresses and opaque or memory intrinsics. Pure value paths use declared parameters without inventing physical SP writes; register FP state effects remain. The macOS mobile matrix independently compiles and executes recovered Swift; successful emission alone is not execution evidence.
 
@@ -1554,6 +1566,120 @@ requests LLVM output explicitly to exercise that complete native proof.
 128-bit remainders and quotient/subtract identities against unknown high
 halves, signed division, zero divisors and undersized storage. Compact selector
 recovery must also pass `ModuloBoundProbesCompactCandidatesIndependently`.
+`JTE_X86_64.CyclicMaskedSelectorReadsOnlyItsOwnRelocatedSlots` masks a cyclic
+switch's sum of absolute differences, whose upstream-mask search cannot finish:
+eight owned relocated slots publish the eight cases, and four owned slots under
+the same mask keep the dispatch unresolved. The `x64v52_redsad` round trip in
+`NeverDSemanticTests` executes the same shape.
+`JTE_X86_64.TwoStateMachinesReadOnlyTheirOwnAdjacentTables` lifts two state
+machines whose adjacent relative tables form one relocation run: each loop
+dispatch reads its own five slots and each entry dispatch slot 0. An exhausted
+account publishes nothing, and a second machine seeded from the first machine's
+exit state reads before its table and stays unresolved. The `x64tt_twomachine`
+and `x64tt_threemachine` round trips in `NeverDTwoTableXformTests` execute the
+same shape. `JTE_X86_64.SecondMachineBehindAnOpenEntryDispatchStaysUnreachable`
+enters a second machine only through a first entry dispatch that can never
+close: that dispatch stays unresolved and no block past it is reachable.
+`JTE_X86_64.NarrowGuardPastTheSignBitBoundsOnlyAZeroExtendedIndex` bounds a
+byte lane with `cmpb $0x81, %dl; ja`: indexed by the lane zero-extended, the
+dispatch reads all 130 slots, while sign extension after the compare, into
+the compared register before it, or to 32 bits before the implicit
+zero-extend keeps it unresolved, as does a byte copied into the low lane of
+an index whose upper bits come from the caller.
+`JTE_X86_64.LoadedByteLanePastTheSignBitBoundsAZeroExtendedIndex` compares
+the low lane of the register a byte was loaded into, which is the index:
+loaded with `movzbl` (bound through the extended lane) or `movzbq` (through
+the lane source), each dispatch reads all 130 slots, while `movsbl; cltq`,
+`movsbq` and a bare `movsbl` keep theirs unresolved.
+`JTE_X86_64.ByteComparedOnEachEntryPathBoundsAJoinedDomain` enters a
+dispatch on two paths that each load a byte with `movzbl` and compare it with
+`cmpb $0xac`: the joined domain reads all 173 slots, while a sign-extended
+second byte, a second path without a compare, or a signed `jg` on it keeps
+the dispatch unresolved. `JTE_X86_64.ReloadThroughAnUnchangedCursorKeepsTheCompareBound`
+reloads the byte a loop compared under a cursor its cases advance: the
+dispatch reads its six slots, while reloading the next byte or reloading
+after replacing the cursor stays unresolved.
+`JTE_X86_64.GuardReadsFlagsItsPredecessorCompareSet` dispatches after a `ja`
+that reads the flags of the previous block's `cmp`, directly and through a
+relay block that keeps them: both dispatches read their eight slots, while an
+index changed after the compare, a second compare into the `ja` block that
+admits 101 values, or an address of the `ja` block that .data holds, stays
+unresolved.
+`JTE_X86_64.LaneGuardFindsItsExtensionInAnEarlierBlock` bounds a byte that
+`movzbl` loaded by ten with `cmp $9, %eax` and, one block and three blocks
+later, by seven with `cmp $6, %al` before the dispatch indexes with `%rax`:
+both dispatches read their seven slots. A second path into the lane compare
+that loads all of `%rax`, a load of all of `%rax` before both compares, or a
+write of `%ah` between them stays unresolved.
+`JTE_X86_64.LaneCompareBoundWinsOverAWideTest` loads `%eax` with `movl`,
+tests `(%eax - 4) & ~4` on the full register in the next block and bounds
+`%eax` by ten in the one after: the dispatch reads its ten slots. A second
+path into the compare that loads all of `%rax`, a call between the load and
+the compare, or an address of the compare block that .data holds stays
+unresolved.
+`JTE_X86_64.AnUnboundedOwnLabelTableDispatchesByValue` jumps through relative
+tables that nothing bounds, as Rust matches a discriminant read from memory:
+the jump dispatches by value on the three labels of six slots, comparing the
+LOAD of the slot with the labels' offsets from the table. A label that reads
+`%rbx` before any path to the jump wrote it is left out, a slot that names an
+address inside an instruction ends the table, a table address loaded into
+`%r12` before a loop is found at its dispatch, a dispatch that one of its
+labels re-enters with another table's address is withdrawn, a table in
+`.data` gives no labels, and a dispatch whose every label stores the `%r15`
+its prologue saved on some path keeps both labels. `x64swx_enumbyte0`, `3` and `5` in `NeverDSwitchXformTests` run the
+same shape from C, an unreachable default on a byte argument, through the lift,
+recompile and emulation and compare the results; `x64swx_enumload` runs eight
+such switches in a row on bytes read back from the stack, whose domains run out
+of evidence.
+`JTE_X86_64.AWin64OwnLabelDispatchKeepsRsiAndRdi` builds the same shape as a
+Win64 object: a label that reads `%rsi` before any write is left out, since
+Win64 keeps `%rsi`, and a table address loaded into `%rsi` before a call still
+gives the jump after the call its two labels.
+`JTE_X86_64.WithdrawnScalarGuessKeepsTheProvedTable` links a state machine
+whose first state is a constant: scalar recovery first takes its dispatch as a
+direct branch and withdraws that guess when the cases loop back, and the
+resolver's guarded four-slot table then stays usable for switch lowering. An
+unguarded dispatch whose next state comes from memory stays unsafe. The
+fixture needs `ld.lld`; without it the test is skipped.
+`JTE_X86_64.TableAddressScalesTheExtendedIndexRegister` reloads a bounded
+field into RCX through `movl`'s implicit zero-extend and scales RCX in the
+table load: the dispatch reads its four slots although one case scales a value
+at the end of a chain no value query finishes, while writing CL between the
+reload and the table load leaves the dispatch unresolved.
+`JTE_X86_64.AliasQueriesSpendOnlyTheirShareOfTheCandidateAccount` builds a
+64-case byte-code walk whose `cmova` selects propose about 10 Mi of alias
+queries with a 14 Mi candidate account: the guard still bounds the dispatch
+to its 64 slots.
+`JTE_X86_64.CompareQueriesOutliveAnUnfinishedGuardSession` puts 24
+controlling compares before a byte dispatch and limits each guard query
+session to a match allowance the whole batch overruns: the compare's own
+queries, asked alone, still bound the six slots.
+`JTE_X86_64.IndexTakesTheComparedLaneAfterTheGuard` uses the same limit on
+dispatches whose index takes the compared lane after the guard
+(`movzbl %sil, %esi` after `cmpb $5, %sil; ja`, and `movl %r11d, %eax` after
+`cmpl $5, %r11d; ja`): both read their six slots, while twins that change
+the lane between the guard and the index (`incb %sil`, `incl %r11d`) stay
+unresolved.
+`JTE_X86_64.AReloadOfTheComparedByteIsTheIndex` reloads a byte compared in
+memory as the index (`cmpb $5, 2(%rdi); ja; movzbl 2(%rdi), %eax`) and reads
+its six slots under the same limit. With the full allowance, a store or an
+address-register write between the loads, another displacement or width, a
+sign-extending reload of a byte the guard admits up to 0x81, a call or a
+change after the reload, a second way into the reload block and a reload
+block whose address is data keep their dispatches unproved. Deleting the
+memory-write, register-write, displacement, width, zero-extension or
+later-write check lets its twin publish a table. The call and second-path
+twins are refused before the guard is read as well: the dispatch after the
+call lifts as an indirect tail call, and the second path leaves the guard
+controlling nothing.
+`JTE_X86_64.LoopCarriedTokenDispatchFitsASmallCandidateAccount` builds a
+lexer loop whose 64 arms each recompute a token dispatched through
+`lea -0x107(%r13), %eax; cmp $63, %eax; ja` and checks its 64 slots under a
+14 Mi and a 20 Mi candidate account. The first needs the target role's
+lexical chain filter and the address proof's single authenticated order
+(without them the dispatch needed 16 and 19.5 Mi); the second needs the
+guard session's share (a session that finished on the whole account left the
+other proofs too little between 16.5 and 23.5 Mi).
 
 `ResolverFrameModes.DisplayEquationDoesNotBecomeAStrictCachedAnswer` checks
 the stack equation at its actual resolver use and switches back to strict
@@ -4732,6 +4858,53 @@ Use `--carry-masks` to place holes above and below the bits an even multiplier
 can carry into the result. Width 2,359,301 and case 3 generate 163,838 factors.
 The 313-factor native fixture exercises both source views against the original
 arithmetic, including a factor whose low weight retains mixed products.
+
+Use `--sparse-masks --width 3145741 --case 3` for a 245,757-factor
+product with disjoint striped masks, odd carries, absorbed OR and AND-NOT
+bits, and a surviving one-bit overlap. Use `--reference` for the reduced
+expression or `--counted` for the original factors with their multiplicities.
+The 389-factor x86 fixture executes both source views against the original
+32-bit arithmetic at Clang O0 and O2.
+
+`tools/neverd-bench/generate_paired_product.py --width 65536 --case 7`
+emits a product whose repeated factors retain square and mixed terms.
+`--reference` reconstructs the result from finite differences of the original
+modular powers. Use `--counted` to evaluate the original without expanding
+repetitions. At width 4194319, case 7 contains 360,018 factors and requires
+`neverd simplify --exhaustive`. A 268-factor x86 fixture exercises the same
+square corrections through both decompiler views.
+
+Use `--group-log 2`, `3` or `4` for blocks of four, eight or sixteen
+equal factors. The weights can retain quadratic cross terms even after the
+outer scale. Signed and unsigned views of a field may carry different bits
+into the result. The reference reconstructs the complete blocks from their
+values at zero, unit coordinates and pairs of unit coordinates, then restores
+any incomplete block. Width 6,291,469, case 7 and group log 4 generate
+524,329 factors across 189 distinct rows. The 383-factor machine-code
+fixture checks this family in HighC and LLVM-to-C through the worker and CLI.
+`SymMBAResiduePowers.SmallOddPowerBlocksKeepTheirFullResidues` checks
+blocks whose cubic and quartic terms still affect the result. It exhausts
+all pairs of four-bit inputs against the original product.
+
+Group logs 5 and 6 add three overlapping word expressions and leave several
+independent factors outside the complete blocks. At width 9,437,201, case 7
+and group log 6 generate 917,516 factors. Use `--counted` for their exact
+multiplicities and `--reference` for the interpolated polynomial. The
+611-factor native fixture exercises blocks of 32 with three remaining copies
+in both source views.
+
+Group logs 7 and 8 use twelve overlapping word expressions with both signed
+and unsigned slices. Some rows have four differently weighted fields and
+several incomplete blocks survive. To reproduce a constrained run, generate
+width 65,536, case 7, group log 8 and pass it to `neverd simplify` with
+`--width=65536 --max-work=65536`. With the same case and group log, width
+14,680,111 generates 1,572,880 factors across 317 distinct rows. Use
+`--exhaustive` to simplify it or generate its compact form with `--counted`.
+
+`SymMBAResiduePowers.SparseFieldRunsStayFactoredWithinBudget` exercises 65
+overlapping signed and unsigned coordinates with short repeated powers. Its
+65,536-work run compares the result with direct evaluation, including an even
+singleton beside the repeated odd factors.
 
 Use `--family composed-rotation-product --count 16` for 96 products at six
 widths from 32 to 65,536 bits. Up to 10,007 factors read eight overlapping
@@ -9926,6 +10099,12 @@ to a different valid image. Truncated instruction streams remain unretained.
 a function whose lift is incomplete until its callee is proved never to
 return: the second build's kept contract answers and it reads no graph, and
 once the prover's answer changes the call is proved again.
+`PipelineOutcome.ASmallX64WholeImageBatchLiftsNoCalleeAgain` runs a
+six-function whole-image x64 batch, too small to run in parallel, through the
+pipeline: its first batch makes no x87 call graph build
+(`PipelineOptions::X87GraphBuildsForTesting`; the single-pass batch made five,
+each a second lift of a function the batch builds), and every body is the
+one a run of that function alone builds.
 
 Publishing an additional code reference may retain the pipeline's raw x87
 graphs, but cannot retain an earlier tag proof. A shared-cache test publishes a
@@ -12485,6 +12664,10 @@ The generated paged execution suite exercises the actual HighC validator that
 exposed the reserved-key collision. Host floating-conversion fixtures link
 `libm` on POSIX when scalar FMA needs a library call.
 
+`HighControlFlowSemantics.ImpliedGuardsPreserveSeparateObservations` checks
+that condition folding keeps distinct atomic, ordered and segment-relative
+observations while still combining tests of one captured scalar.
+
 `HighControlFlowDAG.*` in `NeverDHighControlFlowTests` checks single-use
 condition folding on large shared expression graphs. Shared reads retain
 their multiplicity without expanding every path, and substitution reaches a
@@ -12521,11 +12704,40 @@ condition still executes independently.
 
 `HighBoundPrivateFrameCopies.*` in `NeverDHighControlFlowTests` checks copies through nonescaping private frame slots after call ABI binding, including branches, slot reuse and agreement across guard contexts. For x64 and AArch64, the emitted C runs at `-O0` and `-O2` with undefined-behavior traps and independent arithmetic checks. Negative cases preserve the original function for frame escape, unknown call ABIs, missing or inconsistent frame aliases, reassigned entry inputs, overlapping accesses, ordered or atomic memory, malformed statements, cycles and exhausted budgets. Ordinary value conversions must not become PHI copies.
 
+`HighControlFlowSemantics.PhiCoalescingKeepsDistinctIncomingValues` checks
+that a PHI copy on one path cannot merge distinct values used on a different
+path before any definition. It covers direct and transitive copies.
+
 `HighIntegerSignedness.*` in `NeverDHighControlFlowTests` checks the late pass that declares each register or temporary local signed or unsigned by what most of its uses read. Wrapping arithmetic, logical shifts and unsigned comparisons favor unsigned; signed comparisons, signed division, arithmetic shifts and sign extension favor signed; a conversion to an integer as wide as its operand favors the signedness it converts to; a shift count reads unsigned, so its masking arithmetic prints without a signed view; a local with any non-integer use keeps its types. The emitted C runs at `-O0` and `-O2` with undefined-behavior traps against independent reference arithmetic, including a signed comparison of a local that became unsigned.
+
+`HighValueForward.CallCaptureRetainsTheAssignmentConversion` executes a
+forwarded call's byte test and signed word comparison at O0 and O2. The
+boundary inputs distinguish the captured type from the full return value
+and each case checks that the call runs exactly once.
 
 `HighNarrowLocals.*` in `NeverDHighControlFlowTests` checks the late pass that declares a register or temporary local only as wide as its reads take: every read takes at most its low N bytes and every definition extends a value of at most N bytes or is a constant that keeps its meaning in N bytes. A constant definition keeps only its low bytes; a wide read, an incoming register, a join, a call result or a definition that computes all register bytes keeps the declaration. The emitted C runs at `-O0` and `-O2` with undefined-behavior traps against reference arithmetic.
 
+The large-function `HighValueForward` fixtures exercise direct integer calls
+whose next statement is their only use. The emitted C runs at O0 and O2 with
+an independent call counter. Loop snapshots and captures before a backward
+branch target keep their assignments.
+
 `HighValueForward.*` in `NeverDHighControlFlowTests` checks when the HighC writer may fold a single-use value into its use. A loop condition keeps a value whose variables the loop assigns, since one name can denote several SSA values; a reloaded frame slot keeps its value across a store to that slot and folds past a store to another slot. A copy keeps its value when its source is reassigned before the use. Each case runs at `-O0` and `-O2` with undefined-behavior traps.
+
+`HighControlFlowSemantics.AdjacentLoadRequiresUnconditionalUse` checks that
+a preceding read still runs on paths that skip an operand. It exercises all
+three short-circuit forms and an indirect target with its own effect.
+`HighValueForward.ConditionalUseStillReadsTheCapturedMemberOnBothPaths`
+executes emitted C at O0 and O2 with an observer on the field read.
+`HighValueForward.SkippedOperandStillFoldsAFrameSlotRead` folds a read of a
+fixed frame slot into a conditional and a short-circuit operand, since such a
+read observes nothing outside the function's own frame, and executes the C
+at O0 and O2.
+`HighValueForward.ReturnedCallCaptureConvertsOnlyWhereTheReturnDoesNot`
+returns forwarded call results as they are: a capture at least as wide as
+the return type prints no conversion of its own, a narrower one keeps it,
+as does one a Boolean function returns, and the C runs at O0 and O2 with a
+call counter.
 
 `HighCIntegerConversion.*` in `NeverDHighControlFlowTests` checks the integer conversions the HighC writer leaves to C. A conversion inside an operand that keeps the bytes an outer conversion keeps prints no cast of its own; an assignment to a declared integer local and a return convert implicitly, and a literal is spelled as the value it converts to, while a pointer keeps its explicit conversion. Stores convert like assignments, and a zero-extended argument to a typed wider parameter keeps its extension. A callee whose debug symbol has no type, or that nothing declares while the code reads more than an int of its result, returns its whole register, so a 64-bit pointer keeps its upper half. Each case runs at `-O0` and `-O2` with undefined-behavior traps against reference arithmetic. Non-Windows fixture executables link the math library so fused floating operations also execute on hosts where those builtins lower to library calls.
 
@@ -12720,6 +12932,27 @@ refusal cases on incoming frame bytes whose writer is outside the function.
 `GeneratedSourceExecutesJoinedEqualityAndRange` runs the register and frame
 variants through HighC and optimized/unoptimized LLVMC, compiling the generated
 x64 ELF C at O0/O2 with undefined-behavior traps and independent expected values.
+`JumpTableJoinedGuard.WideJoinedDomainsKeepEveryCase` uses bash's shape: a zero
+byte enters the dispatch past its range guard. Sizes 63, 64, 65, 97, 128,
+129, 173 and 255 cross each word of the feasible set and reach the joined
+ceiling, and each keeps every slot. `WideJoinedDomainsRefuseUnboundedOrHoledPaths`
+refuses 256 cases of a 16-bit value, whose literal is past the ceiling (256
+byte cases are bounded by the byte's own width), an equality path that reads
+one slot past the table, and a 255-case dispatch that a second path enters
+with an unchecked byte, which can be 255.
+`AWideLiteralElsewhereKeepsASmallJoinedDomain` raises the proposed envelope
+to the ceiling with an unrelated compare and still proves the three slots.
+`GeneratedSourceExecutesAWideJoinedDomain` compiles and runs the 97-case
+function from all three C routes at O0/O2.
+`X86_64ColdFragment.TheLoaderBindsAFramelessTrapPart` loads GCC 15.2's output
+for the shape of Lua's reallymarkobject, linked with and without symbols. Its
+isolated trap part begins with the entry rule and is bound in both copies.
+`AFramelessTrapPartIsACaseOfItsSwitch` decompiles the stripped copy: the
+dispatch is a switch whose isolated path traps, not a call through the table,
+and the part has no definition of its own.
+`EntryLikePartsSomethingNamesStayFunctions` binds a control part and keeps as
+functions a part that is also called, one that returns and one a relocated
+pointer names; the control part's own symbol keeps it a function too.
 `JumpTableFiniteSelector.ExactSingletonReplayPreservesAProvedSibling`
 uses i386 and x64 consumers sharing one relocated table. The exact singleton
 keeps its finite replay without poisoning the independently bounded sibling's
@@ -14399,6 +14632,18 @@ Handwritten legacy intrinsics, masked LLVM functions and hidden HighIR branches
 must fail recoverably before source publication. These tests protect the missing
 machine-state boundary; they do not qualify kernel continuation execution.
 
+The callee-save visibility cases cover explicit and recorded Win64 call
+arguments, a call with its own home space, and a dynamic frame-relative read.
+They exercise the combined source pass and its individual callee-save entry.
+`MedPrologueSaves.AnotherFrameObjectsAddressLeavesTheSave` hands a callee,
+and reads at a run-time index, the buffer below a save, also when the index
+lies between the save's address and the constant that reaches the buffer or
+between the buffer's address and a constant that alone would reach the
+save, and
+`MedPrologueSaves.DataReadThroughAFrameAddressIsNoEscape` passes a callee
+what an SSE operation read through a frame address: neither names a byte of
+the save, so both keep it a prologue save.
+
 `NeverDMedPrologueSavesTests` runs the same save, restore, overlapping-store,
 return-address and process-entry cases through separate and combined source
 annotations. It also checks a function that has both a saved register and a
@@ -15541,6 +15786,9 @@ usable and explicit unavailable-backend requests are rejected.
 
 `add_neverd_unittest` creates one GoogleTest executable and assigns every
 discovered case a CTest label equal to that executable's target name.
+On Windows the executable reserves the decompiler's 128 MiB main stack
+(`kDecompilerMainStackSize`): its cases run on GoogleTest's main thread,
+which would otherwise get 1 MiB there against 8 MiB on Linux and macOS.
 
 | Source area | Target and CTest label | What it covers |
 |-------------|-------------------------|----------------|
@@ -15883,6 +16131,12 @@ trap on a register earlier calls left behind, and no incoming stack slot taken
 for the routine's open arity. `MedCallLeftovers.JoinsOfCallClobbersOnly`
 checks which clobbers and joins `ValuesLeftByCalls` names, loops and exception
 entries included.
+`X86_64_CallAbi.AnUndescribedCalleeTakesNoRegisterNothingSetForIt` decompiles
+GCC's call of an undescribed external after a branch that may call another,
+in a function that receives no parameter in those registers: through HighC
+and LLVM C each call passes its one set argument and no unknown value.
+`MedABIPass.CallClobberPhisDoNotInventTrailingArguments` keeps a join that a
+write on one way sets.
 `CallsTakeNoIncomingRegisterAnEarlierCallChanged` links, for x86-64, i386,
 ARM and AArch64, a routine that reads four argument registers with callers
 that declare it with one, calling it after another call, after a join of two
@@ -15955,6 +16209,20 @@ in a live frame, and after an `svc`.
 the `__release_weak` shape through HighC, LLVM-C and unoptimized LLVM-C: none
 keeps the unresolved-branch trap, each calls through the loaded vtable slot,
 and the HighC compiles for AArch64.
+`X64IndirectTailFrame.RestoredStackPointerKeepsTheTailCall` links and strips
+x86-64 jumps that leave RSP at its incoming value (nothing pushed, pops,
+LEAVE after a realignment, an added-back frame, `lea -8(%rbp), %rsp`, a
+balanced diamond and loop) or at nothing derived from it (a fiber switch to an
+argument's stack, RSP loaded from memory): each becomes `INDIR_CALL + RETURN`.
+`LiveOrUnknownStackPointerKeepsTheBranch` keeps the indirect branch inside a
+live frame, through an unbounded relative table inside one, after a push on
+one of two paths, after an unrestored realignment or a register adjustment,
+after LEAVE reads an RBP a call result moved, and after a pushing loop.
+`LazyBindingResolverJumpKeepsTheTailCall` keeps the library's PLT0 jump to
+the lazy-binding resolver a tail call after its push.
+`OwnLabelTableKeepsTheBranch` keeps the branch through an unbounded relative
+table of the function's own labels with nothing pushed, and through one whose
+base RBX keeps across a call, after popping RBX.
 `LowIntrinsicMemoryOperands.DecodeOnlyTheLiftedShapes` rejects width, ordering
 and segment mismatches and intrinsics without a memory contract.
 
@@ -16093,9 +16361,10 @@ build-release/bin/NeverDLiftTests --gtest_filter='ExceptionCFGSeed.*:COFFExcepti
 ```
 
 `MedImmutableTableScanTests` checks exact sentinel exit counts, integer widths,
-mutable/truncated storage, independent roots and budget refusal. Pointer tests
-cover nested recurrences, shared expression DAGs, role-neutral address leaves
-and independently materialized SELECT arms. Both suites retain ambiguous
+mutable/truncated storage, independent roots and budget refusal. It also
+checks that a literal arriving only through a PHI still folds its consumer.
+Pointer tests cover nested recurrences, shared expression DAGs, role-neutral
+address leaves and independently materialized SELECT arms. Both suites retain ambiguous
 relocatable comparisons and distinguish adjacent objects' one-past addresses.
 `NeverDMedPhiRecompositionTests` owns correlated word-PHI regressions
 alongside the existing constant-propagation cases. Reordered edges,
@@ -23520,6 +23789,7 @@ ctest --test-dir build-release -L "^(NeverDX86ScalarMoveAuditTests|NeverDX86Lega
 `ReturningCallRepeatedContainedWritesReuseNonnullProof` checks that a bounded sequence of in-object writes retains all physical stores under a solver-query allowance that requires reuse of the proven nonnull result. The old evaluator exhausts that allowance; the new one completes without adding an alias premise.
 `ReturningCallObjectExclusionSavesCurrentGlobalProofQueries` checks the version-4 caller premise with a current image pointer word followed by an in-object clear and a later reload. The same program completes under version 3 but requires more alias queries; a tight query limit completes only under version 4. The test also verifies complete stores, raw receipt binding and malformed or legacy exclusion refusal. The exclusion is an explicit test contract; the test does not authenticate any allocator or observed runtime address.
 `ReturningCallResultObjectBoundsSymbolicOffset` checks a solver-bounded dynamic offset with a nullable result and explicit low-range frame exclusion. It also refuses the same store without that exclusion, refuses an offset that can cross the object boundary, and accepts the bounded store after a proved nonnull branch without the exclusion.
+`ReturningCallFrameOutputReplacesPreservedBytes` checks that a version-5 output pointer replaces an initialized caller-frame word, retains both post-call branches, and binds the output extent into the raw receipt. The version-2 control keeps the old word; malformed argument registers and extents and a proven out-of-frame output refuse. This checks the declared conditional effect, not an actual callee or source ABI.
 
 `PEFixedImageTest.ReturningCallCanRetainDeclaredEarlierFrameBytes` in `NeverDPEFixedImageTests` distinguishes the version 2 frame-span relation from version 1 and rejects overlap with the call stack area. `RetainsDisjointCurrentFrameSpans` in `NeverDSymMemoryKnowledgeTests` checks that only current bytes in the declared intervals survive, with bounded atomic failure. Run these focused targets for changes to this relation; neither test authenticates an external callee's actual writes.
 
@@ -24711,8 +24981,9 @@ broad whole-project and native Apple CPTA qualification remain false.
 checks: GPR W/X, signed LDPSW and SIMD S/D/Q, offset/pre/post/non-temporal forms,
 215 independent LLVM MC samples and all 5,504 encoding/imm7 combinations through
 full and fast decoding. Native HighC/LLVMC O0/O2 and actual LLVM objects compare
-both complete values, the base and every byte of a 4096-byte buffer. The same
-suite checks malformed three-result bindings, the second store operand,
+both complete values, the base and every byte of a 4096-byte buffer. The
+address-memory harness allows 120 seconds to compile each generated translation
+unit and 30 seconds to execute it. The same suite checks malformed three-result bindings, the second store operand,
 source filtering, original-word ambiguity, aliases, x1-only admission, finite
 tracer refusal, nominal frame footprints, image spans, returned bases and
 retained effects after all values are discarded.
@@ -26491,7 +26762,7 @@ HighExprSimplify exact-demand regressions independently check multiple readers, 
 
 HighExprSimplify selected-byte regressions recover only contiguous captured-local lanes with matching pure guards. Offset, sign-extension, different-guard, load and unknown-value controls remain unchanged; generated source executes at both result widths and optimization levels.
 
-Common-word equality cancellation is covered by independent APInt evaluations at 1--256 bits. It cancels only identical complete XOR or additive operands; subtraction reuses the same additive collector. Packed word contents remain unconstrained.
+Common-word equality cancellation is covered by independent APInt evaluations at 1--256 bits. It cancels only identical complete XOR or additive operands; subtraction reuses the same additive collector. Packed word contents remain unconstrained. A literal both equality sides carry stays, so a selector compared with each of its case values keeps one target; `BinaryLowIRRefinement.PartitionedCoverageKeepsAllNativeAndCandidateArms` groups its cases by that target.
 
 SymExprCancellation captured-mask tests use independent exhaustive small-word and multiword APInt evaluation. Negative controls retain overlapping carries and uncovered fields; bounded known-bit queries leave unresolved inputs intact. Existing complemented-offset MBA tests qualify the equivalent normalized constructor forms.
 

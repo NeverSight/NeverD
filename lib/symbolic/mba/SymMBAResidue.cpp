@@ -312,7 +312,8 @@ SymRef foldProductResidues(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
             Ctx.numOperands(Term) < limits::kMinResidueProductFactors)
           return false;
         if (Ctx.numOperands(Term) > limits::kMaxResidueProductFactors)
-          return Ctx.isConst(Ctx.operand(Term, 0));
+          return Ctx.isConst(Ctx.operand(Term, 0)) ||
+                 hasDistributedFactors(Ctx, Term);
         return hasOffsetFactors(Ctx, Term) ||
                hasProjectedResidueFactors(Ctx, Term) ||
                hasDistributedFactors(Ctx, Term);

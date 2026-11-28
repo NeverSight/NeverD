@@ -241,6 +241,8 @@ add_neverd_unittest(NeverDLinuxProcessTests
   TIMEOUT 20
   LINK_COMPONENTS EmulationProcess)
 target_include_directories(NeverDLinuxProcessTests PRIVATE ${CMAKE_SOURCE_DIR}/lib/emulation)
+set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/LinuxProcessTestExecution.cmake")
 if(TARGET neverd_shared AND TARGET neverd)
   add_neverd_unittest(NeverDProcessPublicTests
     ProcessPublicTests.cpp

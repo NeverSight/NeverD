@@ -23,9 +23,10 @@ machOSourceLibraryCommandBytes(const BinaryImage &Original,
 
 /// Admit validated explicit requests using exact dylib load commands. Does not
 /// allocate import slots; callers retain their transactional candidate bytes.
-llvm::Expected<std::map<std::string, uint32_t>>
-admitMachOSourceLibraries(std::vector<uint8_t> &Binary,
-                          llvm::ArrayRef<SourcePatchDependency> Requests);
+llvm::Expected<std::map<std::string, uint32_t>> admitMachOSourceLibraries(
+    std::vector<uint8_t> &Binary,
+    llvm::ArrayRef<SourcePatchDependency> Requests,
+    const std::map<std::string, bool> &ObjectImports = {});
 llvm::Expected<std::vector<uint8_t>>
 appendMachOSourceDependencies(const BinaryImage &Original,
                               std::vector<SourcePatchImport> &Imports);

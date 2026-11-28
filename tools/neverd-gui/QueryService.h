@@ -77,6 +77,9 @@ public:
                                 QObject *owner, Completion complete,
                                 QString expectedRevision = {},
                                 bool leaves = false);
+  /// Cooperatively stop an explicit command and still deliver its terminal
+  /// reply (which may contain partial results) to the requesting view.
+  void cancelCommand(SubscriptionId id);
   void unsubscribe(SubscriptionId id);
   enum DetachPolicy { CancelRunning, FinishRunning };
   /// FinishRunning detaches the view but retains a started read for reuse.

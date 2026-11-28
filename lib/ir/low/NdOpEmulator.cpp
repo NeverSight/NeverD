@@ -26,7 +26,8 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/IntegerMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/ir/intrinsics/PowerPC/PowerPCDivision.h"
+#include "neverd/ir/intrinsics/PowerPC/PowerPCFixedPoint.h"
+#include "neverd/ir/intrinsics/RISCV/RISCVCycle.h"
 #include "neverd/ir/intrinsics/X86/X86CompressExpand.h"
 #include "neverd/ir/low/AArch64WritebackMemory.h"
 #include "neverd/ir/low/LowArchitecturalValue.h"
@@ -109,7 +110,7 @@ boundaryForOp(llvm::ArrayRef<LowOp> Ops,
   return OpIndex >= First && OpIndex < End ? &*It : nullptr;
 }
 
-/// End of the instruction containing an ARM predicate guard, or zero when
+/// End of the instruction containing a predicate guard, or zero when
 /// this is an ordinary block-level conditional branch.  A LowBlock's boundary
 /// metadata uses InstructionGuard authoritatively after structural validation.
 /// The legacy vector API retains the conservative control-only same-address
@@ -125,9 +126,7 @@ predicatedInstructionEnd(llvm::ArrayRef<LowOp> Ops,
   if (!Boundaries.empty()) {
     const LowInstructionBoundary *Boundary =
         boundaryForOp(Ops, Boundaries, Guard);
-    if (!Boundary ||
-        (Boundary->Mode != InstructionMode::ARM &&
-         Boundary->Mode != InstructionMode::Thumb && !Boundary->DelaySlot))
+    if (!Boundary)
       return 0;
     const bool IsTaggedGuard = hasLowInstructionControlFlag(
         Boundary->ControlFlags, LowInstructionControlFlag::InstructionGuard);
@@ -160,6 +159,7 @@ void NdOpEmulator::forgetReservations() {
 
 void NdOpEmulator::reset() {
   forgetReservations();
+  RISCVFCSR.reset();
   UnknownBits.clear();
   Registers.clear();
   WideRegisters.clear();
@@ -380,32 +380,30 @@ void NdOpEmulator::writeOutput(const NdVar &Output, uint64_t Value,
     return;
   if (!UnknownBits.empty() || Unknown)
     setOutputUnknownBits(Output, Unknown);
-  uint64_t Mask = Output.Size < 8 ? (1ULL << (Output.Size * 8)) - 1 : ~0ULL;
+  const uint64_t Mask =
+      Output.Size < sizeof(Value) ? (1ULL << (Output.Size * 8)) - 1 : ~0ULL;
+  uint64_t &Stored = Registers[Output.Offset];
   uint64_t Result = Value & Mask;
-  if (Output.isReg() && Output.Size < 8) {
-    auto Existing = Registers.find(Output.Offset);
-    if (Existing != Registers.end())
-      Result = (Existing->second & ~Mask) | Result;
-  }
-  Registers[Output.Offset] = Result;
+  if (Output.isReg() && Output.Size < sizeof(Value))
+    Result |= Stored & ~Mask;
+  Stored = Result;
   if (Output.Size > sizeof(Value)) {
     std::vector<uint8_t> Bytes(Output.Size, 0);
     std::memcpy(Bytes.data(), &Value, sizeof(Value));
     WideRegisters[Output.Offset] = std::move(Bytes);
-  } else if (Output.isReg()) {
+  } else if (!WideRegisters.empty()) {
     auto Existing = WideRegisters.find(Output.Offset);
-    if (Existing != WideRegisters.end() &&
-        Existing->second.size() > Output.Size) {
+    if (Existing == WideRegisters.end())
+      return;
+    if (Output.isReg() && Existing->second.size() > Output.Size) {
       std::memcpy(Existing->second.data(), &Result, Output.Size);
       uint64_t Low = 0;
       std::memcpy(&Low, Existing->second.data(),
                   std::min(Existing->second.size(), sizeof(Low)));
-      Registers[Output.Offset] = Low;
-      return;
+      Stored = Low;
+    } else {
+      WideRegisters.erase(Existing);
     }
-    WideRegisters.erase(Output.Offset);
-  } else {
-    WideRegisters.erase(Output.Offset);
   }
 }
 
@@ -643,8 +641,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
     return false;
   if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs && Op.Inputs[0].isConst()) {
     if (const auto D =
-            ppc::division(static_cast<Intrinsic>(Op.Inputs[0].Offset)))
-      return executePowerPCDivision(Op, *D, Following);
+            ppc::fixedPoint(static_cast<Intrinsic>(Op.Inputs[0].Offset)))
+      return executePowerPCFixedPoint(Op, *D, Following);
   }
   if (MIPSReservationGranule) {
     if (Op.NumInputs > std::size(Op.Inputs))
@@ -1102,6 +1100,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
     if (!StepOverCalls)
       return false;
     clobberVolatileRegisters();
+    if (RISCVFCSR)
+      RISCVFCSR.reset();
     return true;
 
   case NdOp::INTRINSIC:
@@ -1188,7 +1188,9 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following,
           Id == Intrinsic::EVEXExpandLoad || Id == Intrinsic::AesEnc ||
           Id == Intrinsic::AesEncLast || Id == Intrinsic::AesDec ||
           Id == Intrinsic::AesDecLast || Id == Intrinsic::Pclmulqdq ||
-          isX86AtomicIntrinsic(Id))
+          isX86AtomicIntrinsic(Id) || Id == Intrinsic::PPCVaddubm ||
+          riscv::cycleRead(Id) || Id == Intrinsic::RISCVFloating ||
+          Id == Intrinsic::RISCVFPControl)
         return executeIntrinsic(Op);
     }
     // Opaque intrinsic (SSE/NEON vector op, etc.): it cannot alter control
@@ -1416,7 +1418,7 @@ NdOpEmulator::runImpl(llvm::ArrayRef<LowOp> Ops,
         PredicateValue = getRegister(Predicate.Offset);
       if (!PredicateValue)
         break;
-      // ARM's guard targets the next instruction when !predicate holds.  A
+      // The guard targets the next instruction when !predicate holds. A
       // concrete true guard therefore skips every remaining effect in this
       // instruction; a false guard executes them in order.  Neither choice is
       // a block terminator by itself.

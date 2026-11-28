@@ -140,6 +140,7 @@ add_neverd_component_library(NeverDIRLow
   AArch64/FuncDetectorAArch64.cpp
   GuardedZeroSelect.cpp
   IndirectTailFrame.cpp
+  X86/IndirectTailFrameX86.cpp
   X86/RegistrationCalleeABI.cpp
   X86/RegistrationLocalUnwind.cpp
   X86/RegistrationLocalUnwindCall.cpp
@@ -183,6 +184,7 @@ add_neverd_component_library(NeverDIRLow
   X86/RegistrationEntryABI.cpp
   NdOpEmulator.cpp
   NdOpEmulatorExec.cpp
+  RISCVFloatingExecution.cpp
   NdOpEmulatorIntegerMemory.cpp
   NdOpEmulatorValues.cpp
   MIPS/MIPSHistoricalCP0.cpp

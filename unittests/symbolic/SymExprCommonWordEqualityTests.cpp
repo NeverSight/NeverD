@@ -67,3 +67,32 @@ TEST(SymExpr, CommonAdditiveEqualityPreservesModularCarries) {
       EXPECT_EQ(C.eval(Equal, {llvm::APInt(4, Av), llvm::APInt(4, Bv)}).isOne(),
                 ((Av + 1) & 15) == ((Bv + 2) & 15));
 }
+
+// A literal both sides carry is no common word. A jump target `k + 4 * e`
+// compared with its first case `k` keeps the target it has against any other
+// case, so a coverage proof can group the cases by one selector.
+TEST(SymExpr, EqualityKeepsALiteralBothSidesCarry) {
+  for (const SymOp Op : {SymOp::Add, SymOp::Xor}) {
+    SymContext C;
+    const auto E = C.mkVar("e", 8);
+    const auto K = C.mkConst(8, 0x44);
+    const auto Scaled = C.mkMul(C.mkConst(8, 4), E);
+    const auto Target =
+        Op == SymOp::Add ? C.mkAdd(K, Scaled) : C.mkXor(K, Scaled);
+    const auto Selector = [&](SymRef Equal) {
+      EXPECT_EQ(C.op(Equal), SymOp::Eq);
+      return C.isConst(C.operand(Equal, 0)) ? C.operand(Equal, 1)
+                                            : C.operand(Equal, 0);
+    };
+    const auto First = C.mkEq(Target, K);
+    const auto Second = C.mkEq(Target, C.mkConst(8, 0x48));
+    EXPECT_EQ(Selector(First), Selector(Second));
+    for (unsigned V = 0; V < 256; ++V) {
+      const unsigned Word =
+          (Op == SymOp::Add ? 0x44 + 4 * V : 0x44 ^ (4 * V)) & 0xff;
+      const llvm::APInt Input(8, V);
+      EXPECT_EQ(C.eval(First, {Input}).isOne(), Word == 0x44);
+      EXPECT_EQ(C.eval(Second, {Input}).isOne(), Word == 0x48);
+    }
+  }
+}

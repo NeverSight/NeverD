@@ -5464,6 +5464,50 @@ TEST(HighControlFlowSemantics, CopyChainRetainsItsSourceBranchEntry) {
   }
 }
 
+TEST(HighControlFlowSemantics, AdjacentLoadRequiresUnconditionalUse) {
+  auto Local = [](unsigned Id, unsigned Bytes) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.Size = Bytes;
+    return HighExpr::makeVar(V, NdType::makeInt(Bytes, false));
+  };
+  for (NdOp Op : {NdOp::SELECT, NdOp::BOOL_AND, NdOp::BOOL_OR}) {
+    SCOPED_TRACE(static_cast<int>(Op));
+    for (bool First : {false, true}) {
+      const auto Captured = Local(1, 1);
+      const auto Condition = Local(2, 1);
+      auto Expr = HighExpr::makeBinop(Op, First ? Captured : Condition,
+                                      First ? Condition : Captured);
+      if (Op == NdOp::SELECT)
+        Expr->Operands.push_back(HighExpr::makeConst(0, 1));
+      Expr->Type = Captured->Type;
+      HighStmt Capture;
+      Capture.Kind = StmtKind::Assign;
+      Capture.Dst = Captured;
+      Capture.Val = HighExpr::makeLoad(Local(3, 8), Captured->Type);
+      HighFunc F;
+      F.Body = {Capture, result(0x1010, Expr)};
+      EXPECT_EQ(inlineAdjacentLoads(F), First);
+      EXPECT_EQ(F.Body.size(), First ? 1u : 2u);
+    }
+  }
+
+  // The target of an indirect call is evaluated as well as its arguments.
+  auto Captured = Local(4, 8);
+  auto Call = HighExpr::makeCall("", 0, {Captured});
+  Call->IsIndirectCall = true;
+  Call->IndirectTarget = HighExpr::makeCall("replace_target", 0x2000, {});
+  HighStmt Capture;
+  Capture.Kind = StmtKind::Assign;
+  Capture.Dst = Captured;
+  Capture.Val = HighExpr::makeLoad(Local(5, 8), Captured->Type);
+  HighFunc F;
+  F.Body = {Capture, result(0x1020, Call)};
+  EXPECT_FALSE(inlineAdjacentLoads(F));
+  EXPECT_EQ(F.Body.size(), 2u);
+}
+
 TEST(HighControlFlowSemantics, NestedCallRetainsItsPrecedingMemorySnapshot) {
   HighFunc F;
   const auto Address = HighExpr::makeConst(0x4000, 8);
@@ -9351,6 +9395,49 @@ TEST(HighControlFlowSemantics, AFunctionReturningNoValueFoldsNoReturnedCall) {
   EXPECT_EQ(Body.find("return 5"), std::string::npos) << Source;
 }
 
+TEST(HighControlFlowSemantics, PhiCoalescingKeepsDistinctIncomingValues) {
+  auto Reg = [](int Tag) {
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.Size = 8;
+    V.RegOff = 0x10;
+    V.RenameTag = Tag;
+    V.TheArch = Arch::X64;
+    return HighExpr::makeVar(V, NdType::makeInt(8));
+  };
+  auto Assign = [](va_t Addr, ExprPtr Dst, ExprPtr Val, bool Phi = false) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Addr = Addr;
+    S.Dst = std::move(Dst);
+    S.Val = std::move(Val);
+    S.IsPhiCopy = Phi;
+    return S;
+  };
+  for (bool ThroughCopy : {false, true}) {
+    SCOPED_TRACE(ThroughCopy);
+    auto A = Reg(1);
+    auto B = Reg(2);
+    MedVar P;
+    P.Kind = MedVar::Param;
+    P.Size = 8;
+    auto Input = HighExpr::makeVar(P, NdType::makeInt(8));
+    HighStmt If;
+    If.Kind = StmtKind::If;
+    If.Addr = 0x1000;
+    If.Cond = Input;
+    If.Body = {result(0x1004, HighExpr::makeBinop(NdOp::INT_ADD, A, B))};
+    HighFunc F;
+    F.Body = {If, Assign(0x1008, Reg(1), Input)};
+    if (ThroughCopy)
+      F.Body.push_back(Assign(0x100c, Reg(3), Reg(1), true));
+    F.Body.push_back(Assign(0x1010, Reg(2), Reg(ThroughCopy ? 3 : 1), true));
+    F.Body.push_back(result(0x1014, Reg(2)));
+    coalesceHighPhiCopies(F);
+    EXPECT_NE(highSourceLocalIdentity(A->Var), highSourceLocalIdentity(B->Var));
+  }
+}
+
 TEST(HighControlFlowSemantics, PhiCopiesOfOneRegisterShareItsName) {
   // v1 = x; v2 = v1; L: v3 = v2 + 1; v2 = v3; if (v3 < x + 5) goto L;
   // return v3;  -- the PHI copies of one register never overlap the values
@@ -9766,6 +9853,34 @@ TEST(HighControlFlowSemantics, UnreachableCleanupDropsCodeAfterAJump) {
   EXPECT_EQ(F.Body.size(), 5u);
   EXPECT_EQ(execute(F, 1), std::optional<uint64_t>(2));
   EXPECT_EQ(execute(F, 0), std::optional<uint64_t>(1));
+}
+
+TEST(HighControlFlowSemantics, ImpliedGuardsPreserveSeparateObservations) {
+  // A second evaluation can observe another value even when the two guards
+  // share an expression node. Two tests of a captured scalar can coalesce.
+  auto Add = HighExpr::makeBinop(NdOp::ATOMIC_ADD, local(0),
+                                 HighExpr::makeConst(1, 8));
+  Add->MemoryOrdering = NdMemoryOrdering::SequentiallyConsistent;
+  auto Read = HighExpr::makeLoad(local(0), NdType::makeInt(8),
+                                 NdMemoryOrdering::Acquire);
+  auto Segment =
+      HighExpr::makeLoad(local(0), NdType::makeInt(8), NdMemoryOrdering::None,
+                         NdMemoryAddressSpace::X86GS);
+  for (const ExprPtr &Input : {Add, Read, Segment, local(1)}) {
+    HighFunc F;
+    HighStmt Inner;
+    Inner.Kind = StmtKind::If;
+    Inner.Cond =
+        HighExpr::makeBinop(NdOp::INT_EQUAL, Input, HighExpr::makeConst(0, 8));
+    Inner.Body = {result(0x1010, HighExpr::makeConst(1, 4))};
+    HighStmt Outer = Inner;
+    Outer.Body = {Inner, result(0x1020, HighExpr::makeConst(2, 4))};
+    F.Body = {Outer, result(0x1030, HighExpr::makeConst(3, 4))};
+    invertSkipGotos(F);
+    size_t Conditions = 0;
+    walkStmts(F.Body, [&](const HighStmt &S) { Conditions += bool(S.Cond); });
+    EXPECT_EQ(Conditions, Input->Kind == ExprKind::Var ? 1u : 2u);
+  }
 }
 
 TEST(HighControlFlowSemantics, GuardWithAnEarlyExitStillJoinsTheElseArm) {

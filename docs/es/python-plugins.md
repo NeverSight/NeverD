@@ -123,17 +123,16 @@ for flip in report.flips:
 
 El desplazamiento del registro es un desplazamiento de bytes en el archivo de registros de NeverD, no un puntero nativo ni un número de registro. El informe nunca es exhaustivo; UNSAT, los límites del solver y los rechazos de proyección o repetición siguen siendo resultados de inversión tipados, no excepciones.
 
-### Auditoría y caza de seguridad de memoria
+### Análisis de seguridad de memoria
 
-`session.audit()` y `session.hunt()` devuelven informes JSON analizados (el mismo esquema que el CLI). Requieren una sesión nativa levantada:
+`session.scan()` ejecuta ambos análisis y devuelve los hallazgos y la cobertura en un informe. [Guía del análisis unificado (en inglés)](../memory-safety-scan.md).
 
 ```python
-audit = session.audit()
-hunt = session.hunt(max_paths=64, max_steps=1 << 16)
-print(audit.get("ok"), hunt.get("findings"))
+report = session.scan(max_paths=64, max_steps=1 << 16)
+print(report["verdict"], report["analyzers"])
 ```
 
-Las sesiones EVM y SBF rechazan estas llamadas.
+Con entradas EVM y SBF, los analizadores seleccionados devuelven el estado `unsupported`.
 
 Las seis variantes de evento inmutables son `BINARY_LOADED`, `BINARY_CLOSING`, `FUNCTION_SELECTED`, `ADDRESS_CHANGED`, `ANALYSIS_DONE` y `PATCH_APPLIED`. Las cadenas del payload se copian durante el callback; los campos no relacionados con la variante valen `None`.
 

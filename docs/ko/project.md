@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: b9cda6cb01918cadfe48b4bc6544a4dc7baeb2e8ecd51cece677de52b5708065 -->
+<!-- i18n-source: 65a3c241a8b8275f8f2afcf61c262f54c2db5a0fd1e46824c63a903708fc981b -->
 
 <div align="center">
 
@@ -68,8 +68,8 @@ CLI, 통합, AI 에이전트는 **순수 C API**로 동일한 엔진 **`libnever
 
 | 대상 | 검증된 ELF 프로필 |
 |---|---|
-| RISC-V | 리틀 엔디언 RV32I/ILP32 및 RV64I/LP64. ELF 정보에 따라 M, A, 정수 C 또는 개별 Zmmul, Zaamo, Zalrsc, Zca 확장을 선택합니다. |
-| PowerPC | 빅 엔디언 및 리틀 엔디언 PPC32 System V와 PPC64 ELFv1/ELFv2. PPC32는 secure PLT와 기존 BSS-PLT를 통한 모듈 간 호출을 지원합니다. 두 PPC64 ABI 모두 PLT를 통한 모듈 간 호출과 TOC 전환을 지원합니다. ELFv1은 함수 디스크립터를 사용하고 ELFv2는 전역 및 지역 진입점을 지원합니다. 검증한 스칼라 연산에는 부호 있는 나눗셈과 부호 없는 나눗셈, CR0에 기록되는 결과, XER 오버플로 비트에 미치는 영향이 포함됩니다. |
+| RISC-V | 리틀 엔디언 RV32 (ILP32, ILP32D) 및 RV64 (LP64, LP64D). ELF 정보에 따라 M, A, 정수 C 또는 개별 Zmmul, Zaamo, Zalrsc, Zca 확장을 선택합니다. ELF ISA 속성에 따라 Zba 1.0, Zbb 1.0, Zbs 1.0 및 Zicond 1.0도 활성화됩니다. Zicntr 2.0은 `rdcycle`을 지원하며 RV32에서는 `rdcycleh`도 지원합니다. |
+| PowerPC | 빅 엔디언 및 리틀 엔디언 PPC32 System V와 PPC64 ELFv1/ELFv2. PPC32는 secure PLT와 기존 BSS-PLT를 통한 모듈 간 호출을 지원합니다. 두 PPC64 ABI 모두 PLT를 통한 모듈 간 호출과 TOC 전환을 지원합니다. ELFv1은 함수 디스크립터를 사용하고 ELFv2는 전역 및 지역 진입점을 지원합니다. 검증된 스칼라 연산에는 부호 있는 나눗셈과 부호 없는 나눗셈, 곱의 상위 워드를 반환하는 곱셈, 오버플로를 표시하는 곱셈이 포함되며, 이 연산들이 CR0와 XER에 미치는 영향도 검증했습니다. PPC64는 접두사가 있는 POWER10 정수 덧셈, 로드, 스토어 명령도 지원합니다. VMX의 `vaddubm`은 16개 바이트 쌍을 각각 더해 하위 8비트를 남깁니다. |
 
 이 프로필의 네이티브 코드 재작성은 향후 과제입니다. [RISC-V 및 PowerPC 지원 범위(영문)](../riscv-powerpc.md)
 
@@ -180,8 +180,7 @@ cmake --build build
 ./build/bin/neverd funcs binary
 ./build/bin/neverd disasm --func 0x401000 binary
 ./build/bin/neverd sym-explore --func 0x401000 --expressions binary
-./build/bin/neverd audit binary
-./build/bin/neverd hunt binary
+./build/bin/neverd scan binary
 ./build/bin/neverd sigs --auto binary
 ```
 
@@ -305,6 +304,9 @@ neverd <command> [options] <binary>
 | `decompile --check-all` | 집계 | 로드된 모든 함수를 기본 C 경로로 처리하고 검사 후 각 함수 본문을 해제 |
 | `decompile -llvm` | `.c` | LLVM IR + 최적화 경로 |
 | `decompile --devirtualize` | `.c` + 선택적 JSON | 실험적 x64 인터프리터 복원. `--func` 필수. [계약과 예제](interpreter-recovery.md) |
+| `java` | Java / JVM IR / 바이트코드 / JSON | [클래스 파일 및 다중 릴리스 JAR](../jvm-recovery.md) |
+| `python` | `.py` / JSON / 네이티브 구성 요소 | [CPython 및 PyInstaller 산출물 복원](../python-recovery.md) |
+| `lua` | `.lua` / `.luau` / JSON | [Lua, LuaJIT 및 Luau 소스 복원](../lua-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 실험적: [Android](android.md), [iOS](ios.md) |
 | `patch` | 바이너리 | 기계어 재작성 |
 
@@ -339,8 +341,7 @@ neverd decompile --arm-function-mode=0xADDRESS:thumb -o output.c binary
 | `funcs` | 발견된 함수 |
 | `disasm` | 디스어셈블(`--func` 이름 또는 hex) |
 | `sym-explore` | 제한된 네이티브 LowIR 경로 탐색(`--func`, JSON 출력) |
-| `audit` | 힙 객체 수명 결함 및 초기화되지 않은 로컬 스택 읽기（JSON） |
-| `hunt` | 위험한 복사 범위 초과와 기호 증거. 완전한 계획이 있으면 `process-input-v1` 재생 증거 추가（JSON schema v1） |
+| `scan` | [객체 수명, 초기화, 경계 및 서식 문자열 검사(JSON)](../memory-safety-scan.md) |
 | `hex` | 주소의 hex dump |
 | `cfg` / `callgraph` | CFG / 호출 그래프(JSON; DOT/SVG 선택) |
 | `xrefs` | 교차 참조 |

@@ -226,6 +226,8 @@ protected:
 };
 
 TEST_P(X86LegacyHaltNativeTest, OriginalPrefixesPrivilegeAndFetchFaults) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Code32 : {false, true})
     for (const std::vector<uint8_t> B : {std::vector<uint8_t>{0xf4},
                                          {0x66, 0xf4},
@@ -243,6 +245,8 @@ TEST_P(X86LegacyHaltNativeTest, OriginalPrefixesPrivilegeAndFetchFaults) {
 }
 
 TEST_P(X86LegacyHaltNativeTest, OriginalFlagsShadowsAndDebugTrap) {
+  if (!neverd::test::hostCpuIsIntel())
+    GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
   for (bool Code32 : {false, true})
     for (uint32_t Flags : {2u, 0x202u, 0x302u, 0x10302u, 0x10ed7u})
       for (unsigned Shadow : {0u, unsigned(KVM_X86_SHADOW_INT_STI),

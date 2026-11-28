@@ -375,6 +375,31 @@ SymRef foldObservedWindow(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       }
     }
   }
+  const SymOp Outer = Ctx.op(Root);
+  if (Outer == SymOp::LShr || Outer == SymOp::AShr) {
+    const SymRef Inner = Ctx.operand(Root, 0);
+    const SymOp Op = Ctx.op(Inner);
+    if (Op != SymOp::LShr && (Op != SymOp::AShr || Outer != SymOp::AShr))
+      return Root;
+    const SymRef A = Ctx.operand(Inner, 1), B = Ctx.operand(Root, 1);
+    if (!Ctx.isConst(A) || !Ctx.isConst(B))
+      return Root;
+    // Both literal counts in a surviving shift are positive and below the
+    // value width. A logical inner shift therefore clears the sign bit.
+    const unsigned Width = Ctx.width(Root);
+    const size_t Words = llvm::APInt::getNumWords(Width);
+    if (Words > Storage / sizeof(uint64_t) || !Budget.consume(1 + Words))
+      return Root;
+    Storage -= Words * sizeof(uint64_t);
+    const uint64_t Total =
+        Ctx.constWords(A).front() + Ctx.constWords(B).front();
+    const SymRef Source = Ctx.operand(Inner, 0);
+    if (Op == SymOp::LShr)
+      return Total >= Width ? Ctx.mkZero(Width)
+                            : Ctx.mkLShr(Source, Ctx.mkConst(Width, Total));
+    return Ctx.mkAShr(Source,
+                      Ctx.mkConst(Width, std::min<uint64_t>(Total, Width - 1)));
+  }
   if (Ctx.op(Root) != SymOp::And || Ctx.numOperands(Root) < 2 ||
       !Ctx.isConst(Ctx.operand(Root, 0)))
     return Root;
@@ -2109,8 +2134,58 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
       simplifyLinearTail(Ctx, E, Opts, Budget, WholeRep,
                          detail::limits::kMinLinearTailProductDegree,
                          /*SingleProductOnly=*/true);
+  Budget.ArithmeticProductReading = {};
   SymRef Prepared =
       foldProductValuations(Ctx, EarlyTail, Budget, ValuationStorage);
+  SymRef ProductAlternative;
+  // A compact modular proof may still print each factor in an incomplete
+  // block. For a native product of this size the ordinary arithmetic engine
+  // can give a shorter polynomial over the original fields.
+  if (Prepared == Budget.ArithmeticProductReading && Ctx.op(E) == SymOp::Mul &&
+      Ctx.width(E) <= 64 &&
+      Ctx.numOperands(E) <= detail::limits::kMaxResidueProductFactors &&
+      readingCost(Ctx, Prepared) >= Ctx.numOperands(E)) {
+    const auto Available = Budget.available();
+    const auto Reserve =
+        Available / detail::limits::kProductReadingReserveDivisor;
+    if (Reserve < Available) {
+      WorkBudget Trial(Available - Reserve);
+      MBAOptions Local = Opts;
+      Local.MaxTableBytes = ValuationStorage;
+      SolveReport Arithmetic;
+      const auto Alternative = solveArithmetic(Ctx, E, Local, Trial, Arithmetic,
+                                               /*ExpandComplements=*/false);
+      Budget.consume(Trial.used());
+      if (Alternative != E) {
+        const auto Parts = Ctx.operands(Prepared);
+        // A native residual power can hide coefficient sharing in the expanded
+        // sum. Finish that sum in the usual walk and keep the already-proved
+        // factored spelling available at the final cost comparison.
+        if (readingScore(Ctx, Alternative) < readingScore(Ctx, Prepared) ||
+            (Ctx.op(Prepared) == SymOp::Mul &&
+             Ctx.op(Alternative) == SymOp::Add &&
+             // A sign or offset can normally disappear once per summed term.
+             // Finish a close expansion; a much larger sum repeats the same
+             // field analysis and consumes the packed product's allowance.
+             readingCost(Ctx, Alternative) <=
+                 llvm::SaturatingAdd(readingCost(Ctx, Prepared),
+                                     size_t(Ctx.numOperands(Alternative))) &&
+             std::adjacent_find(Parts.begin(), Parts.end()) != Parts.end())) {
+          // A constant suffix exposes the actual width of the varying bits.
+          // Walk that spelling when its DAG is smaller. Retain the checked
+          // full-width expansion even when its printed tree is shorter.
+          if (Ctx.op(Prepared) == SymOp::Concat &&
+              Ctx.isConst(Ctx.operand(Prepared, 1)) &&
+              Ctx.dagSize(Alternative) > Ctx.dagSize(Prepared)) {
+            ProductAlternative = Alternative;
+          } else {
+            ProductAlternative = Prepared;
+            Prepared = Alternative;
+          }
+        }
+      }
+    }
+  }
   if (EarlyTail == E && !Budget.exhausted() &&
       (Budget.MultipleResidueAttempts != ResidueAttempts ||
        (Prepared != E &&
@@ -2538,6 +2613,9 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
   // A locally shorter child can make the composed spelling longer. Retain
   // the independently proved whole-root candidate as an alternative even
   // when subsequent search exhausts its allowance.
+  if (ProductAlternative && readingScore(Ctx, ProductAlternative) <
+                                readingScore(Ctx, WholeAlternative))
+    WholeAlternative = ProductAlternative;
   const bool KeptWhole = WalkRoot != E && readingScore(Ctx, WholeAlternative) <
                                               readingScore(Ctx, Out);
   if (KeptWhole)

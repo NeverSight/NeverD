@@ -1181,6 +1181,14 @@ std::array<size_t, 5> CFGBuilder::x87CallGraphFlightStatsForTesting() const {
           SharedX87CallGraphs->PendingBytes};
 }
 
+size_t CFGBuilder::x87CallGraphBuildsForTesting(
+    const std::shared_ptr<X87CallGraphCache> &Cache) {
+  if (!Cache)
+    return 0;
+  std::lock_guard<std::mutex> Lock(Cache->Mutex);
+  return Cache->Leaders + Cache->NonWaitingMisses;
+}
+
 bool CFGBuilder::waitForX87CallGraphWaitersForTesting(size_t Count) const {
   if (!SharedX87CallGraphs)
     return false;

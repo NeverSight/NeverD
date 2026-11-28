@@ -35,6 +35,8 @@ TEST_F(X64PagedBranchDebugTest, OriginalBranchSelectionThroughBothCRoutes) {
   neverd::test::X86BranchDebugOracle CPU;
   ASSERT_NO_FATAL_FAILURE(
       CPU.initialize(neverd::test::X86BranchDebugOracle::Mode::Long64));
+  const bool BlockSteps = CPU.stepsByBlocks();
+  ASSERT_FALSE(HasFatalFailure());
   auto Cases = neverd::test::x86BranchDebugCases(false);
   for (uint8_t Opcode : {0xe0, 0xe1, 0xe2})
     for (uint64_t Count : {0ULL, 1ULL, 2ULL, 0x100000001ULL})
@@ -71,6 +73,8 @@ TEST_F(X64PagedBranchDebugTest, OriginalBranchSelectionThroughBothCRoutes) {
                                              Compiler, Optimization));
         for (unsigned I = 0; I != Cases.size(); ++I)
           for (bool Branch : {false, true}) {
+            if (Branch && !BlockSteps)
+              continue;
             SCOPED_TRACE(testing::Message()
                          << Compiler << " llvm=" << LLVM << Optimization
                          << " case=" << I << " branch=" << Branch);
@@ -108,6 +112,8 @@ TEST_F(X64PagedBranchDebugTest, OriginalBranchSelectionThroughBothCRoutes) {
           }
       }
   RecordProperty("branch_selection_comparisons", Comparisons);
+  if (!BlockSteps)
+    GTEST_SKIP() << neverd::test::X86BranchDebugOracle::NoBlockStepReason;
 }
 #endif
 

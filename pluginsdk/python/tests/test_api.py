@@ -198,95 +198,19 @@ class _SymbolicHost:
 
 
 class _SafetyHost:
-    def __init__(self, *, ok: bool = True) -> None:
-        self.ok = ok
-        self.calls: list[str] = []
-        self.options: dict[str, object] = {}
+    def __init__(self) -> None:
+        self.options = None
 
     def owned_string(self, name: str, *arguments: object) -> str:
-        self.calls.append(name)
-        if name == "neverd_last_error":
-            return "native safety error"
-        if name not in {"neverd_session_audit_json", "neverd_session_hunt_json"}:
+        if name != "neverd_session_scan_json":
             raise AssertionError(name)
-        options = arguments[1]._obj
-        self.options[name] = options
-        if not self.ok:
-            return json.dumps({"ok": False, "error": "analysis failed"})
-        track = "audit" if "audit" in name else "hunt"
-        findings: list[dict[str, object]] = []
-        if track == "hunt":
-            findings.append(
-                {
-                    "verdict": "UNSAFE",
-                    "evidence": {
-                        "replayable": True,
-                        "replay": {
-                            "adapter": "process-input-v1",
-                            "inputs": [
-                                {
-                                    "kind": "environment",
-                                    "call_va": "0x401000",
-                                    "seq": 0,
-                                    "invocation": 0,
-                                    "offset": 0,
-                                    "name": "NEVERD_TOKEN",
-                                    "bytes_hex": "0x41",
-                                    "eof_after": False,
-                                    "terminator_implicit": True,
-                                    "bindings": [
-                                        {
-                                            "assignment_id": 0,
-                                            "role": "byte",
-                                            "offset": 0,
-                                        }
-                                    ],
-                                },
-                                {
-                                    "kind": "stdin",
-                                    "call_va": "0x401020",
-                                    "seq": 1,
-                                    "invocation": 0,
-                                    "offset": 0,
-                                    "bytes_hex": "0x42",
-                                    "eof_after": True,
-                                    "terminator_implicit": False,
-                                    "bindings": [
-                                        {
-                                            "assignment_id": 1,
-                                            "role": "byte",
-                                            "offset": 0,
-                                        }
-                                    ],
-                                },
-                            ],
-                        },
-                    },
-                }
-            )
-            findings.append(
-                {
-                    "verdict": "UNSAFE",
-                    "evidence": {
-                        "replayable": False,
-                        "replay": {
-                            "adapter": "process-input-v1",
-                            "reason": (
-                                "file input is not supported by process-input-v1"
-                            ),
-                        },
-                    },
-                }
-            )
-        return json.dumps(
-            {
-                "schema_version": 1,
-                "ok": True,
-                "track": track,
-                "verdict": "UNSAFE",
-                "findings": findings,
-            }
-        )
+        self.options = arguments[1]._obj
+        return json.dumps({
+            "schema": "neverd.memory-safety-scan",
+            "schema_version": 1,
+            "coverage_complete": False,
+            "verdict": "UNKNOWN",
+        })
 
 
 def _concolic_occurrence(index: int) -> dict[str, object]:
@@ -988,76 +912,55 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(host.options.max_block_visits, 4)
         self.assertEqual(host.options.include_expressions, 1)
 
-    def test_safety_tracks_parse_reports_and_pass_versioned_options(self) -> None:
-        from neverd_plugin import Session
+    def test_scan_selection_and_incomplete_coverage(self) -> None:
+        from neverd_plugin import NeverDError, Session
 
         host = _SafetyHost()
         session = Session(object(), _native=_FakeNativeBridge(), _host=host)
-        audit = session.audit(
-            max_paths=7,
-            max_steps=101,
-            max_loop=5,
-            solver_conflicts=999,
-            max_call_depth=4,
-            max_summary_iterations=6,
-            sinks="rules/sinks.json",
-            sources="rules/sources.json",
-        )
-        hunt = session.hunt(
-            max_paths=3,
-            max_call_depth=8,
-            max_summary_iterations=10,
-        )
+        for name, selection in (("both", 0), ("audit", 1), ("hunt", 2)):
+            result = session.scan(
+                analyzer=name, max_paths=7, max_steps=31, max_loop=5,
+                solver_conflicts=999, sinks="rules/sinks.json",
+                sources="rules/sources.json", max_call_depth=4, max_summary_iterations=6,
+            )
+            self.assertEqual(result["verdict"], "UNKNOWN")
+            self.assertFalse(result["coverage_complete"])
+            options = host.options
+            self.assertEqual(options.analyzers, selection)
+            self.assertEqual(options.struct_size, ctypes.sizeof(options))
+            budget = options.analysis.contents
+            self.assertEqual(budget.struct_size, ctypes.sizeof(budget))
+            self.assertEqual(budget.max_paths, 7)
+            self.assertEqual(budget.max_steps, 31)
+            self.assertEqual(budget.max_loop, 5)
+            self.assertEqual(budget.solver_conflicts, 999)
+            self.assertEqual(budget.sinks_path, b"rules/sinks.json")
+            self.assertEqual(budget.sources_path, b"rules/sources.json")
+            self.assertEqual(budget.max_call_depth, 4)
+            self.assertEqual(budget.max_summary_iterations, 6)
+        with self.assertRaises(ValueError):
+            session.scan(analyzer="none")
+        future_report = json.dumps({"schema": "neverd.memory-safety-scan", "schema_version": 2})
+        with mock.patch.object(host, "owned_string", return_value=future_report):
+            with self.assertRaisesRegex(NeverDError, "invalid memory-safety scan report"):
+                session.scan()
 
-        self.assertEqual(audit["track"], "audit")
-        self.assertEqual(hunt["track"], "hunt")
-        self.assertEqual(hunt["schema_version"], 1)
-        hunt_evidence = hunt["findings"][0]["evidence"]
-        self.assertTrue(hunt_evidence["replayable"])
-        self.assertEqual(hunt_evidence["replay"]["adapter"], "process-input-v1")
-        self.assertEqual(hunt_evidence["replay"]["inputs"][0]["kind"], "environment")
-        unavailable_replay = hunt["findings"][1]["evidence"]
-        self.assertFalse(unavailable_replay["replayable"])
-        self.assertIn("file input", unavailable_replay["replay"]["reason"])
-        audit_options = host.options["neverd_session_audit_json"]
-        self.assertEqual(audit_options.struct_size, ctypes.sizeof(type(audit_options)))
-        self.assertEqual(audit_options.max_paths, 7)
-        self.assertEqual(audit_options.max_steps, 101)
-        self.assertEqual(audit_options.max_loop, 5)
-        self.assertEqual(audit_options.solver_conflicts, 999)
-        self.assertEqual(audit_options.sinks_path, b"rules/sinks.json")
-        self.assertEqual(audit_options.sources_path, b"rules/sources.json")
-        self.assertEqual(audit_options.max_call_depth, 4)
-        self.assertEqual(audit_options.max_summary_iterations, 6)
-        self.assertEqual(
-            host.options["neverd_session_hunt_json"].max_paths,
-            3,
-        )
-        self.assertEqual(
-            host.options["neverd_session_hunt_json"].max_call_depth,
-            8,
-        )
-        self.assertEqual(
-            host.options["neverd_session_hunt_json"].max_summary_iterations,
-            10,
-        )
-
-    def test_safety_tracks_surface_native_errors_and_validate_budgets(self) -> None:
+    def test_scan_surfaces_native_errors_and_validates_budgets(self) -> None:
         from neverd_plugin import NeverDError, Session
 
-        session = Session(
-            object(), _native=_FakeNativeBridge(), _host=_SafetyHost(ok=False)
-        )
-        with self.assertRaisesRegex(NeverDError, "analysis failed"):
-            session.audit()
+        host = _SafetyHost()
+        session = Session(object(), _native=_FakeNativeBridge(), _host=host)
+        with mock.patch.object(host, "owned_string", side_effect=[None, "analysis failed"]):
+            with self.assertRaisesRegex(NeverDError, "analysis failed"):
+                session.scan()
         with self.assertRaisesRegex(ValueError, "max_paths"):
-            session.hunt(max_paths=-1)
+            session.scan(max_paths=-1)
         with self.assertRaisesRegex(ValueError, "solver_conflicts"):
-            session.hunt(solver_conflicts=1 << 64)
+            session.scan(solver_conflicts=1 << 64)
         with self.assertRaisesRegex(ValueError, "max_call_depth"):
-            session.audit(max_call_depth=-1)
+            session.scan(max_call_depth=-1)
         with self.assertRaisesRegex(ValueError, "max_summary_iterations"):
-            session.hunt(max_summary_iterations=1 << 32)
+            session.scan(max_summary_iterations=1 << 32)
 
     def test_strict_sanitize_returns_typed_result_and_full_size_options(self) -> None:
         from neverd_plugin import (

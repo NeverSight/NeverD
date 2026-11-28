@@ -12,6 +12,7 @@
 #include "X64PagedNativeCPU.h"
 #include "X86BranchDebugOracle.h"
 #include "X86LegacyMachineStatusTestEncoding.h"
+#include "X86NativeDebugStatus.h"
 #include "X86PortDevice.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"

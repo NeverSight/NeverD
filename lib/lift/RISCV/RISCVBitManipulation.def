@@ -1,0 +1,34 @@
+//===- RISCVBitManipulation.def - Zba and Zbs encodings ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Fields retained after removing rd, rs1 and rs2 or shamt. Zbs has the
+/// same funct fields for the OP and OP-IMM encodings.
+///
+//===----------------------------------------------------------------------===//
+
+#ifdef NEVERD_RISCV_BIT_MATCH_MASKS
+NEVERD_RISCV_BIT_MATCH_MASKS(0xfe00707f, 0xfc00707f)
+#undef NEVERD_RISCV_BIT_MATCH_MASKS
+#else
+NEVERD_RISCV_SHIFT_ADD(SH1ADD, 0x20002033, 1)
+NEVERD_RISCV_SHIFT_ADD(SH2ADD, 0x20004033, 2)
+NEVERD_RISCV_SHIFT_ADD(SH3ADD, 0x20006033, 3)
+NEVERD_RISCV_SHIFT_ADD(ADD_UW, 0x0800003b, 0)
+NEVERD_RISCV_SHIFT_ADD(SH1ADD_UW, 0x2000203b, 1)
+NEVERD_RISCV_SHIFT_ADD(SH2ADD_UW, 0x2000403b, 2)
+NEVERD_RISCV_SHIFT_ADD(SH3ADD_UW, 0x2000603b, 3)
+NEVERD_RISCV_SHIFT_UW(SLLI_UW, 0x0800101b)
+
+NEVERD_RISCV_SINGLE_BIT(BCLR, 0x48001000, Clear)
+NEVERD_RISCV_SINGLE_BIT(BEXT, 0x48005000, Extract)
+NEVERD_RISCV_SINGLE_BIT(BINV, 0x68001000, Invert)
+NEVERD_RISCV_SINGLE_BIT(BSET, 0x28001000, Set)
+
+#undef NEVERD_RISCV_SHIFT_ADD
+#undef NEVERD_RISCV_SHIFT_UW
+#undef NEVERD_RISCV_SINGLE_BIT
+#endif

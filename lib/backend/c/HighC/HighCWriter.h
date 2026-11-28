@@ -992,6 +992,7 @@ public:
   bool knownVoidCall(const HighExpr &E) const;
   const HighExpr *typedCallResult(const HighExpr *E) const;
   const HighExpr *peelIntegerViewOps(const HighExpr *E) const;
+  ExprPtr integerCallCapture(const ExprPtr &Value, const TypeRef &To) const;
   /// Peel zext/trunc around a named scalar or field load for x86 intrinsic
   /// snippets. Keep wraps on add/sub/mul.
   std::string intrinsicOperandStr(const HighExpr &E);
@@ -1286,7 +1287,8 @@ public:
   bool isCxxCatchObjectName(llvm::StringRef Name) const;
   std::optional<std::string> cxxCatchPointerName(const HighExpr &E) const;
   std::optional<std::string> cxxCatchFieldAccess(const HighExpr &Addr) const;
-  void collectValueForward(const HighFunc &Func);
+  void collectValueForward(const HighFunc &Func,
+                           std::vector<ExprPtr> &CaptureConversions);
   /// MSVC ctor returns `this`. Print the call as a statement and reuse
   /// the this operand at later uses instead of a leftover dest temp.
   void aliasCtorReturnThis(const HighFunc &Func);
@@ -1387,8 +1389,9 @@ public:
   bool takesMainSignature(const HighFunc &Func) const;
   /// The C name each defined function's symbol spells, for its comment.
   std::map<const HighFunc *, std::string> FunctionSymbolNames;
-  std::map<std::string, std::string> FunctionIdentifiersBySourceName;
-  std::map<std::string, std::string> ExternalFunctionIdentifiers;
+  std::map<std::string, std::string, std::less<>>
+      FunctionIdentifiersBySourceName;
+  std::map<std::string, std::string, std::less<>> ExternalFunctionIdentifiers;
   // External prototypes use projected C names, while call expressions still
   // carry source names. Keep their mapping separate when both _foo and __foo
   // occur in one function.
@@ -1408,10 +1411,14 @@ public:
   std::set<va_t> ImportDataSlotReads;
   std::map<va_t, std::string> ImportDataSlotNames;
   std::map<va_t, TypeRef> ImportDataSlotTypes;
-  std::map<std::string, std::string> ExternalSourceIdentifiers;
+  std::map<std::string, std::string, std::less<>> ExternalSourceIdentifiers;
   /// The identifiers functionIdentifier() spelled for functions no map
   /// names, and the symbols they stand for (recordSourceNames()).
   mutable std::map<std::string, std::string> ReferencedFunctionSymbols;
+  /// The spelling functionIdentifier() gave each source name no map named.
+  /// It depends on the name alone, and a call is written many times; the
+  /// maps are still read first, so a name a later pass adds keeps its entry.
+  mutable llvm::StringMap<std::string> ReferenceIdentifiers;
   /// resolvedFunction()'s answers.
   mutable std::map<va_t, std::optional<FunctionSym>> ResolvedFunctions;
   std::set<va_t> GotoTargets;

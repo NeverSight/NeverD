@@ -124,6 +124,20 @@ define i32 @entry(i32 %x) {
 )ir")
 MACHO_AUTH_NATIVE_TEXT(kBindingEntry, "entry")
 MACHO_AUTH_NATIVE_TEXT(kBindingEntrySymbol, "_entry")
+MACHO_AUTH_NATIVE_TEXT(kBindingExactEntry, "\1_entry")
+MACHO_AUTH_NATIVE_TEXT(kBindingExactData, "\1entry")
+MACHO_AUTH_NATIVE_TEXT(kConflictingBinding,
+                       "conflicts with an original binding")
+MACHO_AUTH_NATIVE_TEXT(kBindingCode, "binding_code")
+MACHO_AUTH_NATIVE_TEXT(kBindingExactMarker, "\1binding_marker")
+MACHO_AUTH_NATIVE_TEXT(kBindingMarker, "binding_marker")
+MACHO_AUTH_NATIVE_TEXT(kBindingMarkerSymbol, "_binding_marker")
+MACHO_AUTH_NATIVE_TEXT(kBindingInterior, "\1binding_interior")
+MACHO_AUTH_NATIVE_TEXT(kBindingAbsentSpelling, "\1_binding_marker")
+MACHO_AUTH_NATIVE_TEXT(kBindingExactCode, "\1_binding_code")
+MACHO_AUTH_NATIVE_TEXT(kBindingExactBareCode, "\1binding_code")
+MACHO_AUTH_NATIVE_TEXT(kBindingOriginalCode, "_binding_original_code")
+MACHO_AUTH_NATIVE_TEXT(kBindingSwapped, "swapped")
 MACHO_AUTH_NATIVE_TEXT(kBindingBiasSymbol, "_bias")
 MACHO_AUTH_NATIVE_TEXT(kBindingRetained, "retained")
 MACHO_AUTH_NATIVE_TEXT(kBoundObjectOutput, "bound-object.dylib")
@@ -149,8 +163,10 @@ MACHO_AUTH_NATIVE_TEXT(kAmbiguousMutableTailCFIOption,
                        "-DNEVERD_AMBIGUOUS_MUTABLE_TAIL_CFI")
 MACHO_AUTH_NATIVE_TEXT(kLocalTailCFIOption, "-DNEVERD_LOCAL_TAIL_CFI")
 MACHO_AUTH_NATIVE_TEXT(kMixedTargetsCFIOption, "-DNEVERD_MIXED_TARGETS_CFI")
-MACHO_AUTH_NATIVE_TEXT(kSignedLocalTailCFIOption, "-DNEVERD_SIGNED_LOCAL_TAIL_CFI")
-MACHO_AUTH_NATIVE_TEXT(kSavedLocalTailCFIOption, "-DNEVERD_SAVED_LOCAL_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kSignedLocalTailCFIOption,
+                       "-DNEVERD_SIGNED_LOCAL_TAIL_CFI")
+MACHO_AUTH_NATIVE_TEXT(kSavedLocalTailCFIOption,
+                       "-DNEVERD_SAVED_LOCAL_TAIL_CFI")
 MACHO_AUTH_NATIVE_TEXT(kFramePointerTailCFIOption, "-DNEVERD_FP_TAIL_CFI")
 MACHO_AUTH_NATIVE_TEXT(kAmbiguousTailCFIOption, "-DNEVERD_AMBIGUOUS_TAIL_CFI")
 MACHO_AUTH_NATIVE_TEXT(kClobberedTailCFIOption, "-DNEVERD_CLOBBERED_TAIL_CFI")
@@ -188,6 +204,522 @@ MACHO_AUTH_NATIVE_TEXT(kCleanupSymbol, "_cleanup_frame")
 MACHO_AUTH_NATIVE_TEXT(kRebaseSymbol, "_rebased")
 MACHO_AUTH_NATIVE_TEXT(kBindSymbol, "_bound")
 MACHO_AUTH_NATIVE_TEXT(kInstalledImportSymbol, "_getpid")
+MACHO_AUTH_NATIVE_TEXT(kBarePID, "getpid")
+MACHO_AUTH_NATIVE_TEXT(kVerbatimPID, "\1getpid")
+MACHO_AUTH_NATIVE_VALUE(int, kBindingDlopenFailure, 1)
+MACHO_AUTH_NATIVE_TEXT(kMissingBareImport, "Symbol not found: getpid")
+MACHO_AUTH_NATIVE_TEXT(kBareBinding, "getpid")
+MACHO_AUTH_NATIVE_TEXT(kVerbatimBinding, "\1getpid")
+MACHO_AUTH_NATIVE_TEXT(kBindingHostDriver, "host-fallback-driver")
+MACHO_AUTH_NATIVE_TEXT(kOptionalBinding, "neverd_missing_binding_fixture")
+MACHO_AUTH_NATIVE_TEXT(kBindingFieldsSymbol, "_binding_fields")
+MACHO_AUTH_NATIVE_TEXT(kCoalescedSymbol, "_binding_fallback")
+MACHO_AUTH_NATIVE_TEXT(kWeakLookupProvider, "<weak-def-coalesce>")
+MACHO_AUTH_NATIVE_TEXT(kBindingWeakOption, "-DBIND_WEAK")
+MACHO_AUTH_NATIVE_TEXT(kBindingObjectOption, "-DBIND_OBJECT")
+MACHO_AUTH_NATIVE_TEXT(kBindingReferenceOnlyOption, "-DBIND_REFERENCE_ONLY")
+MACHO_AUTH_NATIVE_TEXT(kBindingHostFallback, "-DBIND_HOST_FALLBACK")
+MACHO_AUTH_NATIVE_TEXT(kBindingWeakLoadImage, "weak-load.dylib")
+MACHO_AUTH_NATIVE_TEXT(kBindingSystemLibrary, "/usr/lib/libSystem.B.dylib")
+MACHO_AUTH_NATIVE_TEXT(kBindingWeakLibrary, "-Wl,-weak_library,")
+MACHO_AUTH_NATIVE_TEXT(kBindingProvider, R"cpp(
+extern "C" int binding_pid() asm("getpid");
+extern "C" int binding_pid() { return 73; }
+)cpp")
+MACHO_AUTH_NATIVE_TEXT(kBindingNativeEnv, "NEVERD_ARM64E_LIFTED_NATIVE")
+MACHO_AUTH_NATIVE_ARGS(kBindingDriverArgs, "-arch", "arm64", "-std=c++20",
+                       "-fptrauth-intrinsics", "-march=armv8.3-a",
+                       "-Wl,-export_dynamic")
+MACHO_AUTH_NATIVE_VALUE(int64_t, kBindingDirectAddend, 8)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kBindingCallWord, 4)
+MACHO_AUTH_NATIVE_TEXT(kAnonymousRejectedObject, "rejected-frames.o")
+MACHO_AUTH_NATIVE_TEXT(kAppleFrameReferenceObject, "apple-control.o")
+MACHO_AUTH_NATIVE_TEXT(kAppleFrameReferenceOption,
+                       "-DNEVERD_APPLE_FRAME_REFERENCE")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousAppleImage, "apple-frames.dylib")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousEntry, "replacement")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousOriginalEntry, "original_entry")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousOriginalSymbol, "_original_entry")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousIndexOption, "-DNEVERD_INDEXED_FRAME")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousInitOption, "-DNEVERD_INIT")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousSignedInitOption, "-DNEVERD_SIGNED_INIT")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousInteriorOption, "-DNEVERD_INTERIOR_INIT")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousBadInitKeyOption, "-DNEVERD_WRONG_INIT_KEY")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousDataOption, "-DNEVERD_DATA_FRAME")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousWrongKeyOption, "-DNEVERD_WRONG_KEY")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousCodeError, "anonymous native unwind range")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousInitError, "initializer requires")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousSigningError, "implicit signed-return CFI")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousDriverProperty, "unwind_driver_arch")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousSystemProfile, "system")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousOriginalResult, "6")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousPublishedResult, "20")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousNoInit, "0")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousOneInit, "1")
+MACHO_AUTH_NATIVE_TEXT(kConflictingExtentOption, "-DNEVERD_CONFLICTING_EXTENT")
+MACHO_AUTH_NATIVE_TEXT(kMissingWriterOption, "-DNEVERD_MISSING_WRITER")
+MACHO_AUTH_NATIVE_TEXT(kConflictingExtentError,
+                       "DWARF and compact extents disagree")
+MACHO_AUTH_NATIVE_TEXT(kMissingWriterError, "compact language or range fields")
+MACHO_AUTH_NATIVE_TEXT(kRedundantFDEOption, "-DNEVERD_MATCHING_COMPACT")
+MACHO_AUTH_NATIVE_TEXT(kMixedFDEOption, "-DNEVERD_COMPACT_NEIGHBOR")
+MACHO_AUTH_NATIVE_VALUE(unsigned, kAnonymousProducerFrames, 27)
+MACHO_AUTH_NATIVE_TEXT(kPublishedFrameCountProperty, "published_frame_count")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousFrameAssembly, R"asm(
+.text
+.p2align 2
+.globl _replacement
+_replacement:
+.cfi_startproc
+ b Lframe
+.cfi_endproc
+#ifdef NEVERD_APPLE_FRAME_REFERENCE
+.private_extern _apple_frame
+_apple_frame:
+#endif
+Lframe:
+.cfi_startproc
+#ifdef NEVERD_INDEXED_FRAME
+.cfi_b_key_frame
+#endif
+#ifdef NEVERD_DATA_FRAME
+ .data_region
+ .long 0
+ .end_data_region
+#endif
+#ifdef NEVERD_WRONG_KEY
+ paciasp
+#else
+ pacibsp
+#endif
+#if defined(NEVERD_INDEXED_FRAME) && !defined(NEVERD_APPLE_FRAME_REFERENCE)
+.cfi_negate_ra_state
+#endif
+ stp x29, x30, [sp, #-16]!
+#ifdef NEVERD_INDEXED_FRAME
+.cfi_def_cfa_offset 16
+.cfi_offset x29, -16
+.cfi_offset x30, -8
+#endif
+ mov x29, sp
+#ifndef NEVERD_INDEXED_FRAME
+.cfi_def_cfa w29, 16
+.cfi_offset w30, -8
+.cfi_offset w29, -16
+#else
+.cfi_def_cfa_register x29
+.cfi_escape 0x2e, 0
+#endif
+ bl _frame_callback
+ add w0, w0, #17
+ ldp x29, x30, [sp], #16
+#ifdef NEVERD_INDEXED_FRAME
+.cfi_def_cfa sp, 0
+.cfi_restore x29
+.cfi_restore x30
+ autibsp
+#ifndef NEVERD_APPLE_FRAME_REFERENCE
+.cfi_negate_ra_state
+#endif
+ ret
+#else
+ retab
+#endif
+.cfi_endproc
+#ifdef NEVERD_APPLE_FRAME_REFERENCE
+.private_extern _apple_initializer
+_apple_initializer:
+#endif
+Linitializer:
+.cfi_startproc
+ nop
+ b _frame_init
+.cfi_endproc
+// More private functions than symbols exercise compact-unwind sizing.
+.rept 24
+1:
+.cfi_startproc
+ ret
+.cfi_endproc
+.endr
+#ifdef NEVERD_INIT
+.section __DATA,__mod_init_func,mod_init_funcs
+.p2align 3
+#ifdef NEVERD_INTERIOR_INIT
+.set Linit_target,Linitializer+4
+#else
+.set Linit_target,Linitializer
+#endif
+#ifdef NEVERD_WRONG_INIT_KEY
+ .quad Linit_target@AUTH(db,0)
+#elif defined(NEVERD_SIGNED_INIT)
+ .quad Linit_target@AUTH(ia,0)
+#else
+ .quad Linit_target
+#endif
+#endif
+.subsections_via_symbols
+)asm")
+MACHO_AUTH_NATIVE_TEXT(kStandaloneFDEAssembly, R"asm(
+.text
+.p2align 2
+.globl _replacement
+_replacement:
+ pacibsp
+ stp x29, x30, [sp, #-16]!
+ mov x29, sp
+ bl _frame_callback
+ add w0, w0, #17
+ ldp x29, x30, [sp], #16
+ autibsp
+ ret
+Lend:
+#ifdef NEVERD_COMPACT_NEIGHBOR
+#ifdef NEVERD_APPLE_FRAME_REFERENCE
+.private_extern _apple_compact_leaf
+_apple_compact_leaf:
+#endif
+Lcompact_leaf:
+.cfi_startproc
+ ret
+.cfi_endproc
+#endif
+.section __TEXT,__eh_frame,coalesced,no_toc+strip_static_syms+live_support
+.p2align 3
+Lcie:
+.long Lcie_end-Lcie_body
+Lcie_body:
+.long 0
+.byte 1
+.asciz "zR"
+.uleb128 1
+.sleb128 -8
+// Return register LR and one byte of augmentation (PC-relative pointer).
+.byte 30, 1, 0x10
+// DW_CFA_def_cfa sp, 0.
+.byte 0x0c, 31, 0
+.p2align 3
+Lcie_end:
+.long Lfde_end-Lfde_body
+Lfde_body:
+.long .-Lcie
+.quad _replacement-.
+.quad Lend-_replacement
+.byte 0
+// After PACIBSP and STP, CFA = SP + 16, FP and LR are saved.
+.byte 0x44
+.byte 0x44, 0x0e, 16, 0x9d, 2, 0x9e, 1
+// MOV establishes FP. The call site uses Darwin implicit signed LR.
+.byte 0x44, 0x0d, 29, 0x2e, 0
+// Restore SP, FP and LR after LDP.
+.byte 0x4c, 0x0c, 31, 0, 0xdd, 0xde
+.byte 0x44
+.p2align 3
+Lfde_end:
+#if defined(NEVERD_CONFLICTING_EXTENT) || defined(NEVERD_MISSING_WRITER) || defined(NEVERD_MATCHING_COMPACT)
+.section __LD,__compact_unwind,regular,debug
+.p2align 3
+#ifdef NEVERD_MISSING_WRITER
+ .quad 0
+#else
+ .quad _replacement
+#endif
+#ifdef NEVERD_MATCHING_COMPACT
+ .long Lend-_replacement
+#else
+ .long Lend-_replacement-4
+#endif
+ .long 0x04000000
+ .quad 0, 0
+#endif
+.subsections_via_symbols
+)asm")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousFrameSource, R"cpp(
+extern "C" __attribute__((noinline)) int frame_callback(int value) {
+  if (value < 0)
+    throw value;
+  return value + 1;
+}
+extern "C" __attribute__((noinline)) int original_entry(int value) {
+  return frame_callback(value) + 3;
+}
+static int initialized;
+extern "C" void frame_init() { ++initialized; }
+extern "C" int frame_init_count() { return initialized; }
+)cpp")
+MACHO_AUTH_NATIVE_TEXT(kAnonymousFrameDriver, R"cpp(
+#include <cstdlib>
+#include <dlfcn.h>
+int main(int argc, char **argv) {
+  if (argc != 5)
+    return 2;
+  auto *image = dlopen(argv[1], RTLD_NOW);
+  if (!image)
+    return 3;
+  auto entry = reinterpret_cast<int (*)(int)>(dlsym(image, argv[2]));
+  auto count = reinterpret_cast<int (*)()>(dlsym(image, "frame_init_count"));
+  if (!entry || !count || count() != std::atoi(argv[4]) ||
+      entry(2) != std::atoi(argv[3]))
+    return 4;
+  try {
+    entry(-23);
+  } catch (int value) {
+    if (value == -23)
+      return 0;
+  }
+  return 5;
+}
+)cpp")
+MACHO_AUTH_NATIVE_TEXT(kBindingAssembly, R"asm(
+.text
+.globl _entry
+.p2align 2
+_entry:
+.cfi_startproc
+  cbnz x0, Lfields
+  adrp x16, _getpid@GOTPAGE
+  ldr x16, [x16, _getpid@GOTPAGEOFF]
+  cbz x16, Labsent
+  b _getpid
+Labsent:
+  mov x0, #0
+  ret
+Lfields:
+  cmp x0, #2
+  b.ne LreturnFields
+  adrp x16, getpid@GOTPAGE
+  ldr x16, [x16, getpid@GOTPAGEOFF]
+  cbz x16, Labsent
+  b getpid
+LreturnFields:
+  cmp x0, #3
+  b.eq LoriginalC
+  cmp x0, #4
+  b.eq LoriginalBare
+  adrp x0, _binding_fields@PAGE
+  add x0, x0, _binding_fields@PAGEOFF
+  ret
+LoriginalC:
+#ifdef BIND_OBJECT
+.globl binding_interior
+.alt_entry binding_interior
+binding_interior:
+#endif
+  adrp x0, _binding_code@PAGE
+  add x0, x0, _binding_code@PAGEOFF
+  ret
+LoriginalBare:
+  adrp x0, binding_code@PAGE
+  add x0, x0, binding_code@PAGEOFF
+  ret
+.cfi_endproc
+#ifdef BIND_OBJECT
+#ifndef BIND_REFERENCE_ONLY
+.globl binding_marker
+#endif
+binding_marker:
+.cfi_startproc
+#ifdef BIND_REFERENCE_ONLY
+.cfi_escape 0x2e, 0
+#endif
+  b binding_helper
+.cfi_endproc
+binding_helper:
+.cfi_startproc
+  mov w0, #27
+  ret
+.cfi_endproc
+#else
+.globl _binding_marker
+_binding_marker:
+.cfi_startproc
+  mov w0, #16
+  ret
+.cfi_endproc
+#endif
+#ifndef BIND_OBJECT
+.private_extern _binding_code
+.private_extern binding_code
+_binding_code:
+  ret
+binding_code:
+  ret
+#endif
+#ifndef BIND_WEAK
+.weak_reference getpid
+#endif
+#ifdef BIND_WEAK
+.weak_reference _getpid
+#elif defined(BIND_OBJECT)
+// N_REF_TO_WEAK on an undefined symbol still requires a definition.
+.desc _getpid, 0x80
+#endif
+#ifdef BIND_REFERENCE_ONLY
+#ifdef BIND_WEAK
+.weak_reference _binding_fallback
+#endif
+#else
+.data
+.p2align 3
+.globl _binding_fallback
+.weak_definition _binding_fallback
+_binding_fallback:
+#ifdef BIND_OBJECT
+  .quad 99
+#else
+  .quad 42
+#endif
+#endif
+.section __DATA_CONST,__const
+.p2align 3
+.globl _binding_fields
+_binding_fields:
+  .quad (_getpid-4)@AUTH(da,0x1234,addr)
+  .quad _getpid+8
+#ifdef BIND_OBJECT
+  .quad _getpid@GOT
+#else
+  .quad 0
+#endif
+  .long _getpid@GOT-.
+  .long 0
+#ifdef BIND_OBJECT
+  .weak_reference neverd_missing_binding_fixture
+  .quad neverd_missing_binding_fixture@AUTH(db,0x1234,addr)
+#else
+  .quad 0
+#endif
+#if defined(BIND_OBJECT) || defined(BIND_WEAK)
+  .quad (_binding_fallback+4)@AUTH(da,0x1234,addr)
+  .quad _binding_fallback
+  .long _binding_fallback@GOT-.
+  .long 0
+#else
+  .space 24
+#endif
+#ifdef BIND_OBJECT
+  .quad neverd_missing_binding_fixture
+  .quad neverd_missing_binding_fixture@GOT
+#else
+  .space 16
+#endif
+  .quad getpid@AUTH(db,0x1234,addr)
+  .quad getpid
+  .long getpid@GOT-.
+  .long 0
+  .quad entry@AUTH(da,0x1234,addr)
+  .quad entry
+// A local is listed before _entry. A private external follows it.
+#ifndef BIND_REFERENCE_ONLY
+.private_extern entry
+#endif
+entry:
+  .quad 42
+#ifndef BIND_OBJECT
+.globl _binding_original_code
+_binding_original_code:
+  .quad _binding_code
+  .quad binding_code
+#endif
+.subsections_via_symbols
+)asm")
+MACHO_AUTH_NATIVE_TEXT(kBindingDriver, R"cpp(
+#include <cstdint>
+#include <cstdio>
+#include <dlfcn.h>
+#include <ptrauth.h>
+#include <unistd.h>
+#ifdef BIND_HOST_FALLBACK
+extern "C" __attribute__((weak, used, visibility("default")))
+uint64_t binding_fallback = 77;
+constexpr uint64_t expectedFallback = 77;
+#else
+constexpr uint64_t expectedFallback = 42;
+#endif
+struct Fields {
+  void *auth;
+  uintptr_t direct;
+  const uintptr_t *got;
+  int32_t relative;
+  uint32_t padding;
+  uintptr_t optional;
+  void *coalescedAuth;
+  uintptr_t coalescedDirect;
+  int32_t coalescedRelative;
+  uint32_t coalescedPadding;
+  uintptr_t optionalDirect;
+  const uintptr_t *optionalGOT;
+  void *bareAuth;
+  uintptr_t bareDirect;
+  int32_t bareRelative;
+  uint32_t barePadding;
+  void *localAuth;
+  const uint64_t *localDirect;
+  uint64_t localValue;
+};
+int main(int argc, char **argv) {
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) {
+    std::fprintf(stderr, "%s\n", dlerror());
+    return 1;
+  }
+  auto entry = reinterpret_cast<uintptr_t (*)(int)>(dlsym(image, "entry"));
+  if (!entry || entry(0) != static_cast<uintptr_t>(getpid()))
+    return 2;
+  auto marker = reinterpret_cast<int (*)()>(dlsym(image, "binding_marker"));
+  if (!marker || marker() != (argc > 3 ? 27 : 16))
+    return 12;
+  auto *code = static_cast<const uintptr_t *>(dlsym(image, "binding_original_code"));
+  const bool swapped = argc == 5;
+  if (!code || code[0] == code[1] || entry(3) != code[swapped] ||
+      entry(4) != code[!swapped])
+    return 11;
+  auto *fields = reinterpret_cast<const Fields *>(entry(1));
+  auto *got = reinterpret_cast<const uintptr_t *>(
+      reinterpret_cast<uintptr_t>(&fields->relative) + fields->relative);
+  auto function = reinterpret_cast<uintptr_t>(dlsym(RTLD_DEFAULT, "getpid"));
+  auto authenticated = ptrauth_auth_data(fields->auth, ptrauth_key_asda,
+      ptrauth_blend_discriminator(&fields->auth, 0x1234));
+  if (reinterpret_cast<uintptr_t>(authenticated) != function - 4)
+    return 4;
+  if (*got != function || fields->direct != function + 8 || fields->optional)
+    return 3;
+  auto local = ptrauth_auth_data(fields->localAuth, ptrauth_key_asda,
+      ptrauth_blend_discriminator(&fields->localAuth, 0x1234));
+  if (local != &fields->localValue || fields->localDirect != &fields->localValue ||
+      fields->localValue != 42)
+    return 10;
+  const bool present = access(argv[2], F_OK) == 0;
+  auto *bareGOT = reinterpret_cast<const uintptr_t *>(
+      reinterpret_cast<uintptr_t>(&fields->bareRelative) + fields->bareRelative);
+  if (bareGOT == got || *bareGOT != fields->bareDirect ||
+      present != bool(fields->bareDirect) || entry(2) != (present ? 73u : 0u))
+    return 7;
+  if (present) {
+    auto bare = ptrauth_auth_data(fields->bareAuth, ptrauth_key_asdb,
+        ptrauth_blend_discriminator(&fields->bareAuth, 0x1234));
+    if (reinterpret_cast<uintptr_t>(bare) != fields->bareDirect ||
+        fields->bareDirect == function)
+      return 8;
+  } else if (fields->bareAuth)
+    return 9;
+  if (argc == 3 && !fields->coalescedDirect)
+    return 0;
+  auto *fallback = reinterpret_cast<const uintptr_t *>(
+      reinterpret_cast<uintptr_t>(&fields->coalescedRelative) +
+      fields->coalescedRelative);
+  auto coalesced = ptrauth_auth_data(fields->coalescedAuth, ptrauth_key_asda,
+      ptrauth_blend_discriminator(&fields->coalescedAuth, 0x1234));
+  if (fields->coalescedDirect != *fallback ||
+      reinterpret_cast<uintptr_t>(coalesced) != *fallback + 4 ||
+      *reinterpret_cast<const uint64_t *>(*fallback) != expectedFallback)
+    return 5;
+  if (argc > 3 && (fields->got != got || fields->optionalDirect ||
+                   !fields->optionalGOT || *fields->optionalGOT))
+    return 6;
+  return 0;
+}
+)cpp")
 MACHO_AUTH_NATIVE_TEXT(kMissingHost,
                        "requires Apple Clang, ld, codesign and dyld_info")
 MACHO_AUTH_NATIVE_TEXT(kFixupsHeading, "fixup_chain_details:")

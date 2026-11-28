@@ -13,6 +13,7 @@
 #include "ELFIntegerProfile.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/lift/PowerPC/PowerPCPrefixed.h"
 #include "neverd/loader/BinaryImageModel.h"
 #include "neverd/loader/ELF/PowerPCABI.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -43,8 +44,8 @@ struct Linkage {
 bool startsLinkage(uint32_t Word, bool V2) {
   if (V2)
     return Word == ELFv2SaveTOC || Word == SaveLRInR12 ||
-           (Word & PCRelativePrefixMask) == PCRelativeLoadPrefix ||
-           (Word & PCRelativePrefixMask) == PCRelativeAddPrefix ||
+           (Word & ppc::prefix::PrefixMask) == ppc::prefix::RelativeEightLS ||
+           (Word & ppc::prefix::PrefixMask) == ppc::prefix::RelativeMLS ||
            (Word & DSFormMask) == LoadR12R2 || (Word & DFormMask) == AddisR12R2;
   return Word == SaveTOC || (Word & DSFormMask) == LoadR12R2 ||
          (Word & DFormMask) == AddisR11R2;
@@ -104,16 +105,15 @@ std::optional<Linkage> linkageAt(const BinaryImage &Image, va_t Address,
 
   if (V2) {
     const va_t PrefixPC = PC;
-    if (Take(PCRelativeLoadPrefix, PCRelativePrefixMask) ||
-        Take(PCRelativeAddPrefix, PCRelativePrefixMask)) {
-      const bool Load = (Insn & PCRelativePrefixMask) == PCRelativeLoadPrefix;
-      uint64_t Displacement = uint64_t(Insn & PrefixHighImmediate)
-                              << ImmediateBits;
-      if (!Take(Load ? PLDR12Suffix : PAddiR12Suffix, DFormMask))
+    if (Take(ppc::prefix::RelativeEightLS, ppc::prefix::PrefixMask) ||
+        Take(ppc::prefix::RelativeMLS, ppc::prefix::PrefixMask)) {
+      const bool Load =
+          (Insn & ppc::prefix::PrefixMask) == ppc::prefix::RelativeEightLS;
+      const uint32_t Prefix = Insn;
+      if (!ppc::prefix::fitsFetchBlock(PrefixPC) ||
+          !Take(Load ? PLDR12Suffix : PAddiR12Suffix, DFormMask))
         return std::nullopt;
-      Displacement |= Insn & ~DFormMask;
-      const va_t Target =
-          PrefixPC + llvm::SignExtend64<PrefixedDisplacementBits>(Displacement);
+      const va_t Target = PrefixPC + ppc::prefix::displacement(Prefix, Insn);
       if (Load)
         Stub.AbsoluteSlot = Target;
       else {

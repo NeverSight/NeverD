@@ -84,8 +84,31 @@ bool isMinimalLeafExpression(const SymContext &Ctx, SymRef E,
     return A != B && MaxAtoms >= 2;
   if (Ctx.isVar(A))
     std::swap(A, B);
+  // A difference of a free word and a bitwise operation on two other free
+  // words requires three leaves and two operations. A select would need an
+  // additional predicate to branch on a word wider than one bit.
+  if (Op == SymOp::Add && MaxAtoms >= 3 && Ctx.width(E) > 1 && Ctx.isVar(B) &&
+      Ctx.op(A) == SymOp::Mul && Ctx.numOperands(A) == 2 &&
+      Ctx.isConstOnes(Ctx.operand(A, 0))) {
+    auto Inner = Ctx.operand(A, 1);
+    const auto Kind = Ctx.op(Inner);
+    if ((Kind == SymOp::Xor || Kind == SymOp::And || Kind == SymOp::Or) &&
+        Ctx.numOperands(Inner) == 2) {
+      const auto L = Ctx.operand(Inner, 0), R = Ctx.operand(Inner, 1);
+      if (Ctx.isVar(L) && Ctx.isVar(R) && L != R && L != B && R != B)
+        return true;
+    }
+  }
   if (!Ctx.isConst(A) || MaxAtoms < 1 || Ctx.isConstZero(A))
     return false;
+  // -(x^y) needs both free words. A shorter reading has just one binary
+  // operator. At width >= 2 neither signed difference, sum, product nor a
+  // bitwise operator gives -1 at both (1,0) and (0,1) and zero at (1,1).
+  if (Op == SymOp::Mul && MaxAtoms >= 2 && Ctx.width(E) >= 2 &&
+      Ctx.op(B) == SymOp::Xor && Ctx.numOperands(B) == 2 &&
+      Ctx.isVar(Ctx.operand(B, 0)) && Ctx.isVar(Ctx.operand(B, 1)) &&
+      Ctx.operand(B, 0) != Ctx.operand(B, 1) && Ctx.isConstOnes(A))
+    return true;
   // A subtraction prints one operation too. C-X can only have a cheaper
   // unary spelling at C=0 (negation) or C=-1 (complement). The builder has
   // already removed a zero addend; retain complement recovery for the latter.
@@ -281,9 +304,73 @@ bool isSingleAffineLane(const SymContext &Ctx, SymRef Body, SymRef Original) {
          (Lane == SymOp::ZExt || Lane == SymOp::SExt || Lane == SymOp::Concat);
 }
 
+// When all corners have different nonzero weights, a direct Boolean-column
+// reading needs a separate minterm for every corner. Keep the affine reading
+// of projected lanes; independent source restorations remain eligible below.
+size_t distinctAffineLaneWork(const SymContext &Ctx, SymRef Body,
+                              SymRef Original, size_t Atoms,
+                              WorkBudget &Budget) {
+  if (Ctx.op(Original) != SymOp::Add ||
+      Ctx.numOperands(Original) != Atoms + 1 ||
+      Ctx.numOperands(Body) != Atoms + 1)
+    return 0;
+  auto Terms = Ctx.operands(Body);
+  if (!Ctx.isConst(Terms.front()) ||
+      !(Ctx.constWords(Terms.front()).front() & 1) ||
+      Ctx.isConstOnes(Terms.front()))
+    return 0;
+  for (const auto Term : Ctx.operands(Original).drop_front()) {
+    if (Ctx.op(Term) != SymOp::Mul || Ctx.numOperands(Term) != 2 ||
+        !Ctx.isConst(Ctx.operand(Term, 0)))
+      return 0;
+    const auto Op = Ctx.op(Ctx.operand(Term, 1));
+    if (Op != SymOp::ZExt && Op != SymOp::SExt && Op != SymOp::Concat)
+      return 0;
+  }
+  llvm::SmallVector<llvm::ArrayRef<uint64_t>, 3> Weights;
+  for (auto T : Terms.drop_front()) {
+    if (Ctx.op(T) != SymOp::Mul || Ctx.numOperands(T) != 2 ||
+        !Ctx.isVar(Ctx.operand(T, 1)) || !Ctx.isConst(Ctx.operand(T, 0)))
+      return 0;
+    auto W = Ctx.constWords(Ctx.operand(T, 0));
+    if (W.front() & 1)
+      return 0;
+    Weights.push_back(W);
+  }
+  // In the first nonzero limb of any slope, the lower limbs of every slope
+  // are zero. Distinct subset sums here witness distinct full-width corners.
+  size_t Limb = 0;
+  while (true) {
+    if (!Budget.canConsume(Atoms))
+      return 0;
+    Budget.consume(Atoms);
+    if (llvm::any_of(Weights, [&](auto W) { return W[Limb] != 0; }))
+      break;
+    ++Limb;
+  }
+  constexpr unsigned WordBits = llvm::APInt::APINT_BITS_PER_WORD;
+  const unsigned Bits =
+      std::min<size_t>(WordBits, Ctx.width(Body) - WordBits * Limb);
+  const uint64_t Mask = UINT64_MAX >> (WordBits - Bits);
+  const size_t Comparisons = Atoms * (size_t(1) << Atoms);
+  if (!Budget.canConsume(Comparisons))
+    return 0;
+  Budget.consume(Comparisons);
+  llvm::SmallVector<uint64_t, 8> Sums{0};
+  for (auto W : Weights) {
+    const size_t N = Sums.size();
+    for (size_t I = 0; I < N; ++I)
+      Sums.push_back((Sums[I] + W[Limb]) & Mask);
+  }
+  llvm::sort(Sums);
+  return std::adjacent_find(Sums.begin(), Sums.end()) == Sums.end()
+             ? 2 * Atoms + 1
+             : 0;
+}
+
 // Return the work for a structural reading, or zero for the corner-table path.
 size_t directLinearWork(const SymContext &Ctx, SymRef R, size_t Atoms,
-                        SymRef Original) {
+                        SymRef Original, WorkBudget &Budget) {
   const auto Op = Ctx.op(R);
   if (Atoms && (Op == SymOp::Or || Op == SymOp::And || Op == SymOp::Xor)) {
     // For one-bit XOR the additive form is equally short. Restoring hidden
@@ -338,6 +425,10 @@ size_t directLinearWork(const SymContext &Ctx, SymRef R, size_t Atoms,
       llvm::APInt::getNumWords(Ctx.width(R)) >= limits::kMinReadOnceWordLimbs &&
       isSingleAffineLane(Ctx, R, Original))
     return 5; // One variable, two literals and two operations.
+  if (Op == SymOp::Add && Atoms >= 2 &&
+      Atoms < limits::kMinCanonicalAffineAtoms &&
+      llvm::APInt::getNumWords(Ctx.width(R)) >= limits::kMinReadOnceWordLimbs)
+    return distinctAffineLaneWork(Ctx, R, Original, Atoms, Budget);
   if (Atoms < limits::kMinCanonicalAffineAtoms || Op != SymOp::Add)
     return 0;
   // Only the constant and singleton conjunction coefficients can be nonzero.
@@ -535,7 +626,7 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
                                          Limits.MaxOptimalSynthesisAtoms);
     std::optional<size_t> Corners = cornerCount(Linear->AtomIds.size());
     const size_t Direct =
-        directLinearWork(Ctx, Linear->Abstract.Body, NumAtoms, E);
+        directLinearWork(Ctx, Linear->Abstract.Body, NumAtoms, E, Budget);
     const bool Excluded =
         !Direct && Corners &&
         linearFormsCannotFit(Ctx, Linear->Abstract.Body, Linear->AtomIds,
@@ -629,7 +720,7 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
           sizeof(llvm::APInt) +
           (Width / 64 + (Width % 64 != 0)) * sizeof(uint64_t);
       const size_t Direct = directLinearWork(Ctx, Coarse->Abstract.Body,
-                                             Coarse->AtomIds.size(), E);
+                                             Coarse->AtomIds.size(), E, Budget);
       if (Corners &&
           (Direct || *Corners <= Opts.MaxTableBytes / 8 / WordBytes) &&
           (Direct ||
@@ -675,8 +766,8 @@ SymRef solveRegion(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
           (Width / 64 + (Width % 64 != 0)) * sizeof(uint64_t);
       // Cover measurement and basis-transform scratch before allocating the
       // additional reading. The opaque-input map remains owned by LinearRegion.
-      const size_t Direct =
-          directLinearWork(Ctx, Abstract.IndependentBody, AtomIds.size(), E);
+      const size_t Direct = directLinearWork(Ctx, Abstract.IndependentBody,
+                                             AtomIds.size(), E, Budget);
       const bool StorageFits =
           Corners && (Direct || *Corners <= Opts.MaxTableBytes / 8 / WordBytes);
       if (AtomIds.size() <= Limits.MaxAtoms && StorageFits &&

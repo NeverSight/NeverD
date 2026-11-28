@@ -123,17 +123,16 @@ for flip in report.flips:
 
 寄存器偏移是 NeverD 寄存器文件中的字节偏移，不是原生指针或寄存器编号。报告始终是非穷举的；UNSAT、求解器预算耗尽、投影拒绝和重放拒绝均保留为类型化翻转结果，而不是异常。
 
-### 内存安全审计与猎取
+### 内存安全扫描
 
-`session.audit()` 与 `session.hunt()` 返回解析后的 JSON 报告（与 CLI 同一模式）。它们需要已提升的原生会话：
+`session.scan()` 运行两项分析，并在一份报告中返回发现和覆盖情况。[统一扫描指南（英文）](../memory-safety-scan.md)。
 
 ```python
-audit = session.audit()
-hunt = session.hunt(max_paths=64, max_steps=1 << 16)
-print(audit.get("ok"), hunt.get("findings"))
+report = session.scan(max_paths=64, max_steps=1 << 16)
+print(report["verdict"], report["analyzers"])
 ```
 
-EVM 和 SBF 会话会拒绝这些调用。
+对 EVM 和 SBF 输入，选中的分析器返回 `unsupported` 状态。
 
 六种不可变事件分别是 `BINARY_LOADED`、`BINARY_CLOSING`、`FUNCTION_SELECTED`、`ADDRESS_CHANGED`、`ANALYSIS_DONE` 和 `PATCH_APPLIED`。回调期间会复制载荷字符串；与当前事件类型无关的字段为 `None`。
 

@@ -4,6 +4,22 @@
 <context>
     <name>Actions</name>
     <message>
+        <source>Inspect JVM classes and JARs…</source>
+        <translation>Inspect JVM classes and JARs…</translation>
+    </message>
+    <message>
+        <source>Inspect Java bytecode, typed IR and reconstructed methods</source>
+        <translation>Inspect Java bytecode, typed IR and reconstructed methods</translation>
+    </message>
+    <message>
+        <source>Memory Safety Scan...</source>
+        <translation>Memory Safety Scan...</translation>
+    </message>
+    <message>
+        <source>Check object lifetimes, initialization, bounds and formats</source>
+        <translation>Check object lifetimes, initialization, bounds and formats</translation>
+    </message>
+    <message>
         <source>Toggle a floating workspace with disassembly, pseudocode and output</source>
         <translation>Toggle a floating workspace with disassembly, pseudocode and output</translation>
     </message>
@@ -1342,6 +1358,22 @@
     <message>
         <source>Find conditional strings computed by functions</source>
         <translation>Find conditional strings computed by functions</translation>
+    </message>
+    <message>
+        <source>Recover Lua source…</source>
+        <translation>Recover Lua source…</translation>
+    </message>
+    <message>
+        <source>Recover a Lua artifact and inspect its prototypes</source>
+        <translation>Recover a Lua artifact and inspect its prototypes</translation>
+    </message>
+    <message>
+        <source>Inspect Python code and package components</source>
+        <translation>Inspect Python code and package components</translation>
+    </message>
+    <message>
+        <source>Recover Python source…</source>
+        <translation>Recover Python source…</translation>
     </message>
 </context>
 <context>
@@ -11187,6 +11219,375 @@ Your previous graph is still available.</translation>
     <message>
         <source>Loading %1…</source>
         <translation>Loading %1…</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::SafetyScanDialog</name>
+    <message>
+        <source>Memory Safety Scan</source>
+        <translation>Memory Safety Scan</translation>
+    </message>
+    <message>
+        <source>&amp;Analyzers</source>
+        <translation>&amp;Analyzers</translation>
+    </message>
+    <message>
+        <source>All checks</source>
+        <translation>All checks</translation>
+    </message>
+    <message>
+        <source>Lifetime and initialization</source>
+        <translation>Lifetime and initialization</translation>
+    </message>
+    <message>
+        <source>Bounds and format strings</source>
+        <translation>Bounds and format strings</translation>
+    </message>
+    <message>
+        <source>Findings</source>
+        <translation>Findings</translation>
+    </message>
+    <message>
+        <source>Verdict</source>
+        <translation>Verdict</translation>
+    </message>
+    <message>
+        <source>Property</source>
+        <translation>Property</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>Address</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Function</translation>
+    </message>
+    <message>
+        <source>Analyzers</source>
+        <translation>Analyzers</translation>
+    </message>
+    <message>
+        <source>Finding evidence</source>
+        <translation>Finding evidence</translation>
+    </message>
+    <message>
+        <source>&amp;Scan</source>
+        <translation>&amp;Scan</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>Cancel scan</translation>
+    </message>
+    <message>
+        <source>Canceling scan…</source>
+        <translation>Canceling scan…</translation>
+    </message>
+    <message>
+        <source>Scanning…</source>
+        <translation>Scanning…</translation>
+    </message>
+    <message>
+        <source>Scan canceled before it started.</source>
+        <translation>Scan canceled before it started.</translation>
+    </message>
+    <message>
+        <source>Verdict: %1</source>
+        <translation>Verdict: %1</translation>
+    </message>
+    <message>
+        <source>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</source>
+        <translation>%1: %2 (%3 scanned, %4 skipped, %5 inconclusive)</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::JVMRecoveryDialog</name>
+    <message>
+        <source>Inspect JVM classes and JARs</source>
+        <translation>Inspect JVM classes and JARs</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Browse…</translation>
+    </message>
+    <message>
+        <source>Artifact</source>
+        <translation>Artifact</translation>
+    </message>
+    <message>
+        <source>Base JAR entries</source>
+        <translation>Base JAR entries</translation>
+    </message>
+    <message>
+        <source>Enable preview</source>
+        <translation>Enable preview</translation>
+    </message>
+    <message>
+        <source>Runtime</source>
+        <translation>Runtime</translation>
+    </message>
+    <message>
+        <source>Local dependencies…</source>
+        <translation>Local dependencies…</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Clear</translation>
+    </message>
+    <message>
+        <source>Dependencies</source>
+        <translation>Dependencies</translation>
+    </message>
+    <message>
+        <source>Class or member</source>
+        <translation>Class or member</translation>
+    </message>
+    <message>
+        <source>Method</source>
+        <translation>Method</translation>
+    </message>
+    <message>
+        <source>Inspect inventory</source>
+        <translation>Inspect inventory</translation>
+    </message>
+    <message>
+        <source>Analyze selection</source>
+        <translation>Analyze selection</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <source>Java source</source>
+        <translation>Java source</translation>
+    </message>
+    <message>
+        <source>Bytecode</source>
+        <translation>Bytecode</translation>
+    </message>
+    <message>
+        <source>Typed IR</source>
+        <translation>Typed IR</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Evidence</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Bytecode mappings</translation>
+    </message>
+    <message>
+        <source>Copy view</source>
+        <translation>Copy view</translation>
+    </message>
+    <message>
+        <source>Export view…</source>
+        <translation>Export view…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Export report…</translation>
+    </message>
+    <message>
+        <source>Open JVM artifact</source>
+        <translation>Open JVM artifact</translation>
+    </message>
+    <message>
+        <source>Selected runtime view</source>
+        <translation>Selected runtime view</translation>
+    </message>
+    <message>
+        <source>All methods</source>
+        <translation>All methods</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ScriptRecoveryDialog</name>
+    <message>
+        <source>Recover Lua source</source>
+        <translation>Recover Lua source</translation>
+    </message>
+    <message>
+        <source>Browse…</source>
+        <translation>Browse…</translation>
+    </message>
+    <message>
+        <source>&amp;Artifact</source>
+        <translation>&amp;Artifact</translation>
+    </message>
+    <message>
+        <source>Detect from artifact</source>
+        <translation>Detect from artifact</translation>
+    </message>
+    <message>
+        <source>PUC Lua</source>
+        <translation>PUC Lua</translation>
+    </message>
+    <message>
+        <source>LuaJIT</source>
+        <translation>LuaJIT</translation>
+    </message>
+    <message>
+        <source>Upstream Luau</source>
+        <translation>Upstream Luau</translation>
+    </message>
+    <message>
+        <source>Upstream Luau 0.659</source>
+        <translation>Upstream Luau 0.659</translation>
+    </message>
+    <message>
+        <source>&amp;Profile</source>
+        <translation>&amp;Profile</translation>
+    </message>
+    <message>
+        <source>Recover</source>
+        <translation>Recover</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <source>Starting analysis worker…</source>
+        <translation>Starting analysis worker…</translation>
+    </message>
+    <message>
+        <source>Prototype</source>
+        <translation>Prototype</translation>
+    </message>
+    <message>
+        <source>Source</source>
+        <translation>Source</translation>
+    </message>
+    <message>
+        <source>Bytecode mappings</source>
+        <translation>Bytecode mappings</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Evidence</translation>
+    </message>
+    <message>
+        <source>Copy source</source>
+        <translation>Copy source</translation>
+    </message>
+    <message>
+        <source>Export source…</source>
+        <translation>Export source…</translation>
+    </message>
+    <message>
+        <source>Export report…</source>
+        <translation>Export report…</translation>
+    </message>
+    <message>
+        <source>Open Lua artifact</source>
+        <translation>Open Lua artifact</translation>
+    </message>
+    <message>
+        <source>Cancelling…</source>
+        <translation>Cancelling…</translation>
+    </message>
+    <message>
+        <source>Export to a new file</source>
+        <translation>Export to a new file</translation>
+    </message>
+    <message>
+        <source>JSON (*.json)</source>
+        <translation>JSON (*.json)</translation>
+    </message>
+    <message>
+        <source>Lua source (*.lua *.luau)</source>
+        <translation>Lua source (*.lua *.luau)</translation>
+    </message>
+    <message>
+        <source>Analysis worker stopped.</source>
+        <translation>Analysis worker stopped.</translation>
+    </message>
+    <message>
+        <source>Recovering source…</source>
+        <translation>Recovering source…</translation>
+    </message>
+    <message>
+        <source>This worker does not support Lua recovery.</source>
+        <translation>This worker does not support Lua recovery.</translation>
+    </message>
+    <message>
+        <source>Reading artifact…</source>
+        <translation>Reading artifact…</translation>
+    </message>
+    <message>
+        <source>Cancelled</source>
+        <translation>Cancelled</translation>
+    </message>
+    <message>
+        <source>Prototype %1</source>
+        <translation>Prototype %1</translation>
+    </message>
+    <message>
+        <source>PC %1   0x%2   %3</source>
+        <translation>PC %1   0x%2   %3</translation>
+    </message>
+    <message>
+        <source>Original line %1</source>
+        <translation>Original line %1</translation>
+    </message>
+    <message>
+        <source>Component</source>
+        <translation>Component</translation>
+    </message>
+    <message>
+        <source>Entry scripts</source>
+        <translation>Entry scripts</translation>
+    </message>
+    <message>
+        <source>Exporting native component…</source>
+        <translation>Exporting native component…</translation>
+    </message>
+    <message>
+        <source>Folder…</source>
+        <translation>Folder…</translation>
+    </message>
+    <message>
+        <source>Function</source>
+        <translation>Function</translation>
+    </message>
+    <message>
+        <source>Function %1</source>
+        <translation>Function %1</translation>
+    </message>
+    <message>
+        <source>Native component exported.</source>
+        <translation>Native component exported.</translation>
+    </message>
+    <message>
+        <source>Open PyInstaller folder</source>
+        <translation>Open PyInstaller folder</translation>
+    </message>
+    <message>
+        <source>Open Python artifact</source>
+        <translation>Open Python artifact</translation>
+    </message>
+    <message>
+        <source>Open in native analysis…</source>
+        <translation>Open in native analysis…</translation>
+    </message>
+    <message>
+        <source>Python recovery is unavailable in this worker.</source>
+        <translation>Python recovery is unavailable in this worker.</translation>
+    </message>
+    <message>
+        <source>Python source (*.py)</source>
+        <translation>Python source (*.py)</translation>
+    </message>
+    <message>
+        <source>Recover Python source</source>
+        <translation>Recover Python source</translation>
+    </message>
+    <message>
+        <source>Save native component to a new file</source>
+        <translation>Save native component to a new file</translation>
     </message>
 </context>
 </TS>

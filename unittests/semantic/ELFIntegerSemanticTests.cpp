@@ -32,6 +32,92 @@ namespace {
 
 class ELFIntegerSemantic : public ::testing::TestWithParam<Arch> {};
 
+#include "PowerPCConditionalBranchFixture.inc"
+
+TEST(PowerPCConditionalBranches, TransferAndRegisterStateMatchUnicorn) {
+  using namespace integerreg::ppc;
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    BinaryImage Img;
+    Img.Arch = A;
+    const bool Wide = isPowerPC64(A);
+    Img.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    uc_engine *Engine = nullptr;
+    ASSERT_EQ(uc_open(UC_ARCH_PPC,
+                      uc_mode(UC_MODE_BIG_ENDIAN |
+                              (Wide ? UC_MODE_PPC64 : UC_MODE_PPC32)),
+                      &Engine),
+              UC_ERR_OK);
+    std::unique_ptr<uc_engine, decltype(&uc_close)> Owner(Engine, uc_close);
+    if (Wide)
+      ASSERT_EQ(uc_ctl_tlb_mode(Engine, UC_TLB_VIRTUAL), UC_ERR_OK);
+    uint64_t MSR = (uint64_t(Wide) << 63) | uint64_t(archLittleEndian(A));
+    ASSERT_EQ(uc_reg_write(Engine, UC_PPC_REG_MSR, &MSR), UC_ERR_OK);
+    ASSERT_EQ(uc_mem_map(Engine, 0x1000, 0x1000, UC_PROT_ALL), UC_ERR_OK);
+    uint64_t PC = 0x1800;
+    for (auto Form : ConditionalBranches) {
+      SCOPED_TRACE(::testing::Message()
+                   << int(A) << " word " << std::hex << Form.Word);
+      uint8_t Bytes[4];
+      llvm::support::endian::write32(Bytes, Form.Word,
+                                     archLittleEndian(A)
+                                         ? llvm::endianness::little
+                                         : llvm::endianness::big);
+      ASSERT_EQ(uc_mem_write(Engine, PC, Bytes, sizeof(Bytes)), UC_ERR_OK);
+      DecodedInsn I;
+      ASSERT_EQ(D.decodeOneForLift(Bytes, sizeof(Bytes), PC, I), 4);
+      std::vector<LowOp> Ops;
+      ASSERT_NO_THROW(D.liftToLow(I, Ops));
+      ASSERT_FALSE(Ops.empty());
+      ASSERT_EQ(Ops.back().Opcode, Form.Transfer);
+      const bool Direct = Form.Transfer == NdOp::CALL;
+      EXPECT_EQ(D.directCallTarget(I),
+                Direct ? Ops.back().Inputs[0].Offset : InvalidVA);
+      EXPECT_EQ(D.returnsToCaller(I), false);
+      EXPECT_FALSE(D.isFunctionTerminator(I));
+      // Observe the taken operand just before the original transfer, on the
+      // same side of its guard. No guest instruction here writes r31.
+      const NdVar Observed = NdVar::reg(integerreg::gpr(31), Wide ? 8 : 4);
+      if (Form.Transfer != NdOp::COPY) {
+        LowOp ReadTarget = Ops.back();
+        ReadTarget.Opcode = NdOp::COPY;
+        ReadTarget.Output = Observed;
+        Ops.insert(Ops.end() - 1, ReadTarget);
+      }
+      for (uint64_t Seed :
+           {UINT64_C(0), UINT64_C(1), UINT64_C(2), UINT64_C(0x100000001)}) {
+        for (unsigned EQ : {0u, 1u}) {
+          uint64_t Link = 0x1503;
+          uint64_t Count = Form.ViaCTR ? 0x1600 + (Seed & 3)
+                           : Wide      ? Seed
+                                       : uint32_t(Seed);
+          uint32_t CR = EQ << 29;
+          ASSERT_EQ(uc_reg_write(Engine, UC_PPC_REG_LR, &Link), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_write(Engine, UC_PPC_REG_CTR, &Count), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_write(Engine, UC_PPC_REG_CR, &CR), UC_ERR_OK);
+          NdOpEmulator Emu(Img);
+          Emu.setStrictMode(true);
+          Emu.setRegister(LR, Link);
+          Emu.setRegister(CTR, Count);
+          Emu.setRegister(crBit(2), EQ);
+          Emu.setRegister(Observed.Offset, PC + 4);
+          Emu.run(Ops);
+          ASSERT_EQ(uc_emu_start(Engine, PC, PC + 4, 0, 1), UC_ERR_OK);
+          uint64_t Target = 0;
+          ASSERT_EQ(uc_reg_read(Engine, UC_PPC_REG_PC, &Target), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_read(Engine, UC_PPC_REG_LR, &Link), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_read(Engine, UC_PPC_REG_CTR, &Count), UC_ERR_OK);
+          EXPECT_EQ(Emu.getRegister(Observed.Offset), Target);
+          EXPECT_EQ(Emu.getRegister(LR), Link);
+          EXPECT_EQ(Emu.getRegister(CTR), Count);
+        }
+      }
+      PC += sizeof(Bytes);
+    }
+  }
+}
+
 TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
   const Arch A = GetParam();
   const bool RV = isRISCV(A), Wide = A == Arch::RISCV64 || isPowerPC64(A);
@@ -106,6 +192,8 @@ TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
                                0x7cc53a79, 0x4d8a8982,   // xor. / crxor
                                0x7cc53a39, 0x4d8a8a42}); // eqv. / creqv
     Words.insert(Words.end(), {MultiplyWord, MultiplyWordRecord});
+    Words.insert(Words.end(), std::begin(LogicalWordShifts),
+                 std::end(LogicalWordShifts));
     if (Wide)
       for (auto Form : PopulationForms)
         Words.push_back(Form.Word);
@@ -136,8 +224,11 @@ TEST_P(ELFIntegerSemantic, ScalarInstructionsMatchUnicornAfterEveryStep) {
                                  UINT64_C(0x8000000000000000),
                                  UINT64_C(0xffffffff80000000),
                                  UINT64_C(0x789abcde76543210)};
+  std::vector<uint64_t> Right(std::begin(Values), std::end(Values));
+  if (!RV)
+    Right.insert(Right.end(), {31, 32, 33, 63, 64, 65});
   for (uint64_t L : Values)
-    for (uint64_t R : Values) {
+    for (uint64_t R : Right) {
       SCOPED_TRACE(::testing::Message() << "lhs=" << L << " rhs=" << R);
       uc_engine *Engine = nullptr;
       auto Mode = RV ? (Wide ? UC_MODE_RISCV64 : UC_MODE_RISCV32)
@@ -360,6 +451,135 @@ TEST(PowerPCInteger, PopulationCountsKeepEachLaneAndRejectReservedFields) {
           EXPECT_EQ(Emu.getRegister(integerreg::gpr(5)), Expected);
         }
       }
+  }
+}
+
+TEST(PowerPCInteger, WordProductsPreserveDefinedBitsAndOverflow) {
+  using namespace integerreg::ppc;
+  struct Operands {
+    uint64_t LHS, RHS;
+    bool WordOverflow, DoubleOverflow;
+  };
+  const Operands Cases[] = {
+      {0, 0, false, false},
+      {0x10000, 0x10000, true, false},
+      {0x80000000, UINT32_MAX, true, false},
+      {uint64_t(INT64_MAX), 2, false, true},
+      {uint64_t(INT64_MIN), UINT64_MAX, false, true},
+      {UINT64_MAX, UINT64_MAX, false, false},
+  };
+  for (Arch A : {Arch::PPC32, Arch::PPC32LE, Arch::PPC64, Arch::PPC64LE}) {
+    const bool Wide = isPowerPC64(A);
+    BinaryImage Img;
+    Img.Arch = A;
+    Img.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+    Decoder D;
+    ASSERT_TRUE(D.init(Img));
+    // Read the three common XER flags independently of ISA-specific fields.
+    const unsigned Width = Wide ? 8 : 4;
+    const uint64_t Flags =
+        uint64_t(1) << XERSO | uint64_t(1) << XEROV | uint64_t(1) << XERCA;
+    LowOp ReadFlags;
+    ReadFlags.Opcode = NdOp::INT_AND;
+    ReadFlags.Output = NdVar::reg(integerreg::gpr(9), Width);
+    ReadFlags.Inputs[0] = NdVar::reg(XER, Width);
+    ReadFlags.Inputs[1] = NdVar::scalar(Flags, Width);
+    ReadFlags.NumInputs = 2;
+    for (uint32_t Form :
+         {HighWordSigned, HighWordUnsigned, OverflowWord, OverflowDouble}) {
+      const bool High = Form == HighWordSigned || Form == HighWordUnsigned;
+      for (bool Record : {false, true}) {
+        uint8_t Code[4];
+        llvm::support::endian::write32(Code, Form | unsigned(Record),
+                                       archLittleEndian(A)
+                                           ? llvm::endianness::little
+                                           : llvm::endianness::big);
+        DecodedInsn I;
+        std::vector<LowOp> Ops;
+        const auto Decoded = D.decodeOneForLift(Code, sizeof(Code), 0x1000, I);
+        if (Form == OverflowDouble && !Wide) {
+          if (Decoded)
+            EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+          EXPECT_TRUE(Ops.empty());
+          continue;
+        }
+        ASSERT_EQ(Decoded, 4);
+        ASSERT_NO_THROW(D.liftToLow(I, Ops));
+        for (const auto &C : Cases) {
+          const uint32_t L = C.LHS, R = C.RHS;
+          const uint64_t WordProduct = int64_t(std::bit_cast<int32_t>(L)) *
+                                       int64_t(std::bit_cast<int32_t>(R));
+          uint64_t Expected =
+              Form == OverflowDouble ? C.LHS * C.RHS : WordProduct;
+          if (High)
+            Expected =
+                (Form == HighWordSigned ? WordProduct : uint64_t(L) * R) >> 32;
+          if (!Wide)
+            Expected = uint32_t(Expected);
+          for (bool OldSO : {false, true}) {
+            SCOPED_TRACE(::testing::Message()
+                         << getArchName(A) << " " << std::hex << Form
+                         << " Rc=" << Record << " " << C.LHS << " " << C.RHS
+                         << " SO=" << OldSO);
+            NdOpEmulator Emu(Img);
+            Emu.setStrictMode(true);
+            Emu.setRegister(integerreg::gpr(6), Wide ? C.LHS : L);
+            Emu.setRegister(integerreg::gpr(7), Wide ? C.RHS : R);
+            const uint64_t OldXER = uint64_t(OldSO) << XERSO |
+                                    uint64_t(1) << XEROV | uint64_t(1) << XERCA;
+            Emu.setRegister(XER, OldXER);
+            for (unsigned Bit = 0; Bit <= CRSO; ++Bit)
+              Emu.setRegister(crBit(Bit), Bit == CREQ);
+            ASSERT_EQ(Emu.run(Ops), Ops.size());
+            const bool OV =
+                Form == OverflowDouble ? C.DoubleOverflow : C.WordOverflow;
+            const bool SO = OldSO || (!High && OV);
+            ASSERT_TRUE(Emu.step(ReadFlags));
+            const uint64_t NewFlags = uint64_t(SO) << XERSO |
+                                      uint64_t(OV) << XEROV |
+                                      uint64_t(1) << XERCA;
+            EXPECT_EQ(Emu.getRegister(ReadFlags.Output.Offset),
+                      High ? OldXER : NewFlags);
+            const bool Partial = High && Wide;
+            for (unsigned Bit = 0; Bit < CRSO; ++Bit) {
+              const bool Negative = Expected >> (Wide ? 63 : 31);
+              std::optional<uint64_t> Value = Bit == CREQ;
+              if (Record && Partial)
+                Value.reset();
+              else if (Record)
+                Value = Bit == CRLT   ? Negative
+                        : Bit == CRGT ? !Negative && Expected
+                                      : !Expected;
+              EXPECT_EQ(Emu.getRegister(crBit(Bit)), Value);
+            }
+            EXPECT_EQ(Emu.getRegister(crBit(CRSO)), Record && SO);
+            if (!Partial) {
+              EXPECT_EQ(Emu.getRegister(integerreg::gpr(6)), Expected);
+              continue;
+            }
+            EXPECT_EQ(Emu.getRegister(integerreg::gpr(6)), std::nullopt);
+            LowOp Low;
+            Low.Opcode = NdOp::SUBBYTES;
+            Low.Output = NdVar::reg(integerreg::gpr(8), sizeof(uint32_t));
+            Low.Inputs[0] = NdVar::reg(integerreg::gpr(6), sizeof(uint64_t));
+            Low.Inputs[1] = NdVar::scalar(0, 4);
+            Low.NumInputs = 2;
+            ASSERT_TRUE(Emu.step(Low));
+            EXPECT_EQ(Emu.getRegister(integerreg::gpr(8)), Expected);
+            // A following word multiply can consume the known low word.
+            ASSERT_EQ(Emu.run(Ops), Ops.size());
+            ASSERT_TRUE(Emu.step(Low));
+            const uint32_t Previous = Expected;
+            const uint64_t Next =
+                Form == HighWordSigned
+                    ? uint64_t(int64_t(std::bit_cast<int32_t>(Previous)) *
+                               int64_t(std::bit_cast<int32_t>(R)))
+                    : uint64_t(Previous) * R;
+            EXPECT_EQ(Emu.getRegister(integerreg::gpr(8)), Next >> 32);
+          }
+        }
+      }
+    }
   }
 }
 

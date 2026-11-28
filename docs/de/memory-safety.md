@@ -2,14 +2,16 @@
 
 [← Dokumentationsindex](README.md)
 
-# Speicher-Audit und Hunt
+# Speichersicherheitsprüfung
+
+Mit `neverd scan <binary>` laufen beide Analysen. Mit `--analyzer=audit` oder `--analyzer=hunt` lässt sich eine einzelne Analyse auswählen. [Leitfaden zur gemeinsamen Prüfung (Englisch)](../memory-safety-scan.md).
 
 NeverD analysiert ein geladenes Binärfile auf zwei Familien von Speichersicherheitsfehlern und berichtet sie als strukturiertes JSON. Beide Spuren laufen auf dem formatneutralen, gelifteten IR, daher sind **PE/COFF, ELF und Mach-O gleichrangige Erstklassziele** — ein Fund hängt nie an einem format-spezifischen Scanner oder einer Importtabelle.
 
 | Spur | Befehl | Berichtet |
 |------|--------|-----------|
-| **Audit** | `neverd audit <binary>` | Heap-Lebensdauerfehler und uninitialisierte lokale Stack-Reads |
-| **Hunt** | `neverd hunt <binary>` | Gefährliche Copy-Überläufe mit symbolischer Evidenz und Eingabekandidaten; `replayable=true` nur mit einem vollständigen `process-input-v1`-Plan |
+| **Audit** | `neverd scan <binary> --analyzer=audit` | Heap-Lebensdauerfehler und uninitialisierte lokale Stack-Reads |
+| **Hunt** | `neverd scan <binary> --analyzer=hunt` | Gefährliche Copy-Überläufe mit symbolischer Evidenz und Eingabekandidaten; `replayable=true` nur mit einem vollständigen `process-input-v1`-Plan |
 
 Die Engine nutzt NeverDs eigene symbolische Ausführung und den Bitvektor-Solver für Zeugen und Erreichbarkeit. Kein externer Solver, keine VM, kein Container.
 
@@ -73,7 +75,7 @@ Fehlt `effect` bei einer JSON-Senke der Art copy oder format, wird ihre Anwendba
 Katalog per Spezifikationsdatei erweitern oder überschreiben:
 
 ```bash
-neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
+neverd scan --sinks extra_sinks.json --sources extra_sources.json app
 ```
 
 ```json
@@ -187,33 +189,27 @@ unvollständiger Slice sowie erschöpfte Tiefen- oder Zusammenfassungsbudgets
 lassen auch jede noch unbelegte Angreifersteuerung UNKNOWN; bereits bewiesene
 Fakten bleiben gültig und es wird keine Propagation erfunden.
 
-Die Reportzähler zählen Befunde, nicht Funktionen oder Pfade.
-`control_reachable` zählt `status=REACHABLE`; `attacker_reachable` ist die
-Teilmenge mit zusätzlichem `attacker_control=TAINTED`.
-`reachability_unknown` und `unreachable` zählen die übrigen Kontrollzustände.
-Sie sind von `safe`, `unsafe` und `unknown` für Urteile getrennt.
-
 ---
 
 <!-- i18n-section: budgets -->
 
 ## Budgets, Ausgabe und Bindings
 
-Hunt-Exploration und Solver sind begrenzt (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`). Interprozedural begrenzt `max_call_depth` die Zahl interner Aufrufkanten eines bekannten Einstiegspfads; `max_summary_iterations` begrenzt die Fixpunktrunden der Angreifersteuerung. Die Standardwerte sind 64 Kanten beziehungsweise die effektive Tiefengrenze plus eine Runde. Erschöpfung schlägt wie oben beschrieben geschlossen fehl. Ist `max_call_depth` erschöpft, kann eine noch nicht erreichte Funktion `status=UNKNOWN` bleiben; eine Erschöpfung von `max_summary_iterations` löscht den strukturellen Zeugen nicht, sodass `status=REACHABLE` mit `attacker_control=UNKNOWN` und `budget_hit=true` zusammen auftreten kann. Beide Befehle drucken JSON und respektieren `-o`. Der Exit-Code ist `0` für SAFE, `2` für UNSAFE und `1` für UNKNOWN oder einen Fehler.
+Hunt-Exploration und Solver sind begrenzt (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`). Interprozedural begrenzt `max_call_depth` die Zahl interner Aufrufkanten eines bekannten Einstiegspfads; `max_summary_iterations` begrenzt die Fixpunktrunden der Angreifersteuerung. Die Standardwerte sind 64 Kanten beziehungsweise die effektive Tiefengrenze plus eine Runde. Erschöpfung schlägt wie oben beschrieben geschlossen fehl. Ist `max_call_depth` erschöpft, kann eine noch nicht erreichte Funktion `status=UNKNOWN` bleiben; eine Erschöpfung von `max_summary_iterations` löscht den strukturellen Zeugen nicht, sodass `status=REACHABLE` mit `attacker_control=UNKNOWN` und `budget_hit=true` zusammen auftreten kann. `neverd scan` gibt JSON aus und unterstützt `-o`. Der Exit-Code ist `0` für SAFE, `2` für UNSAFE und `1` für UNKNOWN oder einen Fehler.
 
 Null wählt auf jeder öffentlichen Oberfläche den Engine-Standard:
 
 | Oberfläche | Kontrolltiefe | Angreifer-Zusammenfassung |
 |------------|---------------|---------------------------|
-| CLI (`audit` und `hunt`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| CLI (`scan`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
 | C (`neverd_safety_options`) | `max_call_depth` | `max_summary_iterations` |
-| Python (`Session.audit()` / `Session.hunt()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+| Python (`Session.scan()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
 
 C-Aufrufer initialisieren `neverd_safety_options` mit Null und setzen
 `struct_size=sizeof(neverd_safety_options)`; ältere Strukturgrößen behalten die
 Standardwerte. Python validiert beide Werte als vorzeichenlose 32-Bit-Zahlen.
 
-Dieselben Analysen stehen über die C-API (`neverd_session_audit_json` / `neverd_session_hunt_json` mit versioniertem `neverd_safety_options`) und das Python-SDK (`Session.audit()` / `Session.hunt()`) zur Verfügung.
+Verwenden Sie `neverd_session_scan_json` in C oder `Session.scan()` in Python. In C werden die Analysebudgets über `neverd_scan_options.analysis` übergeben.
 
 <!-- i18n-section: finding-schema -->
 

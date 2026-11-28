@@ -2,14 +2,16 @@
 
 [← Индекс документации](README.md)
 
-# Аудит и охота на ошибки безопасности памяти
+# Проверка безопасности памяти
+
+Команда `neverd scan <binary>` запускает обе проверки. Для выбора одной из них укажите `--analyzer=audit` или `--analyzer=hunt`. [Руководство по объединённой проверке (на английском)](../memory-safety-scan.md).
 
 NeverD анализирует загруженный двоичный файл на две семьи дефектов безопасности памяти и сообщает их структурированным JSON. Обе дорожки работают на формат-нейтральном поднятом IR, поэтому **PE/COFF, ELF и Mach-O — равноправные цели первого класса**: находка никогда не прячется за сканером или таблицей импорта одного формата.
 
 | Дорожка | Команда | Сообщает |
 |---------|---------|----------|
-| **Audit** | `neverd audit <binary>` | Дефекты жизни объектов кучи и неинициализированные чтения локального стека |
-| **Hunt** | `neverd hunt <binary>` | Переполнения опасных копий с символьным доказательством и кандидатами входных значений; `replayable=true` только при полном плане `process-input-v1` |
+| **Audit** | `neverd scan <binary> --analyzer=audit` | Дефекты жизни объектов кучи и неинициализированные чтения локального стека |
+| **Hunt** | `neverd scan <binary> --analyzer=hunt` | Переполнения опасных копий с символьным доказательством и кандидатами входных значений; `replayable=true` только при полном плане `process-input-v1` |
 
 Движок повторно использует собственное символьное исполнение NeverD и битвекторный солвер для свидетелей и достижимости. Внешнего солвера, ВМ или контейнера нет.
 
@@ -73,7 +75,7 @@ NeverD анализирует загруженный двоичный файл �
 Расширьте или переопределите каталог файлом спецификации:
 
 ```bash
-neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
+neverd scan --sinks extra_sinks.json --sources extra_sources.json app
 ```
 
 ```json
@@ -185,34 +187,28 @@ neverd hunt --sinks extra_sinks.json --sources extra_sources.json app
 атакующего UNKNOWN, если оно ещё не доказано; уже доказанные факты сохраняются,
 а анализ не выдумывает распространение.
 
-Счётчики отчёта считают находки, а не функции или пути. `control_reachable`
-считает `status=REACHABLE`; `attacker_reachable` — его подмножество, где также
-`attacker_control=TAINTED`. `reachability_unknown` и `unreachable` считают
-остальные состояния управления. Они отделены от `safe`, `unsafe` и `unknown`,
-которые считают вердикты.
-
 ---
 
 <!-- i18n-section: budgets -->
 
 ## Бюджеты, вывод и привязки
 
-Исследование охоты и солвер ограничены (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`). Для межпроцедурного анализа `max_call_depth` ограничивает число внутренних рёбер вызова от известного входа, а `max_summary_iterations` — число раундов фиксированной точки управления атакующего. Значения по умолчанию: 64 ребра и эффективная глубина плюс один раунд. Исчерпание закрывается отказом, как описано выше. Исчерпание `max_call_depth` может оставить `status=UNKNOWN` у ещё не достигнутой функции; исчерпание `max_summary_iterations` не стирает структурный свидетель, поэтому `status=REACHABLE` может сочетаться с `attacker_control=UNKNOWN` и `budget_hit=true`. Обе команды печатают JSON и уважают `-o`. Код выхода: `0` для SAFE, `2` для UNSAFE и `1` для UNKNOWN или ошибки.
+Исследование охоты и солвер ограничены (`--max-paths`, `--max-steps`, `--max-loop`, `--solver-conflicts`). Для межпроцедурного анализа `max_call_depth` ограничивает число внутренних рёбер вызова от известного входа, а `max_summary_iterations` — число раундов фиксированной точки управления атакующего. Значения по умолчанию: 64 ребра и эффективная глубина плюс один раунд. Исчерпание закрывается отказом, как описано выше. Исчерпание `max_call_depth` может оставить `status=UNKNOWN` у ещё не достигнутой функции; исчерпание `max_summary_iterations` не стирает структурный свидетель, поэтому `status=REACHABLE` может сочетаться с `attacker_control=UNKNOWN` и `budget_hit=true`. `neverd scan` выводит JSON и поддерживает `-o`. Код выхода: `0` для SAFE, `2` для UNSAFE и `1` для UNKNOWN или ошибки.
 
 Ноль выбирает значение движка по умолчанию во всех интерфейсах:
 
 | Интерфейс | Глубина управления | Сводка атакующего |
 |-----------|---------------------|-------------------|
-| CLI (`audit` и `hunt`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
+| CLI (`scan`) | `--max-call-depth <n>` | `--max-summary-iterations <n>` |
 | C (`neverd_safety_options`) | `max_call_depth` | `max_summary_iterations` |
-| Python (`Session.audit()` / `Session.hunt()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
+| Python (`Session.scan()`) | `max_call_depth=<n>` | `max_summary_iterations=<n>` |
 
 Вызывающий C-код обнуляет `neverd_safety_options` и задаёт
 `struct_size=sizeof(neverd_safety_options)`; старые размеры структуры сохраняют
 значения по умолчанию. Python проверяет оба значения как беззнаковые 32-битные
 целые.
 
-Те же анализы доступны через C API (`neverd_session_audit_json` / `neverd_session_hunt_json` с версионированным `neverd_safety_options`) и Python SDK (`Session.audit()` / `Session.hunt()`).
+В C используйте `neverd_session_scan_json`, в Python — `Session.scan()`. В C пределы анализа передаются через `neverd_scan_options.analysis`.
 
 <!-- i18n-section: finding-schema -->
 
