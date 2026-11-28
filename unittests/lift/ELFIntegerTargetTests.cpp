@@ -1000,9 +1000,33 @@ TEST(RISCVProfile, RoundedResultsAccrueFlagsAndObserveAliasedCSRFields) {
     Emu.setRegister(fpr(12), UINT64_C(0xffffffff40000000));
     ASSERT_TRUE(Run(RR(8, 12, 0)));
     EXPECT_EQ(Emu.getRISCVFCSR(), 0x9f);
+    Emu.setRISCVFCSR(0x20);         // RTZ, no flags
+    ASSERT_TRUE(Run(RR(8, 12, 7))); // max finite times two saturates
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff7f7fffff));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x25);
+    Emu.setRISCVFCSR(0x20);
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff00000001));
+    ASSERT_TRUE(
+        Run(RR(0, 12, 7))); // max finite plus a subnormal also saturates
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff7f7fffff));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x21);
+    // The product is exactly 2^128. A negative subnormal addend brings it
+    // below the overflow boundary even though binary128 RNE loses the addend.
+    constexpr uint32_t FMA = (13u << 27) | (12u << 20) | (11u << 15) |
+                             (7u << 12) | (10u << 7) | 0x43u;
+    Emu.setRegister(fpr(11), UINT64_C(0xffffffff5f800000));
+    Emu.setRegister(fpr(12), UINT64_C(0xffffffff5f800000));
+    Emu.setRegister(fpr(13), UINT64_C(0xffffffff80000001));
+    ASSERT_TRUE(Run(FMA));
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff7f7fffff));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x21);
+    Emu.setRegister(fpr(13), UINT64_C(0xffffffff00000001));
+    ASSERT_TRUE(Run(FMA));
+    EXPECT_EQ(Emu.getRegister(fpr(10)), UINT64_C(0xffffffff7f7fffff));
+    EXPECT_EQ(Emu.getRISCVFCSR(), 0x25);
     Emu.setRegister(integerreg::gpr(10), UINT32_MAX);
     ASSERT_TRUE(Run(CSR(3, 10, 1, 10))); // csrrw a0,fcsr,a0
-    EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)), 0x9fu);
+    EXPECT_EQ(Emu.getRegister(integerreg::gpr(10)), 0x25u);
     EXPECT_EQ(Emu.getRISCVFCSR(), 0xff);
     EXPECT_FALSE(Run(RR(1, 12, 7))); // reserved dynamic frm
     EXPECT_FALSE(riscv::decodeFloating(RR(1, 12, 5), 4, Image.RISCV));

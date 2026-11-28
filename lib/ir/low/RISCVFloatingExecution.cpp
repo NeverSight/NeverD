@@ -38,6 +38,27 @@ struct Answer {
   unsigned Flags;
 };
 
+APFloat widened(APFloat X) {
+  bool Loses = false;
+  X.convert(APFloat::IEEEquad(), APFloat::rmTowardZero, &Loses);
+  return X;
+}
+
+// APFloat reports only inexact when a directed overflow saturates. A nearby
+// inexact result can also round to the largest finite value without overflow.
+// The next power of two is exactly representable in binary128. Rounding toward
+// zero there keeps a value just below that boundary on the correct side, even
+// for a fused product with a tiny addend.
+template <typename WideResult>
+Answer rounded(const APFloat &Value, APFloat::opStatus Status,
+               WideResult Wide) {
+  unsigned Flags = accrued(Status);
+  if (Status == APFloat::opInexact && Value.isLargest() &&
+      ilogb(Wide()) > APFloat::semanticsMaxExponent(Value.getSemantics()))
+    Flags |= OF;
+  return {canonical(Value), Flags};
+}
+
 /// For a positive finite radicand, the square root is normal even for the
 /// smallest subnormal S or D. Its discarded part is above one half ulp iff
 /// N - floor(sqrt(N))^2 exceeds floor(sqrt(N)). A tie is impossible.
@@ -118,7 +139,7 @@ Answer evaluate(const FPForm &F, llvm::ArrayRef<uint64_t> In, unsigned RM) {
   if (F.Operation == Op::Convert) {
     bool Loses = false;
     const auto S = A.convert(semantics(F.Result), Mode, &Loses);
-    return {canonical(A), accrued(S)};
+    return rounded(A, S, [&] { return Value(0); });
   }
   if (F.Operation == Op::ToW || F.Operation == Op::ToWU ||
       F.Operation == Op::ToL || F.Operation == Op::ToLU) {
@@ -137,20 +158,23 @@ Answer evaluate(const FPForm &F, llvm::ArrayRef<uint64_t> In, unsigned RM) {
     return {R.getZExtValue(), accrued(S)};
   }
   APFloat B = Value(1);
-  APFloat::opStatus Status = APFloat::opOK;
+  const auto Binary = [&](auto Calculate) {
+    const auto Status = (A.*Calculate)(B, Mode);
+    return rounded(A, Status, [&] {
+      APFloat X = widened(Value(0));
+      (X.*Calculate)(widened(B), APFloat::rmTowardZero);
+      return X;
+    });
+  };
   switch (F.Operation) {
   case Op::Add:
-    Status = A.add(B, Mode);
-    break;
+    return Binary(&APFloat::add);
   case Op::Sub:
-    Status = A.subtract(B, Mode);
-    break;
+    return Binary(&APFloat::subtract);
   case Op::Mul:
-    Status = A.multiply(B, Mode);
-    break;
+    return Binary(&APFloat::multiply);
   case Op::Div:
-    Status = A.divide(B, Mode);
-    break;
+    return Binary(&APFloat::divide);
   case Op::MAdd:
   case Op::MSub:
   case Op::NMSub:
@@ -159,12 +183,22 @@ Answer evaluate(const FPForm &F, llvm::ArrayRef<uint64_t> In, unsigned RM) {
     unsigned Extra =
         ((A.isZero() && B.isInfinity()) || (A.isInfinity() && B.isZero())) ? NV
                                                                            : 0;
-    if (F.Operation == Op::NMSub || F.Operation == Op::NMAdd)
-      A.changeSign();
-    if (F.Operation == Op::MSub || F.Operation == Op::NMAdd)
-      C.changeSign();
-    Status = A.fusedMultiplyAdd(B, C, Mode);
-    return {canonical(A), Extra | accrued(Status)};
+    const auto Fused = [&](APFloat &X, const APFloat &Y, APFloat Z,
+                           APFloat::roundingMode Rounding) {
+      if (F.Operation == Op::NMSub || F.Operation == Op::NMAdd)
+        X.changeSign();
+      if (F.Operation == Op::MSub || F.Operation == Op::NMAdd)
+        Z.changeSign();
+      return X.fusedMultiplyAdd(Y, Z, Rounding);
+    };
+    const auto Status = Fused(A, B, C, Mode);
+    auto Result = rounded(A, Status, [&] {
+      APFloat X = widened(Value(0));
+      Fused(X, widened(B), widened(C), APFloat::rmTowardZero);
+      return X;
+    });
+    Result.Flags |= Extra;
+    return Result;
   }
   case Op::Min:
   case Op::Max: {
@@ -193,7 +227,6 @@ Answer evaluate(const FPForm &F, llvm::ArrayRef<uint64_t> In, unsigned RM) {
   default:
     llvm_unreachable("unhandled RISC-V floating operation");
   }
-  return {canonical(A), accrued(Status)};
 }
 } // namespace
 
