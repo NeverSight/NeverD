@@ -32,6 +32,11 @@ TEST_F(X64PagedExecutionTest, PagedEntriesEndAtPrefixFaults) {
   auto Bad = exportX64Continuation(image({0xf0, 0x0f}), Request, false);
   ASSERT_FALSE(bool(Bad));
   llvm::consumeError(Bad.takeError());
+  auto Relocated = image({0xf0, 0x0f, 0xff});
+  Relocated.UnappliedCodeRelocations.emplace(0x1001, 1);
+  auto Unapplied = exportX64Continuation(Relocated, Request, false);
+  ASSERT_FALSE(bool(Unapplied));
+  llvm::consumeError(Unapplied.takeError());
   auto Split = image({0xf0, 0x0f, 0xff});
   Section Text;
   Text.Name = ".text";

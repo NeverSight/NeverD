@@ -569,9 +569,6 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
     Matches =
         x86ExecutionBreakpoints(Options.Debug->DR, Options.Debug->DR7, Address,
                                 Original.RFlags, *DebugSSBlocked);
-  if (Matches && PrefixLengthFault)
-    return invalid("overlong prefix stream with a competing execution "
-                   "breakpoint requires its fault priority");
   if (auto Failure = Memory.bindControls(Controls))
     return std::move(Failure);
   if (PendingVirtualInterrupt) {

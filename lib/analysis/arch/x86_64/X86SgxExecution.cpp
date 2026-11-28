@@ -268,17 +268,8 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   if ((R.RFlags & 0x100) && !S.Debug)
     return invalid("software enclave transfer with TF requires its debug bank");
   if (!Fetched) {
-    if (S.Debug && EPC.instructionBreakpointsAt(R.PC)) {
-      const auto Matches = x86ExecutionBreakpoints(S.Debug->DR, S.Debug->DR7,
-                                                   R.PC, R.RFlags, S.SSBlocked);
-      if (Matches) {
-        x86PublishInstructionDebug(*S.Debug, false, Matches);
-        FaultKind = X86EventKind::InstructionBreakpoint;
-        Out.InstructionAttempted = true;
-        return Fault(1);
-      }
-    }
-    auto OK = fetchX86SystemInstruction(S, M, ExpectedBytes, {}, Out);
+    auto OK =
+        fetchX86SystemInstruction(S, M, ExpectedBytes, {}, Out, FaultKind);
     if (!OK)
       return OK.takeError();
     if (!*OK)

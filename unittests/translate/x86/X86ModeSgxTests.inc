@@ -133,22 +133,27 @@ TEST_F(X86ModeSgxTest,
   std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
   if (const char *NeverC = std::getenv("NEVERD_TEST_NEVERC"))
     Compilers.emplace_back(NeverC);
+  struct FaultCase {
+    std::vector<uint8_t> Bytes;
+    bool NXE = false;
+  };
+  const FaultCase Cases[]{
+      {{}},
+      {{0x8e, 0xe0}},
+      {{0xcc}},
+      {{0xf1}},
+      {{0xf4}},
+      {{0xc5, 0xf8, 0x77}},
+      {{0x89, 0x06}},
+      {{0xf0, 0x0f, 0xff, 0xc0}},
+      {{0x67, 0xf0, 0x0f, 0xff}},
+      {{0x67, 0xf0, 0x0f, 0xff}, true},
+      {std::vector<uint8_t>(x86::kMaxInstructionLen, 0x40)}};
   for (const auto &Compiler : Compilers)
     for (bool LLVM : {false, true})
-      for (const std::vector<uint8_t> &FaultBytes :
-           std::vector<std::vector<uint8_t>>{
-               {},
-               {0x8e, 0xe0},
-               {0xcc},
-               {0xf1},
-               {0xf4},
-               {0xc5, 0xf8, 0x77},
-               {0x89, 0x06},
-               {0xf0, 0x0f, 0xff, 0xc0},
-               {0x67, 0xf0, 0x0f, 0xff},
-               std::vector<uint8_t>(x86::kMaxInstructionLen, 0x40)}) {
+      for (const auto &[FaultBytes, NXE] : Cases) {
         SCOPED_TRACE(testing::Message()
-                     << Compiler << " llvm=" << LLVM
+                     << Compiler << " llvm=" << LLVM << " nxe=" << NXE
                      << ", bytes=" << testing::PrintToString(FaultBytes));
         const bool LockedUD0 =
             !FaultBytes.empty() && FaultBytes.front() == 0xf0;
@@ -160,13 +165,17 @@ TEST_F(X86ModeSgxTest,
         const bool GPFault =
             Overlong || (!FaultBytes.empty() && FaultBytes.front() == 0xf4);
         const uint64_t FaultAddress = TailPF ? Base + 0x2000 : Base + 0x1027;
-        const uint32_t PageError = TailPF ? 0x8015 : 0x8007;
+        const uint32_t PageError = TailPF ? (NXE ? 0x8015 : 0x8005) : 0x8007;
         const bool ErrorCode = PageFault || GPFault;
         const bool AVX =
             LLVM && (FaultBytes.empty() || FaultBytes.front() != 0xc5);
         const uint64_t XFRM = AVX ? 7 : 3;
         const uint64_t EnclaveXCR0 = LLVM ? XFRM : 7;
         start(Mode::Long64);
+        if (NXE) {
+          Features.NX = true;
+          Controls.EFER |= 1u << 11;
+        }
         if (LockedUD0 || TailPF)
           Options.Long.UD0Fetch = (TailPF || LLVM)
                                       ? X86UD0FetchProfile::CompleteModRM
