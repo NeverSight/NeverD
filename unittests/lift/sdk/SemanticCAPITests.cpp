@@ -129,7 +129,9 @@ TEST(NeverDSemanticCAPI, StableEnumsAndNamesArePinned) {
 }
 
 TEST(NeverDSemanticCAPI, LegacySimplificationRemainsMBAOnly) {
-  constexpr const char *Expression = "(x >> 4) + ((x >> 2) >> 2)";
+  // For b = x & 1, both 0 >> 0 and 1 >> 1 equal zero. The variable
+  // shift gives synthesis a one-node candidate outside the MBA rules.
+  constexpr const char *Expression = "(x & 1) >> (x & 1)";
   neverd_simplify_options Options{};
   Options.struct_size = sizeof(Options);
   neverd_simplify_result Result{};
@@ -147,6 +149,16 @@ TEST(NeverDSemanticCAPI, LegacySimplificationRemainsMBAOnly) {
   EXPECT_EQ(Object.get("stop"), nullptr);
   EXPECT_EQ(Object.get("counterexample"), nullptr);
   neverd_free_string(JSON);
+
+  auto Synthesis = quickSynthesisOptions();
+  neverd_synthesize_result Proved{};
+  Proved.struct_size = sizeof(Proved);
+  ASSERT_EQ(neverd_synthesize_expr(Expression, &Synthesis, &Proved), 0);
+  EXPECT_EQ(Proved.ok, 1);
+  EXPECT_EQ(Proved.changed, 1);
+  EXPECT_EQ(Proved.proof_status, NEVERD_PROOF_EQUIVALENT);
+  EXPECT_STREQ(Proved.output, "0");
+  neverd_synthesize_result_dispose(&Proved);
 }
 
 TEST(NeverDSemanticCAPI, ShortSimplifyOptionsDoNotReadAppendedFields) {
