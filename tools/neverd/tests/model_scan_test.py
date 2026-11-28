@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+import zlib
 
 CLI = sys.argv.pop(1)
 WORKER = sys.argv.pop(1) if len(sys.argv) > 1 else None
@@ -724,6 +725,70 @@ class ModelScan(unittest.TestCase):
                 ("fixture_module", "InertType", 0),
             )
             self.assertEqual(f["coordinate_space"], "decoded-member")
+        # An aligned, descriptor-framed stored member and a classic-size ZIP64
+        # trailer as used by checkpoint containers. Python independently reads it.
+        name = b"model/data.pkl"
+        crc = zlib.crc32(stream)
+        padding = struct.pack("<HH", 0x4246, 16) + bytes(16)
+        local = (
+            struct.pack(
+                "<IHHHHHIIIHH",
+                0x04034B50,
+                0,
+                8,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                len(name),
+                len(padding),
+            )
+            + name
+            + padding
+        )
+        local += stream + struct.pack(
+            "<IIII", 0x08074B50, crc, len(stream), len(stream)
+        )
+        central = (
+            struct.pack(
+                "<I6H3I5H2I",
+                0x02014B50,
+                0,
+                0,
+                8,
+                0,
+                0,
+                0,
+                crc,
+                len(stream),
+                len(stream),
+                len(name),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            )
+            + name
+        )
+        end64 = struct.pack(
+            "<IQHHIIQQQQ", 0x06064B50, 44, 45, 45, 0, 0, 1, 1, len(central), len(local)
+        )
+        locator = struct.pack("<IIQI", 0x07064B50, 0, len(local) + len(central), 1)
+        end = struct.pack(
+            "<I4H2IH", 0x06054B50, 0, 0, 1, 1, len(central), len(local), 0
+        )
+        archive.write_bytes(local + central + end64 + locator + end)
+        with zipfile.ZipFile(archive) as z:
+            self.assertEqual(z.read(name.decode()), stream)
+        p = self.scan(archive, code=2)["packages"][0]
+        self.assertEqual(
+            p["artifacts"][0]["members"][0]["pickle"]["sha256"],
+            hashlib.sha256(stream).hexdigest(),
+        )
         with zipfile.ZipFile(archive, "w") as z:
             z.writestr("../escape.pkl", b"N.")
         self.assertTrue(self.scan(archive, code=1)["packages"][0]["coverage_gaps"])
