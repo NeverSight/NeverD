@@ -1069,9 +1069,8 @@ bool containsForbiddenAfter(const symbolic::SymPath &Path,
 class Auditor {
 public:
   Auditor(const AnalysisInput &In, const SinkCatalog &Cat,
-          const SafetyBudgets &Budgets, bool IncludeStackReads)
-      : In(In), Cat(Cat), Budgets(Budgets),
-        IncludeStackReads(IncludeStackReads) {
+          const SafetyBudgets &Budgets, DirectReadInitialization *DirectReads)
+      : In(In), Cat(Cat), Budgets(Budgets), DirectReads(DirectReads) {
     buildSummaries();
   }
 
@@ -1115,7 +1114,7 @@ private:
   const AnalysisInput &In;
   const SinkCatalog &Cat;
   const SafetyBudgets &Budgets;
-  bool IncludeStackReads = false;
+  DirectReadInitialization *DirectReads;
   llvm::DenseMap<va_t, Summary> Summaries;
   bool SummaryFixpointComplete = true;
 
@@ -2491,7 +2490,7 @@ private:
       }
     }
 
-    if (IncludeStackReads)
+    if (DirectReads)
       auditUninitializedStackReads(F, Mem, Out);
 
     std::optional<ReturnContract> Contract;
@@ -2806,28 +2805,72 @@ private:
     }
   }
 
+  // A completed ordinary store of literal bytes initializes a following
+  // ordinary load on the same path. Keep this write proof separate from
+  // reaching-value recovery, which needs the exact value and width.
+  bool precedingStoreInitializes(const MedOp &Store, const MedOp &Load,
+                                 const MedVar &Addr,
+                                 std::optional<int64_t> ReadOffset,
+                                 const MemModel &Mem) const {
+    if (Store.Opcode != NdOp::STORE || Load.Opcode != NdOp::LOAD ||
+        Store.MemoryOrdering != NdMemoryOrdering::None ||
+        Load.MemoryOrdering != NdMemoryOrdering::None)
+      return false;
+    const MedVar *Value = detail::storedValue(Store);
+    const MedVar *Dest = detail::memoryAddress(Store);
+    if (!Value || !Value->isConst() ||
+        Value->Provenance != ConstantAddressProvenance::Scalar ||
+        Value->Size > sizeof(Value->ConstVal) ||
+        Value->Size < Load.Output.Size || !Dest || Dest->Size != Addr.Size)
+      return false;
+    if (ReadOffset) {
+      const auto Written = Mem.stackOffsetThroughReloads(*Dest);
+      return Written && *Written <= *ReadOffset &&
+             uint64_t(*ReadOffset) - uint64_t(*Written) <=
+                 unsigned(Value->Size - Load.Output.Size);
+    }
+    if (Mem.AmbiguousDefs.count(keyOf(Addr)))
+      return false;
+    if (Addr.Kind == MedVar::Reg)
+      return detail::sameRegisterOccurrence(Addr, *Dest);
+    return (Addr.Kind == MedVar::Temp || Addr.Kind == MedVar::Param) &&
+           Addr == *Dest && Addr.TheArch == Dest->TheArch &&
+           Addr.RenameTag == Dest->RenameTag;
+  }
+
   void auditUninitializedStackReads(const MedFunc &F, const MemModel &Mem,
                                     std::vector<Finding> &Out) const {
     for (const MedBlock &B : F.Blocks)
       for (int Oi = 0; Oi < static_cast<int>(B.Ops.size()); ++Oi) {
         const MedOp &Op = B.Ops[Oi];
-        if (!detail::isStackMemoryRead(Op.Opcode) || Op.Output.Size == 0)
+        if (!detail::isStackMemoryRead(Op.Opcode))
           continue;
         const MedVar *Addr = detail::memoryAddress(Op);
-        if (!Addr)
+        if (!Addr || Op.Output.Size == 0) {
+          ++DirectReads->OutsideOrUnresolved;
           continue;
+        }
         const std::optional<int64_t> Offset =
             Mem.stackOffsetThroughReloads(*Addr);
-        // Positive entry-SP offsets are caller-owned argument/ABI storage.
-        // This audit only claims local frame bytes below the entry SP.
-        if (!Offset || *Offset >= 0)
-          continue;
         // In a mixed-width frame a memory operation can address through
         // the full GPR that carries the ABI's four-byte pointer.
         const bool FullAddressRegister =
             Mem.MixedWidthStack &&
             Addr->Size == getTargetRegInfo(In.Img->Arch).addressRegisterBytes();
-        if (!valueHasPointerWidth(*Addr) && !FullAddressRegister) {
+        const bool ValidWidth = valueHasPointerWidth(*Addr) ||
+                                (Offset && *Offset < 0 && FullAddressRegister);
+        if (ValidWidth && Oi > 0 &&
+            precedingStoreInitializes(B.Ops[Oi - 1], Op, *Addr, Offset, Mem)) {
+          ++DirectReads->PrecedingConstantStore;
+          continue;
+        }
+        if (!Offset || *Offset >= 0) {
+          ++DirectReads->OutsideOrUnresolved;
+          continue;
+        }
+        // Bytes at or above the entry SP belong to the caller.
+        if (!ValidWidth || Op.Output.Size > uint64_t{0} - uint64_t(*Offset)) {
+          ++DirectReads->OutsideOrUnresolved;
           Finding Fn;
           Fn.Origin = Track::Audit;
           Fn.Class = VulnClass::UninitializedRead;
@@ -2840,7 +2883,10 @@ private:
           Fn.CallVA = Op.Addr;
           Fn.Source = NameSource::Synthetic;
           Fn.Flow = ArgFlow::Unknown;
-          Fn.Detail = "memory address has incompatible target pointer width";
+          Fn.Detail =
+              ValidWidth
+                  ? "read extends into caller-owned stack storage"
+                  : "memory address has incompatible target pointer width";
           if (In.Dbg)
             if (auto Loc = In.Dbg->sourceLocation(Op.Addr);
                 Loc && !Loc->File.empty())
@@ -2848,6 +2894,7 @@ private:
           Out.push_back(std::move(Fn));
           continue;
         }
+        ++DirectReads->LocalStack;
         const detail::ReachingStackValues Reaching =
             Mem.reachingRead(B, Oi, *Addr, Op.Output.Size);
         if (!Reaching.Reachable ||
@@ -2916,13 +2963,19 @@ private:
         Out.push_back(std::move(Fn));
         return;
       }
-      if (!Bytes || *Bytes > std::numeric_limits<uint16_t>::max()) {
+      const bool CrossesEntry =
+          Bytes && *Bytes > uint64_t{0} - uint64_t(*Offset);
+      if (CrossesEntry || !Bytes ||
+          *Bytes > std::numeric_limits<uint16_t>::max()) {
         Finding Fn = baseFinding(F, VulnClass::UninitializedRead, callVA(F, CI),
                                  callName(CI), CI.TargetAddr, CI.IsIndirect);
         Fn.ArgIndex = SourceArg;
         Fn.TheVerdict = Verdict::Unknown;
         Fn.TheConfidence = Confidence::Low;
-        Fn.Detail = UnknownDetail.str();
+        Fn.Detail =
+            CrossesEntry
+                ? "call source read extends into caller-owned stack storage"
+                : UnknownDetail.str();
         Out.push_back(std::move(Fn));
         return;
       }
@@ -3343,7 +3396,7 @@ private:
 std::vector<Finding> neverd::safety::auditHeap(const AnalysisInput &In,
                                                const SinkCatalog &Cat,
                                                const SafetyBudgets &Budgets) {
-  Auditor A(In, Cat, Budgets, /*IncludeStackReads=*/false);
+  Auditor A(In, Cat, Budgets, nullptr);
   return A.run();
 }
 
@@ -3357,6 +3410,16 @@ std::vector<Finding>
 neverd::safety::auditMemory(const AnalysisInput &In, const SinkCatalog &Cat,
                             const SafetyBudgets &Budgets,
                             llvm::function_ref<bool()> Canceled) {
-  Auditor A(In, Cat, Budgets, /*IncludeStackReads=*/true);
+  DirectReadInitialization DirectReads;
+  return auditMemory(In, Cat, Budgets, Canceled, DirectReads);
+}
+
+std::vector<Finding>
+neverd::safety::auditMemory(const AnalysisInput &In, const SinkCatalog &Cat,
+                            const SafetyBudgets &Budgets,
+                            llvm::function_ref<bool()> Canceled,
+                            DirectReadInitialization &DirectReads) {
+  DirectReads = {};
+  Auditor A(In, Cat, Budgets, &DirectReads);
   return A.run(Canceled);
 }
