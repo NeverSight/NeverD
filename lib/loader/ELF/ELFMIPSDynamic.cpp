@@ -85,6 +85,23 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
         return Entries.takeError();
       for (const auto &Entry : *Entries) {
         const auto Type = Entry.getType(ELF.isMips64EL());
+        const auto Index = Entry.getSymbol(ELF.isMips64EL());
+        // With symbol zero the dynamic linker adds only the image load bias
+        // to the in-place pointer. NeverD maps at the ELF's link addresses.
+        // n64 encodes the same operation at pointer width with a second type.
+        constexpr unsigned Relative =
+            ELFT::Is64Bits ? R_MIPS_REL32 | (R_MIPS_64 << 8) : R_MIPS_REL32;
+        if (Runtime && Section.sh_type == SHT_REL && !Index &&
+            Type == Relative) {
+          typename ELFT::Addr Target;
+          const uint8_t *Bytes = Img.readVA(Entry.r_offset, sizeof(Target));
+          if (!Bytes)
+            return llvm::createStringError(
+                "elf: unmapped MIPS relative relocation");
+          std::memcpy(&Target, Bytes, sizeof(Target));
+          LinkedPointers.push_back({Entry.r_offset, Target});
+          continue;
+        }
         if constexpr (ELFT::Is64Bits)
           if ((Type & 0xffffff00u) &&
               (Runtime || Section.sh_type != SHT_RELA ||
@@ -109,7 +126,6 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
         }
         if (Type == R_MIPS_NONE)
           continue;
-        const auto Index = Entry.getSymbol(ELF.isMips64EL());
         if (!Index || Index >= Symbols.size())
           return llvm::createStringError(
               llvm::inconvertibleErrorCode(),

@@ -20,6 +20,10 @@ inline constexpr unsigned VLE = 0x10000000;        // PF_PPC_VLE and SHF_PPC_VLE
 inline constexpr unsigned DynamicOPD = 0x70000001; // DT_PPC64_OPD
 inline constexpr unsigned DynamicOPDSize = 0x70000002; // DT_PPC64_OPDSZ
 inline constexpr unsigned InstructionAlignment = 4;
+// The minimal ELF64 traceback table has a zero marker and eight zero header
+// bytes. Some producers include it in the function symbol's size.
+inline constexpr unsigned EmptyTracebackTableSize = 12;
+inline constexpr uint32_t ReturnToLinkRegister = 0x4e800020; // blr
 inline constexpr char ELFv1Name[] = "elfv1";
 inline constexpr char ELFv2Name[] = "elfv2";
 inline constexpr unsigned SymbolVisibilityMask = 0x3; // ELF64_ST_VISIBILITY

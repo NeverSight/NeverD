@@ -31,6 +31,7 @@
 #include "NativeSnapshotSession.h"
 #include "SessionImpl.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/debug/DebugInfoDiscovery.h"
 #include "neverd/debug/PDBFunctionNameHint.h"
@@ -1233,6 +1234,8 @@ const char *neverd_session_debug_info_path(neverd_session_t Sess) {
 
 namespace {
 bool nativeDiscovery(const Session &S) {
+  if (S.Img.isELF())
+    return archLiftSupported(S.Img.Arch);
   return S.Img.Arch == Arch::X86 || S.Img.Arch == Arch::X64 ||
          S.Img.Arch == Arch::ARM || S.Img.Arch == Arch::AArch64;
 }

@@ -26,14 +26,6 @@ bool isDataSlot(Arch Target, uint32_t Type) {
   return false;
 }
 
-bool isAbsoluteSymbol(Arch Target, uint32_t Type) {
-#define NEVERD_ELF_ABSOLUTE_SYMBOL(ISA, Reloc)                                 \
-  if (Target == Arch::ISA && Type == llvm::ELF::Reloc)                         \
-    return true;
-#include "ELF/ELFDynamicRelocations.def"
-  return false;
-}
-
 bool immutableSlot(const BinaryImage &Image, va_t Slot) {
   const unsigned Width = Image.getPointerSize();
   return Image.readVA(Slot, Width) &&
@@ -121,8 +113,8 @@ collectExternalFunctionPointers(const BinaryImage &Image) {
     return Pointers;
   std::set<va_t> Conflicts;
   for (const auto &Relocation : Image.Relocations) {
-    if (!isAbsoluteSymbol(Image.Arch, Relocation.Type) || !Relocation.ELF ||
-        !Relocation.ELF->Symbol)
+    if (!elf_loader::isAbsoluteSymbolRelocation(Image.Arch, Relocation.Type) ||
+        !Relocation.ELF || !Relocation.ELF->Symbol)
       continue;
     // The loader may leave a weak symbol's word null.
     const auto &Symbol = *Relocation.ELF->Symbol;

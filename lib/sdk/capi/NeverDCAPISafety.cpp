@@ -8,6 +8,7 @@
 #include "JSONText.h"
 #include "SessionImpl.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/safety/SafetyScan.h"
@@ -166,8 +167,8 @@ uint64_t dataPointerCount(const BinaryImage &Img, const Section &Data) {
       break;
     const auto Target = relocatedPointer(Img, *It);
     const Section *Dest = Target ? Img.getSectionFor(*Target) : nullptr;
-    if (!Dest || Dest->IsImageHeader || Dest->isExecutable() ||
-        Img.isCodeAddress(*Target))
+    if (!Dest || Dest->IsImageHeader || !Dest->isReadable() ||
+        Dest->isExecutable() || Img.isCodeAddress(*Target))
       continue;
     // A one-past pointer may have the same value as the next section's
     // first byte. Its relocation still belongs to the original section.
@@ -187,8 +188,9 @@ const char *runDataPtrScan(Session &S, neverd_cancel_probe_fn Cancel,
     return nullptr;
   }
   const BinaryImage &Img = S.Img;
-  if (!Img.isCOFF() || Img.Arch != Arch::X64) {
-    S.setError("data-ptr scan requires an x64 PE/COFF image");
+  if (!archLiftSupported(Img.Arch) ||
+      !(Img.isCOFF() || Img.isELF() || Img.isMachO())) {
+    S.setError("data-ptr scan requires a native PE/COFF, ELF or Mach-O image");
     return nullptr;
   }
   const Section *Data = Img.getDataSection();
