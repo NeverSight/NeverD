@@ -5384,6 +5384,15 @@ TEST_F(JTE_X86_64, AnUnboundedOwnLabelTableDispatchesByValue) {
   ASSERT_FALSE(Writable.Blocks.empty());
   EXPECT_TRUE(Writable.ValueDispatches.empty());
   EXPECT_TRUE(Writable.JumpTables.empty());
+
+  // Every label of jt_own_join reads %r15 before a write on one path: the
+  // read is the program's own, so both labels stay.  Its table follows the
+  // three-word tables of jt_own_shared.
+  const neverd::va_t Join = Hoisted + (4 + 3 + 3) * 4;
+  const neverd::LowFunc JoinFunc = Build("jt_own_join");
+  ASSERT_EQ(JoinFunc.ValueDispatches.size(), 1u);
+  EXPECT_EQ(JoinFunc.ValueDispatches.front().Targets,
+            (std::vector<neverd::va_t>{Label(Join, 0), Label(Join, 1)}));
 }
 
 static fs::path ownLabelDispatchWin64Obj() {

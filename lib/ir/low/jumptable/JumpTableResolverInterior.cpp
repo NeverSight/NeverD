@@ -1083,6 +1083,23 @@ void CFGBuilder::dispatchUnprovedBranchesByValue(const BinaryImage &Img,
       }
     }
   };
+  // A table jump goes to one of its labels whenever control reaches it.  So
+  // when every label reads a kept register no path to the jump wrote, those
+  // reads are the program's own and tell no label from another, as an unused
+  // payload stored from a register the prologue saved: the jump keeps its
+  // whole table, and the function's table jumps stop testing what it read.
+  uint64_t Own = 0;
+  auto Missing = [&](size_t J, size_t L) {
+    const uint64_t Miss = Needed[LabelBlocks[L]] & ~Written[JumpBlocks[J]];
+    return J < UnprovedJumps ? Miss : Miss & ~Own;
+  };
+  auto TakeTable = [&](size_t J) {
+    for (size_t L = 0; L < Labels.size(); ++L)
+      if (Allowed[J][L]) {
+        Own |= Missing(J, L);
+        Edges[J][L] = true;
+      }
+  };
   // Decide the jumps in the order control reaches them, each with the edges
   // decided before it.
   for (bool Progress = true; Progress;) {
@@ -1091,27 +1108,40 @@ void CFGBuilder::dispatchUnprovedBranchesByValue(const BinaryImage &Img,
     for (size_t J = 0; J < Jumps.size(); ++J) {
       if (Decided[J] || !Reached[JumpBlocks[J]])
         continue;
-      for (size_t L = 0; L < Labels.size(); ++L)
-        Edges[J][L] = Allowed[J][L] &&
-                      (Needed[LabelBlocks[L]] & ~Written[JumpBlocks[J]]) == 0;
+      bool AnyEdge = false;
+      for (size_t L = 0; L < Labels.size(); ++L) {
+        Edges[J][L] = Allowed[J][L] && Missing(J, L) == 0;
+        AnyEdge = AnyEdge || Edges[J][L];
+      }
+      if (!AnyEdge && J >= UnprovedJumps)
+        TakeTable(J);
       Decided[J] = true;
       Progress = true;
       break;
     }
   }
   // An edge decided early can fail once later ones exist: drop it.  Each
-  // removal only makes the remaining ones easier to keep.
+  // removal only makes the remaining ones easier to keep.  A table jump that
+  // would keep none takes its table as above, which only adds to Own.
   for (bool Removed = true; Removed;) {
     Removed = false;
     Solve();
-    for (size_t J = 0; J < Jumps.size(); ++J)
-      for (size_t L = 0; L < Labels.size(); ++L)
-        if (Edges[J][L] &&
-            (!Reached[JumpBlocks[J]] ||
-             (Needed[LabelBlocks[L]] & ~Written[JumpBlocks[J]]) != 0)) {
-          Edges[J][L] = false;
-          Removed = true;
+    for (size_t J = 0; J < Jumps.size(); ++J) {
+      bool Had = false, Has = false;
+      for (size_t L = 0; L < Labels.size(); ++L) {
+        if (!Edges[J][L])
+          continue;
+        Had = true;
+        if (Reached[JumpBlocks[J]] && Missing(J, L) == 0) {
+          Has = true;
+          continue;
         }
+        Edges[J][L] = false;
+        Removed = true;
+      }
+      if (Had && !Has && Reached[JumpBlocks[J]] && J >= UnprovedJumps)
+        TakeTable(J);
+    }
   }
 
   bool Changed = false;

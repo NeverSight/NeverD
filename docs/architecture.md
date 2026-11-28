@@ -3049,7 +3049,12 @@ names an address. An edge is kept only where every callee-saved register the
 label's code reads before writing has been written on every path to the jump
 (under the image's calling convention, so Win64 counts `%rsi` and `%rdi` too):
 a table has words its index never selects, and following one must not turn a
-register the caller keeps into an input of the function. Jumps are decided in
+register the caller keeps into an input of the function. A jump through a
+table of its own labels goes to one of them whenever control reaches it, so
+when every label reads such a register, the reads are the program's own
+(gimli's `FileEntry::clone` stores the `%r15` its prologue saved as an unused
+payload): that jump keeps its whole table, and the function's table jumps stop
+testing those registers. Jumps are decided in
 the order control reaches them and the result is checked once more as a whole.
 `LowFunc::ValueDispatches` holds the result beside the recovered tables,
 because it recovers none; MedIR lists it with them, marked

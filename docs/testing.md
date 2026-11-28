@@ -1624,8 +1624,9 @@ LOAD of the slot with the labels' offsets from the table. A label that reads
 `%rbx` before any path to the jump wrote it is left out, a slot that names an
 address inside an instruction ends the table, a table address loaded into
 `%r12` before a loop is found at its dispatch, a dispatch that one of its
-labels re-enters with another table's address is withdrawn, and a table in
-`.data` gives no labels. `x64swx_enumbyte0`, `3` and `5` in `NeverDSwitchXformTests` run the
+labels re-enters with another table's address is withdrawn, a table in
+`.data` gives no labels, and a dispatch whose every label stores the `%r15`
+its prologue saved on some path keeps both labels. `x64swx_enumbyte0`, `3` and `5` in `NeverDSwitchXformTests` run the
 same shape from C, an unreachable default on a byte argument, through the lift,
 recompile and emulation and compare the results; `x64swx_enumload` runs eight
 such switches in a row on bytes read back from the stack, whose domains run out
