@@ -353,8 +353,22 @@ struct QueryService::State {
   std::optional<Cached> takeAnswer(const Job &job, bool carried = false) {
     if (job.spec.payload.value("refresh").toBool())
       return std::nullopt;
-    const auto name = key(job, true);
+    auto name = key(job, true);
     auto *cached = cache.object(name);
+    if (!cached && !carried &&
+        job.spec.operation == QLatin1String("decompile") &&
+        !job.spec.payload.contains(QLatin1String("listed_entry_only"))) {
+      // A successful listing prefetch established the exact function entry.
+      // Its page can answer F5 within the same revision and listing generation.
+      name = key(job, true, /*listedOnly=*/true);
+      cached = cache.object(name);
+      if (cached &&
+          (cached->once ||
+           !sameAddress(
+               cached->response.value("payload").toObject().value("address"),
+               job.spec.payload.value("address"))))
+        return std::nullopt;
+    }
     if (!cached ||
         (!cached->once && (carried || !cacheable(job.spec.operation))))
       return std::nullopt;
@@ -394,8 +408,10 @@ struct QueryService::State {
         .toJson(QJsonDocument::Compact);
   }
 
-  QByteArray key(const Job &job, bool forCache) const {
+  QByteArray key(const Job &job, bool forCache, bool listedOnly = false) const {
     auto payload = job.spec.payload;
+    if (listedOnly)
+      payload[QStringLiteral("listed_entry_only")] = true;
     // Refresh bypasses cached reads, but its result is the current page for
     // ordinary navigation and for the reads carried with the next edit.
     if (forCache)
@@ -1382,6 +1398,9 @@ struct QueryService::State {
     if (job->kind == Read && status == "ok" && cacheable(job->spec.operation)) {
       const auto cleaned = cleanResponse(response);
       answerBytes = weight(cleaned, answerBytes);
+      if (job->spec.operation == QLatin1String("decompile") &&
+          job->spec.payload.value("refresh").toBool())
+        cache.remove(key(*job, true, /*listedOnly=*/true));
       keepAnswer(key(*job, true), cleaned, answerBytes);
     }
     job->resultBytes = answerBytes;

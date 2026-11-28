@@ -71,6 +71,8 @@ public:
   /// Rows supplied locally instead of by the worker (bookmarks).
   void setLocalRows(const QJsonArray &rows);
   void reload();
+  /// A hidden dock can defer the first page until its tab becomes current.
+  void setPageVisible(bool visible);
   void cancelLoading();
   /// Resume an explicitly cancelled read without discarding visible rows.
   void resumeLoading();
@@ -142,6 +144,8 @@ private:
   mutable std::list<int> requestOrder_;
   QJsonArray local_;
   bool localRows_ = false;
+  bool pageVisible_ = true;
+  bool firstPageDeferred_ = false;
   bool cancelled_ = false;
   int total_ = 0;
   quint64 serial_ = 0;

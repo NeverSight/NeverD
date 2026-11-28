@@ -19,8 +19,46 @@ def note(client):
     return items[0]["text"] if items else ""
 
 
+def check_history_sync(executable, directory):
+    binary = directory / "sync.bin"
+    binary.write_bytes(b"sync fixture")
+    history = Path(str(binary) + ".neverd/local/history.json")
+    annotations = Path(str(binary) + ".neverd/annotations.json")
+    client = Client(executable)
+    try:
+        ok(client, "open", {"path": str(binary)})
+        ok(client, "annotation_set", {"address": BASE, "text": "original"})
+        ok(client, "save")
+    finally:
+        client.close()
+
+    for changed in (False, True):
+        journal = json.loads(history.read_text())
+        journal["source_sha256"] = "0" * 64
+        history.write_text(json.dumps(journal))
+        client = Client(executable)
+        try:
+            ok(client, "open", {"path": str(binary)})
+            blocked = client.call("history")
+            assert blocked["payload"]["blocked_reason"] == "input_changed", blocked
+            if changed:
+                annotations.write_text(json.dumps([dict(addr=BASE, text="external")]))
+            sync = client.call("project_sync")
+            assert sync["status"] == "ok", sync
+            assert sync["payload"]["changed"] and sync["payload"]["tables"] == changed, sync
+            assert (sync["revision"] != blocked["revision"]) == changed, sync
+            assert sync["payload"].get("history_only", False) != changed, sync
+            assert note(client) == ("external" if changed else "original")
+            current = ok(client, "history")
+            assert current["available"] and not current["can_undo"], current
+            assert not ok(client, "project_sync")["changed"]
+        finally:
+            client.close()
+
+
 def run(executable):
     with tempfile.TemporaryDirectory(prefix="neverd-history-test-") as directory:
+        check_history_sync(executable, Path(directory))
         binary = Path(directory) / "fixture.bin"
         binary.write_bytes(b"history fixture")
         annotations = Path(str(binary) + ".neverd/annotations.json")

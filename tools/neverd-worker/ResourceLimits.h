@@ -27,6 +27,10 @@ namespace neverd::limits::worker {
 // Eager view preparation needs the shared image indexes and one seed body,
 // not a whole-program decompile. Later functions retain normal full analysis.
 inline constexpr int kInitialViewPreparationFunctions = 1;
+inline constexpr int kSummaryPreparationFunctions = 4;
+inline constexpr std::int64_t kSlowWarmPageMilliseconds = 100;
+/// Larger snapshots travel in their own frame when the GUI requests one.
+inline constexpr std::size_t kOpeningSnapshotMaxBytes = 256 * 1024;
 /// Intermediate updates to one load step; boundaries are always sent.
 inline constexpr int kLoadProgressIntervalMs = 50;
 inline constexpr std::size_t kPatchHexBytes =

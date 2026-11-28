@@ -372,6 +372,7 @@ Json hello() {
                 "analysis_snapshot",
                 "analysis_restore",
                 "prepare_analysis_views",
+                "defer_view_preparation",
                 "analysis_update_names",
                 "analysis_virtual_calls",
                 "prepare_call_summaries",

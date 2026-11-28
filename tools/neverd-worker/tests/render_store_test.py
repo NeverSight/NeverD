@@ -16,6 +16,7 @@ import tempfile
 import time
 
 from call_summaries_test import prefill
+from discovery_ready_test import wait_for_file
 from local_name_cache_test import request
 from render_ahead_test import done, latest, render_ahead, unfixtured
 from source_cache_test import A, B, C, ok, source
@@ -62,6 +63,91 @@ def asks_engine_first(client):
     view = source(client, A, representation="c")
     assert view["fixture_pages"] == 1, view
     assert view["fixture_prepares"] == 1, view
+
+
+def check_opening_preparation(clients, executable, root):
+    # A fresh rendering replica can prepare the selected call-graph root.
+    # A replica that only reads stored pages performs no speculative render.
+    fresh = root / ("initial-root-" + NAME)
+    fresh.write_bytes(b"fresh source fixture")
+    for store, extra in (("write", 1), ("read", 0)):
+        owner, replica = session(clients, executable, fresh, store=store,
+                                 prepare_views=True)
+        page = source(replica, A, representation="c")
+        assert page["fixture_prepares"] == 1 + extra, page
+        assert page["fixture_pages"] == 1 + extra, page
+        end(replica, owner)
+
+    binary = root / ("costly-warm-page-" + NAME)
+    binary.write_bytes(b"render store fixture")
+    owner, writer = session(clients, executable, binary)
+    render_ahead(writer, done)
+    end(writer, owner)
+
+    with Client(executable) as opener:
+        opened = ok(opener, "open", {"path": str(binary), "analysis": True,
+                                    "warm": False, "initial_render_snapshot": True})
+        explicit = ok(opener, "analysis_snapshot")
+        assert opened["initial_render_snapshot"] == explicit
+        assert "initial_render_snapshot" not in explicit["open"]
+        with Client(executable) as replica:
+            ok(replica, "analysis_restore",
+               dict(explicit, call_summaries=True, render_ahead=True,
+                    render_store="write", prepare_views=True))
+            render_ahead(replica, done)
+            # Restore prepared the selected function. The first emission in
+            # this session belongs to the separately requested C view.
+            view = source(replica, A, representation="c")
+            assert view["fixture_prepares"] == 2 and view["fixture_pages"] == 1, view
+            fresh = ok(replica, "decompile", {"address": A, "representation": "source",
+                                              "limit": 4, "refresh": True})
+            assert fresh["fixture_prepares"] == 3 and fresh["fixture_pages"] == 2, fresh
+            assert source(replica, A)["text"] == fresh["text"]
+        with Client(executable) as replica:
+            assert "defer_view_preparation" in replica.hello["capabilities"]
+            Path(str(binary) + ".pause-preparation").touch()
+            ok(replica, "analysis_restore",
+               dict(explicit, call_summaries=True, render_ahead=True,
+                    render_store="write", prepare_views=True,
+                    defer_view_preparation=True))
+            refresh = replica.send("decompile", {"address": A, "representation": "source",
+                                                  "limit": 4, "refresh": True})
+            # The reader handles hello immediately, after it queued the refresh.
+            ok(replica, "hello")
+            Path(str(binary) + ".finish-preparation").touch()
+            reply = replica.response(refresh)
+            assert reply["status"] == "ok", reply
+            page = reply["payload"]
+            assert page["fixture_prepares"] == page["fixture_pages"] == 1, page
+            assert page["text"] == fresh["text"]
+        deferred = dict(explicit, call_summaries=True, render_ahead=True,
+                        render_store="write", prepare_views=True, defer_view_preparation=True)
+
+        def marker(name):
+            return Path(str(binary) + "." + name)
+
+        marker("check-opening-inventory").touch()
+        with Client(executable) as replica:
+            ok(replica, "analysis_restore", deferred)
+            render_ahead(replica, done)
+            summaries(replica, lambda state: state == "deferred")
+            assert marker("opening-warm-order").read_text() == "settled"
+
+        marker("opening-warm-order").unlink()
+        marker("pause-opening-discovery").touch()
+        with Client(executable) as replica:
+            ok(replica, "analysis_restore", deferred)
+            wait_for_file(marker("opening-discovery-waiting"))
+            page = ok(replica, "decompile", {"address": A, "representation": "source",
+                                             "limit": 4, "refresh": True})
+            assert marker("opening-discovery-cancelled").is_file()
+            assert not marker("opening-warm-order").exists()
+            assert page["text"] == fresh["text"]
+
+        with Client(executable) as reader:
+            opened = ok(reader, "open", {"path": str(binary), "read_only": True,
+                                        "analysis": True, "initial_render_snapshot": True})
+            assert "initial_render_snapshot" not in opened
 
 
 def run_kept_edits(clients, executable, root, total):
@@ -178,6 +264,7 @@ def run(executable):
         asks_engine_first(keeper)
         end(keeper)
         owner, second = session(clients, executable, binary)
+        check_opening_preparation(clients, executable, root)
         run_kept_edits(clients, executable, root, total)
 
         # A rename of a local redecorates: the store still reads.

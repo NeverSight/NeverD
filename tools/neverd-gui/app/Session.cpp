@@ -808,6 +808,12 @@ void Session::sendOpen(const QString &requested, const QString &path,
                       // completion before opting in to an owned SDK snapshot.
                       {"step_discovery", options.analysis},
                       {"write_behind", true}};
+  const auto inputSize = QFileInfo(path).size();
+  if (options.analysis &&
+      inputSize >= ::neverd::limits::gui::kSessionIdleRenderMinimumImageBytes &&
+      inputSize <= ::neverd::limits::gui::
+                       kSessionSendOpenLargeQFileInfoFilePathSizeLimit)
+    payload.insert(QStringLiteral("initial_render_snapshot"), true);
   if (!options.pdb.isEmpty())
     payload.insert(QStringLiteral("pdb"), options.pdb);
   if (!options.dwarf.isEmpty())
@@ -835,6 +841,9 @@ void Session::sendOpen(const QString &requested, const QString &path,
         resetState();
         loadOptions_ = options;
         metadata_ = payload;
+        const auto openingSnapshot =
+            metadata_.take(QStringLiteral("initial_render_snapshot"))
+                .toObject();
         // The functions the opened file lists; idle-time discovery can add
         // to them before the first heartbeat reports a count.
         functionCount_ = payload.value("function_count").toInteger(-1);
@@ -966,19 +975,24 @@ void Session::sendOpen(const QString &requested, const QString &path,
             capabilities_.contains(QStringLiteral("prepare_call_summaries"));
         if (options.analysis && native && !large &&
             (prefetchEntry || prepareProject)) {
-          // Start after foreground browsing has drained. The store can answer
-          // a reopened project without allocating a second image session.
-          connect(
-              &queries_, &QueryService::idle, this,
-              [this, opened = epoch(), entry = entryAddress(), prefetchEntry] {
-                if (!loaded_ || epoch() != opened)
-                  return;
-                if (prefetchEntry)
-                  analysis_.prefetchSource(entry);
-                else
-                  analysis_.startIdleRenders();
-              },
-              Qt::SingleShotConnection);
+          const auto start = [this, opened = epoch(), entry = entryAddress(),
+                              prefetchEntry] {
+            if (!loaded_ || epoch() != opened)
+              return;
+            if (prefetchEntry)
+              analysis_.prefetchSource(entry);
+            else
+              analysis_.startIdleRenders();
+          };
+          // Restoring saved workbench settings can change the project revision
+          // and retire an opening read. Try again once those reads have
+          // drained.
+          connect(&queries_, &QueryService::idle, this, start,
+                  Qt::SingleShotConnection);
+          // Queue the kept-page inventory before restoring the desktop can
+          // enqueue scans. The replica does its analysis outside the owner.
+          if (!prefetchEntry)
+            analysis_.startIdleRenders(openingSnapshot);
         }
         const auto finishOpen =
             [this, openedEpoch = epoch()](const QJsonObject &response) {
@@ -1421,6 +1435,8 @@ void Session::takeProjectFiles(const QHash<QString, QByteArray> &files) {
         if (!result.value("changed").toBool())
           return;
         refreshHistory();
+        if (result.value("history_only").toBool())
+          return;
         emit functionsChanged();
         const qint64 kept = result.value("comments_kept").toInteger();
         emit message(

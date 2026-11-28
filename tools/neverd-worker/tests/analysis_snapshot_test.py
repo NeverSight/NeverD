@@ -57,6 +57,11 @@ def run(executable):
         assert before == after, "Restoring analysis changed owner files"
         assert ok(owner, "metadata")["dirty"]
         assert owner.call("analysis_restore", snapshot)["error"]["code"] == "invalid_request"
+        with Client(executable) as fresh:
+            for flag in ("prepare_views", "defer_view_preparation"):
+                invalid = fresh.call("analysis_restore", dict(snapshot, **{flag: "yes"}))
+                assert invalid["error"]["code"] == "invalid_request", invalid
+            assert ok(fresh, "analysis_restore", snapshot)["read_only"]
 
         # A racing committed edit cannot be presented under the old snapshot.
         ok(owner, "save")

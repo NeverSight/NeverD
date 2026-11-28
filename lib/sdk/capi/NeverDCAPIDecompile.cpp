@@ -501,9 +501,81 @@ static int prepareFunction(neverd_session_t Sess, neverd_va_t &FuncEntry,
                                     : Session::PipelineDepth::Analysis);
 }
 
-const char *neverd_warm_functions_json(neverd_session_t Sess,
-                                       neverd_va_t FirstEntry,
-                                       int MaxFunctions) {
+namespace {
+std::optional<va_t> initialViewEntry(Session &S) {
+  const auto &Functions = S.Functions;
+  if (S.Img.Arch != Arch::X64 || Functions.empty() ||
+      Functions.size() > kInitialViewGraphFunctions)
+    return std::nullopt;
+  uint64_t Bytes = 0;
+  llvm::DenseMap<va_t, size_t> Starts;
+  for (size_t I = 0; I < Functions.size(); ++I) {
+    const FuncInfo &F = Functions[I];
+    Starts.try_emplace(F.Entry, I);
+    if (F.Size <= kInitialViewGraphBodyBytes)
+      Bytes += F.Size;
+  }
+  Decoder Dec;
+  if (Bytes > kInitialViewGraphBytes || !Dec.init(S.Img))
+    return std::nullopt;
+  std::vector<std::vector<size_t>> Calls(Functions.size());
+  for (size_t I = 0; I < Functions.size(); ++I) {
+    const FuncInfo &F = Functions[I];
+    if (!F.Size || F.Size > kInitialViewGraphBodyBytes)
+      continue;
+    auto &Targets = Calls[I];
+    decodeNativeRange(S.Img, Dec, F.Entry, F.Size, F.Size,
+                      [&](const DecodedInsn &DI, const uint8_t *, int) {
+                        const va_t To = Dec.directCallTarget(DI);
+                        if (To != InvalidVA)
+                          if (const auto It = Starts.find(To);
+                              It != Starts.end())
+                            Targets.push_back(It->second);
+                        return true;
+                      });
+    llvm::sort(Targets);
+    Targets.erase(std::unique(Targets.begin(), Targets.end()), Targets.end());
+  }
+  // Only the scheduling order uses these decoded direct edges. The pipeline
+  // still proves each selected function from the image and current overrides.
+  std::vector<size_t> Seen(Functions.size(), Functions.size()), Pending;
+  size_t Best = 1;
+  std::optional<va_t> Entry;
+  for (size_t I = 0; I < Functions.size(); ++I) {
+    if (Calls[I].empty())
+      continue;
+    Pending.assign(1, I);
+    Seen[I] = I;
+    size_t Count = 1, Work = 0;
+    while (!Pending.empty() && Count < kInitialViewReachableFunctions &&
+           Work < kInitialViewReachableEdges) {
+      const size_t From = Pending.back();
+      Pending.pop_back();
+      for (const size_t To : Calls[From]) {
+        if (++Work > kInitialViewReachableEdges)
+          break;
+        if (Seen[To] == I)
+          continue;
+        Seen[To] = I;
+        ++Count;
+        Pending.push_back(To);
+        if (Count == kInitialViewReachableFunctions)
+          break;
+      }
+    }
+    if (Count > Best ||
+        (Entry && Count == Best && Functions[I].Entry < *Entry)) {
+      Best = Count;
+      Entry = Functions[I].Entry;
+    }
+  }
+  return Entry;
+}
+} // namespace
+
+static const char *warmFunctionsJson(neverd_session_t Sess,
+                                     neverd_va_t FirstEntry, int MaxFunctions,
+                                     bool InitialView) {
   auto *S = toSession(Sess);
   if (!S)
     return nullptr;
@@ -514,7 +586,7 @@ const char *neverd_warm_functions_json(neverd_session_t Sess,
       return nullptr;
     }
     std::optional<AnalysisCacheWarmup> Warmup;
-    std::optional<va_t> Next;
+    std::optional<va_t> Selected, Next;
     // A PE function's preparation keeps this state unless its handler
     // discovery adds metadata, which after a full load it does not.  Bytecode
     // images have no C view to prepare.
@@ -543,6 +615,10 @@ const char *neverd_warm_functions_json(neverd_session_t Sess,
       // of the callees they leave out (where each call's setup gives its
       // arguments), that warming builds a page of functions at a time.
       {
+        if (InitialView) {
+          Selected = initialViewEntry(*S);
+          FirstEntry = Selected.value_or(FirstEntry);
+        }
         const FunctionPage Page = functionPage(*S, FirstEntry, MaxFunctions);
         std::vector<va_t> Entries;
         Entries.reserve(Page.Functions.size());
@@ -567,6 +643,8 @@ const char *neverd_warm_functions_json(neverd_session_t Sess,
     }
     llvm::json::Object Result;
     Result["available"] = Warmup.has_value();
+    if (Selected && Warmup && Warmup->Prepared)
+      Result["initial_entry"] = vaHex(*Selected);
     Result["prepared"] = static_cast<int64_t>(Warmup ? Warmup->Prepared : 0);
     Result["full"] = Warmup && Warmup->Full;
     Result["next_entry"] =
@@ -580,6 +658,16 @@ const char *neverd_warm_functions_json(neverd_session_t Sess,
     S->setError("unexpected function preparation failure");
   }
   return nullptr;
+}
+
+const char *neverd_warm_functions_json(neverd_session_t Sess,
+                                       neverd_va_t FirstEntry,
+                                       int MaxFunctions) {
+  return warmFunctionsJson(Sess, FirstEntry, MaxFunctions, false);
+}
+
+const char *neverd_warm_initial_view_json(neverd_session_t Sess) {
+  return warmFunctionsJson(Sess, 0, 1, true);
 }
 
 const char *neverd_prepare_call_summaries_json(neverd_session_t Sess) {
@@ -1002,21 +1090,8 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
   if (!Attached)
     Attached = HF;
 
-  std::vector<HighFunc> Single = {*Attached};
-  if (PlainC) {
-    // The plain-C view keeps every related function (e.g. C++ catch funclets)
-    // except termination handlers and filters gathered only to fill a clause.
-    Single.clear();
-    for (HighFunc &Func : Related)
-      if (!SEHFuncletSources.count(Func.Entry))
-        Single.push_back(std::move(Func));
-  }
-  std::string Out;
-  llvm::raw_string_ostream OS(Out);
-
-  CEmitterOptions Opts;
-  Opts.PrecallMemory = S->SourceOptions.PrecallMemory;
-  Opts.PrecallEntry = FuncEntry;
+  // Bind edits to the attached value graph while its statements are owned
+  // here. The plain-C unit takes ownership of those statements below.
   std::string VariableSnapshot =
       SourceMap || !S->SourceOptions.VariableTypes.empty() ||
               !S->SourceOptions.VariableEdits.empty()
@@ -1024,6 +1099,23 @@ static const char *decompileHighC(neverd_session_t Sess, neverd_va_t FuncEntry,
                 highVariableSnapshot(*Attached, S->SourceOptions.Symbolic),
                 S->SourceOptions)
           : std::string();
+  std::vector<HighFunc> Single;
+  if (PlainC) {
+    // The plain-C view keeps every related function (e.g. C++ catch funclets)
+    // except termination handlers and filters gathered only to fill a clause.
+    if (!SEHFuncletSources.empty())
+      std::erase_if(Related, [&](const HighFunc &Func) {
+        return SEHFuncletSources.count(Func.Entry);
+      });
+    Single = std::move(Related);
+  } else
+    Single.push_back(*Attached);
+  std::string Out;
+  llvm::raw_string_ostream OS(Out);
+
+  CEmitterOptions Opts;
+  Opts.PrecallMemory = S->SourceOptions.PrecallMemory;
+  Opts.PrecallEntry = FuncEntry;
   // The analysis's observations of every function. A specialization or an
   // edit gives the view its own; the view reads the rest in place, as a whole
   // image's run holds millions.

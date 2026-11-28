@@ -48,6 +48,27 @@ def global_elf():
 def run(executable, compiler=None):
     with tempfile.TemporaryDirectory(prefix="neverd-variable-types-") as directory, ExitStack() as stack:
         root = Path(directory)
+        # Same address, size and parameter identity, different value graphs.
+        previous = None
+        for name, code in (("increment", "8d4701c3"), ("decrement", "8d47ffc3")):
+            path = root / (name + ".elf")
+            path.write_bytes(elf(bytes.fromhex(code)))
+            with Client(executable) as client:
+                ok(client, "open", {"path": str(path), "analysis": False})
+                view = source(client)
+                snapshot = view["variable_snapshot"]
+                assert snapshot
+                refreshed = ok(client, "decompile", {"address": hex(ENTRY),
+                               "representation": "c", "refresh": True})
+                assert refreshed["variable_snapshot"] == snapshot
+                if previous:
+                    assert snapshot != previous["snapshot"]
+                    refused = client.call("code_edit", previous)
+                    assert refused["status"] == "error" and refused["error"]["code"] == "stale_target", refused
+                previous = {"address": hex(ENTRY), "representation": "c", "kind": "type",
+                            "variable_id": view["source_variables"][0]["id"],
+                            "snapshot": snapshot, "type": "uint64_t"}
+
         binary = root / "types.elf"
         # One call, two field reads from its result, kept live in rbx. The
         # helper's real body returns its first argument unchanged.

@@ -224,7 +224,7 @@ private:
   Json browseCacheIdentity(Json identity,
                            const std::vector<project_files::File> &unread);
   Json restoreAnalysis(const Json &snapshot);
-  void prepareViews();
+  void prepareViews(std::function<bool()> requestWaiting = {});
   Json updateAnalysisNames(const Json &snapshot);
   /// Whether the project's files hold \p snapshot's user state.
   bool projectHolds(const std::string &path, const Json &snapshot);
@@ -252,6 +252,7 @@ private:
   Json restoredDebugInputs_ = Json::array();
   void localNamesChanged();
   Json userState() const;
+  Json loadedHistoryState(const ProjectHistory &store) const;
   Json codeEdits_ = Json::array();
   void reloadCodeEdits();
   static Json readCodeEdits(const std::string &binary);
@@ -304,6 +305,12 @@ private:
   /// then runs again; an explicit request's summaries are only forgotten.
   bool summaryJob_ = false;
   std::uint64_t summaryCursor_ = 0;
+  std::optional<std::uint64_t> slowWarmPage_;
+  /// A completed store can warm shared indexes after acknowledging restore.
+  bool openingViewWarmup_ = false;
+  /// One completed store's listed entry, consumed after its restore reply.
+  std::optional<std::uint64_t> openingSourcePreparation_;
+  std::chrono::steady_clock::duration slowWarmDuration_{};
   /// Whether the job discovered the image's functions, whose summaries it
   /// then solves (summaryJobStep).
   bool summaryDiscovered_ = false;
@@ -396,6 +403,8 @@ private:
   /// `kept_renders`: how many renders the store keeps, and whether a job
   /// reached every function.
   Json keptRendersJson();
+  bool hasOpeningWarmPage();
+  static std::optional<std::uint64_t> keptWarmPage(RenderStore *store);
   /// What the job keeps of what a function's first look in the listing asks
   /// the engine, under the same identity as the renders and for the same
   /// sessions.  The owner reads it too, and takes up what its replica adds.
@@ -1004,6 +1013,7 @@ private:
   resolvedName(const std::string &name);
   /// Run the session's restricted single-function pipeline for \p address
   /// unless whole-image analysis already covers it.
+  void primeSourcePage(std::uint64_t address);
   void prepareFunction(std::uint64_t address,
                        std::string_view representation = {});
   Listing &listing();

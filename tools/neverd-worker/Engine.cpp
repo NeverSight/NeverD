@@ -23,6 +23,7 @@
 #include "neverd/sdk/NeverDCAPIPersist.h"
 #include "neverd/sdk/NeverDCAPIQuery.h"
 #include "neverd/sdk/NeverDCAPISafety.h"
+#include "neverd/sdk/NeverDCAPISession.h"
 #include "neverd/sdk/NeverDCAPISigs.h"
 #include "neverd/support/FileStamp.h"
 #include "neverd/support/ProjectFiles.h"
@@ -71,6 +72,11 @@ constexpr std::size_t MaxAnalysisSectionBytes =
     neverd::sdk::kMaxAnalysisSectionBytes;
 constexpr std::size_t MaxAnalysisSectionState =
     neverd::sdk::kMaxAnalysisSectionStateBytes;
+
+int cancellationRequested(void *context) {
+  const auto &probe = *static_cast<const std::function<bool()> *>(context);
+  return probe && probe();
+}
 
 std::vector<unsigned char> sectionBytes(const std::string &hex) {
   if (hex.empty() || hex.size() % 2 || hex.size() / 2 > MaxAnalysisSectionBytes)
@@ -1693,6 +1699,16 @@ std::string Engine::engineViewPage(std::uint64_t address,
       true);
 }
 
+void Engine::primeSourcePage(std::uint64_t address) {
+  if (!irViewFunction())
+    return;
+  try {
+    (void)engineViewPage(address, "source", 0, true, Json::object(), "{}");
+  } catch (const Error &) {
+    // Some functions can be analyzed even when their source cannot be emitted.
+  }
+}
+
 void Engine::syncNamedViews() {
   const auto generation = listing().viewGeneration();
   if (namedViewsRevision_ != revision_ ||
@@ -2991,6 +3007,8 @@ void Engine::restartSummaries() {
     ++summariesEpoch_;
   summaryState_ = summaryJob_ ? SummaryState::Pending : SummaryState::Off;
   summaryCursor_ = 0;
+  slowWarmPage_.reset();
+  slowWarmDuration_ = {};
   summaryDiscovered_ = false;
   summaryError_.clear();
   prefillState_ = PrefillState::Off;
@@ -3104,8 +3122,11 @@ bool Engine::summaryJobStep() {
   // The solve reads each function's facts, which a page at a time keeps
   // each step as short as warming's.
   summaryState_ = SummaryState::Preparing;
-  constexpr int SummaryStepFunctions = 4;
-  const char *raw = warm(session_, summaryCursor_, SummaryStepFunctions);
+  const auto start = std::chrono::steady_clock::now();
+  const char *raw =
+      warm(session_, summaryCursor_,
+           ::neverd::limits::worker::kSummaryPreparationFunctions);
+  const auto elapsed = std::chrono::steady_clock::now() - start;
   if (!raw) {
     summaryState_ = SummaryState::Unavailable;
     summaryError_ = error();
@@ -3117,6 +3138,12 @@ bool Engine::summaryJobStep() {
   if (!page.value("available", false) || !page.value("call_summaries", false)) {
     summaryState_ = SummaryState::Unavailable;
     return true;
+  }
+  if (elapsed > slowWarmDuration_ &&
+      elapsed >= std::chrono::milliseconds(
+                     ::neverd::limits::worker::kSlowWarmPageMilliseconds)) {
+    slowWarmDuration_ = elapsed;
+    slowWarmPage_ = summaryCursor_;
   }
   const auto next = page.value("next_entry", Json());
   if (next.is_string())
@@ -3295,16 +3322,7 @@ ProjectHistory &Engine::history() {
       invalidate();
       ++revision_;
     }
-    history_->verifyLoadedState(
-        {{"annotations", backendJson(neverd_annotations_json(session_))},
-         {"renames", backendJson(neverd_renames_json(session_))},
-         {"functions", functionEditRows()},
-         {"items", dataItemRows()},
-         {"patches", bytePatchRows()},
-         {"operands", operandFormatRows()},
-         {"code_edits", codeEdits_},
-         {"types", declaresLocalTypes() ? typeDeclarationRows()
-                                        : history_->committedTable("types")}});
+    history_->verifyLoadedState(loadedHistoryState(*history_));
   }
   return *history_;
 }
@@ -3412,6 +3430,13 @@ Json Engine::userState() const {
           {"patches", bytePatchRows()},
           {"operands", operandFormatRows()},
           {"code_edits", codeEdits_}};
+}
+
+Json Engine::loadedHistoryState(const ProjectHistory &store) const {
+  auto state = userState();
+  state["types"] = declaresLocalTypes() ? typeDeclarationRows()
+                                        : store.committedTable("types");
+  return state;
 }
 
 void Engine::reloadCodeEdits() {
@@ -3694,6 +3719,9 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
       !snapshot.contains("open") || !snapshot.contains("state"))
     throw Error("invalid_request",
                 "Analysis restore needs a fresh worker and a snapshot");
+  for (const char *flag : {"prepare_views", "defer_view_preparation"})
+    if (snapshot.contains(flag) && !snapshot.at(flag).is_boolean())
+      throw Error("invalid_request", std::string(flag) + " must be boolean");
   auto options = snapshot.at("open");
   // A replica opens the project's files: an owner's write still on its way
   // gets there first.
@@ -3812,30 +3840,70 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
   restoredSnapshot_.erase("render_ahead");
   restoredSnapshot_.erase("render_store");
   restoredSnapshot_.erase("prepare_views");
+  restoredSnapshot_.erase("defer_view_preparation");
   summaryJob_ = snapshot.value("call_summaries", false);
   renderAheadRequested_ = snapshot.value("render_ahead", false);
   renderStoreMode_ = snapshot.value("render_store", std::string());
   openRenderStore(renderStoreMode_);
   restartSummaries();
   restartRenderAhead();
-  if (snapshot.value("prepare_views", false))
-    prepareViews();
+  if (snapshot.value("prepare_views", false)) {
+    openingViewWarmup_ =
+        summariesDeferred_ && snapshot.value("defer_view_preparation", false);
+    if (!openingViewWarmup_)
+      prepareViews();
+  }
   return metadata();
 }
 
-void Engine::prepareViews() {
+void Engine::prepareViews(std::function<bool()> requestWaiting) {
   using WarmFunction = const char *(*)(neverd_session_t, neverd_va_t, int);
   const auto warm = engineSymbol<WarmFunction>("neverd_warm_functions_json");
   if (!warm)
     throw Error("unsupported", "This engine cannot prepare source views");
-  if (loadProgress_)
-    loadProgress_("prepare_views", 0, 0, "Preparing shared view indexes");
   // One page also prepares the image-wide widths, types and symbol names.
   // Later selections reuse those exact facts; no full-program C is emitted.
-  (void)backendJson(
-      warm(session_, 0,
-           ::neverd::limits::worker::kInitialViewPreparationFunctions),
-      true);
+  auto page =
+      summariesDeferred_ ? keptWarmPage(renderStore_.get()) : std::nullopt;
+  if (page && requestWaiting) {
+    // Publishing newly discovered entries invalidates call-graph facts built
+    // against the old inventory. Settle it before warming the recorded entry.
+    static const auto discover =
+        engineSymbol<decltype(&neverd_session_discover_functions_cancellable)>(
+            "neverd_session_discover_functions_cancellable");
+    if (discover) {
+      if (discover(session_, cancellationRequested, &requestWaiting) < 0)
+        return;
+      summaryDiscovered_ = true;
+      if (requestWaiting())
+        return;
+    }
+  }
+  if (loadProgress_)
+    loadProgress_("prepare_views", 0, 0, "Preparing shared view indexes");
+  static const auto initial =
+      engineSymbol<SessionJsonFunction>("neverd_warm_initial_view_json");
+  if (!page && initial) {
+    const auto warmed = backendJson(initial(session_), true);
+    const auto selected = warmed.find("initial_entry");
+    if (summaryJob_ && renderAheadRequested_ && renderStoreMode_ == "write" &&
+        selected != warmed.end() && selected->is_string())
+      page = parseAddress(selected->get_ref<const std::string &>());
+  } else {
+    // The store identifies one entry. Its neighbours belong to the paged
+    // summary job and need no call-graph preparation for this view.
+    (void)backendJson(
+        warm(session_, page.value_or(0),
+             ::neverd::limits::worker::kInitialViewPreparationFunctions),
+        true);
+  }
+  if (page) {
+    const int index = neverd_func_find_by_addr(session_, *page);
+    const int size = index >= 0 ? neverd_func_size(session_, index) : 0;
+    if (size > 0 && static_cast<std::uint64_t>(size) <=
+                        ::neverd::limits::worker::kRenderAheadMaxFunctionBytes)
+      openingSourcePreparation_ = *page;
+  }
   if (loadProgress_)
     loadProgress_("prepare_views", 1, 1, "Shared view indexes ready");
 }
@@ -4743,6 +4811,32 @@ Json Engine::listingReply(ListingPage page, const std::string &known,
 void Engine::afterReply(const std::function<bool()> &requestWaiting) {
   writeStoreKeeps();
   prepareFollowingViews(requestWaiting);
+  // A client waiting for restore needs its revision to dispatch a refresh.
+  // Recheck the queue between warming shared indexes and lifting the entry.
+  const auto idle = [&] { return !requestWaiting || !requestWaiting(); };
+  if (std::exchange(openingViewWarmup_, false) && idle())
+    prepareViews(requestWaiting);
+  // A restore changes the project revision. Consume this opening hint behind
+  // its reply, after ordinary revision invalidation and before the idle grace
+  // for whole-project jobs. A foreground request already queued gets the lane.
+  const auto entry = std::exchange(openingSourcePreparation_, std::nullopt);
+  if (entry && (summariesDeferred_ || (summaryJob_ && renderAheadRequested_)) &&
+      idle()) {
+    using PrepareView = int (*)(neverd_session_t, neverd_va_t, const char *);
+    static const auto prepare =
+        engineSymbol<PrepareView>("neverd_prepare_function_view");
+    if (prepare) {
+      preparedFunction_.reset();
+      textKey_.clear();
+      if (prepare(session_, *entry, "source") && idle()) {
+        (void)listing().functionAliases();
+        // A completed store already serves the opening page. Preparing the
+        // graph and names also helps an explicit refresh, which emits it anew.
+        if (!summariesDeferred_)
+          primeSourcePage(*entry);
+      }
+    }
+  }
 }
 
 std::vector<std::shared_ptr<const Engine::NamedView>>
@@ -4934,10 +5028,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     else if (analyzer != "both")
       throw Error("invalid_request", "analyzer must be both, audit or hunt");
     options.context = &cancelled_;
-    options.cancel = [](void *context) -> int {
-      const auto &probe = *static_cast<const std::function<bool()> *>(context);
-      return probe && probe();
-    };
+    options.cancel = cancellationRequested;
     // Preserve the versioned SDK report verbatim, including address spellings.
     return transport::parseBackendJson(
         backendText(scan(session_, &options), false));
@@ -5193,9 +5284,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     const auto path = fs::canonical(utf8Path(pathText), ec);
     if (ec || !fs::is_regular_file(path, ec))
       throw Error("load_failed", "Input is not an accessible regular file");
-    for (const char *flag :
-         {"read_only", "debug_info", "analysis", "warm", "step_discovery",
-          "browse_cache", "write_behind", "check_view_changes"})
+    for (const char *flag : {"read_only", "debug_info", "analysis", "warm",
+                             "step_discovery", "browse_cache", "write_behind",
+                             "check_view_changes", "initial_render_snapshot"})
       if (p.contains(flag) && !p[flag].is_boolean())
         throw Error("invalid_request", std::string(flag) + " must be boolean");
     if (p.contains("pdb") && !p.at("pdb").is_object())
@@ -5383,7 +5474,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     readOnly_ = readOnly;
     browseCacheEnabled_ = p.value("browse_cache", true);
     openOptions_ = p;
-    for (const char *input : {"pdb", "dwarf", "map", "symbols"})
+    for (const char *input :
+         {"pdb", "dwarf", "map", "symbols", "initial_render_snapshot"})
       openOptions_.erase(input);
     signatureInputs_ = Json::array();
     pdbInput_ = nullptr;
@@ -5487,6 +5579,22 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     for (const auto &diagnostic : result.at("loader_diagnostics"))
       warnings.push_back(diagnostic.value("message", std::string()));
     result["warnings"] = warnings;
+    // Opening a fully rendered project can start its next source replica while
+    // the GUI restores its desktop. A miss takes the usual snapshot read.
+    if (p.value("initial_render_snapshot", false) && backgroundAnalysis_ &&
+        !readOnly_ && (!history_ || !history_->writesPending())) {
+      try {
+        if (hasOpeningWarmPage()) {
+          auto snapshot = analysisSnapshot();
+          const auto limit = ::neverd::limits::worker::kOpeningSnapshotMaxBytes;
+          if (snapshot.dump().size() <= limit && result.dump().size() <= limit)
+            result["initial_render_snapshot"] = std::move(snapshot);
+        }
+      } catch (const std::exception &) {
+        // Optional preparation must leave a successful open usable. An
+        // explicit analysis_snapshot reports changed inputs and size limits.
+      }
+    }
     return result;
   }
   requireLoaded();
@@ -5810,11 +5918,13 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     // and its undo history starts there.  Comments staged here stay staged
     // on top of them.  Files this worker wrote itself are no change.
     auto &store = history();
-    const bool tables = !store.current();
+    const bool resetHistory = !store.current();
+    bool tables = resetHistory;
     const bool types = localTypesChanged();
     const bool libraries = typeLibrariesChanged();
     std::size_t kept = 0;
-    if (tables) {
+    if (resetHistory) {
+      const bool checkLoadedTables = !dirty_ && !store.blockedReason().empty();
       std::map<std::uint64_t, std::string> committed, staged;
       if (dirty_) {
         for (const auto &row : store.committedTable("annotations"))
@@ -5834,8 +5944,12 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
             staged[address] = std::string();
       }
       store.reset();
+      // A stale undo journal may accompany tables already loaded at open.
+      // Compare with the new disk snapshot, including edits since open.
+      if (checkLoadedTables)
+        tables = !store.matchesLoadedState(loadedHistoryState(store));
       dirty_ = false;
-      if (!reloadUserState())
+      if (tables && !reloadUserState())
         throw Error("reload_failed",
                     "The project's files changed but could not be loaded",
                     {{"state_changed", true}});
@@ -5877,12 +5991,15 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       invalidate();
       ++revision_;
     }
-    return {{"changed", tables || types || libraries},
-            {"tables", tables},
-            {"local_types", types},
-            {"type_libraries", libraries},
-            {"comments_kept", kept},
-            {"dirty", dirty_}};
+    Json result = {{"changed", resetHistory || types || libraries},
+                   {"tables", tables},
+                   {"local_types", types},
+                   {"type_libraries", libraries},
+                   {"comments_kept", kept},
+                   {"dirty", dirty_}};
+    if (resetHistory && !tables && !types && !libraries)
+      result["history_only"] = true;
+    return result;
   }
   if (operation == "undo" || operation == "redo") {
     requireWriter();
@@ -8320,12 +8437,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
               ::neverd::limits::worker::
                   kEngineExecuteImplFunctionTypeOptionsDeclarationStringFieldMax));
     prepareFunction(entry, "source");
-    try {
-      (void)engineViewPage(entry, "source", 0, true, Json::object(),
-                           Json::object().dump());
-    } catch (const Error &) {
-      // An engine that emits no source for it has prepared what it can.
-    }
+    primeSourcePage(entry);
     return {{"address", hexAddress(entry)}, {"prepared", true}};
   }
   if (operation == "decompile") {
