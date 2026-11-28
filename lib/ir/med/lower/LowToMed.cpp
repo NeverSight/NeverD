@@ -1259,6 +1259,8 @@ MedFunc LowToMedConverter::convertFunction(
   NextVarId = 0;
   NextTempId = 0;
   NextCallSiteId = 1;
+  llvm::SmallVector<uint32_t, 2> StaticAllocatorCalls;
+  bool AllStaticCallsBound = true;
   StackSlots.clear();
   RegVarMap.clear();
   TempVarMap.clear();
@@ -1878,6 +1880,16 @@ MedFunc LowToMedConverter::convertFunction(
         if (const std::optional<va_t> Own = importOwnRoutine(
                 *Image, CallArgumentSources, LOp.Inputs[0].Offset))
           CallArgumentsFrom = *Own;
+      if (StaticAllocatorSlots && (MOp.Opcode == NdOp::CALL || MOp.Opcode == NdOp::INDIR_CALL)) {
+        if (MOp.Opcode == NdOp::INDIR_CALL && RegisterCallSlot && MOp.CallSiteId) {
+          if (StaticAllocatorSlots->contains(RegisterCallSlot))
+            StaticAllocatorCalls.push_back(MOp.CallSiteId);
+          else if (!StaticReleaseSlots->contains(RegisterCallSlot))
+            AllStaticCallsBound = false;
+        } else if (MOp.Opcode != NdOp::CALL || !MOp.NumInputs || !MOp.Inputs[0].isConst() ||
+                   !SourceCalleeFunctions || !SourceCalleeFunctions->contains(MOp.Inputs[0].ConstVal))
+          AllStaticCallsBound = false;
+      }
       // How many vector registers the call tells a variadic callee it
       // passes, at most (System V AL).
       if (VariadicVectorCounts &&
@@ -2417,7 +2429,10 @@ MedFunc LowToMedConverter::convertFunction(
                            ? EntrySignature->ReturnComponents.size()
                            : 1;
       MIPSReturnsQualified =
-          hasMIPSSourceReturnTargets(Low, Func, TheArch, Fmt, ResultInputs);
+          hasMIPSSourceReturnTargets(Low, Func, TheArch, Fmt, ResultInputs,
+                                     StaticAllocatorCalls, &Func.UsesStaticAllocatorBinding,
+                                     StaticAllocatorSlots && AllStaticCallsBound
+                                         ? &Func.PreservesStaticAllocationBindings : nullptr);
       if (!MIPSReturnsQualified)
         throw LowToMedConversionError("MIPS source return target is not proven "
                                       "to preserve the incoming link and mode");

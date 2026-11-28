@@ -217,6 +217,44 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
     return Entries.takeError();
   if (Entries->size() != Total->second || Strings.empty())
     return Fail("symbol extent or string table is inconsistent");
+  // Bind a version requirement to this exact dynamic symbol table. Section
+  // names alone do not identify the tables the dynamic linker will use.
+  llvm::ArrayRef<typename ELFT::Versym> Versions;
+  std::map<unsigned, MIPSImageMetadata::ImportVersion> Providers;
+  if (isMIPSN32(Img.Arch) && Img.MIPS && Tags.contains(DT_VERSYM) &&
+      Tags.contains(DT_VERNEED) && Tags.contains(DT_VERNEEDNUM) &&
+      Tags.contains(DT_SYMTAB) && Tags.at(DT_SYMTAB) == Symbols->sh_addr) {
+    for (const auto &Section : Sections) {
+      if (!(Section.sh_flags & SHF_ALLOC))
+        continue;
+      if (Section.sh_type == SHT_GNU_versym &&
+          Section.sh_addr == Tags.at(DT_VERSYM) &&
+          Section.sh_link == size_t(Symbols - Sections.data())) {
+        auto Table = ELF.template getSectionContentsAsArray<typename ELFT::Versym>(Section);
+        if (!Table)
+          return Table.takeError();
+        if (!Versions.empty() || Table->size() != Entries->size())
+          return Fail("has inconsistent symbol version indices");
+        Versions = *Table;
+      }
+      if (Section.sh_type != SHT_GNU_verneed ||
+          Section.sh_addr != Tags.at(DT_VERNEED) ||
+          Section.sh_link != Symbols->sh_link)
+        continue;
+      auto Needs = ELF.getVersionDependencies(Section);
+      if (!Needs)
+        return Needs.takeError();
+      if (Needs->size() != Tags.at(DT_VERNEEDNUM))
+        return Fail("has inconsistent version dependency count");
+      for (const auto &Need : *Needs)
+        for (const auto &Aux : Need.AuxV) {
+          const unsigned Index = Aux.Other & VERSYM_VERSION;
+          if (Index <= VER_NDX_GLOBAL ||
+              !Providers.try_emplace(Index, MIPSImageMetadata::ImportVersion{Need.File, Aux.Name}).second)
+            return Fail("has ambiguous version dependency indices");
+        }
+    }
+  }
   for (uint64_t I = First->second; I < Total->second; ++I) {
     const auto &Symbol = (*Entries)[I];
     const va_t Slot = GOT->second + (Local->second + I - First->second) * Width;
@@ -255,6 +293,12 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
     Import Imported;
     Imported.Name = Name->str();
     Imported.Module = kExternModule.str();
+    if (!Versions.empty() && Symbol.getType() == STT_FUNC &&
+        Symbol.getBinding() == STB_GLOBAL && Symbol.getVisibility() == STV_DEFAULT) {
+      const auto It = Providers.find(Versions[I].vs_index);
+      if (It != Providers.end())
+        Img.MIPS->RequiredImportVersions.emplace(Slot, It->second);
+    }
     Imported.IATAddr = Slot;
     Img.Imports.push_back(std::move(Imported));
   }

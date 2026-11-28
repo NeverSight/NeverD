@@ -176,7 +176,8 @@ bool nativeArgumentsAreNonFrame(
 
 bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                                 Arch Target, BinaryFormat Format,
-                                unsigned SourceResultOperands) {
+                                unsigned SourceResultOperands, llvm::ArrayRef<uint32_t> StaticAllocatorCalls,
+                                bool *UsedAllocator, bool *PrivateStores) {
   if (auto Error = validateLowInstructionBoundaries(
           Low, LowInstructionBoundaryRequirement::Required)) {
     llvm::consumeError(std::move(Error));
@@ -364,6 +365,20 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     const auto It = Offsets.find(key(V));
     return It == Offsets.end() ? std::nullopt : It->second;
   };
+  if (PrivateStores) {
+    *PrivateStores = QualifiedMemory && !HasMergeStores &&
+        llvm::all_of(Function.Blocks, [&](const MedBlock &B) {
+          return llvm::all_of(B.Ops, [&](const MedOp &Op) {
+            if (Op.Opcode != NdOp::STORE)
+              return Op.Opcode != NdOp::INDIR_BR;
+            const auto *Addr = safety::detail::memoryAddress(Op);
+            const auto *Value = safety::detail::storedValue(Op);
+            const auto At = Addr ? Offset(*Addr) : std::nullopt;
+            return Value && At && *At >= -limits::ir::kSourceFrameAnalysisMaxFrame &&
+                   *At < 0 && *At + Value->Size <= 0;
+          });
+        });
+  }
   MedDefSiteIndex Definitions(Function);
   safety::detail::ExactPhiGraph Graph(Function);
   // Only the byte-by-byte record walk tracks the addresses and register
@@ -555,6 +570,17 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         // argument have no provenance in this frame. Spilling that result
         // beside the saved link does not escape the link slot. Unknown and
         // pointer-returning calls still provide no such proof.
+        if (UsedAllocator && isMIPSN32(Target) && Op.Opcode == NdOp::INDIR_CALL &&
+            Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == TRI.IntReturnReg &&
+            Op.Output.Size == TRI.addressRegisterBytes() &&
+            llvm::is_contained(StaticAllocatorCalls, Op.CallSiteId) &&
+            BeforeFrameEscape(*D.Block, &Op - D.Block->Ops.data())) {
+          // A bound allocator returns null or fresh storage disjoint from this
+          // frame. The scan verifies the image's writes and reachable calls.
+          Safe = true;
+          *UsedAllocator = true;
+          break;
+        }
         if (const auto Call = Calls.find(&Op);
             Call != Calls.end() &&
             First + Bytes <= Call->second.NumericResultBytes) {
