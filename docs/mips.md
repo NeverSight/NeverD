@@ -116,6 +116,15 @@ variadic caller below exercises both encodings in big- and little-endian o32.
 [LLVM change](https://github.com/NeverSight/llvm-project/pull/25) ·
 [Release archives](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r16).
 
+The r17 fork also assembles the MIPS16 text that Clang writes with
+`-save-temps=obj`. This includes direct calls with delay slots, references
+to local literal pools and compact or extended stack operands. For both
+direct object output and reassembled output, it encodes stack adjustments
+in units of eight bytes and fills executable alignment with a MIPS16 NOP.
+The C calling-convention tests below exercise both paths in both byte orders.
+[LLVM change](https://github.com/NeverSight/llvm-project/pull/26) ·
+[Release archives](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r17).
+
 Selecting r7 limits
 native object output to classic profiles with a qualified ABI.
 
@@ -273,7 +282,14 @@ in caller-owned storage. Signed integers and 64-bit variadic arguments cross
 the register and stack boundary. The caller checks all three result fields
 and exits with 43 for the original or 89 for either replacement. This covers
 classic MIPS and microMIPS R2 for o32, n32 and n64 in both byte orders, plus
-MIPS16 o32 in both byte orders. The n64 programs run above 4 GiB.
+MIPS16 o32 in both byte orders. At each of `-O0`, `-O2`, `-Os` and
+`-O3`, the tests compile both translation units directly to objects and
+through saved assembly with Clang’s `-save-temps=obj`. Both paths run the
+original executable and both replacement placements.
+Four more MIPS16 builds pass a 2,064-byte array to a separately compiled
+helper. The callee checks both ends of that array along with the incoming
+stack arguments after the frame grows beyond one SAVE instruction. The n64
+programs run above 4 GiB.
 
 The cross-object arithmetic programs exercise their own stack, function pointer, ELF
 global pointer, 64-bit data and arguments beyond the register argument area.
@@ -313,8 +329,8 @@ memory size and 256-byte alignment of `PT_TLS`.
 The MIPS16 branch programs take both arms of a conditional and swap the
 two destinations in the replacement. The targets are more than 2 KiB ahead
 in the original layout and behind the new `section` placement. Each native
-build produces 1,346 executable images across 394 configurations, including
-952 updated images. The upgrade check uses r13, r14 and r15 to build one original
+build produces 1,652 executable images across 496 configurations, including
+1,156 updated images. The upgrade check uses r13, r14 and r15 to build one original
 per ABI and byte order. Twelve more r14 originals use `ld.lld -r` to combine
 the startup, the function and two helpers. Both helpers define the same
 COMDAT function and different weak implementations of `group_choice`.
@@ -333,7 +349,20 @@ function placement in every ELF. Twelve more programs keep the original
 r15 C caller and its aggregate and variadic call sites. The current Clang
 compiles the replacement callee. Both placements must match direct links
 and run with the original caller on classic and microMIPS for each ABI and
-byte order. The MIPS16 caller uses the current fork for both translations.
+byte order. Another 14 programs keep the r16 caller and startup objects
+and use the current Clang to assemble a replacement callee from saved
+assembly. These cover both byte orders on classic and microMIPS o32, n32
+and n64, plus MIPS16 o32. The runner executes the 14 originals and 28
+updates and compares each update with an independent link.
+
+For the MIPS16 r16 input, saved assembly shortens the final callee by 70
+bytes. Its unmodified object works in `section` mode. The original layout
+ends the executable segment after that callee, so an in-place link must
+retain its input section extent. The test reads the original `.text.calc`
+size with fork `llvm-readobj` and uses fork `ld.lld -r` to fill the
+replacement section to that size with MIPS16 NOPs. The function symbol
+keeps its shorter size. The original object and final link layout are
+reused, including the original linker's alignment bytes after the function.
 
 When the original build uses a static library in a partial link, keep the
 result of that `ld.lld -r` step as the manifest object. Rebuild it from the

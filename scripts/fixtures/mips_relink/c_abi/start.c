@@ -2,6 +2,14 @@
 
 __attribute__((noreturn)) void finish(int value);
 
+#ifdef CHECK_LARGE_FRAME
+__attribute__((section(".text.start")))
+void fill_frame(unsigned char *frame, unsigned size, unsigned char value) {
+  frame[0] = value;
+  frame[size - 1] = value;
+}
+#endif
+
 __attribute__((noreturn, section(".text.start"))) void _start(void) {
   const u64 value = 0x1122334455667788ULL;
   const u64 wide = 0x987654321af9dca5ULL;
