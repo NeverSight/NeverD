@@ -66,6 +66,8 @@ protected:
     Program.push_back({Code.Linear + Offset, Mode::Long64, Bytes.vec()});
   }
 
+  void checkSavedEnclaveOperand(bool Accept);
+
   void bindThread(X86SgxFeatures FeaturesSGX = {}) {
     auto EPC = llvm::cantFail(X86SgxMemory::create(
         {Secs, TCS, Code, Previous, Next}, {}, FeaturesSGX));

@@ -25,13 +25,15 @@ struct X86SgxInstructionProgress {
   // Retain a completed KEYREQUEST/TARGETINFO read across a later backing stop.
   std::vector<uint8_t> Request;
   std::optional<std::array<uint8_t, 64>> ReportData;
+  // Completed page walks survive a later missing page-table backing.
+  std::optional<uint64_t> SecInfo, Destination, Source;
 };
 
 class X86SgxExecution {
 public:
   static llvm::Expected<std::optional<uint8_t>>
   instructionException(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC,
-                       const translate::X86SgxMemory &Memory);
+                       const translate::X86PagedMemory &Memory);
   static llvm::Expected<X86ModeExecutionResult>
   instruction(X86ModeState &State, translate::X86PagedMemory &Memory,
               bool Fetched, llvm::ArrayRef<uint8_t> Original,
@@ -49,6 +51,16 @@ private:
   keyOrReport(X86ModeState &State, translate::X86PagedMemory &Memory,
               X86SgxInstructionProgress &Progress, unsigned InstructionSize,
               X86ModeExecutionResult Result);
+  static llvm::Expected<X86ModeExecutionResult>
+  dynamicMemory(X86ModeState &State, translate::X86PagedMemory &Memory,
+                X86SgxInstructionProgress &Progress, unsigned InstructionSize,
+                X86ModeExecutionResult Result);
+  static llvm::Expected<bool>
+  walkOperand(translate::X86PagedMemory &Memory,
+              const translate::X86LinearAccess &Access,
+              X86ModeExecutionResult &Result, uint64_t &Physical);
+  static void retireEnclaveLeaf(X86ModeState &State, unsigned InstructionSize,
+                                X86ModeExecutionResult &Result);
   static llvm::Expected<bool> bindFrame(translate::X86PagedMemory &Memory,
                                         const translate::X86SgxEnclave &Enclave,
                                         const translate::X86SgxPage &TCS,

@@ -125,7 +125,7 @@ TEST_F(X86ModeSgxThreadTest,
   }
 }
 
-TEST_F(X86ModeSgxThreadTest, KeyRequestSurvivesOutputPageTableBackingRepair) {
+void X86ModeSgxThreadTest::checkSavedEnclaveOperand(bool Accept) {
   startThread();
   privateInstruction(0, Enclu);
   put(0x12000, 0x13007);
@@ -139,14 +139,17 @@ TEST_F(X86ModeSgxThreadTest, KeyRequestSurvivesOutputPageTableBackingRepair) {
                         Permissions,
                         0,
                         {Original.begin() + Hole + 8, Original.end()}});
-  llvm::support::endian::write16le(Previous.Bytes.data() + 512, 0xffff);
-  bindThread();
+  Next.Pending = Accept;
+  Next.TrackingComplete = true;
+  llvm::support::endian::write16le(Previous.Bytes.data() + 512,
+                                   Accept ? 0x20b : 0xffff);
+  bindThread({.SGX2 = Accept});
   X86ModeExecution First(*Memory, Options);
   uint64_t Budget = 1;
   ASSERT_EQ(llvm::cantFail(First.run(Machine, Program, Budget)).Completions,
             1u);
   auto &R = Machine.Core.Core.Core.Core.Core.Core;
-  R.GPR[0] = 1;
+  R.GPR[0] = Accept ? 5 : 1;
   R.GPR[3] = Previous.Linear + 512;
   R.GPR[1] = Next.Linear;
   Budget = 1;
@@ -155,8 +158,8 @@ TEST_F(X86ModeSgxThreadTest, KeyRequestSurvivesOutputPageTableBackingRepair) {
   ASSERT_TRUE(Machine.Pending);
   EXPECT_EQ(Stop.Attempts, 1u);
   EXPECT_EQ(Budget, 0u);
-  // Changing the already-read request to REPORT_KEY distinguishes a saved
-  // input from replay, which would now require platform key state.
+  // Changing the saved input to 3 would either require the report-key
+  // platform or cause EACCEPT to fault on a different SECINFO type.
   ASSERT_EQ(llvm::cantFail(Memory->store({R.GPR[3], MemoryAccessKind::Write, 3},
                                          std::array<uint8_t, 2>{3, 0}))
                 .Status,
@@ -180,8 +183,17 @@ TEST_F(X86ModeSgxThreadTest, KeyRequestSurvivesOutputPageTableBackingRepair) {
   ASSERT_EQ(Done->Completions, 1u) << Done->OwnerError;
   EXPECT_EQ(Done->Attempts, 0u);
   EXPECT_EQ(R.PC, Code.Linear + Enclu.size());
-  EXPECT_EQ(R.GPR[0], 256u);
+  EXPECT_EQ(R.GPR[0], Accept ? 0u : 256u);
   EXPECT_FALSE(Machine.Pending);
+}
+
+TEST_F(X86ModeSgxThreadTest, KeyRequestSurvivesOutputPageTableBackingRepair) {
+  checkSavedEnclaveOperand(false);
+}
+
+TEST_F(X86ModeSgxThreadTest,
+       AcceptRetainsSecinfoAcrossRepeatedPageTableRepair) {
+  checkSavedEnclaveOperand(true);
 }
 
 TEST_F(X86ModeSgxThreadTest,

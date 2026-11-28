@@ -632,7 +632,7 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
     // UD0's live address tail belongs to the fetch profile, including when a
     // full-mode binding supplied those optional bytes alongside the opcode.
     auto Denied = detail::X86SgxExecution::instructionException(
-        Bytes.take_front(FetchBytes), Address, *Memory.sgxMemory());
+        Bytes.take_front(FetchBytes), Address, Memory);
     if (!Denied)
       return Denied.takeError();
     if (*Denied) {
