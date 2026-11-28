@@ -34,6 +34,7 @@ jobs:
           path: toolchain-src
           sparse-checkout: |
             cmake
+            clang
             llvm
             lld
             libunwind/include
@@ -57,7 +58,7 @@ jobs:
       - if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/ci/Install-WindowsFixtureClang.ps1 -AddToPath
-      - name: Build the fork's MIPS code generator, assembler and linker
+      - name: Build the fork's MIPS frontend, code generator, assembler and linker
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
@@ -66,12 +67,12 @@ jobs:
           args=()
           if [[ "$RUNNER_OS" == Linux ]]; then args+=(-DLLVM_USE_LINKER=lld); fi
           cmake -S toolchain-src/llvm -B build-tools -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DLLVM_ENABLE_PROJECTS=lld -DLLVM_TARGETS_TO_BUILD=Mips \
+            '-DLLVM_ENABLE_PROJECTS=clang;lld' -DLLVM_TARGETS_TO_BUILD=Mips \
             -DLLVM_ENABLE_RTTI=ON -DLLVM_ENABLE_ASSERTIONS=ON \
             -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
             -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF \
             -DLLVM_PARALLEL_LINK_JOBS=1 "${args[@]}"
-          cmake --build build-tools --parallel 4 --target llc llvm-mc llvm-ar lld
+          cmake --build build-tools --parallel 4 --target clang llc llvm-mc llvm-ar lld
       - name: Build the native CLI with the published fork SDK
         env:
           CC: ${{ matrix.cc }}
@@ -93,10 +94,12 @@ jobs:
           mkdir -p products
           git rev-parse HEAD > products/neverd.txt
           git rev-parse HEAD:third_party/llvm-project > products/llvm.txt
+          build-tools/bin/clang$suffix --version | tee products/clang.txt
           build-tools/bin/ld.lld$suffix --version | tee products/linker.txt
           python - <<'PY'
           from pathlib import Path
           revision = Path("products/llvm.txt").read_text().strip()
+          assert revision in Path("products/clang.txt").read_text()
           assert revision in Path("products/linker.txt").read_text()
           cache = Path("build-check/CMakeCache.txt").read_text()
           llvm_dir = next(row.split("=", 1)[1] for row in cache.splitlines() if row.startswith("LLVM_DIR:PATH="))
@@ -106,30 +109,42 @@ jobs:
           PY
           python scripts/check_mips_elf_relink.py qualify --root products \
             --neverd build-check/bin/neverd$suffix --mc build-tools/bin/llvm-mc$suffix \
-            --llc build-tools/bin/llc$suffix --lld build-tools/bin/ld.lld$suffix
-      - name: Relink original r13 and r14 executables with the current fork
+            --llc build-tools/bin/llc$suffix --lld build-tools/bin/ld.lld$suffix \
+            --clang build-tools/bin/clang$suffix
+      - name: Relink original r13, r14 and r15 executables with the current fork
         env:
           LLVM_R13: 24ced447e1718432292dc9d54b6eb229323409d1
           LLVM_R14: 6c769154fbe9db2fe9e2e2dc1b04bebfe64e1312
+          LLVM_R15: 54143a8d7c037ee4c22f1f238bd4d50ca9a5fd00
         run: |
           suffix=
           if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
           mkdir current-tools
-          for tool in llc ld.lld llvm-ar; do
+          for tool in clang llc ld.lld llvm-ar; do
             cp -L "build-tools/bin/$tool$suffix" "current-tools/$tool$suffix"
           done
-          for release in r13 r14; do
-            revision="$LLVM_R13"
-            if [[ "$release" == r14 ]]; then revision="$LLVM_R14"; fi
+          for release in r15 r14 r13; do
+            case "$release" in
+              r15) revision="$LLVM_R15" ;;
+              r14) revision="$LLVM_R14" ;;
+              r13) revision="$LLVM_R13" ;;
+            esac
             git -C toolchain-src fetch --no-tags --depth 1 origin "$revision"
             git -C toolchain-src checkout --detach "$revision"
-            cmake --build build-tools --parallel 4 --target llc llvm-mc lld
+            tools=(llc llvm-mc lld)
+            if [[ "$release" == r15 ]]; then tools+=(clang); fi
+            cmake --build build-tools --parallel 4 --target "${tools[@]}"
             root="products/from-$release"
             mkdir -p "$root"
             build-tools/bin/ld.lld$suffix --version | tee "$root/linker.txt"
             grep -F "$revision" "$root/linker.txt"
             args=(--neverd "build-check/bin/neverd$suffix" --original-tools build-tools/bin --tools current-tools)
             python scripts/check_mips_elf_relink.py upgrade --root "$root" "${args[@]}"
+            if [[ "$release" == r15 ]]; then
+              build-tools/bin/clang$suffix --version | tee "$root/clang.txt"
+              grep -F "$revision" "$root/clang.txt"
+              python scripts/check_mips_elf_relink.py upgrade --root "$root-c" --c-calls "${args[@]}"
+            fi
             if [[ "$release" == r14 ]]; then
               python scripts/check_mips_elf_relink.py upgrade --root "$root-partial" --partial-link --archive-tool "current-tools/llvm-ar$suffix" "${args[@]}"
               python scripts/check_mips_elf_relink.py upgrade --root "$root-partial-pic" --partial-link=pic --archive-tool "current-tools/llvm-ar$suffix" "${args[@]}"
@@ -165,7 +180,7 @@ jobs:
           for host in Linux macOS Windows; do
             dir="products/relink-$host"
             test "$(cat "$dir/neverd.txt")" = "$(git rev-parse HEAD)"
-            for root in "$dir" "$dir/from-r13" "$dir/from-r14"; do
+            for root in "$dir" "$dir/from-r13" "$dir/from-r14" "$dir/from-r15" "$dir/from-r15-c"; do
               /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$root"
             done
             /usr/bin/python3 scripts/check_mips_elf_relink.py execute --root "$dir/from-r14-partial" --partial-link

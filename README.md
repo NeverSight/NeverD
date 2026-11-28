@@ -213,7 +213,7 @@ The first configure builds the LLVM fork locally (often 30–60 minutes). Later 
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DNEVERD_LLVM_PREBUILT=ON \
-  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r15
+  -DNEVERD_LLVM_PREBUILT_TAG=neverd-llvm-v23.0.0-r16
 cmake --build build
 ```
 
@@ -238,7 +238,7 @@ build uses ccache on macOS and Linux. Windows clang-cl builds use sccache with
 the GitHub Actions cache backend; compiler caches only accelerate rebuilds and
 are never published as release assets.
 
-The default uses the package revision `neverd-llvm-v23.0.0-r15`; unlike the
+The default uses the package revision `neverd-llvm-v23.0.0-r16`; unlike the
 legacy mutable base tag, its Git tag, release target, source commit, and three
 archive digests form one revisioned source pin that NeverD treats as
 immutable. Existing build directories still caching the legacy base tag,
@@ -264,7 +264,7 @@ gh workflow run neverd-release.yml \
 After the workflow succeeds, update the default tag, pinned commit, and all
 three digests in `cmake/NeverDLLVMPrebuilt.cmake` together. Each package revision
 uses its own cache directory; the current default lives below
-`.cache/neverd-llvm/neverd-llvm-v23.0.0-r15`. A stale or republished archive fails
+`.cache/neverd-llvm/neverd-llvm-v23.0.0-r16`. A stale or republished archive fails
 before extraction. `overwrite_existing_assets`
 exists only for legacy recovery; the normal revision workflow leaves it off.
 
