@@ -129,9 +129,11 @@ std::string runSafety(Session *S, const neverd_safety_options *Options,
       const auto *Sink = Cat.matchSink(Import.Name);
       if (!Sink)
         continue;
-      if (Import.Name == "malloc" && Sink->Kind == safety::SinkKind::Alloc)
+      if (Import.Name == "malloc" && Sink->Kind == safety::SinkKind::Alloc &&
+          Sink->HandleArg == -1)
         PO.StaticAllocatorSlots.insert(Import.IATAddr);
-      else if (Import.Name == "free" && Sink->Kind == safety::SinkKind::Free)
+      else if (Import.Name == "free" && Sink->Kind == safety::SinkKind::Free &&
+               Sink->HandleArg == 0 && !Sink->ReleaseMayFail)
         PO.StaticReleaseSlots.insert(Import.IATAddr);
     }
   }

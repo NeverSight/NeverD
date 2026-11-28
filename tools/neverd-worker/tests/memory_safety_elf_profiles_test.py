@@ -77,6 +77,13 @@ def verify_ownership(cli, directory, name, temporary):
     # in the version provider also removes the known allocation contract.
     report = scan("unrelated-store", "--analyzer=audit")
     assert report["verdict"] == "UNKNOWN" and not report["coverage_complete"], (name, report)
+    model = temporary.with_suffix(".json")
+    model.write_text(json.dumps({"sinks": [
+        {"name": "free", "kind": "free", "handle": 0, "release_may_fail": True}
+    ]}))
+    report = scan("released", "--analyzer=audit", "--sinks=" + str(model))
+    assert report["verdict"] == "UNKNOWN" and not report["coverage_complete"], (name, report)
+
     original = (directory / "ownership" / (name + "-released")).read_bytes()
     assert original.count(b"libc.so.6\0") == 1, name
     temporary.write_bytes(original.replace(b"libc.so.6\0", b"libc.so.5\0"))
