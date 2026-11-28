@@ -3219,6 +3219,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
             {row["id"]: row["status"] for row in document["capabilities"]},
             {
                 **expected_mips,
+                "analysis.data-pointer-scan": "experimental",
                 "analysis.ir-view.instruction-anchors": "experimental",
                 "analysis.materialized-image-sections": "experimental",
                 "analysis.external-bytecode-recovery": "experimental",
@@ -3478,6 +3479,12 @@ class RepositoryCapabilityTests(unittest.TestCase):
                 "python": [],
                 "cli": ["neverd decompile --x86-legacy-source"],
                 "json": [],
+            },
+            "analysis.data-pointer-scan": {
+                "c": ["neverd_session_data_ptr_scan_json"],
+                "python": ["Session.scan_data_pointers"],
+                "cli": ["neverd scan --data-ptr"],
+                "json": ["neverd_session_data_ptr_scan_json"],
             },
             "analysis.ir-view.instruction-anchors": {
                 "c": ["neverd_ir_view_json"],

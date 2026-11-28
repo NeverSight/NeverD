@@ -3,6 +3,7 @@
 import argparse
 import ctypes
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -40,6 +41,10 @@ marker: .long 11
 
 
 class DataPtrScanCLI(unittest.TestCase):
+    neverd = os.environ.get("NEVERD_TEST_CLI")
+    clang = os.environ.get("NEVERD_TEST_CLANG")
+    sdk = os.environ.get("NEVERD_TEST_LIBNEVERD")
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="neverd-data-ptr-")
         self.addCleanup(temporary.cleanup)

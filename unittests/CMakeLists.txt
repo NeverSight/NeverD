@@ -314,11 +314,13 @@ if(TARGET neverd AND Python3_EXECUTABLE)
     TIMEOUT 120 LABELS "NeverDFunctionListingCLI")
   if(NEVERD_TEST_CLANG_EXECUTABLE)
     add_test(NAME NeverDDataPtrScanCLI
-      COMMAND "${Python3_EXECUTABLE}"
-        "${CMAKE_SOURCE_DIR}/scripts/tests/test_data_ptr_scan_cli.py"
-        --neverd $<TARGET_FILE:neverd> --clang "${NEVERD_TEST_CLANG_EXECUTABLE}"
-        --sdk $<TARGET_FILE:neverd_shared>)
-    set_tests_properties(NeverDDataPtrScanCLI PROPERTIES TIMEOUT 120 LABELS "NeverDDataPtrScanCLI")
+      COMMAND "${CMAKE_COMMAND}" -E env
+        "NEVERD_TEST_CLI=$<TARGET_FILE:neverd>"
+        "NEVERD_TEST_CLANG=${NEVERD_TEST_CLANG_EXECUTABLE}"
+        "NEVERD_TEST_LIBNEVERD=$<TARGET_FILE:neverd_shared>"
+        "${Python3_EXECUTABLE}" -m unittest scripts.tests.test_data_ptr_scan_cli -v)
+    set_tests_properties(NeverDDataPtrScanCLI PROPERTIES
+      TIMEOUT 120 LABELS "NeverDDataPtrScanCLI" WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     add_test(NAME NeverDDataPtrScanProfiles
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/scripts/tests/test_data_ptr_scan_profiles.py"
