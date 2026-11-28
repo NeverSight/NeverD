@@ -982,6 +982,15 @@ sidecar is `stale_snapshot`; a changed input is `input_changed`. The GUI tries i
 on every change to the project of an idle replica, and restores a fresh process
 when it refuses.
 
+A GUI opening an image may request `initial_render_snapshot:true`. A writable
+owner with a complete render store and an expensive preparation page may attach
+its small, validated `analysis_snapshot` under that key in the open reply.
+It belongs to the open revision. Later revisions and larger snapshots use the
+ordinary snapshot request. Replica restore performs its normal validation.
+After restoring a completed store, an idle replica can also prepare the
+source dependencies of a bounded, listed entry on the recorded slow page.
+Refreshing still discards the selected pipeline result and rebuilds it.
+
 `open` and `analysis_restore` accept `prepare_views:true` when the worker advertises
 `prepare_analysis_views`. Before replying, it prepares the shared data-access
 widths, debug types, symbol names and the first function page through
@@ -1067,7 +1076,9 @@ A `decompile`, `cfg_summary` or `cfg_viewport` with `kept_only: true`, on a work
 that advertises `kept_renders`, answers from what is kept and otherwise refuses it as
 `not_kept` without asking the engine, so an owner can answer them with no replica.
 `kept_renders` replies `{kept, complete}`: how many records the store for the current
-inputs holds, and whether a job has reached every function.
+inputs holds, and whether a job has reached every function. An optional
+`warm_page` flag indicates that the completed job recorded a slow preparation
+page. A reopened replica may repeat that page's SDK analysis during idle time.
 
 A `decompile` that carries `if_none_match` (empty for none) asks for its page's name:
 the reply's `etag` names the document and lines it came from in this worker. A later
@@ -1392,8 +1403,11 @@ is capped at 8 MiB and the write-ahead journal at 24 MiB, both compact.
 `project_sync` (writer only) takes the project's files as they are on disk after
 something outside this worker changed them: git, another tool or a person. When
 the edit tables differ from what the worker last committed, or the history no
-longer describes them, it resets the history to the files, reloads every table
-and keeps staged annotations staged on top of them, except those the files now
+longer describes them, it resets the history to the files. When only the undo
+journal is stale and every loaded table matches the new disk snapshot, the
+reply carries `history_only:true`, `changed:true` and `tables:false`; the analysis
+revision stays current. When tables changed, it reloads them and keeps
+staged annotations on top of them, except those the files now
 hold as staged (`comments_kept` counts the rest); a changed local types file
 is reloaded and its analysis restarts. It answers `{changed, tables,
 local_types, comments_kept, dirty}`, and `changed:false` for files the worker

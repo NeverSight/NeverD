@@ -1125,6 +1125,9 @@ const char *neverd_warm_functions_json(neverd_session_t s,
         {"full", false},
         {"next_entry",
          nullptr}}.dump());
+  if (state.path.find("costly-warm-page") != std::string::npos &&
+      firstEntry == Base + 64)
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
   if (firstEntry == 0)
     state.warmed = 0;
   // warm-slow.bin takes long enough per step for heartbeats to show a pass;

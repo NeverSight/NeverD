@@ -187,7 +187,8 @@ QString AnalysisService::send(const QString &operation,
       // replica would read whole: the owner answers for it while it keeps
       // it.  A graph stays with the replica.
       if (useKept && operation_ == QLatin1String("decompile") &&
-          ownerPages_.contains(payload_.value("if_none_match").toString())) {
+          (keptState_ == KeptState::Whole ||
+           ownerPages_.contains(payload_.value("if_none_match").toString()))) {
         askOwner();
         return;
       }
@@ -234,25 +235,33 @@ bool AnalysisService::canRenderAhead() const {
          SourceDefaults::options(QStringLiteral("source")).isEmpty();
 }
 
-void AnalysisService::startIdleRenders() {
-  if (ownerReadsKept_ && !snapshotBlocked_ && !replicaStarted() &&
-      canRenderAhead())
-    askKeptState(QueryService::QuerySpec::Normal);
+void AnalysisService::startIdleRenders(const QJsonObject &openingSnapshot) {
+  if (!ownerReadsKept_ || snapshotBlocked_ || replicaStarted() ||
+      !canRenderAhead())
+    return;
+  if (keptState_ == KeptState::Unknown && !openingSnapshot.isEmpty()) {
+    // Only a complete render store with an expensive warm page supplies this
+    // snapshot. It belongs to this open reply and is never used after an edit.
+    keptBefore_ = keptState_ = KeptState::Whole;
+    startingReplica_ = true;
+    restoreSnapshot(openingSnapshot);
+    return;
+  }
+  askKeptState(/*forIdlePreparation=*/true);
 }
 
-void AnalysisService::askKeptState(QueryService::QuerySpec::Priority priority) {
+void AnalysisService::askKeptState(bool forIdlePreparation) {
   if (keptState_ != KeptState::Unknown)
     return;
   keptState_ = KeptState::Asked;
   const auto serial = serial_;
-  auto query = visible(QStringLiteral("kept_renders"), {});
-  query.priority = priority;
   keptStateRequest_ = owner_.subscribe(
-      query, this, [this, serial, priority](const QJsonObject &response) {
+      visible(QStringLiteral("kept_renders"), {}), this,
+      [this, serial, forIdlePreparation](const QJsonObject &response) {
         if (serial != serial_)
           return;
         keptStateRequest_ = 0;
-        if (priority == QueryService::QuerySpec::Normal &&
+        if (forIdlePreparation &&
             response.value("status") != QLatin1String("ok")) {
           keptState_ = KeptState::Unknown;
           return;
@@ -262,8 +271,12 @@ void AnalysisService::askKeptState(QueryService::QuerySpec::Priority priority) {
                 ? KeptState::Whole
                 : KeptState::Part;
         keptBefore_ = keptState_;
-        // The read that asked may have its answer already.
-        if (keptState_ == KeptState::Part)
+        // A completed store serves the first read in the owner. An expensive
+        // preparation from an earlier run can overlap browsing in the replica.
+        const bool warm =
+            forIdlePreparation &&
+            response.value("payload").toObject().value("warm_page").toBool();
+        if (keptState_ == KeptState::Part || (warm && canRenderAhead()))
           startReplica();
       });
 }
@@ -450,17 +463,21 @@ void AnalysisService::startReplica() {
           finish(response);
           return;
         }
-        snapshot_ = response.value("payload").toObject();
-        // An update it is still taking moves the revision: the snapshot itself
-        // says what this one applies to.
-        if (refreshingNames_)
-          restore_ = client_.request(QStringLiteral("analysis_update_names"),
-                                     snapshot_);
-        else {
-          restoring_.start();
-          client_.start(workerPath_);
-        }
+        restoreSnapshot(response.value("payload").toObject());
       });
+}
+
+void AnalysisService::restoreSnapshot(QJsonObject snapshot) {
+  snapshot_ = std::move(snapshot);
+  // An update it is still taking moves the revision: the snapshot itself
+  // says what this one applies to.
+  if (refreshingNames_)
+    restore_ =
+        client_.request(QStringLiteral("analysis_update_names"), snapshot_);
+  else {
+    restoring_.start();
+    client_.start(workerPath_);
+  }
 }
 
 void AnalysisService::receive(const QJsonObject &message, qint64 bytes) {
@@ -523,7 +540,9 @@ void AnalysisService::receive(const QJsonObject &message, qint64 bytes) {
       restore["render_store"] = restore.contains(QStringLiteral("render_ahead"))
                                     ? QStringLiteral("write")
                                     : QStringLiteral("read");
-    if (prepareViews_ &&
+    const bool idlePreparation =
+        solvesSummaries_ && canRenderAhead() && active_.isEmpty();
+    if ((prepareViews_ || idlePreparation) &&
         message.value("capabilities")
             .toArray()
             .contains(QStringLiteral("prepare_analysis_views")))
@@ -576,10 +595,15 @@ void AnalysisService::receive(const QJsonObject &message, qint64 bytes) {
     refreshingNames_ = false;
     workerRevision_ = message.value("revision").toString();
     ready_ = true;
-    // The replica answers from here on.
-    if (keptRead_)
-      owner_.unsubscribe(std::exchange(keptRead_, 0));
-    dispatch();
+    // A complete source page already requested from the owner can finish
+    // there. On a miss askOwner dispatches to this restored replica.
+    if (!keptRead_ || keptState_ != KeptState::Whole ||
+        operation_ != QLatin1String("decompile") ||
+        payload_.value("refresh").toBool()) {
+      if (keptRead_)
+        owner_.unsubscribe(std::exchange(keptRead_, 0));
+      dispatch();
+    }
     sendPreparedRead();
   } else if (!wire_.isEmpty() && id == wire_) {
     workerRevision_ = message.value("revision").toString();
@@ -710,8 +734,8 @@ void AnalysisPool::prefetchSource(quint64 address, bool listedOnly) {
   auto &lane = lanes_.front();
   if (preparing_ || lane.service->queries().pendingReadCount() != 0)
     return;
-  if (listedOnly &&
-      (!lane.service->ready() || functionLanes_.value(address, 0) != 0))
+  if (listedOnly && (!lane.service->replicaStarted() ||
+                     functionLanes_.value(address, 0) != 0))
     return;
   lane.function = address;
   if (!listedOnly)

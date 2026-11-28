@@ -252,6 +252,7 @@ private:
   Json restoredDebugInputs_ = Json::array();
   void localNamesChanged();
   Json userState() const;
+  Json loadedHistoryState(const ProjectHistory &store) const;
   Json codeEdits_ = Json::array();
   void reloadCodeEdits();
   static Json readCodeEdits(const std::string &binary);
@@ -304,6 +305,10 @@ private:
   /// then runs again; an explicit request's summaries are only forgotten.
   bool summaryJob_ = false;
   std::uint64_t summaryCursor_ = 0;
+  std::optional<std::uint64_t> slowWarmPage_;
+  /// One completed store's listed entry, consumed after its restore reply.
+  std::optional<std::uint64_t> openingSourcePreparation_;
+  std::chrono::steady_clock::duration slowWarmDuration_{};
   /// Whether the job discovered the image's functions, whose summaries it
   /// then solves (summaryJobStep).
   bool summaryDiscovered_ = false;
@@ -396,6 +401,8 @@ private:
   /// `kept_renders`: how many renders the store keeps, and whether a job
   /// reached every function.
   Json keptRendersJson();
+  bool hasOpeningWarmPage();
+  static std::optional<std::uint64_t> keptWarmPage(RenderStore *store);
   /// What the job keeps of what a function's first look in the listing asks
   /// the engine, under the same identity as the renders and for the same
   /// sessions.  The owner reads it too, and takes up what its replica adds.

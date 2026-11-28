@@ -39,6 +39,13 @@ inline constexpr int kDecodeBenchmarkMaxRepetitions = 100;
 /// Maximum wait between cancellation probes while joining an owned discovery.
 inline constexpr unsigned kFunctionDiscoveryPollMilliseconds = 5;
 
+// Bound the optional first idle selection of an x64 call graph.
+inline constexpr size_t kInitialViewGraphFunctions = 4096;
+inline constexpr uint64_t kInitialViewGraphBodyBytes = 16u << 10;
+inline constexpr uint64_t kInitialViewGraphBytes = 1u << 20;
+inline constexpr size_t kInitialViewReachableFunctions = 256;
+inline constexpr size_t kInitialViewReachableEdges = 1024;
+
 // Query paging and decoding.
 
 inline constexpr int kMaxFunctionsPerPage = 4096;

@@ -501,9 +501,81 @@ static int prepareFunction(neverd_session_t Sess, neverd_va_t &FuncEntry,
                                     : Session::PipelineDepth::Analysis);
 }
 
-const char *neverd_warm_functions_json(neverd_session_t Sess,
-                                       neverd_va_t FirstEntry,
-                                       int MaxFunctions) {
+namespace {
+std::optional<va_t> initialViewEntry(Session &S) {
+  const auto &Functions = S.Functions;
+  if (S.Img.Arch != Arch::X64 || Functions.empty() ||
+      Functions.size() > kInitialViewGraphFunctions)
+    return std::nullopt;
+  uint64_t Bytes = 0;
+  llvm::DenseMap<va_t, size_t> Starts;
+  for (size_t I = 0; I < Functions.size(); ++I) {
+    const FuncInfo &F = Functions[I];
+    Starts.try_emplace(F.Entry, I);
+    if (F.Size <= kInitialViewGraphBodyBytes)
+      Bytes += F.Size;
+  }
+  Decoder Dec;
+  if (Bytes > kInitialViewGraphBytes || !Dec.init(S.Img))
+    return std::nullopt;
+  std::vector<std::vector<size_t>> Calls(Functions.size());
+  for (size_t I = 0; I < Functions.size(); ++I) {
+    const FuncInfo &F = Functions[I];
+    if (!F.Size || F.Size > kInitialViewGraphBodyBytes)
+      continue;
+    auto &Targets = Calls[I];
+    decodeNativeRange(S.Img, Dec, F.Entry, F.Size, F.Size,
+                      [&](const DecodedInsn &DI, const uint8_t *, int) {
+                        const va_t To = Dec.directCallTarget(DI);
+                        if (To != InvalidVA)
+                          if (const auto It = Starts.find(To);
+                              It != Starts.end())
+                            Targets.push_back(It->second);
+                        return true;
+                      });
+    llvm::sort(Targets);
+    Targets.erase(std::unique(Targets.begin(), Targets.end()), Targets.end());
+  }
+  // Only the scheduling order uses these decoded direct edges. The pipeline
+  // still proves each selected function from the image and current overrides.
+  std::vector<size_t> Seen(Functions.size(), Functions.size()), Pending;
+  size_t Best = 1;
+  std::optional<va_t> Entry;
+  for (size_t I = 0; I < Functions.size(); ++I) {
+    if (Calls[I].empty())
+      continue;
+    Pending.assign(1, I);
+    Seen[I] = I;
+    size_t Count = 1, Work = 0;
+    while (!Pending.empty() && Count < kInitialViewReachableFunctions &&
+           Work < kInitialViewReachableEdges) {
+      const size_t From = Pending.back();
+      Pending.pop_back();
+      for (const size_t To : Calls[From]) {
+        if (++Work > kInitialViewReachableEdges)
+          break;
+        if (Seen[To] == I)
+          continue;
+        Seen[To] = I;
+        ++Count;
+        Pending.push_back(To);
+        if (Count == kInitialViewReachableFunctions)
+          break;
+      }
+    }
+    if (Count > Best ||
+        (Entry && Count == Best && Functions[I].Entry < *Entry)) {
+      Best = Count;
+      Entry = Functions[I].Entry;
+    }
+  }
+  return Entry;
+}
+} // namespace
+
+static const char *warmFunctionsJson(neverd_session_t Sess,
+                                     neverd_va_t FirstEntry, int MaxFunctions,
+                                     bool InitialView) {
   auto *S = toSession(Sess);
   if (!S)
     return nullptr;
@@ -543,6 +615,8 @@ const char *neverd_warm_functions_json(neverd_session_t Sess,
       // of the callees they leave out (where each call's setup gives its
       // arguments), that warming builds a page of functions at a time.
       {
+        if (InitialView)
+          FirstEntry = initialViewEntry(*S).value_or(FirstEntry);
         const FunctionPage Page = functionPage(*S, FirstEntry, MaxFunctions);
         std::vector<va_t> Entries;
         Entries.reserve(Page.Functions.size());
@@ -580,6 +654,16 @@ const char *neverd_warm_functions_json(neverd_session_t Sess,
     S->setError("unexpected function preparation failure");
   }
   return nullptr;
+}
+
+const char *neverd_warm_functions_json(neverd_session_t Sess,
+                                       neverd_va_t FirstEntry,
+                                       int MaxFunctions) {
+  return warmFunctionsJson(Sess, FirstEntry, MaxFunctions, false);
+}
+
+const char *neverd_warm_initial_view_json(neverd_session_t Sess) {
+  return warmFunctionsJson(Sess, 0, 1, true);
 }
 
 const char *neverd_prepare_call_summaries_json(neverd_session_t Sess) {

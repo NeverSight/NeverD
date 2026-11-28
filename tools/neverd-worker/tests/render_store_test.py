@@ -64,6 +64,34 @@ def asks_engine_first(client):
     assert view["fixture_prepares"] == 1, view
 
 
+def check_opening_preparation(clients, executable, root):
+    binary = root / ("costly-warm-page-" + NAME)
+    binary.write_bytes(b"render store fixture")
+    owner, writer = session(clients, executable, binary)
+    render_ahead(writer, done)
+    end(writer, owner)
+
+    with Client(executable) as opener:
+        opened = ok(opener, "open", {"path": str(binary), "analysis": True,
+                                    "warm": False, "initial_render_snapshot": True})
+        explicit = ok(opener, "analysis_snapshot")
+        assert opened["initial_render_snapshot"] == explicit
+        assert "initial_render_snapshot" not in explicit["open"]
+        with Client(executable) as replica:
+            ok(replica, "analysis_restore",
+               dict(explicit, call_summaries=True, render_ahead=True,
+                    render_store="write", prepare_views=True))
+            render_ahead(replica, done)
+            # Reopening actually prepared a dependency after the restore
+            # advanced the revision. This separate C view builds its own page.
+            view = source(replica, A, representation="c")
+            assert view["fixture_prepares"] == 2 and view["fixture_pages"] == 1, view
+        with Client(executable) as reader:
+            opened = ok(reader, "open", {"path": str(binary), "read_only": True,
+                                        "analysis": True, "initial_render_snapshot": True})
+            assert "initial_render_snapshot" not in opened
+
+
 def run_kept_edits(clients, executable, root, total):
     """What an owner says of the store after an edit, with no replica to tell it."""
     binary = root / ("kept-" + NAME)
@@ -178,6 +206,7 @@ def run(executable):
         asks_engine_first(keeper)
         end(keeper)
         owner, second = session(clients, executable, binary)
+        check_opening_preparation(clients, executable, root)
         run_kept_edits(clients, executable, root, total)
 
         # A rename of a local redecorates: the store still reads.
