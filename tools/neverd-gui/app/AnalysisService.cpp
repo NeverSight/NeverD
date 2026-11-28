@@ -545,8 +545,14 @@ void AnalysisService::receive(const QJsonObject &message, qint64 bytes) {
     if ((prepareViews_ || idlePreparation) &&
         message.value("capabilities")
             .toArray()
-            .contains(QStringLiteral("prepare_analysis_views")))
+            .contains(QStringLiteral("prepare_analysis_views"))) {
       restore["prepare_views"] = true;
+      if (!prepareViews_ &&
+          message.value("capabilities")
+              .toArray()
+              .contains(QStringLiteral("defer_view_preparation")))
+        restore["defer_view_preparation"] = true;
+    }
     warmTypeLibraries_ = !prepareViews_ &&
                          restore.value("render_ahead").toBool() &&
                          message.value("capabilities")

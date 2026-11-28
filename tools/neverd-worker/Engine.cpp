@@ -3831,14 +3831,19 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
   restoredSnapshot_.erase("render_ahead");
   restoredSnapshot_.erase("render_store");
   restoredSnapshot_.erase("prepare_views");
+  restoredSnapshot_.erase("defer_view_preparation");
   summaryJob_ = snapshot.value("call_summaries", false);
   renderAheadRequested_ = snapshot.value("render_ahead", false);
   renderStoreMode_ = snapshot.value("render_store", std::string());
   openRenderStore(renderStoreMode_);
   restartSummaries();
   restartRenderAhead();
-  if (snapshot.value("prepare_views", false))
-    prepareViews();
+  if (snapshot.value("prepare_views", false)) {
+    openingViewWarmup_ =
+        summariesDeferred_ && snapshot.value("defer_view_preparation", false);
+    if (!openingViewWarmup_)
+      prepareViews();
+  }
   return metadata();
 }
 
@@ -4781,19 +4786,24 @@ Json Engine::listingReply(ListingPage page, const std::string &known,
 void Engine::afterReply(const std::function<bool()> &requestWaiting) {
   writeStoreKeeps();
   prepareFollowingViews(requestWaiting);
+  // A client waiting for restore needs its revision to dispatch a refresh.
+  // Recheck the queue between warming shared indexes and lifting the entry.
+  const auto idle = [&] { return !requestWaiting || !requestWaiting(); };
+  if (std::exchange(openingViewWarmup_, false) && idle())
+    prepareViews();
   // A restore changes the project revision. Consume this opening hint behind
   // its reply, after ordinary revision invalidation and before the idle grace
   // for whole-project jobs. A foreground request already queued gets the lane.
   const auto entry = std::exchange(openingSourcePreparation_, std::nullopt);
   if (entry && (summariesDeferred_ || (summaryJob_ && renderAheadRequested_)) &&
-      (!requestWaiting || !requestWaiting())) {
+      idle()) {
     using PrepareView = int (*)(neverd_session_t, neverd_va_t, const char *);
     static const auto prepare =
         engineSymbol<PrepareView>("neverd_prepare_function_view");
     if (prepare) {
       preparedFunction_.reset();
       textKey_.clear();
-      if (prepare(session_, *entry, "source")) {
+      if (prepare(session_, *entry, "source") && idle()) {
         (void)listing().functionAliases();
         // A completed store already serves the opening page. Preparing the
         // graph and names also helps an explicit refresh, which emits it anew.

@@ -77,7 +77,7 @@ def check_opening_preparation(clients, executable, root):
         assert page["fixture_pages"] == 1 + extra, page
         end(replica, owner)
 
-    binary = root / ("costly-warm-page-" + NAME)
+    binary = root / ("costly-warm-page-prepare-views-" + NAME)
     binary.write_bytes(b"render store fixture")
     owner, writer = session(clients, executable, binary)
     render_ahead(writer, done)
@@ -102,6 +102,23 @@ def check_opening_preparation(clients, executable, root):
                                               "limit": 4, "refresh": True})
             assert fresh["fixture_prepares"] == 3 and fresh["fixture_pages"] == 2, fresh
             assert source(replica, A)["text"] == fresh["text"]
+        with Client(executable) as replica:
+            assert "defer_view_preparation" in replica.hello["capabilities"]
+            Path(str(binary) + ".pause-preparation").touch()
+            ok(replica, "analysis_restore",
+               dict(explicit, call_summaries=True, render_ahead=True,
+                    render_store="write", prepare_views=True,
+                    defer_view_preparation=True))
+            refresh = replica.send("decompile", {"address": A, "representation": "source",
+                                                  "limit": 4, "refresh": True})
+            # The reader handles hello immediately, after it queued the refresh.
+            ok(replica, "hello")
+            Path(str(binary) + ".finish-preparation").touch()
+            reply = replica.response(refresh)
+            assert reply["status"] == "ok", reply
+            page = reply["payload"]
+            assert page["fixture_prepares"] == page["fixture_pages"] == 1, page
+            assert page["text"] == fresh["text"]
         with Client(executable) as reader:
             opened = ok(reader, "open", {"path": str(binary), "read_only": True,
                                         "analysis": True, "initial_render_snapshot": True})

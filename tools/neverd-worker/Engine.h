@@ -306,6 +306,8 @@ private:
   bool summaryJob_ = false;
   std::uint64_t summaryCursor_ = 0;
   std::optional<std::uint64_t> slowWarmPage_;
+  /// A completed store can warm shared indexes after acknowledging restore.
+  bool openingViewWarmup_ = false;
   /// One completed store's listed entry, consumed after its restore reply.
   std::optional<std::uint64_t> openingSourcePreparation_;
   std::chrono::steady_clock::duration slowWarmDuration_{};

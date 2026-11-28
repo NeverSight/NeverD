@@ -1004,6 +1004,13 @@ and chosen debug inputs have been applied. The GUI requests it while opening
 large files with automatic analysis enabled and for large-image replicas, and queues their
 initial preparation after discovery, without waiting for the first F5.
 
+A client that warms views while idle can also request `defer_view_preparation:true`
+when the worker advertises that capability. For a completed render store, restore
+acknowledges the validated revision first. The worker yields to queued requests
+before warming the shared indexes and again before lifting the recorded entry.
+Fresh stores and clients requiring synchronous preparation keep the usual
+`prepare_views` completion guarantee.
+
 `analysis_restore` also takes `call_summaries:true`, which the GUI adds to the
 owner's snapshot when the replica advertises `prepare_call_summaries`. The
 replica then discovers the image's functions (`neverd_session_discover_functions`,
