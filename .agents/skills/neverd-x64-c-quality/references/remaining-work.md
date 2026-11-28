@@ -54,7 +54,12 @@ MinGW header declarations when only the PDB names the omitted routine.
 Ordinary and original-state HighC exports use open declarations for direct
 Win64 calls with unknown parameter types when every use passes only integer
 or pointer slots. Both GNU C11 and C23 retain the argument promotions and
-original linker symbols.
+original linker symbols. A focused PE export resolves the two code operands
+of a verified native dispatch frame from exact PDB publics. The same
+instruction check lets the register analysis use a reached service's
+documented parameters when its public was omitted at load. A direct Win64
+call can retain its physical RCX result across the x87 context transport,
+with both the call target and the two x87 state transfers preserved.
 The V6 `native_rtm_abort_steps` binding handles an authenticated immediate
 abort pair under declared RTM support as one translated step. It preserves
 early-abort EAX and the original fallback. The earlier environment-budget

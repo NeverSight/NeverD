@@ -4011,8 +4011,9 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     }
     if (E.Kind == ExprKind::Const && isAddressProvenance(E.ConstProvenance))
       if (const auto Key = functionAddressKey(E))
-        noteFunctionAddress(*Key, Funcs, E.ConstProvenance ==
-                                           ConstantAddressProvenance::CodeAddress);
+        noteFunctionAddress(*Key, Funcs,
+                            E.ConstProvenance ==
+                                ConstantAddressProvenance::CodeAddress);
     if (isImageBaseConstant(E))
       ReachesImageBase = true;
     if (E.Kind == ExprKind::Const &&
@@ -4783,7 +4784,8 @@ void HighCWriter::noteFunctionAddress(va_t Addr,
   std::string Name;
   if (const auto Found = Symbols.find(Addr); Found != Symbols.end())
     Name = Found->second->Name;
-  if (ProvenCodeAddress && Dbg && !Opts.Image->LoadOnlyFunctionEntries.empty() &&
+  if (ProvenCodeAddress && Dbg &&
+      !Opts.Image->LoadOnlyFunctionEntries.empty() &&
       (Name.empty() || isSynthesizedFuncName(Name)))
     if (const auto Public = Dbg->functionName(Addr))
       Name = *Public;

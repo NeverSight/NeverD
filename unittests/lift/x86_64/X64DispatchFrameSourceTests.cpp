@@ -226,6 +226,46 @@ TEST(X64DispatchFrame, RejectsForeignImagesRelocationsAndAssemblyNames) {
 
 class X64DispatchFrameSource : public NeverDLiftTest {};
 
+TEST_F(X64DispatchFrameSource, ReachedSparseServiceUsesItsExactPublicContract) {
+  class Names : public NullDebugContext {
+  public:
+    std::optional<std::string> functionName(va_t Addr) const override {
+      return Addr == Entry ? std::optional<std::string>("ZwOpenMutant")
+                           : std::nullopt;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  for (const bool Complete : {false, true}) {
+    SCOPED_TRACE(Complete);
+    auto Image = bridgeImage();
+    Image.Symbols.erase(Image.Symbols.begin());
+    Image.LoadOnlyFunctionEntries.insert(Caller);
+    auto *Bytes = Image.Segments.front().Data.data();
+    // An ordinary wrapper passes through the three input registers.
+    const uint8_t Body[] = {0x48, 0x83, 0xec, 0x28, 0xe8, 0,    0,
+                            0,    0,    0x48, 0x83, 0xc4, 0x28, 0xc3};
+    std::copy(std::begin(Body), std::end(Body), Bytes + Caller - Linkage);
+    llvm::support::endian::write32le(Bytes + Caller - Linkage + 5,
+                                     static_cast<uint32_t>(Entry - Caller - 9));
+    Image.Symbols.push_back(Symbol::makeFunc(Caller, sizeof(Body)));
+    if (!Complete)
+      Bytes[Entry - Linkage + 3] = 0x90;
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.OnlyFunctionEntries = {Caller};
+    Options.SourceProjection = true;
+    auto Result = Pipeline().run(Image, Context, Options, &Debug);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    EXPECT_EQ(Result.CallPrototypeArguments.count(Entry), Complete ? 1u : 0u);
+    if (Complete) {
+      const auto &Arguments = Result.CallEntryIntegerArguments;
+      ASSERT_TRUE(Arguments.count(Entry));
+      EXPECT_EQ(Arguments.at(Entry).Parameters.size(), 3u);
+    }
+  }
+}
+
 TEST_F(X64DispatchFrameSource, BothRoutesRetainThePhysicalMachineInterface) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "requires Clang";

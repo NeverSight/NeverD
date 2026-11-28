@@ -88,9 +88,13 @@ decodeX64DispatchFrame(const BinaryImage &Image, va_t Address) {
   const auto Linkage = Relative(15, 19), Target = Relative(26, 30);
   if (!Linkage || !Target)
     return std::nullopt;
-  return X64DispatchFrame{Address, *Linkage, *Target,
+  return X64DispatchFrame{Address,
+                          *Linkage,
+                          *Target,
                           llvm::support::endian::read32le(Bytes + 21),
-                          static_cast<int8_t>(Bytes[11]), {}, {}};
+                          static_cast<int8_t>(Bytes[11]),
+                          {},
+                          {}};
 }
 
 /// The bridge with assembly-safe link identities for both code operands.
