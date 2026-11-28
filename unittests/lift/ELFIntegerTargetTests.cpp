@@ -1048,6 +1048,46 @@ TEST(RISCVProfile, RoundedResultsAccrueFlagsAndObserveAliasedCSRFields) {
   }
 }
 
+TEST(RISCVProfile, DiscardedQuotientStillUpdatesFlagsInBothCOutputs) {
+  for (Arch A : {Arch::RISCV32D, Arch::RISCV64D}) {
+    LinkedImage File(A);
+    // fsrmi zero,3; fmv.w.x ft0,zero; fdiv.s ft1,ft0,ft0,dyn; frflags a0; ret
+    File.setWords({0x0021d073, 0xf0000053, 0x180070d3, 0x00102573, 0x00008067});
+    File.riscvAttributes(isRISCV32(A) ? "rv32i2p1_f2p2_d2p2_zicsr2p0"
+                                      : "rv64i2p1_f2p2_d2p2_zicsr2p0");
+    auto Image = ELFLoader().loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    for (bool LLVM : {false, true}) {
+      llvm::LLVMContext Ctx;
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {Image->Entry};
+      Options.LiftMode = LLVM;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Image, Ctx, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      CEmitterOptions Emit;
+      Emit.Image = &*Image;
+      Emit.TheArch = A;
+      Emit.Format = BinaryFormat::ELF;
+      std::string Text;
+      llvm::raw_string_ostream Out(Text);
+      if (LLVM) {
+        ASSERT_TRUE(Result.LlvmModule);
+        ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, Emit));
+      } else {
+        ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit));
+      }
+      const auto Set = Text.find(", frm");
+      const auto Divide = Text.find("fdiv.s ");
+      const auto Read = Text.find(", fflags");
+      ASSERT_NE(Read, std::string::npos) << Text;
+      EXPECT_LT(Set, Divide) << Text;
+      EXPECT_LT(Divide, Read) << Text;
+    }
+  }
+}
+
 TEST(RISCVProfile, ReusedDecoderTracksExtensionEvidenceAndHalfwordBoundaries) {
   const uint8_t Addi[] = {0x05, 0x05}; // c.addi a0,1
   const uint8_t Mul[] = {0x33, 0x05, 0xb5, 0x02};
