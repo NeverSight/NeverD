@@ -15790,6 +15790,9 @@ usable and explicit unavailable-backend requests are rejected.
 
 `add_neverd_unittest` creates one GoogleTest executable and assigns every
 discovered case a CTest label equal to that executable's target name.
+On macOS, Release builds link these executables with `-dead_strip` to remove
+unused code and data from their static dependencies.
+
 On Windows the executable reserves the decompiler's 128 MiB main stack
 (`kDecompilerMainStackSize`): its cases run on GoogleTest's main thread,
 which would otherwise get 1 MiB there against 8 MiB on Linux and macOS.

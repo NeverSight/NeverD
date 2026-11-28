@@ -3,6 +3,7 @@
 #include "neverd/sdk/NeverDCAPI.h"
 
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/Program.h"
@@ -453,7 +454,7 @@ void verifyRuntime(bool Chained,
   ASSERT_TRUE(neverd_session_load(Session.get(), Original.c_str()));
   std::unique_ptr<const char, decltype(&neverd_free_string)> Raw(
       neverd_objc_methods_json(Session.get(), 0), neverd_free_string);
-  ASSERT_TRUE(Raw);
+  ASSERT_TRUE(Raw) << neverd_last_error(Session.get());
   auto JSON = llvm::json::parse(Raw.get());
   ASSERT_TRUE(bool(JSON));
   if (CheckSummary) {
@@ -470,6 +471,7 @@ void verifyRuntime(bool Chained,
       SummaryObject->erase("sources_omitted");
       auto Expected = Full;
       Expected.getAsObject()->erase("native_source");
+      Expected.getAsObject()->erase("native_emitted_function_count");
       for (auto &Method : *Expected.getAsObject()->getArray("methods"))
         Method.getAsObject()->erase("source");
       EXPECT_TRUE(Expected == *Summary);
@@ -523,6 +525,20 @@ void verifyRuntime(bool Chained,
                   true);
     }
   }
+  if (ReadOnlyTables) {
+    const auto Native = Object->getString("native_source");
+    const auto Inventory = Object->getInteger("native_function_count");
+    ASSERT_TRUE(Native);
+    ASSERT_TRUE(Inventory);
+    const auto Definitions =
+        static_cast<int64_t>(Native->count("/* neverd.entry: "));
+    const auto Refusals =
+        static_cast<int64_t>(Native->count("/* neverd.not-decompiled: "));
+    EXPECT_EQ(*Inventory, Definitions + Refusals);
+    EXPECT_EQ(Object->getInteger("native_emitted_function_count")
+                  .value_or(*Inventory),
+              Definitions);
+  }
   const auto *Methods = Object->getArray("methods");
   ASSERT_NE(Methods, nullptr);
   for (const auto &Value : *Methods) {
@@ -534,6 +550,18 @@ void verifyRuntime(bool Chained,
     ASSERT_TRUE(Entry);
     ASSERT_TRUE(Nodes.count(Entry->str()));
     EXPECT_EQ(Nodes.at(Entry->str())->getBoolean("closure_closed"), true);
+    if (ReadOnlyTables) {
+      // Each raw function still has a definition or a diagnostic, including
+      // methods whose typed projection can bind the table independently.
+      const auto Native = Object->getString("native_source");
+      ASSERT_TRUE(Native);
+      uint64_t Address;
+      ASSERT_FALSE(Entry->getAsInteger(0, Address));
+      const auto Hex = "0x" + llvm::utohexstr(Address);
+      EXPECT_TRUE(Native->contains("/* neverd.entry: " + Hex + " */") ||
+                  Native->contains(" at " + Hex + ": c-emission-failed; "))
+          << Entry->str();
+    }
   }
   if (DynamicProperties) {
     const auto *Metadata = Object->getObject("objc_metadata");
@@ -1658,7 +1686,7 @@ void verifySwiftStorage(bool Chained) {
   ASSERT_TRUE(neverd_session_load(Session.get(), Original.c_str()));
   std::unique_ptr<const char, decltype(&neverd_free_string)> Raw(
       neverd_objc_methods_json(Session.get(), 0), neverd_free_string);
-  ASSERT_TRUE(Raw);
+  ASSERT_TRUE(Raw) << neverd_last_error(Session.get());
   auto JSON = llvm::json::parse(Raw.get());
   ASSERT_TRUE(bool(JSON));
   const auto *Object = JSON->getAsObject();

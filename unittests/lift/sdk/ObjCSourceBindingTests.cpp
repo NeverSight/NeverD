@@ -16896,6 +16896,7 @@ TEST(SwiftValueWitnessCalls, GeneratedFrameWitnessSourceMatchesOriginalARM64) {
     std::ofstream(Path) << "#define TEST_METADATA " << MetadataAccessor << "\n"
                         << Source << R"(
 #include <stdio.h>
+#include <string.h>
 extern void *original_witness(void *,void *,void *,uint64_t,void *);
 __asm__(".text\n.p2align 2\n.globl _original_witness\n_original_witness:\n"
         ".long 0xa9bb53f3,0xa9015bf5,0xa9047bfd,0xaa0003f3,0xaa0103f4\n"
