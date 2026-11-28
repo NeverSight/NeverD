@@ -221,6 +221,81 @@ TEST(LLVMCSourcePointers, StandaloneHeaderBooleanCompilesAsC17) {
       {"--target=aarch64-pc-windows-msvc", "-std=c17", "-ffreestanding"});
 }
 
+TEST(LLVMCSourceParameters, DebugWordRequiresUnobservedUpperBits) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"(
+    target datalayout = "e-p:64:64"
+    define i32 @forward(i64 %input) {
+      %r = call i32 @low(i64 %input)
+      ret i32 %r
+    }
+    define i32 @low(i64 %input) {
+      %v = trunc i64 %input to i32
+      ret i32 %v
+    }
+    define i32 @masked(i64 %input) {
+      %m = and i64 %input, 2147483648
+      %v = trunc i64 %m to i32
+      ret i32 %v
+    }
+    define i32 @upper(i64 %input) {
+      %h = lshr i64 %input, 32
+      %v = trunc i64 %h to i32
+      ret i32 %v
+    }
+    @saved = global ptr @escapes
+    define i32 @escapes(i64 %input) {
+      %v = trunc i64 %input to i32
+      ret i32 %v
+    }
+  )",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  PointerContext Debug;
+  va_t Entry = 0x1000;
+  for (const char *Name : {"low", "masked", "upper", "escapes"}) {
+    auto &Signature = Debug.Functions[Entry];
+    Signature.Addr = Entry;
+    Signature.Name = Name;
+    Signature.ReturnType = NdType::makeInt(4, false);
+    Signature.Params = {
+        {"input", NdType::makeInt(4, Signature.Name == "masked")}};
+    rewrite_source::setOriginalVA(*Module->getFunction(Name), Entry++);
+  }
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::ELF;
+  auto Render = [&](const llvm::Function *Only = nullptr) {
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    EXPECT_TRUE(
+        LLVMCEmitter().emit(*Module, Out, Options, &Debug, nullptr, Only));
+    return Text;
+  };
+  const std::string Header = "#include <stdint.h>\nuint32_t low(uint32_t);\n";
+  const std::string Whole = Render();
+  EXPECT_NE(Whole.find("low(uint32_t input)"), std::string::npos) << Whole;
+  EXPECT_NE(Whole.find("masked(int32_t input)"), std::string::npos) << Whole;
+  EXPECT_NE(Whole.find("upper(uint64_t input)"), std::string::npos) << Whole;
+  EXPECT_NE(Whole.find("escapes(uint64_t input)"), std::string::npos) << Whole;
+  source_call_execution_test::checkSyntax(Header + Whole, {"-std=c11"});
+  source_call_execution_test::checkSyntax(
+      Header + Render(Module->getFunction("forward")), {"-std=c11"});
+  source_call_execution_test::checkSyntax(
+      Header + Render(Module->getFunction("low")), {"-std=c11"});
+  Options.PreserveLLVMFunctionTypes = true;
+  EXPECT_EQ(Render().find("low(uint32_t"), std::string::npos);
+
+  Options.PreserveLLVMFunctionTypes = false;
+  Options.TheArch = Arch::AArch64;
+  Options.Format = BinaryFormat::COFF;
+  EXPECT_NE(Render().find("low(uint32_t input)"), std::string::npos);
+  Options.TheArch = Arch::X86;
+  Module->setDataLayout("e-p:32:32");
+  EXPECT_EQ(Render().find("low(uint32_t"), std::string::npos);
+}
+
 TEST(LLVMCSourcePointers, AddressBoundZeroArgumentStdcallKeepsItsLinkage) {
   constexpr va_t Entry = 0x2000;
   llvm::LLVMContext Context;
