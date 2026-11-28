@@ -25,7 +25,7 @@ MODES = ("section", "inplace")
 SAVED_ASSEMBLY_FLAGS = ("-fintegrated-as", "-save-temps=obj")
 C_CALL_UPGRADES = {"direct": "c-call-upgrade", "saved-replacement": "c-call-upgrade-saved",
                    "pic-saved-replacement": "c-call-upgrade-pic"}
-PRODUCT_VERSION = 18
+PRODUCT_VERSION = 19
 STARTUP = """
     .set noreorder
     SET_NOAT
@@ -134,7 +134,7 @@ class Profile:
 
     @property
     def soft_float(self):
-        return self.linkage in ("pic-soft", "far-branches", "relocation-bounds") or self.tls_blocks
+        return self.linkage in ("pic-soft", "far-branches", "relocation-bounds", "branch-slots") or self.tls_blocks
 
     @property
     def name(self):
@@ -238,6 +238,8 @@ def profiles(version=PRODUCT_VERSION):
                     for isa in ("classic", "micromips"):
                         for linkage in workloads:
                             yield Profile(abi, little, isa, release, linkage=linkage)
+                        if version >= 19:
+                            yield Profile(abi, little, isa, release, linkage="branch-slots")
                 if abi == "o32":
                     for linkage in workloads:
                         yield Profile(abi, little, "mips16", linkage=linkage)
@@ -722,7 +724,7 @@ def qualify_named_inputs(args, build, out, profile, expected):
 
 def save_linkage_objects(build, out, profile):
     names = ["caller.o", "calc.o"]
-    if profile.c_pic or profile.linkage == "relocation-bounds":
+    if profile.c_pic or profile.linkage in ("relocation-bounds", "branch-slots"):
         names.append("updated.o")
     hashes = {}
     for name in names:
@@ -772,7 +774,8 @@ def qualify(args):
             for mode in MODES:
                 patch(mode, out / f"{mode}.elf")
                 if (profile.c_call or profile.entry_alias or profile.dwarf_version
-                        or profile.linkage in ("init-arrays", "large-segments", "callback-table", "relocation-bounds")):
+                        or profile.linkage in ("init-arrays", "large-segments", "callback-table",
+                                               "relocation-bounds", "branch-slots")):
                     reference = build / "reference.elf"
                     script = build / ("section.ld" if mode == "section" else "base.ld")
                     run([args.lld, "-static", "-T", script, "-o", reference,
