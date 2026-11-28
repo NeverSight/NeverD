@@ -198,7 +198,8 @@ bool chargeStorageQuery(const BinaryImage &Image, uint32_t Size,
           Image.MachOResolvedChainedPointerSlots.size(),
           Image.ConflictingImportStorageSlots.size(),
           Image.ImportPtrSlots.size(), Image.ImportStorageSlots.size(),
-          Image.DyldBindSlots.size(), Image.ObjCSourceReferences.size(),
+          Image.DyldBindSlots.size(), Image.IndirectFunctionSlots.size(),
+          Image.ObjCSourceReferences.size(),
           Image.DataAddressRelocOperands.size(),
           Image.CodeAddressRelocOperands.size()})
       if (!Lookup(Count, Window))
@@ -364,6 +365,9 @@ bool hasConflictingFixups(const BinaryImage &Image, va_t Address,
       Touches(Image.ImportPtrSlots, Map, Import) ||
       Touches(Image.ImportStorageSlots, Map, Import) ||
       Touches(Image.DyldBindSlots, Map, Import) ||
+      // The dynamic linker fills these with what a GNU indirect function's
+      // resolver returns, whatever the file holds.
+      Touches(Image.IndirectFunctionSlots, Set) ||
       Touches(Image.ObjCSourceReferences, Map, ObjCReference) ||
       TouchesOperands(Image.DataAddressRelocOperands) ||
       TouchesOperands(Image.CodeAddressRelocOperands))
@@ -529,6 +533,7 @@ std::optional<uint64_t> readImmutableImageScalar(const BinaryImage &Image,
           Image.ImportPtrSlots.size(),
           Image.ImportStorageSlots.size(),
           Image.DyldBindSlots.size(),
+          Image.IndirectFunctionSlots.size(),
           Image.ObjCSourceReferences.size(),
           Image.DataAddressRelocOperands.size(),
           Image.CodeAddressRelocOperands.size(),
