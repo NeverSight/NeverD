@@ -3173,11 +3173,10 @@ TEST(InterpreterSpecialization,
     // An absolute address can overlap the return word for some entry SP,
     // even with stack alignment. Use a distinct stack-relative byte to make
     // this a genuine two-outcome test without an entry frame exclusion.
-    P.add(0x200,
-          {op(NdOp::INT_ADD, reg(48), {reg(32), constant(ReturnByte)}),
-           op(NdOp::INT_SUB, reg(56), {reg(32), constant(16)}),
-           op(NdOp::SELECT, reg(40), {reg(8, 1), reg(48), reg(56)}),
-           op(NdOp::STORE, {}, {reg(40), constant(3, 1)})});
+    P.add(0x200, {op(NdOp::INT_ADD, reg(48), {reg(32), constant(ReturnByte)}),
+                  op(NdOp::INT_SUB, reg(56), {reg(32), constant(16)}),
+                  op(NdOp::SELECT, reg(40), {reg(8, 1), reg(48), reg(56)}),
+                  op(NdOp::STORE, {}, {reg(40), constant(3, 1)})});
     P.add(0x201, {ret()});
     P.Code.at(0x201).NativeStackControl =
         SpecializationNativeStackControl::Return;

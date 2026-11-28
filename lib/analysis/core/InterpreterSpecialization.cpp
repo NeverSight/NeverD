@@ -5664,9 +5664,9 @@ bool Specializer::evaluate(int Id) {
         }
       } else {
         bool TrackNativeReturnWithoutPreservation = false;
-        const bool MayTrackNativeReturn =
-            FrameRoot && Original.Opcode == NdOp::STORE &&
-            !Frame.NativeReturnSlots.empty();
+        const bool MayTrackNativeReturn = FrameRoot &&
+                                          Original.Opcode == NdOp::STORE &&
+                                          !Frame.NativeReturnSlots.empty();
         const auto ConditionalAddress =
             MayTrackNativeReturn && !StorePreservation &&
                     Options.ProveStoreReturnSlotSeparation
