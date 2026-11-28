@@ -3046,7 +3046,8 @@ relocation-proven pointers outside the code hold, which are roots of the
 function already. A jump that reads its table through an exact field takes only
 the labels of that table's run, which ends where another field of the code
 names an address. An edge is kept only where every callee-saved register the
-label's code reads before writing has been written on every path to the jump:
+label's code reads before writing has been written on every path to the jump
+(under the image's calling convention, so Win64 counts `%rsi` and `%rdi` too):
 a table has words its index never selects, and following one must not turn a
 register the caller keeps into an input of the function. Jumps are decided in
 the order control reaches them and the result is checked once more as a whole.
@@ -3071,8 +3072,9 @@ the type allows no other value. After the scalar recoveries,
 `CFGBuilder::recoverOwnLabelTableBranches` reads such a jump's target back
 through the blocks that are each the only way into the next, starting with
 the constants every path into the first of them leaves in a register (a
-table address hoisted out of a loop; a call keeps only what the callee
-preserves): the table's address plus its 32-bit slot,
+table address hoisted out of a loop; a call keeps only what the image's
+calling convention preserves, which under Win64 includes `%rsi` and `%rdi`):
+the table's address plus its 32-bit slot,
 read from a read-only, non-executable section.
 The labels are the table's leading slots, up to the first slot that names
 anything but code of the function, an instruction start of one linear decode

@@ -4626,6 +4626,18 @@ if(LLD_LINK_EXEC)
     COMMENT "Linking MinGW-style x64 SEH startup fixture")
   list(APPEND TEST_OBJECTS ${mingw_startup_seh_obj} ${mingw_startup_seh_exe})
 
+  set(own_label_win64_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_jumptable_own_label_win64.s")
+  set(own_label_win64_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_jumptable_own_label_win64.obj")
+  add_custom_command(
+    OUTPUT ${own_label_win64_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${own_label_win64_src} -o ${own_label_win64_obj}
+    DEPENDS ${own_label_win64_src}
+    COMMENT "Compiling Win64 own-label table dispatch fixture")
+  list(APPEND TEST_OBJECTS ${own_label_win64_obj})
+
   set(coff_cxx_fh3_src
       "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff_cxx_fh3.s")
   set(coff_cxx_fh3_obj
